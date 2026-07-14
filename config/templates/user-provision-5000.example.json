@@ -1,0 +1,21 @@
+{
+  "bottler": "5000",
+  "templates": [
+    {
+      "id": "onboarding-admin",
+      "label": "Onboarding Admin",
+      "bottler": "5000",
+      "role": "Master Data",
+      "modules": ["Onboarding", "Equipment"],
+      "locations": ["Northeast"]
+    },
+    {
+      "id": "field-user",
+      "label": "Field User",
+      "bottler": "5000",
+      "role": "User",
+      "modules": ["Onboarding"],
+      "locations": ["Northeast"]
+    }
+  ]
+}

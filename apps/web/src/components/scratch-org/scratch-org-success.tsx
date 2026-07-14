@@ -1,0 +1,99 @@
+'use client';
+
+import { useState } from 'react';
+import { CheckCircle2, Copy, ExternalLink } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/utils/cn';
+
+interface ScratchOrgSuccessProps {
+  alias: string;
+  username?: string;
+  password?: string;
+  instanceUrl?: string;
+  expirationDate?: string | null;
+  variant?: 'banner' | 'full';
+  compact?: boolean;
+  onViewDetails?: () => void;
+}
+
+export function ScratchOrgSuccessBanner({
+  alias,
+  username,
+  password,
+  instanceUrl,
+  expirationDate,
+  variant = 'banner',
+  compact,
+  onViewDetails,
+}: ScratchOrgSuccessProps) {
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copy = async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        'rounded-lg border border-green-500/40 bg-green-500/10',
+        compact ? 'p-2.5 space-y-2' : 'p-4 space-y-4',
+        variant === 'full' && 'text-center',
+      )}
+    >
+      <div className={cn('flex items-center gap-2', variant === 'full' && 'justify-center flex-col')}>
+        <CheckCircle2 className={cn('text-green-500', compact ? 'w-5 h-5' : 'w-8 h-8')} />
+        <h3 className={cn('font-semibold text-green-400', compact ? 'text-xs' : undefined)}>
+          Scratch org created
+        </h3>
+      </div>
+      <dl className={cn('grid gap-1.5', compact ? 'text-[11px]' : 'gap-2 text-sm', variant === 'full' ? 'text-left' : 'grid-cols-1 sm:grid-cols-2')}>
+        <div><dt className="text-muted-foreground text-[10px]">Alias</dt><dd className="font-medium truncate">{alias}</dd></div>
+        {username && (
+          <div className="flex items-center justify-between gap-1">
+            <div className="min-w-0"><dt className="text-muted-foreground text-[10px]">Username</dt><dd className="font-mono text-[10px] truncate">{username}</dd></div>
+            <Button variant="ghost" size="sm" className={compact ? 'h-6 w-6 p-0 shrink-0' : undefined} onClick={() => copy(username, 'user')}>
+              {copied === 'user' ? '✓' : <Copy className="w-3 h-3" />}
+            </Button>
+          </div>
+        )}
+        {password && (
+          <div className="flex items-center justify-between gap-1">
+            <div><dt className="text-muted-foreground text-[10px]">Password</dt><dd className="font-mono text-[10px]">••••••••</dd></div>
+            <Button variant="ghost" size="sm" className={compact ? 'h-6 w-6 p-0 shrink-0' : undefined} onClick={() => copy(password, 'pass')}>
+              {copied === 'pass' ? '✓' : <Copy className="w-3 h-3" />}
+            </Button>
+          </div>
+        )}
+        {instanceUrl && !compact && (
+          <div>
+            <dt className="text-muted-foreground text-[10px]">Instance URL</dt>
+            <dd>
+              <a href={instanceUrl} target="_blank" rel="noreferrer" className="text-primary text-xs break-all hover:underline">
+                {instanceUrl}
+              </a>
+            </dd>
+          </div>
+        )}
+        {expirationDate && !compact && (
+          <div><dt className="text-muted-foreground text-[10px]">Expires</dt><dd>{new Date(expirationDate).toLocaleDateString()}</dd></div>
+        )}
+      </dl>
+      <div className={cn('flex flex-wrap gap-1.5', variant === 'full' && 'justify-center')}>
+        {instanceUrl && (
+          <Button variant="outline" size="sm" className={compact ? 'h-7 text-xs' : undefined} onClick={() => window.open(instanceUrl, '_blank')}>
+            <ExternalLink className="w-3 h-3 mr-1" />Open
+          </Button>
+        )}
+        {onViewDetails && (
+          <Button variant="outline" size="sm" className={compact ? 'h-7 text-xs' : undefined} onClick={onViewDetails}>Details</Button>
+        )}
+      </div>
+    </div>
+  );
+}

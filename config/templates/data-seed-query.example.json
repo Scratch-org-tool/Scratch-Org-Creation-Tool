@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "defaultLimit": 200,
+  "source": "upload",
+  "queries": [
+    {
+      "id": "primary-group-onboarding",
+      "label": "Primary Group Onboarding Config",
+      "object": "cfs_ob__Onboarding_Config__c",
+      "soql": "SELECT RecordType.DeveloperName, RecordTypeId, cfs_ob__Bottler__c, cfs_ob__Business_Unit__c, cfs_ob__Sales_Office__c, cfs_ob__Primary_Group_Number__c, cfs_ob__Primary_Group__c FROM cfs_ob__Onboarding_Config__c WHERE cfs_ob__Record_Category__c = 'Primary Group' AND cfs_ob__Bottler__c = '5000'",
+      "limit": 200
+    }
+  ],
+  "accountRules": [
+    {
+      "id": "z001-5000-z1",
+      "label": "Z001 accounts bottler 5000",
+      "accountGroup": "Z001",
+      "bottler": "5000",
+      "distributionChannel": "Z1",
+      "perOfficeLimit": 20
+    }
+  ]
+}

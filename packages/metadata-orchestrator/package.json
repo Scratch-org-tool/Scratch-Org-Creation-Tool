@@ -1,0 +1,23 @@
+{
+  "name": "@sfcc/metadata-orchestrator",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "npm run build && node --test dist/graph/algorithms.test.js dist/discovery/apex-reference.test.js",
+    "load-test": "npm run build && node scripts/load-test-plan.mjs"
+  },
+  "dependencies": {
+    "@sfcc/shared": "*",
+    "@sfcc/sf-cli": "*",
+    "fast-xml-parser": "^5.3.4",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

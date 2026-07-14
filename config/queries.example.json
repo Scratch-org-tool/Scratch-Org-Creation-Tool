@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "defaultLimit": 200,
+  "source": "upload",
+  "queries": [
+    {
+      "id": "primary-group-onboarding",
+      "label": "Primary Group Onboarding Config",
+      "object": "cfs_ob__Onboarding_Config__c",
+      "soql": "SELECT RecordType.DeveloperName, RecordTypeId, cfs_ob__Bottler__c, cfs_ob__Business_Unit__c, cfs_ob__Sales_Office__c, cfs_ob__Primary_Group_Number__c, cfs_ob__Primary_Group__c, cfs_ob__Payer__c, cfs_ob__Trade_Channel__c, cfs_ob__Subtrade_Channel__c, cfs_ob__Secondary_Group__c, cfs_ob__Secondary_Group_Number__c, cfs_ob__Secondary_Group_Description__c, cfs_ob__Store_Number_Requirements__c, cfs_ob__Terms_of_Payment__c, cfs_ob__TermsofPayment__c, cfs_ob__AML__c, cfs_ob__Is_Tax_Form_Required__c, cfs_ob__Global_Customer__c, cfs_ob__Primary_Franchise_Group_Description__c, cfs_ob__ZN_Partner__c, cfs_ob__Tax_Certificate__c, cfs_ob__Secondary_Franchise_Group_Number__c, cfs_ob__Secondary_Franchise_Group_Description__c FROM cfs_ob__Onboarding_Config__c WHERE cfs_ob__Record_Category__c = 'Primary Group' AND cfs_ob__Bottler__c = 'YOUR_BOTTLER' LIMIT 200",
+      "limit": 200
+    }
+  ]
+}

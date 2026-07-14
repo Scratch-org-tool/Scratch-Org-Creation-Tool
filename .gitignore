@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Env (never commit secrets)
+.env
+.env.local
+.env.*.local
+apps/api/.env
+apps/web/.env.local
+**/.env
+!**/.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Prisma
+packages/db/prisma/migrations/**/migration_lock.toml
+
+# Firebase
+firebase-debug.log
+.firebase/
+
+# Test
+coverage/
+
+# Turbo
+.turbo/
+
+# Local dev stack
+.dev/
+
+# Salesforce
+.sfdx/
+.sf/
+
+# SFDMU deploy working files (legacy — runs now use OS temp dir)
+sfdmu-runs/
+
+# Salesforce bulk job result CSVs (written by sf CLI when cwd is wrong)
+*-failed-records.csv
+*-success-records.csv

@@ -1,0 +1,422 @@
+import { Injectable } from '@nestjs/common';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import * as XLSX from 'xlsx';
+import { prisma } from '@sfcc/db';
+import { createSfCliClient } from '@sfcc/sf-cli';
+import type { BottlerSalesOfficeConfig } from '@sfcc/shared';
+import { BOTTLER_CONFIG, normalizeAccountKey, resolveSalesOfficeConfig, type BottlerId } from './bottler-config';
+
+const EMPLOYEE_FIELDS = [
+  'cfs_ob__EmployeeNo__c',
+  'cfs_ob__External_Id__c',
+  'Name',
+  'cfs_ob__Bottler__c',
+  'cfs_ob__u_Sales_Office__c',
+  'cfs_ob__EmailID__c',
+] as const;
+
+const PARTNER_FIELDS = [
+  'cfs_ob__AccountPartnerExternalId__c',
+  'cfs_ob__PartnerRole__c',
+  'cfs_ob__Bottler__c',
+  'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c',
+  'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c',
+] as const;
+
+const ACCOUNT_TRANSFER_FIELDS = [
+  'cfs_ob__u_CustomerNumber__c', 'Name', 'AccountNumber', 'cfs_ob__Bottler__c',
+  'cfs_ob__u_SalesOffice__c', 'cfs_ob__u_CustomerAccountGroup__c', 'cfs_ob__u_DistributionChannel__c',
+  'cfs_ob__u_ActiveCustomer__c', 'cfs_ob__MarkforDeletion__c', 'cfs_ob__SuppressionReason__c',
+  'cfs_ob__Business_Type__c', 'cfs_ob__BusinessTypeExtension__c', 'cfs_ob__u_SalesGroup__c', 'cfs_ob__Classic_Foods__c',
+];
+
+interface ProcessOptions {
+  bottler: BottlerId;
+  targetOrgId: string;
+  perOffice?: number;
+  matchOrgDistribution?: boolean;
+  sheet?: string;
+  excelBase64?: string;
+  excelPath?: string;
+}
+
+@Injectable()
+export class AccountPartnerImportService {
+  private readonly sfCli = createSfCliClient();
+  private readonly artifactDirs = new Map<string, string>();
+
+  async processExcel(options: ProcessOptions) {
+    const cfg = BOTTLER_CONFIG[options.bottler];
+    const workDir = await mkdtemp(join(tmpdir(), `partner-${options.bottler}-`));
+    await mkdir(workDir, { recursive: true });
+    this.artifactDirs.set(`${options.bottler}:${options.targetOrgId}`, workDir);
+
+    let buffer: Buffer;
+    if (options.excelBase64) {
+      buffer = Buffer.from(options.excelBase64, 'base64');
+    } else if (options.excelPath) {
+      buffer = await readFile(options.excelPath);
+    } else {
+      throw new Error('excelBase64 or excelPath required');
+    }
+
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    const sheetName = options.sheet ?? cfg.defaultSheet;
+    const ws = wb.Sheets[sheetName] ?? wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
+
+    const target = await this.resolveOrg(options.targetOrgId);
+    const orgLookup = options.matchOrgDistribution
+      ? await this.queryOrgDistributionAccounts(target.alias, options.bottler)
+      : {};
+
+    const offices = new Set<string>(cfg.offices);
+    const allowedRoles = new Set(cfg.roles);
+    const perOffice = options.perOffice ?? 30;
+    const officeBuckets = new Map<string, Map<string, Record<string, unknown>>>();
+
+    const stats = {
+      total: rows.length,
+      skipped_no_office: 0,
+      skipped_office: 0,
+      skipped_role: 0,
+      skipped_no_emp: 0,
+      skipped_no_acct: 0,
+      skipped_no_org_match: 0,
+    };
+
+    for (const r of rows) {
+      const office = String(r.cfs_ob__Sales_Office__c ?? '').trim();
+      if (!office) { stats.skipped_no_office++; continue; }
+      if (!offices.has(office)) { stats.skipped_office++; continue; }
+
+      const role = String(r.cfs_ob__PartnerRole__c ?? r.cfs_ob__PartnerFunction__c ?? '').trim();
+      if (role && !allowedRoles.has(role as typeof cfg.roles[number])) { stats.skipped_role++; continue; }
+
+      const empNo = String(r['cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c'] ?? '').trim();
+      const empId = String(r.cfs_ob__EmployeeMaster__c ?? '').trim();
+      if (!empNo && !empId) { stats.skipped_no_emp++; continue; }
+
+      const linkCust = this.orgLinkCustomer(r, orgLookup, options.matchOrgDistribution ?? true);
+      if (!linkCust) {
+        if (options.matchOrgDistribution) stats.skipped_no_org_match++;
+        else stats.skipped_no_acct++;
+        continue;
+      }
+
+      const dedupeKey = `${role}|${empId || empNo}`;
+      if (!officeBuckets.has(office)) officeBuckets.set(office, new Map());
+      const bucket = officeBuckets.get(office)!;
+      if (!bucket.has(dedupeKey)) {
+        bucket.set(dedupeKey, { ...r, _link_customer: linkCust });
+      }
+    }
+
+    const sampled: Record<string, unknown>[] = [];
+    for (const office of [...officeBuckets.keys()].sort()) {
+      sampled.push(...[...officeBuckets.get(office)!.values()].slice(0, perOffice));
+    }
+
+    const employees = new Map<string, Record<string, string>>();
+    const partners: Record<string, string>[] = [];
+
+    for (const r of sampled) {
+      const office = String(r.cfs_ob__Sales_Office__c ?? '').trim();
+      const empNo = String(r['cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c'] ?? '').trim();
+      const extId = String(r['cfs_ob__EmployeeMaster__r.cfs_ob__External_Id__c'] ?? '').trim() || empNo;
+      const empName = String(
+        r['cfs_ob__EmployeeMaster__r.Name'] ?? r.cfs_ob__Name__c ?? `Employee ${empNo}`,
+      ).slice(0, 80);
+      const email = String(r['cfs_ob__EmployeeMaster__r.cfs_ob__EmailID__c'] ?? '').trim();
+      const empOffice = String(r['cfs_ob__EmployeeMaster__r.cfs_ob__u_Sales_Office__c'] ?? office).trim();
+
+      if (empNo) {
+        employees.set(empNo, {
+          'cfs_ob__EmployeeNo__c': empNo,
+          'cfs_ob__External_Id__c': extId || empNo,
+          Name: empName || empNo,
+          'cfs_ob__Bottler__c': options.bottler,
+          'cfs_ob__u_Sales_Office__c': empOffice,
+          'cfs_ob__EmailID__c': email,
+        });
+      }
+
+      const cust = String(r._link_customer ?? '').trim();
+      const partnerRole = String(r.cfs_ob__PartnerRole__c ?? r.cfs_ob__PartnerFunction__c ?? cfg.roles[0]).trim();
+      let apExt = String(r.cfs_ob__AccountPartnerExternalId__c ?? '').trim();
+      if (!apExt) apExt = `${options.bottler}-${office}-${empNo}-${partnerRole}-${cust}`;
+
+      partners.push({
+        'cfs_ob__AccountPartnerExternalId__c': apExt.slice(0, 255),
+        'cfs_ob__PartnerRole__c': partnerRole,
+        'cfs_ob__Bottler__c': options.bottler,
+        'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c': cust,
+        'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c': empNo,
+      });
+    }
+
+    await this.writeCsv(join(workDir, 'employee_master.csv'), [...EMPLOYEE_FIELDS], [...employees.values()]);
+    await this.writeCsv(join(workDir, 'account_partners.csv'), [...PARTNER_FIELDS], partners);
+
+    const summary = {
+      bottler: options.bottler,
+      partners: partners.length,
+      employees: employees.size,
+      offices: officeBuckets.size,
+      stats,
+      outDir: workDir,
+    };
+    await writeFile(join(workDir, 'summary.json'), JSON.stringify(summary, null, 2));
+    return summary;
+  }
+
+  async loadFromArtifacts(bottler: BottlerId, targetOrgId: string, dryRun = false) {
+    const workDir = this.artifactDirs.get(`${bottler}:${targetOrgId}`);
+    if (!workDir) throw new Error('No processed artifacts — run process first');
+
+    const target = await this.resolveOrg(targetOrgId);
+    if (dryRun) return { dryRun: true, workDir };
+
+    const empCsv = join(workDir, 'employee_master.csv');
+    const partnerCsv = join(workDir, 'account_partners.csv');
+
+    const emp = await this.sfCli.upsertBulk('cfs_ob__EmployeeMaster__c', empCsv, 'cfs_ob__EmployeeNo__c', target.alias, 15, { cwd: workDir });
+    if (!emp.success) throw new Error(emp.error ?? 'Employee upsert failed');
+
+    const partners = await this.sfCli.upsertBulk(
+      'cfs_ob__AccountPartner__c',
+      partnerCsv,
+      'cfs_ob__AccountPartnerExternalId__c',
+      target.alias,
+      15,
+      { cwd: workDir },
+    );
+    if (!partners.success) throw new Error(partners.error ?? 'Partner upsert failed');
+
+    return { success: true, workDir };
+  }
+
+  async transferOrgToOrgMatched(
+    sourceOrgId: string,
+    targetOrgId: string,
+    bottler: BottlerId,
+    options?: {
+      perOffice?: number;
+      matchOrgDistribution?: boolean;
+      salesOfficeConfig?: BottlerSalesOfficeConfig;
+    },
+  ) {
+    const cfg = resolveSalesOfficeConfig(bottler, options?.salesOfficeConfig);
+    const perOffice = options?.perOffice ?? cfg.perOfficePartnerLimit ?? 20;
+    const source = await this.resolveOrg(sourceOrgId);
+    const target = await this.resolveOrg(targetOrgId);
+    const workDir = await mkdtemp(join(tmpdir(), `partner-matched-${bottler}-`));
+    await mkdir(workDir, { recursive: true });
+    this.artifactDirs.set(`${bottler}:${targetOrgId}`, workDir);
+
+    const orgLookup = options?.matchOrgDistribution !== false
+      ? await this.queryOrgDistributionAccounts(target.alias, bottler)
+      : {};
+
+    const officeFilter = cfg.offices.map((o) => `'${o.replace(/'/g, "\\'")}'`).join(', ');
+    const partnerSoql =
+      `SELECT ${PARTNER_FIELDS.join(', ')}, cfs_ob__PartnerFunction__c, cfs_ob__Sales_Office__c, ` +
+      `cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c, cfs_ob__EmployeeMaster__r.cfs_ob__External_Id__c, ` +
+      `cfs_ob__EmployeeMaster__r.Name, cfs_ob__EmployeeMaster__r.cfs_ob__EmailID__c, ` +
+      `cfs_ob__EmployeeMaster__r.cfs_ob__u_Sales_Office__c ` +
+      `FROM cfs_ob__AccountPartner__c WHERE cfs_ob__Bottler__c = '${bottler}' ` +
+      `AND cfs_ob__Sales_Office__c IN (${officeFilter})`;
+
+    const result = await this.sfCli.query(source.alias, partnerSoql);
+    const records = (result.data as { result?: { records?: Array<Record<string, unknown>> } })?.result?.records ?? [];
+
+    const offices = new Set(cfg.offices);
+    const allowedRoles = new Set(cfg.roles);
+    const officeBuckets = new Map<string, Map<string, Record<string, unknown>>>();
+    const stats = {
+      total: records.length,
+      skipped_no_office: 0,
+      skipped_office: 0,
+      skipped_role: 0,
+      skipped_no_emp: 0,
+      skipped_no_org_match: 0,
+    };
+
+    for (const r of records) {
+      const office = String(r.cfs_ob__Sales_Office__c ?? '').trim();
+      if (!office) { stats.skipped_no_office++; continue; }
+      if (!offices.has(office)) { stats.skipped_office++; continue; }
+
+      const role = String(r.cfs_ob__PartnerRole__c ?? r.cfs_ob__PartnerFunction__c ?? '').trim();
+      if (role && !allowedRoles.has(role)) { stats.skipped_role++; continue; }
+
+      const empNo = String((r.cfs_ob__EmployeeMaster__r as { cfs_ob__EmployeeNo__c?: string } | undefined)?.cfs_ob__EmployeeNo__c ?? r['cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c'] ?? '').trim();
+      if (!empNo) { stats.skipped_no_emp++; continue; }
+
+      const linkCust = this.orgLinkCustomer(r, orgLookup, options?.matchOrgDistribution ?? true);
+      if (!linkCust) { stats.skipped_no_org_match++; continue; }
+
+      const dedupeKey = `${role}|${empNo}`;
+      if (!officeBuckets.has(office)) officeBuckets.set(office, new Map());
+      const bucket = officeBuckets.get(office)!;
+      if (!bucket.has(dedupeKey)) {
+        bucket.set(dedupeKey, { ...r, _link_customer: linkCust });
+      }
+    }
+
+    const sampled: Record<string, unknown>[] = [];
+    for (const office of [...officeBuckets.keys()].sort()) {
+      sampled.push(...[...officeBuckets.get(office)!.values()].slice(0, perOffice));
+    }
+
+    const employees = new Map<string, Record<string, string>>();
+    const partners: Record<string, string>[] = [];
+
+    for (const r of sampled) {
+      const office = String(r.cfs_ob__Sales_Office__c ?? '').trim();
+      const empNo = String((r.cfs_ob__EmployeeMaster__r as { cfs_ob__EmployeeNo__c?: string } | undefined)?.cfs_ob__EmployeeNo__c ?? r['cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c'] ?? '').trim();
+      const extId = String((r.cfs_ob__EmployeeMaster__r as { cfs_ob__External_Id__c?: string } | undefined)?.cfs_ob__External_Id__c ?? r['cfs_ob__EmployeeMaster__r.cfs_ob__External_Id__c'] ?? '').trim() || empNo;
+      const empName = String((r.cfs_ob__EmployeeMaster__r as { Name?: string } | undefined)?.Name ?? r['cfs_ob__EmployeeMaster__r.Name'] ?? `Employee ${empNo}`).slice(0, 80);
+      const email = String((r.cfs_ob__EmployeeMaster__r as { cfs_ob__EmailID__c?: string } | undefined)?.cfs_ob__EmailID__c ?? r['cfs_ob__EmployeeMaster__r.cfs_ob__EmailID__c'] ?? '').trim();
+      const empOffice = String((r.cfs_ob__EmployeeMaster__r as { cfs_ob__u_Sales_Office__c?: string } | undefined)?.cfs_ob__u_Sales_Office__c ?? r['cfs_ob__EmployeeMaster__r.cfs_ob__u_Sales_Office__c'] ?? office).trim();
+
+      employees.set(empNo, {
+        'cfs_ob__EmployeeNo__c': empNo,
+        'cfs_ob__External_Id__c': extId || empNo,
+        Name: empName || empNo,
+        'cfs_ob__Bottler__c': bottler,
+        'cfs_ob__u_Sales_Office__c': empOffice,
+        'cfs_ob__EmailID__c': email,
+      });
+
+      const cust = String(r._link_customer ?? '').trim();
+      const partnerRole = String(r.cfs_ob__PartnerRole__c ?? r.cfs_ob__PartnerFunction__c ?? cfg.roles[0]).trim();
+      let apExt = String(r.cfs_ob__AccountPartnerExternalId__c ?? '').trim();
+      if (!apExt) apExt = `${bottler}-${office}-${empNo}-${partnerRole}-${cust}`;
+
+      partners.push({
+        'cfs_ob__AccountPartnerExternalId__c': apExt.slice(0, 255),
+        'cfs_ob__PartnerRole__c': partnerRole,
+        'cfs_ob__Bottler__c': bottler,
+        'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c': cust,
+        'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c': empNo,
+      });
+    }
+
+    await this.writeCsv(join(workDir, 'employee_master.csv'), [...EMPLOYEE_FIELDS], [...employees.values()]);
+    await this.writeCsv(join(workDir, 'account_partners.csv'), [...PARTNER_FIELDS], partners);
+
+    const summary = {
+      bottler,
+      partners: partners.length,
+      employees: employees.size,
+      offices: officeBuckets.size,
+      stats,
+      outDir: workDir,
+    };
+    await writeFile(join(workDir, 'summary.json'), JSON.stringify(summary, null, 2));
+
+    const load = await this.loadFromArtifacts(bottler, targetOrgId, false);
+    return { ...summary, ...load };
+  }
+
+  async transferOrgToOrg(sourceOrgId: string, targetOrgId: string, bottler: BottlerId | 'all' = 'all') {
+    const source = await this.resolveOrg(sourceOrgId);
+    const target = await this.resolveOrg(targetOrgId);
+    const workDir = await mkdtemp(join(tmpdir(), 'org-transfer-'));
+    try {
+    const bottlers = bottler === 'all' ? ['5000', '4900', '4600'] : [bottler];
+    const filter = `cfs_ob__Bottler__c IN (${bottlers.map((b) => `'${b}'`).join(', ')})`;
+
+    const accountCsv = join(workDir, 'accounts.csv');
+    const employeeCsv = join(workDir, 'employees.csv');
+    const partnerCsv = join(workDir, 'partners.csv');
+
+    const accountSoql =
+      `SELECT ${ACCOUNT_TRANSFER_FIELDS.join(', ')} FROM Account WHERE ${filter} AND cfs_ob__u_CustomerNumber__c != null`;
+    const employeeSoql =
+      `SELECT ${EMPLOYEE_FIELDS.join(', ')} FROM cfs_ob__EmployeeMaster__c WHERE ${filter} AND cfs_ob__EmployeeNo__c != null`;
+    const partnerSoql =
+      `SELECT ${PARTNER_FIELDS.join(', ')}, cfs_ob__PartnerFunction__c FROM cfs_ob__AccountPartner__c WHERE ${filter} AND cfs_ob__AccountPartnerExternalId__c != null`;
+
+    await this.sfCli.exportBulk(accountSoql, source.alias, accountCsv, 10, { cwd: workDir });
+    await this.sfCli.exportBulk(employeeSoql, source.alias, employeeCsv, 10, { cwd: workDir });
+    await this.sfCli.exportBulk(partnerSoql, source.alias, partnerCsv, 10, { cwd: workDir });
+
+    await this.sfCli.upsertBulk('Account', accountCsv, 'cfs_ob__u_CustomerNumber__c', target.alias, 15, { cwd: workDir });
+    await this.sfCli.upsertBulk('cfs_ob__EmployeeMaster__c', employeeCsv, 'cfs_ob__EmployeeNo__c', target.alias, 15, { cwd: workDir });
+    await this.sfCli.upsertBulk('cfs_ob__AccountPartner__c', partnerCsv, 'cfs_ob__AccountPartnerExternalId__c', target.alias, 15, { cwd: workDir });
+
+    return { success: true, bottlers };
+    } finally {
+      try {
+        await rm(workDir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+
+  async preview(options: ProcessOptions) {
+    const summary = await this.processExcel(options);
+    return { preview: true, ...summary };
+  }
+
+  private orgLinkCustomer(
+    r: Record<string, unknown>,
+    lookup: Record<string, string>,
+    matchOrg: boolean,
+  ): string | null {
+    if (!matchOrg || Object.keys(lookup).length === 0) {
+      const direct = String(r['cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c'] ?? '').trim();
+      return direct || null;
+    }
+    for (const field of ['cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c', 'cfs_ob__Account__r.AccountNumber']) {
+      const key = normalizeAccountKey(r[field]);
+      if (key && lookup[key]) return lookup[key];
+    }
+    return null;
+  }
+
+  private async queryOrgDistributionAccounts(alias: string, bottler: string) {
+    const soql =
+      `SELECT cfs_ob__u_CustomerNumber__c FROM Account ` +
+      `WHERE cfs_ob__Bottler__c = '${bottler}' ` +
+      `AND cfs_ob__u_DistributionChannel__c != null ` +
+      `AND cfs_ob__u_CustomerNumber__c != null`;
+    const result = await this.sfCli.query(
+      alias,
+      soql,
+    );
+    const lookup: Record<string, string> = {};
+    const records = (result.data as { result?: { records?: Array<{ cfs_ob__u_CustomerNumber__c: string }> } })?.result?.records ?? [];
+    for (const rec of records) {
+      const key = normalizeAccountKey(rec.cfs_ob__u_CustomerNumber__c);
+      if (key) lookup[key] = key;
+    }
+    return lookup;
+  }
+
+  private async resolveOrg(orgId: string) {
+    const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
+    if (!org) throw new Error('Org not found');
+    return { ...org, alias: org.username ?? org.alias };
+  }
+
+  private async writeCsv(path: string, headers: string[], rows: Record<string, string>[]) {
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+      lines.push(headers.map((h) => this.csvEscape(row[h] ?? '')).join(','));
+    }
+    await writeFile(path, lines.join('\n'), 'utf-8');
+  }
+
+  private csvEscape(val: string): string {
+    if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+      return `"${val.replace(/"/g, '""')}"`;
+    }
+    return val;
+  }
+}

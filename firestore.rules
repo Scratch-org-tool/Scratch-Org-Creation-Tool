@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isDeploymentToolUser(userId) {
+      return request.auth != null
+        && (request.auth.uid == userId || userId == 'DPT_' + request.auth.uid);
+    }
+
+    match /uiPreferences/{userId} {
+      allow read, write: if isDeploymentToolUser(userId);
+    }
+
+    match /userProfiles/{userId} {
+      allow read: if isDeploymentToolUser(userId);
+      allow write: if false;
+    }
+
+    match /templates/{templateId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /agentSessions/{sessionId} {
+      allow read, write: if false;
+    }
+  }
+}

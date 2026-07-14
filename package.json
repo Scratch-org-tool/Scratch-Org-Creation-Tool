@@ -1,0 +1,39 @@
+{
+  "name": "sf-devops-command-center",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bash scripts/stack.sh start",
+    "dev:stop": "bash scripts/stack.sh stop",
+    "dev:restart": "bash scripts/stack.sh restart",
+    "dev:status": "bash scripts/stack.sh status",
+    "dev:apps": "turbo run dev",
+    "dev:gateway": "node scripts/gateway.mjs",
+    "dev:fix": "bash scripts/stack.sh stop --apps-only && bash scripts/stack.sh restart",
+    "dev:bg": "bash scripts/stack.sh start --bg",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "db:generate": "npm run generate --workspace=@sfcc/db",
+    "db:push": "npm run push --workspace=@sfcc/db",
+    "db:migrate": "npm run migrate --workspace=@sfcc/db",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "smoke-test": "node scripts/smoke-test.js"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "npm@11.17.0",
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.1"
+  }
+}
