@@ -43,8 +43,8 @@ export function DashboardRecentDeployments({ deployments, loading }: DashboardRe
         <div className="space-y-1 max-h-[320px] overflow-y-auto scrollbar-thin pr-1">
           {deployments.map((d) => {
             const href = d.jobId
-              ? `/deployment-center/azure?deployment=${d.id}`
-              : '/deployment-center/azure';
+              ? `/deployment-center/git?deployment=${d.id}`
+              : '/deployment-center/git';
             return (
               <Link
                 key={d.id}

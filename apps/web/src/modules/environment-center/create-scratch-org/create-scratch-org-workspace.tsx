@@ -86,20 +86,17 @@ function ConfigCard({
           sourceOrgs={w.sourceOrgs}
           templates={w.templates}
           templateMeta={w.templateMeta}
-          repos={w.repos}
-          branches={w.branches}
-          azureStatus={w.azureStatus}
+          metadataSource={w.metadataSource}
           installPackage={w.installPackage}
           setInstallPackage={w.setInstallPackage}
           isRunning={!!w.isRunning}
-          onRepoChange={w.onRepoChange}
         />
       )}
       {w.desktopStep === 1 && (
         <ScratchOrgReview
           form={w.form}
           installPackage={w.installPackage}
-          azureConnected={w.azureStatus.connected}
+          sourceControlConnected={w.metadataSource.connected}
           templateMeta={w.templateMeta}
           sourceOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.sourceOrgId)?.alias}
         />
@@ -255,19 +252,16 @@ export function CreateScratchOrgWorkspace() {
                   sourceOrgs={w.sourceOrgs}
                   templates={w.templates}
                   templateMeta={w.templateMeta}
-                  repos={w.repos}
-                  branches={w.branches}
-                  azureStatus={w.azureStatus}
+                  metadataSource={w.metadataSource}
                   installPackage={w.installPackage}
                   setInstallPackage={w.setInstallPackage}
                   isRunning={!!w.isRunning}
-                  onRepoChange={w.onRepoChange}
                 />
               ) : (
                 <ScratchOrgReview
                   form={w.form}
                   installPackage={w.installPackage}
-                  azureConnected={w.azureStatus.connected}
+                  sourceControlConnected={w.metadataSource.connected}
                   templateMeta={w.templateMeta}
                   sourceOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.sourceOrgId)?.alias}
                 />

@@ -244,9 +244,9 @@ export class WorkerRegistry implements OnModuleInit {
       QUEUE_NAMES.METADATA_DEPLOY,
       wrap((j) => this.metadataDeployWorker.process(j), {
         pipelineJobType: 'pipeline_metadata_deploy',
-        failedStep: 'azure_metadata_deploy',
+        failedStep: 'git_metadata_deploy',
         resolveFailedStep: (error) =>
-          error instanceof PipelineStepError ? error.pipelineStep : 'azure_metadata_deploy',
+          error instanceof PipelineStepError ? error.pipelineStep : 'git_metadata_deploy',
       }),
     );
     this.queueService.registerWorker(

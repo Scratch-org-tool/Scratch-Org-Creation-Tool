@@ -18,7 +18,7 @@ const PREFETCH_ROUTES = [
   '/environment-center/create-scratch-org',
   '/scratch-templates',
   '/deployment-center',
-  '/deployment-center/azure',
+  '/deployment-center/git',
   '/deployment-center/jenkins',
   '/metadata-deployment',
   '/data-center',

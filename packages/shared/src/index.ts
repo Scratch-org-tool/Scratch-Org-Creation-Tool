@@ -21,3 +21,4 @@ export * from './bottler-sales-office-config.js';
 export * from './data-seed-query-set.js';
 export * from './user-provision-template.js';
 export * from './template-config-migration.js';
+export * from './integrations.js';

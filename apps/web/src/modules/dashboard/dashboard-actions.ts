@@ -4,8 +4,8 @@ import type { QuickActionItem } from '@/components/studio';
 export const DASHBOARD_QUICK_ACTIONS: QuickActionItem[] = [
   {
     label: 'New Deployment',
-    description: 'Deploy metadata from Azure DevOps',
-    href: '/deployment-center/azure',
+    description: 'Deploy metadata from a connected Git provider',
+    href: '/deployment-center/git',
     icon: Rocket,
     border: 'border-l-blue-500',
     iconBg: 'bg-blue-500/10 text-blue-400',

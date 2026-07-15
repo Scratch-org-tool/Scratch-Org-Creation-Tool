@@ -12,9 +12,9 @@ import { canAccessModule } from '@/lib/auth-utils';
 
 const DEPLOY_ACTIONS: HubActionItem[] = [
   {
-    label: 'Azure DevOps',
-    description: 'Deploy metadata from Azure repos with live execution logs.',
-    href: '/deployment-center/azure',
+    label: 'Git Metadata Deploy',
+    description: 'Deploy metadata from Azure DevOps, GitHub, or Bitbucket with live execution logs.',
+    href: '/deployment-center/git',
     icon: Rocket,
     iconBg: 'bg-blue-500/10 text-blue-400',
   },

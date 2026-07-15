@@ -1,4 +1,34 @@
-export type IntegrationTab = 'salesforce' | 'azure';
+export type IntegrationTab = 'salesforce' | 'source-control' | 'work-management';
+
+export type ScmProvider = 'azure_devops' | 'github' | 'bitbucket';
+export type WorkItemProvider = 'azure_boards' | 'github_issues' | 'jira';
+
+export interface PublicIntegrationConnection {
+  id: string;
+  provider: ScmProvider | WorkItemProvider;
+  externalAccountId?: string | null;
+  displayName: string;
+  namespace?: string | null;
+  baseUrl?: string | null;
+  source?: 'database' | 'environment' | null;
+  status: 'connected' | 'degraded' | 'disconnected' | 'error' | string;
+  capabilities?: Record<string, boolean> | null;
+  connectedAt?: string | null;
+  lastVerifiedAt?: string | null;
+}
+
+export interface ProjectBinding {
+  id: string;
+  scmConnectionId?: string | null;
+  workItemConnectionId?: string | null;
+  externalProjectId: string;
+  projectKey?: string | null;
+  repositoryId?: string | null;
+  repositoryName?: string | null;
+  metadata?: { workspace?: string | null } | null;
+  scmConnection?: Pick<PublicIntegrationConnection, 'id' | 'provider' | 'displayName' | 'status'> | null;
+  workItemConnection?: Pick<PublicIntegrationConnection, 'id' | 'provider' | 'displayName' | 'status'> | null;
+}
 
 export type OrgConnectType = 'production' | 'sandbox' | 'devhub' | 'custom';
 

@@ -9,22 +9,16 @@ import {
   setSessionCache,
 } from '@/lib/session-cache';
 import { DEFAULT_AZURE_MANIFEST_PATH } from '@sfcc/shared';
+import { useGitMetadataSource } from '@/modules/source-control/use-git-metadata-source';
+import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import type {
-  AzureDefaults,
   AzureDeployForm,
-  AzureRepo,
-  AzureStatus,
   DeploymentRow,
   JobData,
   Org,
   TestLevel,
 } from './types';
 import { ACTIVE_STATUSES, AZURE_LOG_TAIL, TERMINAL_STATUSES } from './types';
-
-async function fetchAzureBranches(project: string, repo: string): Promise<string[]> {
-  const params = new URLSearchParams({ repo, project });
-  return api<string[]>(`/environment/azure-branches?${params.toString()}`);
-}
 
 function capLogs(lines: string[], streams: string[]) {
   return {
@@ -45,20 +39,16 @@ const DEFAULT_FORM: AzureDeployForm = {
 const AZURE_BOOTSTRAP_KEY = 'azure:deploy-bootstrap';
 
 interface AzureBootstrapCache {
-  azureStatus: AzureStatus;
-  repos: AzureRepo[];
   history: DeploymentRow[];
-  branches: string[];
-  formPatch: Pick<AzureDeployForm, 'manifestPath' | 'project' | 'repo' | 'branch'>;
 }
 
 export function useAzureDeploy() {
+  const metadataSource = useGitMetadataSource({
+    defaultManifestPath: DEFAULT_AZURE_MANIFEST_PATH,
+  });
   const [loading, setLoading] = useState(true);
   const [orgs, setOrgs] = useState<Org[]>([]);
-  const [repos, setRepos] = useState<AzureRepo[]>([]);
-  const [branches, setBranches] = useState<string[]>([]);
   const [history, setHistory] = useState<DeploymentRow[]>([]);
-  const [azureStatus, setAzureStatus] = useState<AzureStatus>({ connected: false });
   const [form, setForm] = useState<AzureDeployForm>(DEFAULT_FORM);
   const [deploying, setDeploying] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -111,69 +101,19 @@ export function useAzureDeploy() {
       if (cached) {
         const o = await fetchOrgsList();
         setOrgs(o);
-        setAzureStatus(cached.azureStatus);
-        setRepos(cached.repos);
-        setBranches(cached.branches);
         setHistory(cached.history);
-        setForm((f) => ({ ...f, ...cached.formPatch }));
         setLoading(false);
         return;
       }
     }
 
-    const [o, azure, defaults, repoList] = await Promise.all([
-      fetchOrgsList(),
-      api<AzureStatus>('/environment/azure-connection').catch(() => ({ connected: false })),
-      api<AzureDefaults>('/environment/azure-defaults').catch(() => ({ manifestPath: DEFAULT_AZURE_MANIFEST_PATH })),
-      api<AzureRepo[]>('/environment/azure-repos').catch(() => []),
-    ]);
+    const o = await fetchOrgsList();
     setOrgs(o);
-    setAzureStatus(azure);
-    setRepos(repoList);
-    const azureProject =
-      ('project' in azure ? azure.project : null) ?? ('project' in defaults ? defaults.project : null) ?? '';
-    let branches: string[] = [];
-    let formPatch: AzureBootstrapCache['formPatch'] = {
-      manifestPath: defaults.manifestPath || DEFAULT_FORM.manifestPath,
-      project: azureProject || DEFAULT_FORM.project,
-      repo: DEFAULT_FORM.repo,
-      branch: DEFAULT_FORM.branch,
-    };
-    setForm((f) => ({
-      ...f,
-      manifestPath: formPatch.manifestPath,
-      project: formPatch.project || f.project,
-    }));
-    if (repoList[0]) {
-      const defaultRepo = 'repo' in defaults ? defaults.repo : undefined;
-      const defaultBranch = 'branch' in defaults ? defaults.branch : undefined;
-      const preferred =
-        (defaultRepo ? repoList.find((r) => r.name === defaultRepo) : null) ?? repoList[0];
-      const b = await fetchAzureBranches(preferred.project, preferred.name).catch(() => []);
-      branches = b;
-      formPatch = {
-        ...formPatch,
-        repo: preferred.name,
-        project: preferred.project,
-        branch: (defaultBranch ? b.find((x) => x === defaultBranch) : null) ?? b[0] ?? '',
-      };
-      setBranches(b);
-      setForm((f) => ({
-        ...f,
-        repo: formPatch.repo,
-        project: formPatch.project,
-        branch: formPatch.branch,
-      }));
-    }
     const list = await api<DeploymentRow[]>('/deployments');
     const filteredHistory = list.filter((d) => d.strategy === 'azure');
     setHistory(filteredHistory);
     setSessionCache(AZURE_BOOTSTRAP_KEY, {
-      azureStatus: azure,
-      repos: repoList,
       history: filteredHistory,
-      branches,
-      formPatch,
     });
     setLoading(false);
   }, []);
@@ -249,15 +189,6 @@ export function useAzureDeploy() {
     };
   }, [jobId, jobStatus, loadHistory]);
 
-  const onRepoChange = async (repoName: string) => {
-    const selected = repos.find((r) => r.name === repoName);
-    const project = selected?.project ?? '';
-    setForm((f) => ({ ...f, repo: repoName, project, branch: '' }));
-    const b = await fetchAzureBranches(project, repoName).catch(() => []);
-    setBranches(b);
-    if (b[0]) setForm((f) => ({ ...f, branch: b[0] }));
-  };
-
   const deploy = async () => {
     setDeploying(true);
     setDeployError(null);
@@ -268,7 +199,11 @@ export function useAzureDeploy() {
     setJobId(null);
     setActiveDeploymentId(null);
     setJobStatus('running');
-    setCurrentStep('Connecting to Azure DevOps');
+    setCurrentStep(
+      metadataSource.source.provider
+        ? `Connecting to ${SCM_PROVIDER_LABELS[metadataSource.source.provider]}`
+        : 'Connecting to source control',
+    );
     setDeployStartedAt(Date.now());
     try {
       const res = await api<{ deploymentId: string; jobId: string; status: string }>(
@@ -277,11 +212,12 @@ export function useAzureDeploy() {
           method: 'POST',
           body: JSON.stringify({
             targetOrgId: form.targetOrgId,
-            repo: form.repo,
-            branch: form.branch,
+            repo: metadataSource.gitSource?.repo,
+            branch: metadataSource.gitSource?.branch,
             strategy: 'azure',
-            project: form.project || undefined,
-            manifestPath: form.manifestPath || undefined,
+            project: metadataSource.gitSource?.project,
+            manifestPath: metadataSource.gitSource?.manifestPath,
+            gitSource: metadataSource.gitSource,
             testLevel: form.testLevel,
           }),
         },
@@ -300,7 +236,10 @@ export function useAzureDeploy() {
       setLogStreams([]);
       setLogsTruncated(false);
       setLogCount(null);
-      setDeployError(err instanceof Error ? err.message : 'Failed to submit deployment');
+      const provider = metadataSource.source.provider
+        ? SCM_PROVIDER_LABELS[metadataSource.source.provider]
+        : 'Source-control provider';
+      setDeployError(`${provider}: ${err instanceof Error ? err.message : 'Failed to submit deployment'}`);
     } finally {
       setDeploying(false);
     }
@@ -346,19 +285,22 @@ export function useAzureDeploy() {
   const targetOrgAlias = orgs.find((o) => o.id === form.targetOrgId)?.alias ?? '';
   const isRunning = !!jobStatus && ACTIVE_STATUSES.includes(jobStatus);
   const canDeploy =
-    azureStatus.connected &&
+    !!metadataSource.gitSource &&
     !!form.targetOrgId &&
-    !!form.repo &&
-    !!form.branch &&
     !isRunning;
 
   return {
     loading,
     orgs,
-    repos,
-    branches,
+    repos: metadataSource.repositories.map((repository) => ({
+      id: repository.id,
+      name: repository.fullName || repository.name,
+      project: metadataSource.source.project,
+    })),
+    branches: metadataSource.branches,
     history,
-    azureStatus,
+    azureStatus: { connected: metadataSource.connected },
+    metadataSource,
     form,
     setForm,
     deploying,
@@ -379,7 +321,7 @@ export function useAzureDeploy() {
     targetOrgAlias,
     isRunning,
     canDeploy,
-    onRepoChange,
+    onRepoChange: () => undefined,
     deploy,
     cancelDeploy,
     selectHistory,

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { normalizeAzureOrgSlug, normalizeAzureProject } from '../azure-utils.js';
 import { querySetSchema } from '../query-set.js';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX } from '../org-to-org-data.js';
+import { gitSourceConfigSchema, normalizeGitSourceConfig } from '../integrations.js';
 
 const dataRecordLimitSchema = z
   .number()
@@ -137,7 +138,8 @@ export const dataDeployConfigSchema = z.object({
 });
 
 export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
-  azureDeploy: azureDeployConfigSchema,
+  azureDeploy: azureDeployConfigSchema.optional(),
+  gitSource: gitSourceConfigSchema.optional(),
   automationRunId: z.string().uuid().optional(),
   sourceOrgId: z.string().uuid().optional(),
   dataDeploymentOrgId: z.string().uuid().optional(),
@@ -204,7 +206,10 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
   pipelineSteps: pipelineStepsConfigSchema.optional(),
   permissionSets: z.array(z.string()).optional(),
   templateId: z.string().uuid().optional(),
-});
+}).refine((value) => Boolean(value.gitSource || value.azureDeploy), {
+  message: 'gitSource or azureDeploy is required',
+  path: ['gitSource'],
+}).transform(normalizeGitSourceConfig);
 
 export const customSettingsLoadSchema = z.object({
   sourceOrgId: z.string().uuid(),
@@ -295,21 +300,86 @@ export const pipelineResumeSchema = z.object({
     repo: z.string().optional(),
     project: z.string().optional(),
   }).optional(),
+  gitSource: gitSourceConfigSchema.partial().optional(),
 });
 
 export const deploymentSchema = z.object({
   targetOrgId: z.string().uuid(),
-  repo: z.string().min(1),
-  branch: z.string().min(1),
-  strategy: z.enum(['azure', 'jenkins']),
-  sourceOrgId: z.string().uuid().optional(),
-});
-
-export const deployNowSchema = deploymentSchema.extend({
-  strategy: z.literal('azure'),
+  repo: z.string().min(1).optional(),
+  branch: z.string().min(1).optional(),
   project: z.string().optional(),
   manifestPath: z.string().optional(),
+  strategy: z.enum(['azure', 'jenkins']).optional(),
+  gitSource: gitSourceConfigSchema.optional(),
+  azureDeploy: azureDeployConfigSchema.optional(),
+  sourceOrgId: z.string().uuid().optional(),
+}).superRefine((value, context) => {
+  if (!value.gitSource && !value.azureDeploy && (!value.repo || !value.branch)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'gitSource, azureDeploy, or repo and branch are required',
+      path: ['gitSource'],
+    });
+  }
+}).transform((value) => {
+  const legacyAzure = value.azureDeploy ?? (
+    value.repo && value.branch && value.strategy !== 'jenkins'
+      ? {
+          project: value.project,
+          repo: value.repo,
+          branch: value.branch,
+          manifestPath: value.manifestPath,
+        }
+      : undefined
+  );
+  const normalized = normalizeGitSourceConfig({ ...value, azureDeploy: legacyAzure });
+  return {
+    ...normalized,
+    repo: normalized.gitSource?.repo ?? value.repo!,
+    branch: normalized.gitSource?.branch ?? value.branch!,
+    strategy: value.strategy ?? 'azure',
+  };
+});
+
+export const deployNowSchema = z.object({
+  targetOrgId: z.string().uuid(),
+  sourceOrgId: z.string().uuid().optional(),
+  repo: z.string().min(1).optional(),
+  branch: z.string().min(1).optional(),
+  project: z.string().optional(),
+  manifestPath: z.string().optional(),
+  strategy: z.literal('azure').optional(),
+  gitSource: gitSourceConfigSchema.optional(),
+  azureDeploy: azureDeployConfigSchema.optional(),
   testLevel: z.enum(['NoTestRun', 'RunSpecifiedTests', 'RunLocalTests', 'RunAllTestsInOrg']).optional(),
+}).superRefine((value, context) => {
+  if (!value.gitSource && !value.azureDeploy && (!value.repo || !value.branch)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'gitSource, azureDeploy, or repo and branch are required',
+      path: ['gitSource'],
+    });
+  }
+}).transform((value) => {
+  const azureDeploy = value.azureDeploy ?? (
+    value.repo && value.branch
+      ? {
+          project: value.project,
+          repo: value.repo,
+          branch: value.branch,
+          manifestPath: value.manifestPath,
+        }
+      : undefined
+  );
+  const normalized = normalizeGitSourceConfig({ ...value, azureDeploy });
+  return {
+    ...normalized,
+    repo: normalized.gitSource!.repo,
+    branch: normalized.gitSource!.branch,
+    project: normalized.gitSource!.project,
+    manifestPath: normalized.gitSource!.manifestPath,
+    strategy: 'azure' as const,
+  };
 });
 
 export const orgSetupAssignScopeSchema = z.enum(['default_user', 'all_active_users']);

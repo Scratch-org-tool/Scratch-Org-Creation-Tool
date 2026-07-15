@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { gitSourceConfigSchema } from './integrations.js';
 import { extractObjectFromSoql } from './query-set.js';
 import { bottlerSalesOfficeConfigSchema } from './bottler-sales-office-config.js';
 import { dataSeedQuerySetSchema } from './data-seed-query-set.js';
@@ -43,6 +44,7 @@ export const scratchPipelineTemplateConfigSchema = z.object({
   duration: z.number().int().positive().optional().default(7),
   installPackage: z.boolean().default(true),
   azureDeploy: scratchPipelineTemplateAzureSchema,
+  gitSource: gitSourceConfigSchema.partial().optional(),
   permissionSets: z.array(z.string()).optional(),
   orgConfig: z.object({
     upsertQueueIds: z.boolean().default(true),
@@ -93,7 +95,7 @@ export const scratchPipelineTemplateConfigSchema = z.object({
 
 export type ScratchPipelineTemplateConfig = z.infer<typeof scratchPipelineTemplateConfigSchema>;
 
-/** Strip per-run Azure fields (repo/branch) before persisting a template. */
+/** Strip per-run repository fields while retaining provider/connection defaults. */
 export function sanitizeTemplateConfigForStorage(
   config: ScratchPipelineTemplateConfig,
 ): ScratchPipelineTemplateConfig {
@@ -103,6 +105,11 @@ export function sanitizeTemplateConfigForStorage(
     cleaned.azureDeploy = { manifestPath };
   } else {
     delete cleaned.azureDeploy;
+  }
+  if (config.gitSource) {
+    const { repo: _repo, branch: _branch, repositoryId: _repositoryId, ...defaults } =
+      config.gitSource;
+    cleaned.gitSource = Object.keys(defaults).length ? defaults : undefined;
   }
   return cleaned;
 }

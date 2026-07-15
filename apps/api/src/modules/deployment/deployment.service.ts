@@ -5,8 +5,11 @@ import {
   buildDestructiveChangesXml,
   deployNowSchema,
   deploymentSchema,
+  gitSourceConfigSchema,
   orgToOrgMetadataDeploySchema,
   resolveManifestXml,
+  type GitSourceConfig,
+  type ScmProvider,
 } from '@sfcc/shared';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import { AzureService } from '../../integrations/azure/azure.service';
@@ -19,11 +22,15 @@ import { JobProcessRegistryService } from '../jobs/job-process-registry.service'
 import { StreamService } from '../stream/stream.service';
 import { QUEUE_NAMES } from '@sfcc/shared';
 import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
+import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
+import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 
 @Injectable()
 export class DeploymentService {
   constructor(
     private readonly azureService: AzureService,
+    private readonly scmAdapters: ScmAdapterRegistry,
+    private readonly scmSources: ScmSourceService,
     private readonly jenkinsService: JenkinsService,
     private readonly metadataDeployQueue: MetadataDeployQueueService,
     private readonly metadataDeployJobService: MetadataDeployJobService,
@@ -65,6 +72,9 @@ export class DeploymentService {
 
     return deployments.map((d) => ({
       ...d,
+      provider:
+        ((d.metadata as Record<string, unknown> | null)?.provider as string | undefined) ??
+        (d.strategy === 'azure' ? 'azure_devops' : d.strategy),
       sourceOrg: d.sourceOrgId ? sourceMap.get(d.sourceOrgId) ?? null : null,
     }));
   }
@@ -72,6 +82,9 @@ export class DeploymentService {
   async createDeployment(body: unknown, userId: string) {
     const input = deploymentSchema.parse(body);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
+    const gitSource = input.gitSource
+      ? await this.scmSources.resolve(input.gitSource)
+      : undefined;
     return prisma.deployment.create({
       data: {
         targetOrgId: input.targetOrgId,
@@ -80,6 +93,15 @@ export class DeploymentService {
         branch: input.branch,
         strategy: input.strategy,
         status: 'pending',
+        metadata: gitSource
+          ? {
+              provider: gitSource.provider,
+              connectionId: gitSource.connectionId,
+              bindingId: gitSource.bindingId,
+              manifestPath: gitSource.manifestPath,
+              gitSource,
+            } as Prisma.InputJsonValue
+          : undefined,
         createdBy: userId,
       },
     });
@@ -99,12 +121,9 @@ export class DeploymentService {
       sourceOrgAlias = sourceOrg.username ?? sourceOrg.alias;
     }
 
-    const project = await this.metadataDeployQueue.resolveAzureProject(
-      input.repo,
-      input.project,
-    );
+    const gitSource = await this.scmSources.requireActive(input.gitSource!);
 
-    const deployMode = input.sourceOrgId ? 'org_to_org' as const : 'azure' as const;
+    const deployMode = input.sourceOrgId ? 'org_to_org' as const : 'git' as const;
 
     const deployment = await prisma.deployment.create({
       data: {
@@ -116,7 +135,10 @@ export class DeploymentService {
         status: 'running',
         metadata: {
           manifestPath: input.manifestPath,
-          project,
+          provider: gitSource.provider,
+          connectionId: gitSource.connectionId,
+          bindingId: gitSource.bindingId,
+          gitSource,
           deployMode,
         } as Prisma.InputJsonValue,
         createdBy: userId,
@@ -131,12 +153,7 @@ export class DeploymentService {
       sourceOrgId: input.sourceOrgId,
       sourceOrgAlias,
       deployMode,
-      azureDeploy: {
-        repo: input.repo,
-        branch: input.branch,
-        project: project || undefined,
-        manifestPath: input.manifestPath,
-      },
+      gitSource,
     });
 
     const updated = await prisma.deployment.findUnique({
@@ -302,15 +319,22 @@ export class DeploymentService {
     });
 
     if (dep.strategy === 'azure') {
-      const project = await this.metadataDeployQueue.resolveAzureProject(dep.repo);
+      const metadata = (dep.metadata ?? {}) as Record<string, unknown>;
+      const storedSource = metadata.gitSource
+        ? gitSourceConfigSchema.parse(metadata.gitSource)
+        : {
+            provider: 'azure_devops' as const,
+            project: typeof metadata.project === 'string' ? metadata.project : undefined,
+            repo: dep.repo,
+            branch: dep.branch,
+            manifestPath:
+              typeof metadata.manifestPath === 'string' ? metadata.manifestPath : undefined,
+          };
       await this.metadataDeployQueue.enqueue({
         deploymentId: dep.id,
         orgAlias: dep.targetOrg.username ?? dep.targetOrg.alias,
-        azureDeploy: {
-          repo: dep.repo,
-          branch: dep.branch,
-          project: project || undefined,
-        },
+        gitSource: storedSource,
+        createdBy: userId,
       });
     } else {
       await this.jenkinsService.triggerBuild(dep.repo, dep.branch);
@@ -480,16 +504,46 @@ export class DeploymentService {
     };
   }
 
-  async listRepos(strategy: 'azure' | 'jenkins') {
-    if (strategy === 'azure') return this.azureService.listRepos();
-    return this.jenkinsService.listJobs();
+  async listRepos(
+    providerOrStrategy: ScmProvider | 'azure' | 'jenkins',
+    connectionId?: string,
+    namespace?: string,
+    project?: string,
+  ) {
+    if (providerOrStrategy === 'jenkins') return this.jenkinsService.listJobs();
+    const provider = providerOrStrategy === 'azure' ? 'azure_devops' : providerOrStrategy;
+    return this.scmAdapters.get(provider).listRepositories({ connectionId, namespace, project });
   }
 
-  async listBranches(strategy: 'azure' | 'jenkins', repo: string, project?: string) {
-    if (strategy === 'azure') {
-      return this.azureService.listBranches(project, repo);
+  async listBranches(
+    providerOrStrategy: ScmProvider | 'azure' | 'jenkins',
+    repo: string,
+    project?: string,
+    connectionId?: string,
+    namespace?: string,
+    repositoryId?: string,
+    bindingId?: string,
+  ) {
+    if (providerOrStrategy === 'jenkins') {
+      return this.jenkinsService.listBranches(repo);
     }
-    return this.jenkinsService.listBranches(repo);
+    const provider = providerOrStrategy === 'azure' ? 'azure_devops' : providerOrStrategy;
+    const source: GitSourceConfig = {
+      provider,
+      connectionId,
+      namespace,
+      project,
+      repositoryId,
+      bindingId,
+      repo,
+      branch: 'main',
+    };
+    const resolved = await this.scmSources.resolve(source);
+    return this.scmAdapters.get(provider).listBranches(resolved);
+  }
+
+  getScmDefaults(provider: ScmProvider, connectionId?: string) {
+    return this.scmAdapters.get(provider).getConnectionStatus({ connectionId });
   }
 
   getAzureDefaults() {

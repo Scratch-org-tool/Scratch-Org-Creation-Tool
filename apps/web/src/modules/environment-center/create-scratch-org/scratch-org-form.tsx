@@ -1,15 +1,14 @@
 'use client';
 
-import Link from 'next/link';
 import { SCRATCH_ORG_SKIPPABLE_STEPS } from '@sfcc/shared';
-import { Bug, CloudUpload, KeyRound, Link2, ShieldCheck } from 'lucide-react';
+import { Bug, CloudUpload, KeyRound, ShieldCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { FormSection } from '@/components/studio/form-section';
-import { InlineAlert } from '@/components/studio/inline-alert';
+import { GitMetadataSourceFields } from '@/modules/source-control/git-metadata-source-fields';
+import type { GitMetadataSourceHook } from '@/modules/source-control/use-git-metadata-source';
 import { cn } from '@/utils/cn';
 import type { ScratchOrgFormState } from '@/components/scratch-org/types';
-import type { AzureRepo, AzureStatus } from './types';
 
 interface ScratchOrgFormProps {
   form: ScratchOrgFormState;
@@ -18,13 +17,10 @@ interface ScratchOrgFormProps {
   sourceOrgs: { id: string; alias: string }[];
   templates: Array<{ id: string; name: string; isSystem: boolean }>;
   templateMeta?: { name: string; config: Record<string, unknown> } | null;
-  repos: AzureRepo[];
-  branches: string[];
-  azureStatus: AzureStatus;
+  metadataSource: GitMetadataSourceHook;
   installPackage: boolean;
   setInstallPackage: (v: boolean) => void;
   isRunning: boolean;
-  onRepoChange: (repo: string) => void;
 }
 
 function Field({ className, children }: { className?: string; children: React.ReactNode }) {
@@ -82,13 +78,10 @@ export function ScratchOrgForm({
   sourceOrgs,
   templates,
   templateMeta,
-  repos,
-  branches,
-  azureStatus,
+  metadataSource,
   installPackage,
   setInstallPackage,
   isRunning,
-  onRepoChange,
 }: ScratchOrgFormProps) {
   const usingTemplate = Boolean(form.templateId && templateMeta);
 
@@ -118,7 +111,7 @@ export function ScratchOrgForm({
                 <p className="font-medium">From template: {templateMeta!.name}</p>
                 <p className="text-xs text-muted-foreground">
                   Scratch defaults, permissions, custom settings, data seed, and users come from this template.
-                  Set alias, Dev Hub, and Azure repo/branch below for this run.
+                  Set alias, Dev Hub, and metadata source below for this run.
                 </p>
               </div>
             </Field>
@@ -214,72 +207,8 @@ export function ScratchOrgForm({
         </div>
       </FormSection>
 
-      <FormSection title="Azure DevOps" description="Source repository for metadata deployment.">
-        {azureStatus.connected ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field>
-              <Label htmlFor="scratch-org-azure-repository">Azure Repository</Label>
-              <Select
-                id="scratch-org-azure-repository"
-                value={form.azureRepo}
-                onChange={(e) => onRepoChange(e.target.value)}
-                disabled={isRunning}
-              >
-                {repos.length === 0 ? (
-                  <option value="">No repositories found</option>
-                ) : (
-                  repos.map((r) => (
-                    <option key={r.id} value={r.name}>
-                      {r.project ? `${r.name} (${r.project})` : r.name}
-                    </option>
-                  ))
-                )}
-              </Select>
-            </Field>
-            <Field>
-              <Label htmlFor="scratch-org-azure-branch">Branch</Label>
-              <Select
-                id="scratch-org-azure-branch"
-                value={form.azureBranch}
-                onChange={(e) => setForm({ ...form, azureBranch: e.target.value })}
-                disabled={isRunning}
-              >
-                {branches.length === 0 ? (
-                  <option value="">No branches found</option>
-                ) : (
-                  branches.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))
-                )}
-              </Select>
-            </Field>
-            <Field className="sm:col-span-2">
-              <Label htmlFor="scratch-org-manifest-path">Manifest Path</Label>
-              <Input
-                id="scratch-org-manifest-path"
-                value={form.azureManifestPath}
-                onChange={(e) => setForm({ ...form, azureManifestPath: e.target.value })}
-                placeholder="CoreFlex Onboarding/manifest/package.xml"
-                disabled={isRunning}
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Path to package.xml inside the selected branch
-              </p>
-            </Field>
-          </div>
-        ) : (
-          <InlineAlert variant="warning" title="Azure DevOps not connected">
-            <Link
-              href="/environment-center?tab=azure"
-              className="text-primary inline-flex items-center gap-1 mt-1 hover:underline"
-            >
-              <Link2 className="w-3 h-3" />
-              Connect Azure DevOps
-            </Link>
-          </InlineAlert>
-        )}
+      <FormSection title="Metadata Source" description="Connected Git provider and repository used for metadata deployment.">
+        <GitMetadataSourceFields source={metadataSource} disabled={isRunning} />
       </FormSection>
 
       <FormSection title="Pipeline Options">
@@ -299,7 +228,7 @@ export function ScratchOrgForm({
             <PipelineOptionCard
               key={s.key}
               label={s.label}
-              description="Included in Azure pipeline"
+              description="Included in the metadata pipeline"
               checked
               disabled
               icon={s.key === 'deployMetadata' ? CloudUpload : ShieldCheck}

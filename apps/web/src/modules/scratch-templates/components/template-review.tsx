@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import type { TemplateConfigState } from '../types';
 import { TEMPLATE_WIZARD_STEPS } from '../types';
 import { formatPermissionSets } from './permission-sets-editor';
+import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 
 interface TemplateReviewProps {
   name: string;
@@ -45,7 +46,15 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
         ['Scratch def', config.template ?? '—'],
         ['Duration', `${config.duration ?? 7} days`],
         ['Install package', config.installPackage ? 'Yes' : 'No'],
-        ['Default manifest', config.azureDeploy?.manifestPath ?? '—'],
+        [
+          'Metadata provider',
+          config.gitSource?.provider
+            ? SCM_PROVIDER_LABELS[config.gitSource.provider]
+            : config.azureDeploy
+              ? 'Azure DevOps (legacy)'
+              : '—',
+        ],
+        ['Default manifest', config.gitSource?.manifestPath ?? config.azureDeploy?.manifestPath ?? '—'],
       ] as const,
     },
     {

@@ -2,6 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { prisma, Prisma } from '@sfcc/db';
 import {
   QUEUE_NAMES,
+  canonicalPipelineStep,
+  normalizeGitSourceConfig,
+  normalizePipelineCheckpointAliases,
+  type GitSourceConfig,
   type PipelineStepId,
   type ScratchOrgPipelineInput,
   type UserTriggeredPipelineStepId,
@@ -15,7 +19,6 @@ import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JobProcessRegistryService } from '../jobs/job-process-registry.service';
 import { StreamService } from '../stream/stream.service';
-import { AzureService } from '../../integrations/azure/azure.service';
 import { MetadataDeployQueueService } from '../deployment/metadata-deploy-queue.service';
 import { MetadataDeployJobService } from '../deployment/metadata-deploy-job.service';
 import { DeploymentService } from '../deployment/deployment.service';
@@ -25,6 +28,8 @@ import {
   loadBundledCustomSettingsExport,
   writeSfdmuExportFromUpload,
 } from '../data/sfdmu-config.generator';
+import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
+import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 
 export interface PipelineCheckpoint {
   completedSteps: PipelineStepId[];
@@ -50,7 +55,8 @@ export class PipelineOrchestratorService {
     private readonly jobsService: JobsService,
     private readonly processRegistry: JobProcessRegistryService,
     private readonly streamService: StreamService,
-    private readonly azureService: AzureService,
+    private readonly scmAdapters: ScmAdapterRegistry,
+    private readonly scmSources: ScmSourceService,
     private readonly metadataDeployQueue: MetadataDeployQueueService,
     private readonly metadataDeployJobService: MetadataDeployJobService,
     private readonly deploymentService: DeploymentService,
@@ -65,7 +71,19 @@ export class PipelineOrchestratorService {
       },
     });
     if (userId) assertResourceOwner(run, userId, 'Automation run');
-    return run;
+    if (!run) return run;
+    return {
+      ...run,
+      config: normalizeGitSourceConfig(
+        run.config as unknown as {
+          gitSource?: GitSourceConfig;
+          azureDeploy?: ScratchOrgPipelineInput['azureDeploy'];
+        },
+      ),
+      checkpoint: normalizePipelineCheckpointAliases(
+        (run.checkpoint ?? {}) as unknown as PipelineCheckpoint,
+      ),
+    };
   }
 
   async getActiveRun(intent: string, userId: string) {
@@ -149,11 +167,13 @@ export class PipelineOrchestratorService {
     const run = await prisma.automationRun.findUnique({ where: { id: automationRunId } });
     if (!run) return;
 
-    const config = run.config as ScratchOrgPipelineInput;
-    const checkpoint = (run.checkpoint ?? {
+    const config = normalizeGitSourceConfig(
+      run.config as unknown as ScratchOrgPipelineInput,
+    ) as ScratchOrgPipelineInput;
+    const checkpoint = normalizePipelineCheckpointAliases((run.checkpoint ?? {
       completedSteps: [],
       resumeFrom: 'scratch_org_create',
-    }) as unknown as PipelineCheckpoint;
+    }) as unknown as PipelineCheckpoint) as PipelineCheckpoint;
 
     if (jobType === 'scratch_org_workflow') {
       const conn = await prisma.orgConnection.findUnique({
@@ -161,14 +181,14 @@ export class PipelineOrchestratorService {
       });
       checkpoint.completedSteps.push('scratch_org_create');
       checkpoint.targetOrgConnectionId = conn?.id;
-      checkpoint.resumeFrom = 'azure_metadata_deploy';
+      checkpoint.resumeFrom = 'git_metadata_deploy';
       await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
       return;
     }
 
     if (jobType === 'pipeline_metadata_deploy') {
-      if (!checkpoint.completedSteps.includes('azure_metadata_deploy')) {
-        checkpoint.completedSteps.push('azure_metadata_deploy');
+      if (!checkpoint.completedSteps.includes('git_metadata_deploy')) {
+        checkpoint.completedSteps.push('git_metadata_deploy');
       }
       if (result?.assignPermissionSetCompleted) {
         checkpoint.completedSteps.push('assign_permission_set');
@@ -239,16 +259,19 @@ export class PipelineOrchestratorService {
     const run = await prisma.automationRun.findUnique({ where: { id: automationRunId } });
     if (!run) return;
 
-    const checkpoint = (run.checkpoint ?? { completedSteps: [], resumeFrom: 'scratch_org_create' }) as unknown as PipelineCheckpoint;
-    if (failedStep === 'assign_permission_set' && !checkpoint.completedSteps.includes('azure_metadata_deploy')) {
-      checkpoint.completedSteps.push('azure_metadata_deploy');
+    const canonicalFailedStep = canonicalPipelineStep(failedStep) as PipelineStepId;
+    const checkpoint = normalizePipelineCheckpointAliases(
+      (run.checkpoint ?? { completedSteps: [], resumeFrom: 'scratch_org_create' }) as unknown as PipelineCheckpoint,
+    ) as PipelineCheckpoint;
+    if (canonicalFailedStep === 'assign_permission_set' && !checkpoint.completedSteps.includes('git_metadata_deploy')) {
+      checkpoint.completedSteps.push('git_metadata_deploy');
     }
-    checkpoint.resumeFrom = failedStep;
+    checkpoint.resumeFrom = canonicalFailedStep;
 
     const checkpointData = (run.checkpoint ?? {}) as unknown as PipelineCheckpoint;
     if (
       checkpointData.deploymentId &&
-      (failedStep === 'azure_metadata_deploy' || failedStep === 'assign_permission_set')
+      (canonicalFailedStep === 'git_metadata_deploy' || canonicalFailedStep === 'assign_permission_set')
     ) {
       const deployment = await prisma.deployment.findUnique({
         where: { id: checkpointData.deploymentId },
@@ -271,7 +294,7 @@ export class PipelineOrchestratorService {
       where: { id: automationRunId },
       data: {
         status: 'paused',
-        failedStep,
+        failedStep: canonicalFailedStep,
         lastError: error,
         checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
       },
@@ -280,14 +303,14 @@ export class PipelineOrchestratorService {
     await this.streamService.publish('job_status', {
       automationRunId,
       status: 'paused',
-      step: failedStep,
+      step: canonicalFailedStep,
       message: error,
       recoverable: true,
     });
     await this.jobsService.addLog(
       checkpoint.scratchOrgJobId ?? automationRunId,
       'stderr',
-      `[PIPELINE PAUSED] ${failedStep}: ${error}`,
+      `[PIPELINE PAUSED] ${canonicalFailedStep}: ${error}`,
     );
   }
 
@@ -326,7 +349,9 @@ export class PipelineOrchestratorService {
     // Org-to-org metadata runs store the full deploy input in run.config —
     // resume re-enqueues the deploy (with any chained data config) directly.
     if (run.intent === 'org_to_org_metadata_data') {
-      const checkpoint = (run.checkpoint ?? {}) as unknown as PipelineCheckpoint;
+      const checkpoint = normalizePipelineCheckpointAliases(
+        (run.checkpoint ?? {}) as unknown as PipelineCheckpoint,
+      ) as PipelineCheckpoint;
       let deploymentId = checkpoint.deploymentId;
       if (!deploymentId) {
         const previousJob = await prisma.job.findFirst({
@@ -349,7 +374,7 @@ export class PipelineOrchestratorService {
         });
         return {
           automationRunId,
-          resumeFrom: 'azure_metadata_deploy' as PipelineStepId,
+          resumeFrom: 'git_metadata_deploy' as PipelineStepId,
           ...result,
           status: 'running',
         };
@@ -359,14 +384,44 @@ export class PipelineOrchestratorService {
       }
     }
 
+    const persistedConfig = normalizeGitSourceConfig(
+      run.config as unknown as ScratchOrgPipelineInput,
+    ) as ScratchOrgPipelineInput;
+    const legacyPatch = patch.azureDeploy && persistedConfig.gitSource?.provider === 'azure_devops'
+      ? {
+          ...persistedConfig.gitSource,
+          ...patch.azureDeploy,
+          provider: 'azure_devops' as const,
+        }
+      : undefined;
+    const canonicalPatch = patch.gitSource;
+    const providerChanged =
+      canonicalPatch?.provider &&
+      canonicalPatch.provider !== persistedConfig.gitSource?.provider;
+    const patchedSource = legacyPatch || canonicalPatch
+      ? {
+          ...(providerChanged
+            ? {
+                repo: persistedConfig.gitSource?.repo,
+                branch: persistedConfig.gitSource?.branch,
+                manifestPath: persistedConfig.gitSource?.manifestPath,
+              }
+            : persistedConfig.gitSource),
+          ...legacyPatch,
+          ...canonicalPatch,
+        }
+      : undefined;
     const config = {
-      ...(run.config as ScratchOrgPipelineInput),
+      ...persistedConfig,
       ...(patch.azureDeploy
-        ? { azureDeploy: { ...(run.config as ScratchOrgPipelineInput).azureDeploy, ...patch.azureDeploy } }
+        ? { azureDeploy: { ...persistedConfig.azureDeploy, ...patch.azureDeploy } }
         : {}),
+      ...(patchedSource ? { gitSource: patchedSource } : {}),
     } as ScratchOrgPipelineInput;
 
-    const checkpoint = (run.checkpoint ?? { completedSteps: [], resumeFrom: 'scratch_org_create' }) as unknown as PipelineCheckpoint;
+    const checkpoint = normalizePipelineCheckpointAliases(
+      (run.checkpoint ?? { completedSteps: [], resumeFrom: 'scratch_org_create' }) as unknown as PipelineCheckpoint,
+    ) as PipelineCheckpoint;
 
     await prisma.automationRun.update({
       where: { id: automationRunId },
@@ -379,7 +434,7 @@ export class PipelineOrchestratorService {
     const resumeFrom = checkpoint.resumeFrom;
 
     try {
-      if (resumeFrom === 'azure_metadata_deploy') {
+      if (resumeFrom === 'git_metadata_deploy' || resumeFrom === 'azure_metadata_deploy') {
         await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
       } else if (resumeFrom === 'assign_permission_set') {
         await this.enqueueAssignPermissionSet(automationRunId, checkpoint);
@@ -640,6 +695,9 @@ export class PipelineOrchestratorService {
       where: { id: checkpoint.targetOrgConnectionId ?? '' },
     });
     if (!target) throw new Error('Target org connection not found');
+    const normalized = normalizeGitSourceConfig(config);
+    if (!normalized.gitSource) throw new Error('gitSource is required for metadata deployment');
+    const gitSource = await this.scmSources.requireActive(normalized.gitSource);
 
     const existingDeployment = checkpoint.deploymentId
       ? await prisma.deployment.findUnique({ where: { id: checkpoint.deploymentId } })
@@ -649,39 +707,52 @@ export class PipelineOrchestratorService {
           where: { id: existingDeployment.id },
           data: {
             status: 'queued',
-            repo: config.azureDeploy.repo,
-            branch: config.azureDeploy.branch,
+            repo: gitSource.repo,
+            branch: gitSource.branch,
+            metadata: {
+              ...((existingDeployment.metadata as Record<string, unknown> | null) ?? {}),
+              provider: gitSource.provider,
+              connectionId: gitSource.connectionId,
+              bindingId: gitSource.bindingId,
+              manifestPath: gitSource.manifestPath,
+              gitSource,
+            } as Prisma.InputJsonValue,
           },
         })
       : await prisma.deployment.create({
           data: {
             targetOrgId: target.id,
-            repo: config.azureDeploy.repo,
-            branch: config.azureDeploy.branch,
+            repo: gitSource.repo,
+            branch: gitSource.branch,
             strategy: 'azure',
             status: 'queued',
+            metadata: {
+              provider: gitSource.provider,
+              connectionId: gitSource.connectionId,
+              bindingId: gitSource.bindingId,
+              manifestPath: gitSource.manifestPath,
+              gitSource,
+            } as Prisma.InputJsonValue,
             createdBy: (await prisma.automationRun.findUnique({ where: { id: automationRunId } }))?.createdBy ?? 'system',
           },
         });
     checkpoint.deploymentId = deployment.id;
 
-    await this.azureService.triggerPipeline(
-      config.azureDeploy.project ?? process.env.AZURE_DEFAULT_PROJECT ?? '',
-      config.azureDeploy.repo,
-      config.azureDeploy.branch,
-      {
+    const adapter = this.scmAdapters.get(gitSource.provider);
+    if (adapter.triggerPipeline) {
+      await adapter.triggerPipeline(gitSource, {
         targetOrgAlias: target.alias,
         targetOrgUsername: target.username ?? target.alias,
         instanceUrl: target.instanceUrl,
-      },
-    );
+      });
+    }
 
     const orgAlias = target.username ?? target.alias;
     const job = await this.metadataDeployQueue.enqueue({
       automationRunId,
       deploymentId: deployment.id,
       orgAlias,
-      azureDeploy: config.azureDeploy,
+      gitSource,
       assignPermissionSet: true,
       intelligentDeployRunId: checkpoint.intelligentDeployRunId,
     });

@@ -9,11 +9,12 @@ import { DefectsPageHeader } from './defects-page-header';
 import { DefectsStatCards } from './defects-stat-cards';
 import { DefectsWorkItemsTable } from './defects-work-items-table';
 import { useDefectsWorkspace } from './use-defects-workspace';
+import { providerLabel, providerSetupHref } from './work-item-contracts';
 
 export function DefectsCommandCentreWorkspace() {
   const w = useDefectsWorkspace();
   const showSkeleton = w.loading && !w.overview && !w.needsProjectSelection;
-  const notConnected = w.projectsMeta && !w.projectsMeta.connected;
+  const notConnected = !w.contextsLoading && !w.connected && !w.setupError;
 
   return (
     <div className="p-4 md:p-6 space-y-5">
@@ -22,22 +23,46 @@ export function DefectsCommandCentreWorkspace() {
       {w.error && <InlineAlert variant="error">{w.error}</InlineAlert>}
 
       {w.needsProjectSelection && (
-        <InlineAlert variant="warning" title="Select an Azure project">
+        <InlineAlert variant="warning" title={`Select a ${providerLabel(w.provider)} project`}>
           <p className="mb-0">
-            Your organization has multiple Azure DevOps projects. Choose a project from the header
-            dropdown to load defects and user stories for that board.
+            Choose a project from the header to load its supported work items.
           </p>
         </InlineAlert>
       )}
 
-      {notConnected && (
-        <InlineAlert variant="warning" title="Azure DevOps not connected">
-          <p className="mb-3">
-            Link Azure DevOps with Work Items scopes to see your assigned defects and user stories.
+      {w.setupError && (
+        <InlineAlert
+          variant="warning"
+          title={
+            w.setupError.code === 'EXTERNAL_IDENTITY_NOT_BOUND'
+              ? 'Provider identity setup required'
+              : `${providerLabel(w.provider)} setup required`
+          }
+        >
+          <p className="mb-3">{w.setupError.message}</p>
+          <p className="mb-3 text-sm">
+            {w.setupError.code === 'EXTERNAL_IDENTITY_NOT_BOUND' && !w.contexts?.isAdmin
+              ? 'Ask an administrator to bind your app account to your provider identity for this connection.'
+              : 'Configure a connected work-item connection and ProjectBinding.'}
           </p>
-          <Button size="sm" asChild>
-            <Link href="/environment-center?tab=azure">Go to Azure Integrations</Link>
-          </Button>
+          {w.contexts?.isAdmin && (
+            <Button size="sm" asChild>
+              <Link href={providerSetupHref(w.provider)}>Open integration setup</Link>
+            </Button>
+          )}
+        </InlineAlert>
+      )}
+
+      {notConnected && (
+        <InlineAlert variant="warning" title={`${providerLabel(w.provider)} not connected`}>
+          <p className="mb-3">
+            Connect this provider with work-item scopes to load projects and issues.
+          </p>
+          {w.contexts?.isAdmin && (
+            <Button size="sm" asChild>
+              <Link href={providerSetupHref(w.provider)}>Open integration setup</Link>
+            </Button>
+          )}
         </InlineAlert>
       )}
 
@@ -58,9 +83,10 @@ export function DefectsCommandCentreWorkspace() {
             totalPages={w.totalPages}
             statusFilter={w.statusFilter}
             typeFilter={w.typeFilter}
+            issueTypes={w.issueTypes}
             search={w.search}
             selectedId={w.selectedId}
-            assigneeEmail={w.overview?.assigneeEmail ?? null}
+            assigneeId={w.overview?.assigneeExternalId ?? null}
             projectName={w.selectedProject || w.overview?.project || null}
             isAdminView={w.overview?.isAdminView ?? false}
             onStatusFilterChange={w.setStatusFilter}

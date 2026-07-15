@@ -7,9 +7,12 @@ import {
 import {
   AZURE_DEFECT_WORK_ITEM_TYPES,
   azureWiqlUrl,
+  azureWitAttachmentsUrl,
   azureWitAttachmentUrl,
   azureWorkItemCommentsUrl,
+  azureWorkItemCreateUrl,
   azureWorkItemTypesStatesUrl,
+  azureWorkItemTypesUrl,
   azureWorkItemUpdatesUrl,
   azureWorkItemUrl,
   azureWorkItemWebUrl,
@@ -59,12 +62,29 @@ interface AdoWorkItem {
   }>;
 }
 
+export interface AzureWorkItemWriteInput {
+  title?: string;
+  description?: string | null;
+  type?: string | null;
+  assigneeId?: string | null;
+  priority?: string | number | null;
+  severity?: string | null;
+  area?: string | null;
+  iteration?: string | null;
+  labels?: readonly string[];
+  state?: string;
+  customFields?: Record<string, string | number | null>;
+}
+
 @Injectable()
 export class AzureWorkItemsService {
   constructor(private readonly azureIntegration: AzureIntegrationService) {}
 
-  async resolveProject(projectOverride?: string): Promise<{ orgSlug: string; project: string; pat: string }> {
-    const creds = await this.azureIntegration.getCredentials();
+  async resolveProject(
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<{ orgSlug: string; project: string; pat: string }> {
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'workItems');
     if (!creds) {
       throw new NotFoundException({
         code: 'AZURE_NOT_CONNECTED',
@@ -84,8 +104,8 @@ export class AzureWorkItemsService {
     return { orgSlug: creds.orgSlug, project, pat: creds.pat };
   }
 
-  async resolveDefaultProject(): Promise<string | null> {
-    const creds = await this.azureIntegration.getCredentials();
+  async resolveDefaultProject(connectionId?: string): Promise<string | null> {
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'workItems');
     if (!creds) return null;
     return (
       normalizeAzureProject(creds.project) ??
@@ -94,11 +114,27 @@ export class AzureWorkItemsService {
     );
   }
 
-  async getConnectionInfo(): Promise<{ orgSlug: string; defaultProject: string | null } | null> {
-    const creds = await this.azureIntegration.getCredentials();
+  async getConnectionInfo(
+    connectionId?: string,
+  ): Promise<{
+    id?: string;
+    orgSlug: string;
+    defaultProject: string | null;
+    source: 'database' | 'environment' | null;
+  } | null> {
+    const [creds, status] = await Promise.all([
+      this.azureIntegration.getCredentials(connectionId, 'workItems'),
+      this.azureIntegration.getStatus(connectionId, 'workItems'),
+    ]);
     if (!creds) return null;
     return {
+      ...('connectionId' in status && status.connectionId
+        ? { id: status.connectionId }
+        : connectionId
+          ? { id: connectionId }
+          : {}),
       orgSlug: creds.orgSlug,
+      source: status.source,
       defaultProject:
         normalizeAzureProject(creds.project) ??
         normalizeAzureProject(process.env.AZURE_DEFAULT_PROJECT) ??
@@ -106,8 +142,8 @@ export class AzureWorkItemsService {
     };
   }
 
-  async listProjects(): Promise<AzureDevOpsProjectOption[]> {
-    const creds = await this.azureIntegration.getCredentials();
+  async listProjects(connectionId?: string): Promise<AzureDevOpsProjectOption[]> {
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'workItems');
     if (!creds) {
       throw new NotFoundException({
         code: 'AZURE_NOT_CONNECTED',
@@ -132,8 +168,12 @@ export class AzureWorkItemsService {
     project?: string;
     assigneeEmail?: string;
     types?: readonly string[];
+    connectionId?: string;
   }): Promise<AzureWorkItemSummary[]> {
-    const { orgSlug, project, pat } = await this.resolveProject(options.project);
+    const { orgSlug, project, pat } = await this.resolveProject(
+      options.project,
+      options.connectionId,
+    );
     const types = options.types ?? AZURE_DEFECT_WORK_ITEM_TYPES;
     const typeList = types.map((t) => `'${t.replace(/'/g, "''")}'`).join(',');
     let where = `[System.TeamProject] = '${project.replace(/'/g, "''")}' AND [System.WorkItemType] IN (${typeList}) AND [System.State] <> 'Removed'`;
@@ -167,14 +207,22 @@ export class AzureWorkItemsService {
     return items;
   }
 
-  async getWorkItem(id: number, projectOverride?: string): Promise<AzureWorkItemDetail> {
-    const { orgSlug, project, pat } = await this.resolveProject(projectOverride);
+  async getWorkItem(
+    id: number,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemDetail> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
     const wi = await this.fetchJson<AdoWorkItem>(azureWorkItemUrl(orgSlug, project, id), pat);
     return this.toDetail(wi, orgSlug, project);
   }
 
-  async getComments(id: number, projectOverride?: string): Promise<AzureWorkItemComment[]> {
-    const { orgSlug, project, pat } = await this.resolveProject(projectOverride);
+  async getComments(
+    id: number,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemComment[]> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
     const data = await this.fetchJson<{
       comments: Array<{
         id: number;
@@ -194,16 +242,157 @@ export class AzureWorkItemsService {
     }));
   }
 
-  async getStateOptions(workItemType: string, projectOverride?: string): Promise<AzureWorkItemStateOption[]> {
-    const { orgSlug, project, pat } = await this.resolveProject(projectOverride);
+  async getStateOptions(
+    workItemType: string,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemStateOption[]> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
     const data = await this.fetchJson<{
       value: Array<{ name: string; category: string }>;
     }>(azureWorkItemTypesStatesUrl(orgSlug, project, workItemType), pat);
     return (data.value ?? []).map((s) => ({ name: s.name, category: s.category }));
   }
 
-  async getHistory(id: number, projectOverride?: string): Promise<AzureWorkItemHistoryResponse> {
-    const { orgSlug, project, pat } = await this.resolveProject(projectOverride);
+  async listWorkItemTypes(projectOverride?: string, connectionId?: string): Promise<string[]> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
+    const data = await this.fetchJson<{ value?: Array<{ name?: string }> }>(
+      azureWorkItemTypesUrl(orgSlug, project),
+      pat,
+    );
+    return (data.value ?? [])
+      .map((type) => type.name?.trim())
+      .filter((name): name is string => Boolean(name));
+  }
+
+  async createWorkItem(
+    input: AzureWorkItemWriteInput & { title: string; type: string; project?: string },
+    connectionId?: string,
+  ): Promise<AzureWorkItemDetail> {
+    const { orgSlug, project, pat } = await this.resolveProject(input.project, connectionId);
+    const operations = this.writeOperations(input, true);
+    const created = await this.fetchJson<AdoWorkItem>(
+      azureWorkItemCreateUrl(orgSlug, project, input.type),
+      pat,
+      {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json-patch+json' },
+      body: JSON.stringify(operations),
+      },
+    );
+    return this.getWorkItem(created.id, project, connectionId);
+  }
+
+  async updateWorkItem(
+    id: number,
+    input: AzureWorkItemWriteInput,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemDetail> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
+    const operations = this.writeOperations(input, false);
+    if (operations.length) {
+      await this.fetchJson<AdoWorkItem>(
+        azureWorkItemUrl(orgSlug, project, id, 'api-version=7.0'),
+        pat,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json-patch+json' },
+          body: JSON.stringify(operations),
+        },
+      );
+    }
+    return this.getWorkItem(id, project, connectionId);
+  }
+
+  async addComment(
+    id: number,
+    body: string,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemComment> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
+    const response = await this.fetchJson<{
+      comment?: {
+        id?: number;
+        text?: string;
+        createdBy?: { displayName?: string };
+        createdDate?: string;
+        modifiedDate?: string;
+      };
+      id?: number;
+      text?: string;
+      createdBy?: { displayName?: string };
+      createdDate?: string;
+      modifiedDate?: string;
+    }>(azureWorkItemCommentsUrl(orgSlug, project, id, 'api-version=7.0-preview.3'), pat, {
+      method: 'POST',
+      body: JSON.stringify({ text: body }),
+    });
+    const comment = response.comment ?? response;
+    return {
+      id: comment.id ?? 0,
+      text: comment.text ?? body,
+      author: comment.createdBy?.displayName ?? 'Unknown',
+      createdDate: comment.createdDate ?? '',
+      modifiedDate: comment.modifiedDate ?? comment.createdDate ?? '',
+    };
+  }
+
+  async uploadAttachment(
+    id: number,
+    upload: { fileName: string; contentType: string; buffer: Buffer },
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemAttachment> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
+    const uploadResponse = await fetch(azureWitAttachmentsUrl(orgSlug, upload.fileName), {
+      method: 'POST',
+      headers: {
+        ...this.authHeader(pat),
+        'Content-Type': 'application/octet-stream',
+      },
+      body: upload.buffer.buffer.slice(
+        upload.buffer.byteOffset,
+        upload.buffer.byteOffset + upload.buffer.byteLength,
+      ) as ArrayBuffer,
+    });
+    if (!uploadResponse.ok) {
+      await this.throwWriteError(uploadResponse, 'upload attachment');
+    }
+    const attachment = await uploadResponse.json() as { id: string; url: string };
+    await this.fetchJson<AdoWorkItem>(
+      azureWorkItemUrl(orgSlug, project, id, 'api-version=7.0'),
+      pat,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json-patch+json' },
+        body: JSON.stringify([{
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'AttachedFile',
+            url: attachment.url,
+            attributes: { comment: upload.fileName, name: upload.fileName },
+          },
+        }]),
+      },
+    );
+    return {
+      id: attachment.id,
+      name: upload.fileName,
+      sizeBytes: upload.buffer.length,
+      url: attachment.url,
+      contentType: upload.contentType,
+    };
+  }
+
+  async getHistory(
+    id: number,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemHistoryResponse> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
 
     const [updatesData, comments] = await Promise.all([
       this.fetchJson<{
@@ -227,7 +416,7 @@ export class AzureWorkItemsService {
           };
         }>;
       }>(azureWorkItemUpdatesUrl(orgSlug, project, id), pat),
-      this.getComments(id, project),
+      this.getComments(id, project, connectionId),
     ]);
 
     const meaningfulFields = new Set([
@@ -331,8 +520,12 @@ export class AzureWorkItemsService {
     return { events };
   }
 
-  async listAttachments(id: number, projectOverride?: string): Promise<AzureWorkItemAttachment[]> {
-    const detail = await this.getWorkItem(id, projectOverride);
+  async listAttachments(
+    id: number,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemAttachment[]> {
+    const detail = await this.getWorkItem(id, projectOverride, connectionId);
     return this.parseAttachments(detail);
   }
 
@@ -364,8 +557,13 @@ export class AzureWorkItemsService {
     return { buffer, contentType, fileName };
   }
 
-  async updateState(id: number, state: string, projectOverride?: string): Promise<AzureWorkItemDetail> {
-    const { orgSlug, project, pat } = await this.resolveProject(projectOverride);
+  async updateState(
+    id: number,
+    state: string,
+    projectOverride?: string,
+    connectionId?: string,
+  ): Promise<AzureWorkItemDetail> {
+    const { orgSlug, project, pat } = await this.resolveProject(projectOverride, connectionId);
     const url = azureWorkItemUrl(orgSlug, project, id, 'api-version=7.0');
     const res = await fetch(url, {
       method: 'PATCH',
@@ -395,6 +593,50 @@ export class AzureWorkItemsService {
   isAssignedToEmail(assignedTo: string | null, email: string): boolean {
     if (!assignedTo || !email) return false;
     return assignedTo.toLowerCase().includes(email.toLowerCase());
+  }
+
+  private writeOperations(
+    input: AzureWorkItemWriteInput,
+    creating: boolean,
+  ): Array<{ op: 'add' | 'remove'; path: string; value?: string | number }> {
+    const fields: Record<string, string | number | null | undefined> = {
+      'System.Title': input.title,
+      'System.Description': input.description,
+      'System.AssignedTo': input.assigneeId,
+      'Microsoft.VSTS.Common.Priority': input.priority,
+      'Microsoft.VSTS.Common.Severity': input.severity,
+      'System.AreaPath': input.area,
+      'System.IterationPath': input.iteration,
+      'System.Tags': input.labels?.join('; '),
+      'System.State': input.state,
+      ...(input.customFields ?? {}),
+    };
+    const operations: Array<{
+      op: 'add' | 'remove';
+      path: string;
+      value?: string | number;
+    }> = [];
+    for (const [field, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      const path = `/fields/${field.replace(/~/g, '~0').replace(/\//g, '~1')}`;
+      if (value === null && !creating) operations.push({ op: 'remove', path });
+      if (value !== null) operations.push({ op: 'add', path, value });
+    }
+    return operations;
+  }
+
+  private async throwWriteError(response: Response, operation: string): Promise<never> {
+    const text = await response.text().catch(() => '');
+    if (response.status === 401 || response.status === 403) {
+      throw new ForbiddenException({
+        code: 'AZURE_WIT_SCOPE',
+        message:
+          'PAT lacks Work Items (Read & write) scope. Update your Azure PAT and reconnect in Integrations.',
+      });
+    }
+    throw new UnprocessableEntityException(
+      `Failed to ${operation} (${response.status}). ${text.slice(0, 200)}`,
+    );
   }
 
   private authHeader(pat: string) {

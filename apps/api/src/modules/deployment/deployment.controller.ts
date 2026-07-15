@@ -3,6 +3,7 @@ import { DeploymentService } from './deployment.service';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
+import type { ScmProvider } from '@sfcc/shared';
 
 @Controller('deployments')
 @UseGuards(AuthGuard, ModuleGuard)
@@ -67,16 +68,48 @@ export class DeploymentController {
   }
 
   @Get('repos')
-  listRepos(@Query('strategy') strategy: 'azure' | 'jenkins') {
-    return this.deploymentService.listRepos(strategy);
+  listRepos(
+    @Query('provider') provider?: ScmProvider,
+    @Query('strategy') strategy?: 'azure' | 'jenkins',
+    @Query('connectionId') connectionId?: string,
+    @Query('namespace') namespace?: string,
+    @Query('project') project?: string,
+  ) {
+    return this.deploymentService.listRepos(
+      provider ?? strategy ?? 'azure',
+      connectionId,
+      namespace,
+      project,
+    );
   }
 
   @Get('branches')
   listBranches(
-    @Query('strategy') strategy: 'azure' | 'jenkins',
+    @Query('provider') provider: ScmProvider | undefined,
+    @Query('strategy') strategy: 'azure' | 'jenkins' | undefined,
     @Query('repo') repo: string,
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
+    @Query('namespace') namespace?: string,
+    @Query('repositoryId') repositoryId?: string,
+    @Query('bindingId') bindingId?: string,
   ) {
-    return this.deploymentService.listBranches(strategy, repo, project);
+    return this.deploymentService.listBranches(
+      provider ?? strategy ?? 'azure',
+      repo,
+      project,
+      connectionId,
+      namespace,
+      repositoryId,
+      bindingId,
+    );
+  }
+
+  @Get('scm/:provider/defaults')
+  scmDefaults(
+    @Param('provider') provider: ScmProvider,
+    @Query('connectionId') connectionId?: string,
+  ) {
+    return this.deploymentService.getScmDefaults(provider, connectionId);
   }
 }

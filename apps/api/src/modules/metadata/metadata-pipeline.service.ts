@@ -30,7 +30,7 @@ export class MetadataPipelineService {
         checkpoint: {
           completedSteps: [],
           // Must be a valid PipelineStepId — resumeRun dispatches on this.
-          resumeFrom: 'azure_metadata_deploy',
+          resumeFrom: 'git_metadata_deploy',
         } as Prisma.InputJsonValue,
       },
     });

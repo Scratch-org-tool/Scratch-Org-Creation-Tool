@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import { azureGitBranchesUrl, azureGitReposUrl, DEFAULT_AZURE_MANIFEST_PATH, normalizeAzureOrgSlug, normalizeAzureProject } from '@sfcc/shared';
 import { AzureIntegrationService } from '../../modules/integrations/azure-integration.service';
 import { removeTempDir } from '../../common/temp-cleanup.util';
-import { resolveSfdxWorkspace } from './sfdx-workspace.util';
+import { resolveSfdxWorkspace } from '../../common/sfdx-workspace.util';
 
 const execFileAsync = promisify(execFile);
 
@@ -42,8 +42,8 @@ export class AzureService {
   }
 
   /** Lists repos org-wide unless an explicit project filter is passed. */
-  async listRepos(projectFilter?: string) {
-    const creds = await this.azureIntegration.getCredentials();
+  async listRepos(projectFilter?: string, connectionId?: string) {
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'scm');
     if (!creds) return [];
     const project = projectFilter?.trim() || undefined;
     return this.fetchAllRepos(creds.orgSlug, creds.pat, project);
@@ -78,13 +78,13 @@ export class AzureService {
     return all;
   }
 
-  async listBranches(project: string | undefined, repo: string) {
-    const creds = await this.azureIntegration.getCredentials();
+  async listBranches(project: string | undefined, repo: string, connectionId?: string) {
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'scm');
     if (!creds || !repo.trim()) return [];
 
     let proj = this.resolveProject(creds, project);
     if (!proj) {
-      const repos = await this.listRepos();
+      const repos = await this.listRepos(undefined, connectionId);
       const match = repos.find((r) => r.name === repo || r.id === repo);
       proj = match?.project;
     }
@@ -101,8 +101,9 @@ export class AzureService {
     project: string,
     repo: string,
     branch: string,
+    connectionId?: string,
   ): Promise<{ workspaceDir: string; cleanup: () => Promise<void> }> {
-    const creds = await this.azureIntegration.getCredentials();
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'scm');
     if (!creds) throw new Error('Azure DevOps is not connected');
 
     const org = normalizeAzureOrgSlug(creds.orgSlug);
@@ -152,7 +153,11 @@ export class AzureService {
     repo: string,
     branch: string,
     variables?: AzurePipelineVariables,
+    connectionId?: string,
   ) {
+    if (!(await this.azureIntegration.getCredentials(connectionId, 'scm'))) {
+      throw new Error('Azure DevOps is not connected');
+    }
     console.log('[Azure] Pipeline trigger (stub)', { project, repo, branch, variables });
     return { triggered: true, repo, branch, project, provider: 'azure', variables };
   }

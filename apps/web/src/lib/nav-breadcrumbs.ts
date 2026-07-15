@@ -5,7 +5,7 @@ export interface BreadcrumbItem {
 
 const ROUTE_LABELS: Record<string, string> = {
   '/dashboard': 'Dashboard',
-  '/environment-center': 'Integrations',
+  '/environment-center': 'Environment Center',
   '/environment-center/connect': 'Connect Salesforce Org',
   '/environment-center/connect-azure': 'Connect Azure DevOps',
   '/environment-center/create-scratch-org': 'Create Scratch Org',
@@ -13,7 +13,8 @@ const ROUTE_LABELS: Record<string, string> = {
   '/environment-center/sandboxes': 'Sandboxes',
   '/environment-center/wizard': 'Wizard',
   '/deployment-center': 'Deployment Center',
-  '/deployment-center/azure': 'Azure DevOps',
+  '/deployment-center/azure': 'Git Metadata Deploy',
+  '/deployment-center/git': 'Git Metadata Deploy',
   '/deployment-center/jenkins': 'Jenkins',
   '/deployment-center/releases': 'Release Manager',
   '/metadata-deployment': 'Metadata Deployment',

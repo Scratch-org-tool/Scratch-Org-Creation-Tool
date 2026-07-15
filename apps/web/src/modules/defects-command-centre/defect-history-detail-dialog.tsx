@@ -8,10 +8,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { AzureWorkItemHistoryEvent } from './types';
+import type { WorkItemHistoryEvent } from './types';
 
 interface DefectHistoryDetailDialogProps {
-  event: AzureWorkItemHistoryEvent | null;
+  event: WorkItemHistoryEvent | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -30,7 +30,7 @@ function formatValue(value: string | null): string {
   return stripHtmlForDisplay(value);
 }
 
-function dialogTitle(event: AzureWorkItemHistoryEvent): string {
+function dialogTitle(event: WorkItemHistoryEvent): string {
   switch (event.kind) {
     case 'created':
       return 'Created';
@@ -41,7 +41,7 @@ function dialogTitle(event: AzureWorkItemHistoryEvent): string {
     case 'attachment_removed':
       return 'Attachment removed';
     default:
-      return event.rev > 0 ? `Update #${event.rev}` : 'Update';
+      return event.version > 0 ? `Update #${event.version}` : 'Update';
   }
 }
 
@@ -65,7 +65,7 @@ export function DefectHistoryDetailDialog({
         <DialogHeader>
           <DialogTitle>{dialogTitle(event)}</DialogTitle>
           <DialogDescription>
-            {formatWhen(event.revisedDate)} · {event.revisedBy}
+            {formatWhen(event.occurredAt)} · {event.actor.displayName}
           </DialogDescription>
         </DialogHeader>
 
@@ -81,7 +81,7 @@ export function DefectHistoryDetailDialog({
           <ul className="max-h-[50vh] overflow-y-auto scrollbar-thin space-y-3 pr-1">
             {event.changes.map((change) => (
               <li
-                key={change.fieldRef}
+                key={`${change.fieldRef ?? change.field}-${change.oldValue}-${change.newValue}`}
                 className="rounded-lg border border-border/50 bg-muted/20 p-3 text-sm"
               >
                 <p className="text-xs font-medium text-muted-foreground mb-1">{change.field}</p>

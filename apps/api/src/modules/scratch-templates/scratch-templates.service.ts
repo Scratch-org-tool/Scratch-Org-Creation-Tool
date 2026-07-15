@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from
 import { prisma, Prisma } from '@sfcc/db';
 import {
   DEFAULT_AZURE_MANIFEST_PATH,
+  normalizeGitSourceConfig,
+  type GitSourceConfig,
   migrateTemplateConfig,
   sanitizeTemplateConfigForStorage,
   scratchTemplateCreateSchema,
@@ -25,13 +27,19 @@ export class ScratchTemplatesService implements OnModuleInit {
     if (existing) {
       const cfg = existing.config as Record<string, unknown>;
       const azure = cfg.azureDeploy as { repo?: string; branch?: string; manifestPath?: string } | undefined;
-      if (azure?.repo || azure?.branch) {
+      const git = cfg.gitSource as Partial<GitSourceConfig> | undefined;
+      if (azure?.repo || azure?.branch || !git?.provider) {
         await prisma.scratchPipelineTemplate.update({
           where: { id: existing.id },
           data: {
             config: sanitizeTemplateConfigForStorage({
               ...cfg,
-              azureDeploy: azure.manifestPath ? { manifestPath: azure.manifestPath } : undefined,
+              azureDeploy: azure?.manifestPath ? { manifestPath: azure.manifestPath } : undefined,
+              gitSource: {
+                ...git,
+                provider: git?.provider ?? 'azure_devops',
+                manifestPath: git?.manifestPath ?? azure?.manifestPath,
+              },
             } as Parameters<typeof sanitizeTemplateConfigForStorage>[0]) as Prisma.InputJsonValue,
           },
         });
@@ -50,6 +58,10 @@ export class ScratchTemplatesService implements OnModuleInit {
           duration: 7,
           installPackage: true,
           azureDeploy: { manifestPath: DEFAULT_AZURE_MANIFEST_PATH },
+          gitSource: {
+            provider: 'azure_devops',
+            manifestPath: DEFAULT_AZURE_MANIFEST_PATH,
+          },
           permissionSets: [],
           orgConfig: {
             upsertQueueIds: true,
@@ -192,7 +204,8 @@ export class ScratchTemplatesService implements OnModuleInit {
       dataDeploymentOrgId?: string;
       customSettingsOrgId?: string;
       templateId?: string;
-      azureDeploy: { project?: string; repo: string; branch: string; manifestPath?: string };
+      gitSource?: GitSourceConfig;
+      azureDeploy?: { project?: string; repo: string; branch: string; manifestPath?: string };
       installPackage?: boolean;
       duration?: number;
       description?: string;
@@ -200,6 +213,17 @@ export class ScratchTemplatesService implements OnModuleInit {
   ) {
     const tmplAzure = templateConfig.azureDeploy as { manifestPath?: string } | undefined;
     const tmpl = migrateTemplateConfig(templateConfig as Parameters<typeof migrateTemplateConfig>[0]);
+    const source = normalizeGitSourceConfig({
+      gitSource: overrides.gitSource,
+      azureDeploy: overrides.azureDeploy,
+    }).gitSource;
+    if (!source) throw new BadRequestException('gitSource or azureDeploy is required');
+    const gitSource = {
+      ...(tmpl.gitSource ?? {}),
+      ...source,
+      manifestPath:
+        source.manifestPath ?? tmpl.gitSource?.manifestPath ?? tmplAzure?.manifestPath,
+    } as GitSourceConfig;
     const dataDeploymentOrgId =
       overrides.dataDeploymentOrgId ?? overrides.sourceOrgId ?? tmpl.dataDeploymentOrgId ?? tmpl.sourceOrgId;
     const customSettingsOrgId =
@@ -215,12 +239,15 @@ export class ScratchTemplatesService implements OnModuleInit {
       customSettingsOrgId,
       templateId: overrides.templateId,
       definitionFile: tmpl.template ?? 'config/project-scratch-def.json',
-      azureDeploy: {
-        project: overrides.azureDeploy.project,
-        repo: overrides.azureDeploy.repo,
-        branch: overrides.azureDeploy.branch,
-        manifestPath: overrides.azureDeploy.manifestPath ?? tmplAzure?.manifestPath,
-      },
+      gitSource,
+      azureDeploy: gitSource.provider === 'azure_devops'
+        ? {
+            project: gitSource.project ?? gitSource.namespace,
+            repo: gitSource.repo,
+            branch: gitSource.branch,
+            manifestPath: gitSource.manifestPath,
+          }
+        : undefined,
       skipSteps: [],
     };
   }

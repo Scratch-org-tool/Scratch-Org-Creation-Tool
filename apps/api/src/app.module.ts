@@ -20,6 +20,7 @@ import { AgentsModule } from './modules/agents/agents.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { IntegrationAdaptersModule } from './integrations/foundation/integration-adapters.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { AuthModule } from './modules/auth/auth.module';
         join(__dirname, '..', '.env'),
       ],
     }),
+    IntegrationAdaptersModule,
     AuthModule,
     HealthModule,
     QueueModule,

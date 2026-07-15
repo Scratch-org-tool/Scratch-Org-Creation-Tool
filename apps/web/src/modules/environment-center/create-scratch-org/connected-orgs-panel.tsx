@@ -79,8 +79,8 @@ export function ConnectedOrgsPanel({
         )}
         {!azureStatus.connected && (
           <p className="text-xs text-muted-foreground">
-            <Link href="/environment-center?tab=azure" className="text-primary hover:underline">
-              + Connect Azure DevOps
+            <Link href="/environment-center?tab=source-control" className="text-primary hover:underline">
+              + Connect source control
             </Link>
           </p>
         )}

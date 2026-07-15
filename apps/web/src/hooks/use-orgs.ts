@@ -19,11 +19,14 @@ export interface ConnectedOrg {
 const CACHE_KEY = 'orgs:list';
 
 /** Fetch org list with session cache — safe to call outside React hooks. */
-export async function fetchOrgsList(options?: { force?: boolean }): Promise<ConnectedOrg[]> {
+export async function fetchOrgsList(options?: {
+  force?: boolean;
+  signal?: AbortSignal;
+}): Promise<ConnectedOrg[]> {
   if (!options?.force && hasFreshSessionCache(CACHE_KEY)) {
     return getSessionCache<ConnectedOrg[]>(CACHE_KEY) ?? [];
   }
-  const orgs = await api<ConnectedOrg[]>('/orgs');
+  const orgs = await api<ConnectedOrg[]>('/orgs', { signal: options?.signal });
   setSessionCache(CACHE_KEY, orgs);
   return orgs;
 }
