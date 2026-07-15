@@ -42,6 +42,8 @@ import {
 import {
   buildTemplateLaunchRequest,
   completedRunAlias,
+  formFromRunConfig,
+  metadataSourceFromForm,
   retrieveCredentialsWithRetry,
 } from './template-v2-workspace-utils';
 
@@ -96,59 +98,6 @@ function mapMetaSubtext(step?: string): string | undefined {
   if (step.includes('Deployment Completed')) return 'Metadata deployment finished';
   if (step.includes('Assign')) return 'Assigning permission set…';
   return step;
-}
-
-function formFromRunConfig(
-  run: AutomationRunView,
-  fallback: ScratchOrgFormState,
-): ScratchOrgFormState {
-  const cfg = run.config as Record<string, unknown> | undefined;
-  if (!cfg) return fallback;
-  const azure = cfg.azureDeploy as
-    | { project?: string; repo?: string; branch?: string; manifestPath?: string }
-    | undefined;
-  const git = cfg.gitSource as
-    | {
-        provider?: ScratchOrgFormState['gitProvider'];
-        connectionId?: string;
-        namespace?: string;
-        project?: string;
-        repositoryId?: string;
-        repo?: string;
-        branch?: string;
-        manifestPath?: string;
-      }
-    | undefined;
-  const scratchJob = run.jobs?.find((j) => j.type === 'scratch_org_workflow');
-  const alias =
-    (scratchJob && 'alias' in scratchJob ? (scratchJob as { alias?: string }).alias : undefined) ??
-    (cfg.alias as string | undefined);
-  return {
-    ...fallback,
-    alias: alias ?? fallback.alias,
-    duration: (cfg.duration as number | undefined) ?? fallback.duration,
-    devHubAlias: (cfg.devHubAlias as string | undefined) ?? fallback.devHubAlias,
-    template: (cfg.template as string | undefined) ?? fallback.template,
-    description: (cfg.description as string | undefined) ?? fallback.description,
-    sourceOrgId: (cfg.sourceOrgId as string | undefined) ?? fallback.sourceOrgId,
-    dataDeploymentOrgId:
-      (cfg.dataDeploymentOrgId as string | undefined)
-      ?? (cfg.sourceOrgId as string | undefined)
-      ?? fallback.dataDeploymentOrgId,
-    customSettingsOrgId:
-      (cfg.customSettingsOrgId as string | undefined)
-      ?? fallback.customSettingsOrgId,
-    runtimeEmailPool: fallback.runtimeEmailPool,
-    templateId: (cfg.templateId as string | undefined) ?? fallback.templateId,
-    gitProvider: git?.provider ?? (azure ? 'azure_devops' : fallback.gitProvider),
-    gitConnectionId: git?.connectionId ?? fallback.gitConnectionId,
-    gitNamespace: git?.namespace ?? git?.project ?? azure?.project ?? fallback.gitNamespace,
-    gitRepositoryId: git?.repositoryId ?? fallback.gitRepositoryId,
-    azureProject: git?.project ?? git?.namespace ?? azure?.project ?? fallback.azureProject,
-    azureRepo: git?.repo ?? azure?.repo ?? fallback.azureRepo,
-    azureBranch: git?.branch ?? azure?.branch ?? fallback.azureBranch,
-    azureManifestPath: git?.manifestPath ?? azure?.manifestPath ?? fallback.azureManifestPath,
-  };
 }
 
 export function useScratchOrgWorkspace() {
@@ -470,7 +419,10 @@ export function useScratchOrgWorkspace() {
         const r = await refreshRunWithRetry(runId);
         if (!isCurrent()) return;
         if (!snapshot) {
-          setForm((f) => formFromRunConfig(r, f));
+          const restoredForm = formFromRunConfig(r, formRef.current);
+          formRef.current = restoredForm;
+          setForm(restoredForm);
+          metadataSource.setSource(metadataSourceFromForm(restoredForm));
         }
         await hydrateRunState(r, { fromRestore: true, alias: formRef.current.alias });
       } catch (err) {
@@ -484,7 +436,7 @@ export function useScratchOrgWorkspace() {
         }
       }
     },
-    [hydrateRunState, refreshRunWithRetry, syncRunIdInUrl],
+    [hydrateRunState, metadataSource.setSource, refreshRunWithRetry, syncRunIdInUrl],
   );
 
   const loadInitial = useCallback(async (generation: number, signal: AbortSignal) => {
@@ -863,9 +815,7 @@ export function useScratchOrgWorkspace() {
     try {
       await api(`/environment/automation-runs/${automationRunId}/resume`, {
         method: 'POST',
-        body: JSON.stringify({
-          gitSource: metadataSource.gitSource ?? undefined,
-        }),
+        body: JSON.stringify({}),
       });
       await refreshRun(automationRunId);
       persistSnapshot({ startedAt: now });

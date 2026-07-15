@@ -33,6 +33,7 @@ describe('OrgConfigLoaderService selectors', () => {
       data: { result: { id: 'config-id' } },
     });
     sfCli.updateRecord.mockResolvedValue({ success: true });
+    sfCli.deleteRecord.mockResolvedValue({ success: true });
   });
 
   it('includes bottler and config key when creating, then finds the same record', async () => {
@@ -80,5 +81,57 @@ describe('OrgConfigLoaderService selectors', () => {
     expect(selectorSoql).toHaveLength(2);
     expect(selectorSoql[0]).toContain("cfs_ob__Bottler__c = '5000'");
     expect(selectorSoql[0]).toContain("Name = 'Primary Config'");
+  });
+
+  it('throws on a failed config query instead of creating a duplicate', async () => {
+    sfCli.query.mockImplementation(async (_alias: string, soql: string) => {
+      if (soql.includes('StaticResource')) {
+        return { success: true, data: { result: { records: [] } } };
+      }
+      return {
+        success: false,
+        error: 'target org unavailable',
+      };
+    });
+
+    await expect(new OrgConfigLoaderService().loadForOrg('org', {
+      upsertQueueIds: false,
+      upsertDomainFields: true,
+      upsertRequestId: false,
+    })).rejects.toThrow('target org unavailable');
+    expect(sfCli.createRecord).not.toHaveBeenCalled();
+  });
+
+  it('surfaces temporary Request creation failures without attempting cleanup', async () => {
+    sfCli.createRecord.mockResolvedValueOnce({
+      success: false,
+      error: 'request create failed',
+    });
+
+    await expect(new OrgConfigLoaderService().loadForOrg('org', {
+      upsertQueueIds: false,
+      upsertDomainFields: false,
+      upsertRequestId: true,
+    })).rejects.toThrow('request create failed');
+    expect(sfCli.deleteRecord).not.toHaveBeenCalled();
+  });
+
+  it('surfaces temporary Request cleanup failures before changing org config', async () => {
+    sfCli.createRecord.mockResolvedValueOnce({
+      success: true,
+      data: { result: { id: 'a01000000000001AAA' } },
+    });
+    sfCli.deleteRecord.mockResolvedValueOnce({
+      success: false,
+      error: 'request delete failed',
+    });
+
+    await expect(new OrgConfigLoaderService().loadForOrg('org', {
+      upsertQueueIds: false,
+      upsertDomainFields: false,
+      upsertRequestId: true,
+    })).rejects.toThrow('request delete failed');
+    expect(sfCli.query).not.toHaveBeenCalled();
+    expect(sfCli.updateRecord).not.toHaveBeenCalled();
   });
 });

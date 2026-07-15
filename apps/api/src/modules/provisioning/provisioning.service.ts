@@ -11,6 +11,11 @@ import {
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { assertOrgOwned, userOwnedWhere } from '../../common/user-tenancy.util';
 import { OrgUserMetadataService } from './org-user-metadata.service';
+import {
+  ProvisioningProfileValidationError,
+  provisioningProfileNames,
+  resolveProvisioningProfileIds,
+} from './provisioning-profile.util';
 
 @Injectable()
 export class ProvisioningService {
@@ -24,14 +29,31 @@ export class ProvisioningService {
     if (!input.orgId) throw new Error('orgId is required');
     const config = userProvisioningConfigSchema.parse(input.config ?? {});
     const runId = input.automationRunId ?? `preview-${input.orgId}`;
-    const users = resolveUserProvisioningPlan(config, runId);
+    const unresolvedUsers = resolveUserProvisioningPlan(config, runId);
     const discoveryPolicy = config.discoveryPolicy ?? 'best_effort';
     const discoveryFailurePolicy = config.execution?.discoveryFailurePolicy ?? 'fail';
     const warnings: string[] = [];
+    const resolveProfiles = async (
+      profiles?: Array<{ Id: string; Name: string }>,
+    ) => {
+      const availableProfiles = profiles ?? (
+        provisioningProfileNames(unresolvedUsers).length
+          ? await this.orgUserMetadata.discoverProfiles(input.orgId!, userId)
+          : []
+      );
+      return resolveProvisioningProfileIds(unresolvedUsers, availableProfiles, {
+        requireProfile: true,
+      }).users;
+    };
     if (discoveryPolicy === 'disabled') {
-      const errors = users
-        .filter((user) => !user.profile)
-        .map((user) => `${user.username}: missing profile`);
+      let users = unresolvedUsers;
+      const errors: string[] = [];
+      try {
+        users = await resolveProfiles();
+      } catch (error) {
+        if (!(error instanceof ProvisioningProfileValidationError)) throw error;
+        errors.push(error.message);
+      }
       return {
         ok: errors.length === 0,
         users,
@@ -48,17 +70,27 @@ export class ProvisioningService {
       warnings.push(
         `Target metadata discovery failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      const errors = users
-        .filter((user) => !user.profile)
-        .map((user) => `${user.username}: missing profile`);
+      let users = unresolvedUsers;
+      const errors: string[] = [];
+      try {
+        users = await resolveProfiles();
+      } catch (profileError) {
+        if (!(profileError instanceof ProvisioningProfileValidationError)) throw profileError;
+        errors.push(profileError.message);
+      }
       return { ok: errors.length === 0, users, metadata: null, errors, warnings };
     }
     const picklists = new Map(metadata.picklists.map((field) => [field.name, new Set(field.values)]));
-    const profiles = new Set(metadata.profiles.flatMap((profile) => [profile.Id, profile.Name]));
     const permissionSets = new Set(metadata.permissionSets.map((permissionSet) => permissionSet.Name));
     const errors: string[] = [];
+    let users = unresolvedUsers;
+    try {
+      users = await resolveProfiles(metadata.profiles);
+    } catch (error) {
+      if (!(error instanceof ProvisioningProfileValidationError)) throw error;
+      errors.push(error.message);
+    }
     for (const user of users) {
-      if (!user.profile || !profiles.has(user.profile)) errors.push(`${user.username}: invalid or missing profile`);
       for (const permissionSet of user.permissionSets ?? []) {
         if (!permissionSets.has(permissionSet)) errors.push(`${user.username}: unknown permission set ${permissionSet}`);
       }

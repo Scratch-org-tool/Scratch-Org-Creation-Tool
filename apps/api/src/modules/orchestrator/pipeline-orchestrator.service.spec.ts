@@ -110,6 +110,38 @@ describe('PipelineOrchestratorService provider-neutral resume', () => {
     );
   });
 
+  it('does not overwrite persisted SCM source with resume-time defaults', async () => {
+    const service = createService();
+    const enqueueMetadataDeploy = vi.fn().mockResolvedValue({ id: 'job-2' });
+    (service as unknown as { enqueueMetadataDeploy: typeof enqueueMetadataDeploy })
+      .enqueueMetadataDeploy = enqueueMetadataDeploy;
+
+    await service.resumeRun('run-1', {
+      gitSource: {
+        provider: 'github',
+        repo: 'current-default',
+        branch: 'develop',
+      },
+    }, 'owner-1');
+
+    const resumedConfig = enqueueMetadataDeploy.mock.calls[0][1];
+    expect(resumedConfig.gitSource).toEqual(expect.objectContaining({
+      provider: 'azure_devops',
+      repo: 'metadata',
+      branch: 'main',
+    }));
+    expect(resumedConfig.gitSource).not.toEqual(expect.objectContaining({
+      repo: 'current-default',
+    }));
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        config: expect.objectContaining({
+          gitSource: expect.objectContaining({ repo: 'metadata' }),
+        }),
+      }),
+    }));
+  });
+
   it('does not disclose or resume another user’s run', async () => {
     const service = createService();
     await expect(service.getRun('run-1', 'other-user')).rejects.toThrow('not found');

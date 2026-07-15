@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { InlineAlert } from '@/components/studio';
 import { api } from '@/services/api';
+import { provisioningPreviewIsValid } from '../template-form-utils';
 
 interface PicklistField {
   name: string;
@@ -185,7 +186,7 @@ export function UserProvisioningV2Section({
         setPlanPreview(result);
         if (result.metadata) setDiscovery(result.metadata);
         onValidationChange?.({
-          valid: result.ok && result.warnings.length === 0,
+          valid: provisioningPreviewIsValid(result),
           checking: false,
         });
       }).catch((error) => {

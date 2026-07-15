@@ -92,6 +92,10 @@ describe('UserProvisionWorker provisioning policies', () => {
     sf.query.mockResolvedValue({ success: true, data: { result: { records: [] } } });
     sf.updateUser.mockResolvedValue({ success: true });
     sf.assignPermissionSet.mockResolvedValue({ success: true });
+    sf.createUser.mockResolvedValue({
+      success: true,
+      data: { result: { id: 'new-user-id' } },
+    });
   });
 
   it('honors disabled discovery while still requiring directly resolvable V2 profile ids', async () => {
@@ -99,6 +103,57 @@ describe('UserProvisionWorker provisioning policies', () => {
     await expect(worker().process(job([user('one@example.com')], 'fail_fast')))
       .resolves.toEqual({ successCount: 1, failCount: 0, partial: false });
     expect(sf.describeSObject).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '00e000000000001',
+    '00e000000000001AAA',
+  ])('passes an explicit profile id through with disabled discovery (%s)', async (explicitId) => {
+    const input = user('id@example.com');
+    input.profile = explicitId;
+    db.provisionedUser.findFirst.mockResolvedValue({
+      id: 'row-id',
+      status: 'failed',
+      sfUserId: null,
+    });
+    sf.query.mockResolvedValue({ success: true, data: { result: { records: [] } } });
+    db.provisionedUser.findMany.mockResolvedValue([{ status: 'completed' }]);
+
+    await worker().process(job([input], 'fail_fast'));
+
+    expect(sf.createUser).toHaveBeenCalledWith(
+      'target',
+      expect.objectContaining({ ProfileId: explicitId }),
+    );
+  });
+
+  it('resolves a profile name to its target id even when custom discovery is disabled', async () => {
+    const input = user('named@example.com');
+    input.profile = 'Standard User';
+    db.provisionedUser.findFirst.mockResolvedValue({
+      id: 'row-named',
+      status: 'failed',
+      sfUserId: null,
+    });
+    sf.query.mockImplementation(async (_alias: string, soql: string) => ({
+      success: true,
+      data: {
+        result: {
+          records: soql.includes('FROM Profile')
+            ? [{ Id: profileId, Name: 'Standard User' }]
+            : [],
+        },
+      },
+    }));
+    db.provisionedUser.findMany.mockResolvedValue([{ status: 'completed' }]);
+
+    await worker().process(job([input], 'fail_fast'));
+
+    expect(sf.describeSObject).not.toHaveBeenCalled();
+    expect(sf.createUser).toHaveBeenCalledWith(
+      'target',
+      expect.objectContaining({ ProfileId: profileId }),
+    );
   });
 
   it('continues after row failures and returns a partial result', async () => {

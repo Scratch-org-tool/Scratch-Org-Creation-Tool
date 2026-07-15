@@ -22,6 +22,20 @@ export interface PicklistFieldInfo {
 export class OrgUserMetadataService {
   private readonly sfCli = createSfCliClient();
 
+  async discoverProfiles(orgId: string, userId: string) {
+    const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
+    assertResourceOwner(org, userId, 'Org');
+    const alias = org.username ?? org.alias;
+    const result = await this.sfCli.query(
+      alias,
+      'SELECT Id, Name FROM Profile ORDER BY Name LIMIT 500',
+    );
+    if (!result.success) {
+      throw new BadRequestException(result.error ?? 'Failed to discover profiles');
+    }
+    return (result.data?.result?.records ?? []) as Array<{ Id: string; Name: string }>;
+  }
+
   async discover(orgId: string, userId: string) {
     const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
     assertResourceOwner(org, userId, 'Org');

@@ -78,11 +78,8 @@ export function buildTemplateV2Preview(
     errors: [
       ...errors,
       ...(provisioningPlan?.errors ?? []),
-      ...(provisioningPlan?.warnings ?? []).map(
-        (warning) => `Provisioning metadata validation: ${warning}`,
-      ),
     ],
-    warnings: [],
+    warnings: provisioningPlan?.warnings ?? [],
     metadata: provisioningPlan?.metadata ?? null,
   };
 }

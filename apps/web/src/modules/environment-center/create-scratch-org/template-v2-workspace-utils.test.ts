@@ -3,6 +3,8 @@ import type { AutomationRunView, ScratchOrgFormState } from '@/components/scratc
 import {
   buildTemplateLaunchRequest,
   completedRunAlias,
+  formFromRunConfig,
+  metadataSourceFromForm,
   retrieveCredentialsWithRetry,
   runtimeEmailPoolOverride,
 } from './template-v2-workspace-utils';
@@ -52,6 +54,56 @@ describe('Template V2 launch and recovery contracts', () => {
       status: 'completed',
       config: {},
     } as AutomationRunView)).toBeUndefined();
+  });
+
+  it('hydrates metadata source from immutable run config without a session snapshot', () => {
+    const fallback = {
+      devHubAlias: 'current-hub',
+      alias: '',
+      duration: 7,
+      template: 'current-definition.json',
+      description: '',
+      azureProject: 'Current',
+      azureRepo: 'current-repo',
+      azureBranch: 'develop',
+      azureManifestPath: 'current-package.xml',
+      gitProvider: 'azure_devops',
+      gitConnectionId: 'current-connection',
+      gitNamespace: 'Current',
+      gitRepositoryId: 'current-repository-id',
+      templateId: '',
+      sourceOrgId: '',
+      dataDeploymentOrgId: '',
+      customSettingsOrgId: '',
+      runtimeEmailPool: '',
+    } satisfies ScratchOrgFormState;
+    const restored = formFromRunConfig({
+      id: 'run',
+      status: 'running',
+      config: {
+        alias: 'persisted-alias',
+        gitSource: {
+          provider: 'github',
+          connectionId: 'persisted-connection',
+          namespace: 'saved-org',
+          repositoryId: 'saved-repository-id',
+          repo: 'saved-org/saved-repo',
+          branch: 'release',
+          manifestPath: 'manifest/saved.xml',
+        },
+      } as never,
+    }, fallback);
+
+    expect(metadataSourceFromForm(restored)).toEqual({
+      provider: 'github',
+      connectionId: 'persisted-connection',
+      namespace: 'saved-org',
+      project: 'saved-org',
+      repositoryId: 'saved-repository-id',
+      repo: 'saved-org/saved-repo',
+      branch: 'release',
+      manifestPath: 'manifest/saved.xml',
+    });
   });
 
   it('retries credentials a bounded number of times and succeeds before handling', async () => {

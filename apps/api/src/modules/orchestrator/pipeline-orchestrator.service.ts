@@ -357,7 +357,7 @@ export class PipelineOrchestratorService {
   }
 
   async resumeRun(automationRunId: string, body: unknown, userId?: string) {
-    const patch = pipelineResumeSchema.parse(body ?? {});
+    pipelineResumeSchema.parse(body ?? {});
     const run = await prisma.automationRun.findUnique({ where: { id: automationRunId } });
     if (!run) throw new Error('Automation run not found');
     if (userId) assertResourceOwner(run, userId, 'Automation run');
@@ -429,37 +429,9 @@ export class PipelineOrchestratorService {
     const persistedConfig = normalizeGitSourceConfig(
       run.config as unknown as ScratchOrgPipelineInput,
     ) as ScratchOrgPipelineInput;
-    const legacyPatch = patch.azureDeploy && persistedConfig.gitSource?.provider === 'azure_devops'
-      ? {
-          ...persistedConfig.gitSource,
-          ...patch.azureDeploy,
-          provider: 'azure_devops' as const,
-        }
-      : undefined;
-    const canonicalPatch = patch.gitSource;
-    const providerChanged =
-      canonicalPatch?.provider &&
-      canonicalPatch.provider !== persistedConfig.gitSource?.provider;
-    const patchedSource = legacyPatch || canonicalPatch
-      ? {
-          ...(providerChanged
-            ? {
-                repo: persistedConfig.gitSource?.repo,
-                branch: persistedConfig.gitSource?.branch,
-                manifestPath: persistedConfig.gitSource?.manifestPath,
-              }
-            : persistedConfig.gitSource),
-          ...legacyPatch,
-          ...canonicalPatch,
-        }
-      : undefined;
-    const config = {
-      ...persistedConfig,
-      ...(patch.azureDeploy
-        ? { azureDeploy: { ...persistedConfig.azureDeploy, ...patch.azureDeploy } }
-        : {}),
-      ...(patchedSource ? { gitSource: patchedSource } : {}),
-    } as ScratchOrgPipelineInput;
+    // A run's SCM coordinates are immutable execution input. Browser defaults
+    // or stale resume payloads must never redirect an already-created run.
+    const config = persistedConfig;
 
     const checkpoint = normalizePipelineCheckpointAliases(
       (run.checkpoint ?? { completedSteps: [], resumeFrom: 'scratch_org_create' }) as unknown as PipelineCheckpoint,

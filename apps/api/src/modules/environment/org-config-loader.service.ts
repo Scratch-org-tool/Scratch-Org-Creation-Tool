@@ -36,6 +36,9 @@ export class OrgConfigLoaderService {
         alias,
         `SELECT Id, DeveloperName FROM Group WHERE Type = 'Queue' AND DeveloperName IN (${quoted})`,
       );
+      if (!queueResult.success) {
+        throw new Error(queueResult.error ?? 'Failed to query onboarding queues');
+      }
       const queues = (queueResult.data as { result?: { records?: Array<{ Id: string; DeveloperName: string }> } })?.result?.records ?? [];
       for (const [devName, fieldName] of Object.entries(ONBOARDING_CONFIG_QUEUE_MAP)) {
         const match = queues.find((q) => q.DeveloperName === devName);
@@ -60,6 +63,9 @@ export class OrgConfigLoaderService {
         alias,
         "SELECT Name, NamespacePrefix, SystemModstamp FROM StaticResource WHERE Name = 'fsvLightingComponent' LIMIT 1",
       );
+      if (!srResult.success) {
+        throw new Error(srResult.error ?? 'Failed to query onboarding static resource');
+      }
       const sr = (srResult.data as {
         result?: { records?: Array<{ Name: string; NamespacePrefix: string | null; SystemModstamp: string }> };
       })?.result?.records?.[0];
@@ -74,12 +80,23 @@ export class OrgConfigLoaderService {
 
     if (flags.upsertRequestId) {
       const createResult = await this.sfCli.createRecord(alias, 'u_Request__c', { Name: 'Sample Request for Config' });
-      const newId = createResult.data?.result?.id;
-      if (newId) {
-        updates.cfs_ob__Request_ID__c = newId.substring(0, 3);
-        await this.sfCli.deleteRecord(alias, 'u_Request__c', newId);
-        logs.push(`Request ID prefix: ${updates.cfs_ob__Request_ID__c}`);
+      if (!createResult.success) {
+        throw new Error(createResult.error ?? 'Failed to create temporary Request');
       }
+      const newId = createResult.data?.result?.id;
+      if (!newId) {
+        throw new Error('Salesforce did not return an id for the temporary Request');
+      }
+      const deleteResult = await this.sfCli.deleteRecord(alias, 'u_Request__c', newId);
+      if (!deleteResult.success) {
+        throw new Error(
+          deleteResult.error
+            ? `Failed to delete temporary Request ${newId}: ${deleteResult.error}`
+            : `Failed to delete temporary Request ${newId}`,
+        );
+      }
+      updates.cfs_ob__Request_ID__c = newId.substring(0, 3);
+      logs.push(`Request ID prefix: ${updates.cfs_ob__Request_ID__c}`);
     }
 
     if (Object.keys(updates).length === 0) {
@@ -98,6 +115,9 @@ export class OrgConfigLoaderService {
         ? `SELECT Id FROM ${ONBOARDING_CONFIG_OBJECT} WHERE ${selectors.join(' AND ')} ORDER BY Id LIMIT 2`
         : `SELECT Id FROM ${ONBOARDING_CONFIG_OBJECT} LIMIT 1`,
     );
+    if (!existing.success) {
+      throw new Error(existing.error ?? `Failed to query ${ONBOARDING_CONFIG_OBJECT}`);
+    }
     const existingRecords =
       (existing.data as { result?: { records?: Array<{ Id: string }> } })?.result?.records ?? [];
     if (selectors.length && existingRecords.length > 1) {

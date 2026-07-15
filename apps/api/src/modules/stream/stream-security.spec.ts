@@ -1,6 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
 import type { StreamEvent } from '@sfcc/shared';
+
+const db = vi.hoisted(() => ({
+  job: { findUnique: vi.fn() },
+  automationRun: { findUnique: vi.fn() },
+}));
+
+vi.mock('@sfcc/db', () => ({ prisma: db }));
+
 import { StreamService } from './stream.service';
 import { StreamTicketService } from './stream-ticket.service';
 import { StreamTicketGuard, type StreamRequest } from './stream-ticket.guard';
@@ -66,6 +74,10 @@ describe('stream tickets', () => {
 });
 
 describe('stream ownership', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('defaults to denying ownerless and foreign events for non-admins', async () => {
     const service = new StreamService({
       getConnection: () => null,
@@ -81,5 +93,51 @@ describe('stream ownership', () => {
     await service.publish('auth_status', { status: 'owned' }, 'DPT_owner');
 
     expect(received.map((event) => event.payload.status)).toEqual(['owned']);
+  });
+
+  it('routes automation-run events only to the run owner', async () => {
+    db.automationRun.findUnique.mockResolvedValue({ createdBy: 'DPT_owner' });
+    const service = new StreamService({ getConnection: () => null } as never);
+    const ownerEvents: StreamEvent[] = [];
+    const unrelatedEvents: StreamEvent[] = [];
+    service.subscribe(undefined, { userId: 'DPT_owner', isAdmin: false })
+      .subscribe((event) => ownerEvents.push(event));
+    service.subscribe(undefined, { userId: 'DPT_other', isAdmin: false })
+      .subscribe((event) => unrelatedEvents.push(event));
+
+    await service.publish('job_status', {
+      automationRunId: 'run-1',
+      status: 'query-completed',
+    });
+
+    expect(ownerEvents).toHaveLength(1);
+    expect(unrelatedEvents).toHaveLength(0);
+  });
+
+  it('uses the parent run owner for system-owned child jobs', async () => {
+    db.job.findUnique.mockResolvedValue({
+      createdBy: 'system',
+      parentRun: { createdBy: 'DPT_owner' },
+    });
+    const service = new StreamService({ getConnection: () => null } as never);
+    const ownerEvents: StreamEvent[] = [];
+    const unrelatedEvents: StreamEvent[] = [];
+    service.subscribe(undefined, { userId: 'DPT_owner', isAdmin: false })
+      .subscribe((event) => ownerEvents.push(event));
+    service.subscribe(undefined, { userId: 'DPT_other', isAdmin: false })
+      .subscribe((event) => unrelatedEvents.push(event));
+
+    await service.publish('job_status', {
+      jobId: 'system-provision-job',
+      status: 'provisioned',
+    });
+
+    expect(ownerEvents).toHaveLength(1);
+    expect(unrelatedEvents).toHaveLength(0);
+    expect(db.job.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({
+        parentRun: { select: { createdBy: true } },
+      }),
+    }));
   });
 });

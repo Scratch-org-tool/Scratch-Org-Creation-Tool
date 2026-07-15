@@ -13,6 +13,11 @@ import {
   deriveProvisioningBatchStatus,
 } from '../modules/provisioning/provisioning-status.util';
 import { buildPicklistDependencies } from '../modules/provisioning/picklist-dependency.util';
+import {
+  ProvisioningProfileValidationError,
+  provisioningProfileNames,
+  resolveProvisioningProfileIds,
+} from '../modules/provisioning/provisioning-profile.util';
 
 interface ConaUserInput {
   firstName: string;
@@ -26,8 +31,6 @@ interface ConaUserInput {
   permissionSets?: string[];
   profile?: string;
 }
-
-class MetadataValidationError extends Error {}
 
 @Injectable()
 export class UserProvisionWorker {
@@ -75,7 +78,7 @@ export class UserProvisionWorker {
     let metadata: { profileIds: Map<string, string> } | undefined;
     try {
       if (conaMode && discoveryPolicy === 'disabled') {
-        metadata = this.disabledDiscoveryProfiles(users, Boolean(strictMetadata));
+        metadata = await this.resolveProfiles(alias, users, Boolean(strictMetadata));
         await log('stdout', 'Target User metadata discovery disabled by policy');
       } else if (conaMode) {
         try {
@@ -86,13 +89,13 @@ export class UserProvisionWorker {
           );
         } catch (error) {
           if (
-            error instanceof MetadataValidationError
+            error instanceof ProvisioningProfileValidationError
             || discoveryPolicy === 'strict'
             || discoveryFailurePolicy === 'fail'
           ) {
             throw error;
           }
-          metadata = this.disabledDiscoveryProfiles(users, Boolean(strictMetadata));
+          metadata = await this.resolveProfiles(alias, users, Boolean(strictMetadata));
           await log(
             'stderr',
             `Target metadata discovery failed; continuing by policy: ${
@@ -349,7 +352,7 @@ export class UserProvisionWorker {
     ];
     const missing = fieldNames.filter((name) => !fields.some((field) => field.name === name));
     if (strict && missing.length) {
-      throw new MetadataValidationError(`Target User fields are missing: ${missing.join(', ')}`);
+      throw new ProvisioningProfileValidationError(`Target User fields are missing: ${missing.join(', ')}`);
     }
 
     const [profilesResult, permissionSetsResult] = await Promise.all([
@@ -360,10 +363,9 @@ export class UserProvisionWorker {
       throw new Error(profilesResult.error ?? permissionSetsResult.error ?? 'Profile/permission-set preflight failed');
     }
     const profiles = (profilesResult.data?.result?.records ?? []) as Array<{ Id: string; Name: string }>;
-    const profileIds = new Map(profiles.flatMap((profile) => [
-      [profile.Name, profile.Id] as const,
-      [profile.Id, profile.Id] as const,
-    ]));
+    const { profileIds } = resolveProvisioningProfileIds(users, profiles, {
+      requireProfile: strict,
+    });
     const permissionSets = new Set(
       ((permissionSetsResult.data?.result?.records ?? []) as Array<{ Name: string }>).map((row) => row.Name),
     );
@@ -379,22 +381,16 @@ export class UserProvisionWorker {
       return [];
     };
     for (const user of users) {
-      if (strict && !user.profile) {
-        throw new MetadataValidationError(`Profile is required for ${user.username ?? user.email}`);
-      }
-      if (user.profile && !profileIds.has(user.profile)) {
-        throw new MetadataValidationError(`Unknown profile: ${user.profile}`);
-      }
       for (const permissionSet of user.permissionSets ?? []) {
         if (!permissionSets.has(permissionSet)) {
-          throw new MetadataValidationError(`Unknown permission set: ${permissionSet}`);
+          throw new ProvisioningProfileValidationError(`Unknown permission set: ${permissionSet}`);
         }
       }
       for (const fieldName of fieldNames) {
         const allowed = picklists.get(fieldName);
         for (const value of userValue(user, fieldName)) {
           if (allowed && !allowed.has(value)) {
-            throw new MetadataValidationError(`Invalid ${fieldName} value "${value}"`);
+            throw new ProvisioningProfileValidationError(`Invalid ${fieldName} value "${value}"`);
           }
         }
         const field = fields.find((candidate) => candidate.name === fieldName);
@@ -411,7 +407,7 @@ export class UserProvisionWorker {
             dependency
             && !dependency.validFor.some((controllerValue) => selectedControllerValues.has(controllerValue))
           ) {
-            throw new MetadataValidationError(
+            throw new ProvisioningProfileValidationError(
               `Value "${selected}" for ${fieldName} is invalid for ${field.controllerName}`,
             );
           }
@@ -421,27 +417,22 @@ export class UserProvisionWorker {
     return { profileIds };
   }
 
-  private disabledDiscoveryProfiles(users: ConaUserInput[], strict: boolean) {
-    const profileIds = new Map<string, string>();
-    for (const user of users) {
-      if (!user.profile) {
-        if (strict) {
-          throw new MetadataValidationError(
-            `Profile is required for ${user.username ?? user.email}`,
-          );
-        }
-        continue;
+  private async resolveProfiles(alias: string, users: ConaUserInput[], strict: boolean) {
+    const names = provisioningProfileNames(users);
+    let profiles: Array<{ Id: string; Name: string }> = [];
+    if (names.length) {
+      const result = await this.sfCli.query(
+        alias,
+        'SELECT Id, Name FROM Profile ORDER BY Name LIMIT 500',
+      );
+      if (!result.success) {
+        throw new Error(result.error ?? 'Profile resolution failed');
       }
-      if (!/^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/.test(user.profile)) {
-        if (strict) {
-          throw new MetadataValidationError(
-            `Profile "${user.profile}" cannot be resolved while discovery is unavailable`,
-          );
-        }
-        continue;
-      }
-      profileIds.set(user.profile, user.profile);
+      profiles = (result.data?.result?.records ?? []) as Array<{ Id: string; Name: string }>;
     }
+    const { profileIds } = resolveProvisioningProfileIds(users, profiles, {
+      requireProfile: strict,
+    });
     return { profileIds };
   }
 
