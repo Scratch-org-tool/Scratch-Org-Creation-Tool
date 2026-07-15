@@ -299,6 +299,7 @@ export function groupQualityResults(
       coverage: null,
     };
   }
+  const staticStage = results.stages.find((stage) => stage.key === 'static_analysis');
   const validation = results.stages.find((stage) => stage.key === 'validation');
   const apex = results.stages.find((stage) => stage.key === 'apex_tests');
   const validationRaw = asRecord(validation?.artifacts?.raw);
@@ -331,9 +332,11 @@ export function groupQualityResults(
     (value): value is number => typeof value === 'number' && Number.isFinite(value),
   ) ?? null;
   return {
-    staticIssues: status?.results?.staticAnalysis?.issues ?? results.issues.filter(
-      (issue) => issue.engine !== 'salesforce',
-    ),
+    staticIssues: staticStage?.id
+      ? results.issues.filter((issue) => issue.stageId === staticStage.id)
+      : status?.results?.staticAnalysis?.issues ?? results.issues.filter(
+        (issue) => issue.engine !== 'salesforce',
+      ),
     validationComponentFailures: status?.results?.validation?.issues?.map(
       (issue) => ({ ...issue }),
     ) ?? validationFailures,

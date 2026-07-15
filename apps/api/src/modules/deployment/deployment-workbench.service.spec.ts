@@ -25,9 +25,10 @@ const db = vi.hoisted(() => ({
     findMany: vi.fn(),
     create: vi.fn(),
   },
-  deploymentQualityApproval: { create: vi.fn(), count: vi.fn() },
+  deploymentQualityApproval: { create: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
   deploymentDestructiveReview: { findFirst: vi.fn(), upsert: vi.fn() },
-  job: { findUnique: vi.fn() },
+  job: { findUnique: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
+  dataMovement: { findMany: vi.fn(), updateMany: vi.fn() },
   orgConnection: { findUnique: vi.fn(), findMany: vi.fn() },
   appUser: { findMany: vi.fn() },
   metadataComparison: { findFirst: vi.fn() },
@@ -87,6 +88,11 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     db.deploymentQualityAudit.create.mockResolvedValue({});
     db.deploymentQualityApproval.create.mockResolvedValue({});
     db.deploymentQualityApproval.count.mockResolvedValue(1);
+    db.deploymentQualityApproval.findFirst.mockResolvedValue(null);
+    db.job.findMany.mockResolvedValue([]);
+    db.job.updateMany.mockResolvedValue({ count: 0 });
+    db.dataMovement.findMany.mockResolvedValue([]);
+    db.dataMovement.updateMany.mockResolvedValue({ count: 0 });
     db.deploymentQualityRun.update.mockResolvedValue({});
     enqueue.mockResolvedValue({ id: 'job-2' });
     removeJob.mockResolvedValue(true);
@@ -100,15 +106,78 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('advertises optional dependency expansion', async () => {
+    await expect(service.capabilities()).resolves.toEqual(expect.objectContaining({
+      supports: expect.objectContaining({ includeOptional: true }),
+    }));
+  });
+
   it('hides another user’s workbench policy as not found', async () => {
-    db.deploymentQualityRun.findFirst.mockResolvedValue(null);
+    db.deploymentQualityRun.findUnique.mockResolvedValue(null);
 
     await expect(service.getPolicy('run-1', 'user-2')).rejects.toThrow(
       'Deployment workbench run not found',
     );
-    expect(db.deploymentQualityRun.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'run-1', createdBy: 'user-2' },
+    expect(db.deploymentQualityRun.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-1' },
+      select: expect.objectContaining({
+        createdBy: true,
+        status: true,
+        policySnapshot: true,
+      }),
     }));
+  });
+
+  it('lets an eligible distinct approver read only an approval-needed plan', async () => {
+    const distinctPolicy = {
+      ...policySnapshot,
+      approval: { required: true, approverType: 'distinct_user', minimumApprovals: 2 },
+    };
+    db.deploymentQualityRun.findUnique.mockResolvedValue({
+      id: 'run-1',
+      createdBy: 'owner-1',
+      status: 'awaiting_approval',
+      policySnapshot: distinctPolicy,
+      currentStage: 'approval',
+      validationId: null,
+      approvedAt: null,
+      rejectedAt: null,
+      artifacts: {},
+      deploymentId: null,
+      destructiveSelections: [],
+      manifestXml: null,
+      apiVersion: '62.0',
+      targetProfile: 'sandbox',
+      strategy: 'direct',
+      dependencyPolicy: { mode: 'include_required' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    db.deploymentQualityStage.findMany.mockResolvedValue([]);
+    db.deploymentQualityIssue.findMany.mockResolvedValue([]);
+    db.deploymentQualityTestResult.findMany.mockResolvedValue([]);
+    db.deploymentQualityAudit.findMany.mockResolvedValue([]);
+
+    await expect(service.getPolicy('run-1', 'reviewer-1')).resolves.toEqual(
+      expect.objectContaining({ id: 'run-1', policy: distinctPolicy }),
+    );
+    await expect(service.getStages('run-1', 'reviewer-1')).resolves.toEqual([]);
+    await expect(service.getResults('run-1', 'reviewer-1')).resolves.toEqual(
+      expect.objectContaining({ id: 'run-1', stages: [], issues: [] }),
+    );
+    await expect(service.getStatus('run-1', 'reviewer-1')).resolves.toEqual(
+      expect.objectContaining({ canReject: true }),
+    );
+
+    db.deploymentQualityRun.findUnique.mockResolvedValue({
+      id: 'run-1',
+      createdBy: 'owner-1',
+      status: 'running',
+      policySnapshot: distinctPolicy,
+    });
+    await expect(service.getPolicy('run-1', 'reviewer-1')).rejects.toThrow(
+      'Deployment workbench run not found',
+    );
   });
 
   it('requires an administrator for an admin approval policy', async () => {
@@ -356,6 +425,104 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     expect(db.deploymentQualityRun.update).not.toHaveBeenCalled();
   });
 
+  it('iteratively retrieves optional org components and their required dependencies', async () => {
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const targetId = '22222222-2222-4222-8222-222222222222';
+    const comparisonId = '33333333-3333-4333-8333-333333333333';
+    db.orgConnection.findUnique
+      .mockResolvedValueOnce({
+        id: targetId,
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'target',
+        username: null,
+        orgId: '00D-target',
+      })
+      .mockResolvedValueOnce({
+        id: sourceId,
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'source',
+        username: null,
+        orgId: '00D-source',
+      });
+    db.metadataComparison.findFirst.mockResolvedValue({
+      id: comparisonId,
+      sourceOrgId: sourceId,
+      targetOrgId: targetId,
+      status: 'completed',
+      items: [
+        { metadataType: 'ApexClass', fullName: 'Selected', diffType: 'changed' },
+        { metadataType: 'ApexClass', fullName: 'Optional', diffType: 'new' },
+      ],
+    });
+    const cleanups: Array<ReturnType<typeof vi.fn>> = [];
+    resolveSource.mockImplementation(async (request: { manifestContent?: string }) => {
+      const root = fs.mkdtempSync(path.join(tmpdir(), 'workbench-org-expansion-'));
+      tempRoots.push(root);
+      const manifestDir = path.join(root, 'manifest');
+      const classes = path.join(root, 'force-app', 'main', 'default', 'classes');
+      fs.mkdirSync(manifestDir, { recursive: true });
+      fs.mkdirSync(classes, { recursive: true });
+      const manifest = request.manifestContent ?? '';
+      fs.writeFileSync(path.join(manifestDir, 'package.xml'), manifest);
+      if (manifest.includes('<members>Selected</members>')) {
+        fs.writeFileSync(path.join(classes, 'Selected.cls'), 'class Selected {}');
+      }
+      if (manifest.includes('<members>Optional</members>')) {
+        fs.writeFileSync(
+          path.join(classes, 'Optional.cls'),
+          'class Optional { void load() { [SELECT Id FROM Required__c]; } }',
+        );
+      }
+      if (manifest.includes('<members>Required__c</members>')) {
+        const objectDir = path.join(
+          root,
+          'force-app',
+          'main',
+          'default',
+          'objects',
+          'Required__c',
+        );
+        fs.mkdirSync(objectDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(objectDir, 'Required__c.object-meta.xml'),
+          '<CustomObject><label>Required</label></CustomObject>',
+        );
+      }
+      const cleanup = vi.fn().mockResolvedValue(undefined);
+      cleanups.push(cleanup);
+      return {
+        projectRoot: root,
+        manifestRelative: 'manifest/package.xml',
+        manifestAbsolutePath: path.join(manifestDir, 'package.xml'),
+        mode: 'org_to_org_manifest',
+        cleanup,
+      };
+    });
+
+    const preview = await service.preview({
+      source: { type: 'org_compare', sourceOrgId: sourceId, comparisonId },
+      target: { orgId: targetId, profile: 'scratch' },
+      components: [{ metadataType: 'ApexClass', members: ['Selected'] }],
+      dependencyPolicy: {
+        mode: 'include_required',
+        includeOptional: true,
+        maxDepth: 10,
+        failOnMissing: true,
+        allowCycles: false,
+      },
+    }, 'user-1');
+
+    expect(resolveSource).toHaveBeenCalledTimes(3);
+    expect(preview.dependencies.resolvedSelections).toEqual(expect.arrayContaining([
+      { metadataType: 'ApexClass', members: ['Optional', 'Selected'] },
+      { metadataType: 'CustomObject', members: ['Required__c'] },
+    ]));
+    expect(cleanups).toHaveLength(3);
+    expect(cleanups.every((cleanup) => cleanup.mock.calls.length === 1)).toBe(true);
+  });
+
   it('pages quality history within strict owner scope and includes gate summaries', async () => {
     db.deploymentQualityRun.count.mockResolvedValue(1);
     db.deploymentQualityRun.findMany.mockResolvedValue([{
@@ -412,7 +579,7 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
   });
 
   it('returns authoritative actions and stage-separated normalized results', async () => {
-    db.deploymentQualityRun.findFirst.mockResolvedValue({
+    db.deploymentQualityRun.findUnique.mockResolvedValue({
       id: 'run-1',
       status: 'awaiting_approval',
       currentStage: 'approval',
@@ -437,18 +604,21 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     });
     db.deploymentQualityStage.findMany.mockResolvedValue([
       {
+        id: 'static-stage',
         key: 'static_analysis',
         status: 'passed',
         summary: { counts: { error: 0 } },
         artifacts: { reports: [] },
       },
       {
+        id: 'validation-stage',
         key: 'validation',
         status: 'passed',
         summary: { coverage: 88 },
         artifacts: { sourceDigest: 'source-digest' },
       },
       {
+        id: 'test-stage',
         key: 'apex_tests',
         status: 'passed',
         summary: { coverage: 88 },
@@ -456,8 +626,8 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       },
     ]);
     db.deploymentQualityIssue.findMany.mockResolvedValue([
-      { engine: 'eslint', severity: 'warning' },
-      { engine: 'salesforce', severity: 'error' },
+      { stageId: 'static-stage', engine: 'eslint', severity: 'warning' },
+      { stageId: 'validation-stage', engine: 'salesforce', severity: 'error' },
     ]);
     db.deploymentQualityTestResult.findMany.mockResolvedValue([
       { className: 'ExampleTest', methodName: 'works', status: 'passed' },
@@ -468,6 +638,7 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
 
     expect(status).toEqual(expect.objectContaining({
       canApprove: true,
+      canReject: true,
       canQuickDeploy: false,
       canCancel: true,
       canResume: false,
@@ -478,6 +649,14 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
         tests: expect.objectContaining({ status: 'passed' }),
         coverage: expect.objectContaining({ percentage: 88 }),
       }),
+    }));
+
+    db.deploymentQualityApproval.findFirst.mockResolvedValue({ id: 'approval-1' });
+    const afterActorApproval = await service.getStatus('run-1', 'user-1', true);
+    expect(afterActorApproval).toEqual(expect.objectContaining({
+      approvalCount: 0,
+      canApprove: false,
+      canReject: false,
     }));
   });
 
@@ -495,13 +674,40 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       status: 'running',
       artifacts: { execution: { jobId: 'job-1' } },
     });
-    db.job.findUnique.mockResolvedValue({ id: 'job-1', status: 'running' });
+    db.job.findMany.mockResolvedValue([
+      {
+        id: 'job-1',
+        queue: 'metadata-deploy',
+        payload: { workbenchRunId: 'run-1' },
+      },
+      {
+        id: 'job-data',
+        queue: 'sfdmu-run',
+        payload: { workbenchRunId: 'run-1', movementId: 'movement-1' },
+      },
+    ]);
+    db.dataMovement.findMany.mockResolvedValue([{ id: 'movement-1' }]);
 
     const result = await service.cancel('run-1', 'user-1');
 
-    expect(result).toEqual(expect.objectContaining({ cancelled: true, jobId: 'job-1' }));
+    expect(result).toEqual(expect.objectContaining({
+      cancelled: true,
+      jobId: 'job-1',
+      cancelledJobs: 2,
+      cancelledMovements: 1,
+    }));
     expect(removeJob).toHaveBeenCalledWith('metadata-deploy', 'job-1');
+    expect(removeJob).toHaveBeenCalledWith('sfdmu-run', 'job-data');
     expect(cancelProcess).toHaveBeenCalledWith('job-1');
+    expect(cancelProcess).toHaveBeenCalledWith('job-data');
+    expect(db.job.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: { in: ['job-1', 'job-data'] } }),
+      data: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(db.dataMovement.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: { in: ['movement-1'] } }),
+      data: { status: 'cancelled' },
+    }));
     expect(db.deploymentQualityStage.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ runId: 'run-1' }),

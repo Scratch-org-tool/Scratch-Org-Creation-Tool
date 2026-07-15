@@ -25,12 +25,14 @@ export class MetadataDataChainService {
     targetOrgId: string;
     dataDeployConfig: DataDeployConfigItem[];
     automationRunId?: string;
+    workbenchRunId?: string;
     createdBy?: string;
     onLog: (line: string) => Promise<void>;
     awaitTerminal?: boolean;
     sequential?: boolean;
     stopOnError?: boolean;
     timeoutMs?: number;
+    isCancelled?: () => Promise<boolean>;
   }): Promise<string[]> {
     // Validate the complete chain before creating a movement or queue job.
     const configs = options.dataDeployConfig.map((item) => chainedDataConfigItemSchema.parse(item));
@@ -54,6 +56,7 @@ export class MetadataDataChainService {
     await options.onLog(`Starting chained data deploy for ${configs.length} object(s)...`);
 
     const enqueueOne = async (cfg: DataDeployConfigItem) => {
+      if (await options.isCancelled?.()) throw new Error('Chained data deployment cancelled');
       const soql = cfg.soql?.trim()
         ?? `SELECT Id, Name FROM ${cfg.objectName} LIMIT 200`;
 
@@ -66,8 +69,18 @@ export class MetadataDataChainService {
           movementType: 'org_to_org',
           status: 'queued',
           createdBy: options.createdBy ?? 'system',
+          sfdmuConfig: options.workbenchRunId
+            ? { workbenchRunId: options.workbenchRunId }
+            : undefined,
         },
       });
+      if (await options.isCancelled?.()) {
+        await prisma.dataMovement.update({
+          where: { id: movement.id },
+          data: { status: 'cancelled' },
+        });
+        throw new Error('Chained data deployment cancelled');
+      }
 
       const generated = generateSfdmuConfigFromSoql({
         runId: movement.id,
@@ -85,6 +98,7 @@ export class MetadataDataChainService {
             configPath: generated.configPath,
             strategy: cfg.strategy ?? 'upsert',
             matchField: cfg.matchField ?? 'Name',
+            ...(options.workbenchRunId ? { workbenchRunId: options.workbenchRunId } : {}),
           } as Prisma.InputJsonValue,
         },
       });
@@ -97,10 +111,21 @@ export class MetadataDataChainService {
           targetOrgAlias: targetAlias,
           configPath: generated.configPath,
           movementId: movement.id,
+          ...(options.workbenchRunId ? { workbenchRunId: options.workbenchRunId } : {}),
         },
         parentRunId: options.automationRunId,
         createdBy: options.createdBy,
       });
+      if (await options.isCancelled?.()) {
+        await Promise.all([
+          this.jobsService.updateStatus(job.id, 'cancelled', 'Workbench run cancelled'),
+          prisma.dataMovement.update({
+            where: { id: movement.id },
+            data: { status: 'cancelled' },
+          }),
+        ]);
+        throw new Error('Chained data deployment cancelled');
+      }
 
       await this.queueService.addJob(
         QUEUE_NAMES.SFDMU_RUN,
@@ -111,9 +136,21 @@ export class MetadataDataChainService {
           configPath: generated.configPath,
           movementId: movement.id,
           dbJobId: job.id,
+          ...(options.workbenchRunId ? { workbenchRunId: options.workbenchRunId } : {}),
         },
         job.id,
       );
+      if (await options.isCancelled?.()) {
+        await Promise.all([
+          this.queueService.removeJob(QUEUE_NAMES.SFDMU_RUN, job.id).catch(() => false),
+          this.jobsService.updateStatus(job.id, 'cancelled', 'Workbench run cancelled'),
+          prisma.dataMovement.update({
+            where: { id: movement.id },
+            data: { status: 'cancelled' },
+          }),
+        ]);
+        throw new Error('Chained data deployment cancelled');
+      }
 
       jobIds.push(job.id);
       await options.onLog(`Queued data deploy for ${cfg.objectName} (job ${job.id})`);
@@ -124,7 +161,7 @@ export class MetadataDataChainService {
       for (const cfg of configs) {
         const id = await enqueueOne(cfg);
         if (options.awaitTerminal) {
-          const terminal = await this.awaitJob(id, options.timeoutMs);
+          const terminal = await this.awaitJob(id, options.timeoutMs, options.isCancelled);
           await options.onLog(`Data deploy ${id} finished with ${terminal.status}`);
           if (terminal.status !== 'completed' && options.stopOnError !== false) {
             throw new Error(`Chained data deploy ${id} ${terminal.status}: ${terminal.error ?? 'unknown error'}`);
@@ -134,7 +171,9 @@ export class MetadataDataChainService {
     } else {
       const ids = await Promise.all(configs.map(enqueueOne));
       if (options.awaitTerminal) {
-        const outcomes = await Promise.all(ids.map((id) => this.awaitJob(id, options.timeoutMs)));
+        const outcomes = await Promise.all(
+          ids.map((id) => this.awaitJob(id, options.timeoutMs, options.isCancelled)),
+        );
         const failed = outcomes.find((outcome) => outcome.status !== 'completed');
         if (failed && options.stopOnError !== false) {
           throw new Error(`Chained data deploy ${failed.id} ${failed.status}: ${failed.error ?? 'unknown error'}`);
@@ -145,7 +184,11 @@ export class MetadataDataChainService {
     return jobIds;
   }
 
-  private async awaitJob(id: string, timeoutMs = 30 * 60_000) {
+  private async awaitJob(
+    id: string,
+    timeoutMs = 30 * 60_000,
+    isCancelled?: () => Promise<boolean>,
+  ) {
     const deadline = Date.now() + Math.min(Math.max(timeoutMs, 1_000), 24 * 60 * 60_000);
     for (;;) {
       const job = await prisma.job.findUnique({
@@ -154,6 +197,9 @@ export class MetadataDataChainService {
       });
       if (!job) throw new Error(`Chained data job ${id} disappeared`);
       if (['completed', 'partial', 'failed', 'cancelled'].includes(job.status)) return job;
+      if (await isCancelled?.()) {
+        return { ...job, status: 'cancelled', error: 'Workbench run cancelled' };
+      }
       if (Date.now() >= deadline) throw new Error(`Timed out waiting for chained data job ${id}`);
       await new Promise((resolve) => setTimeout(resolve, 500));
     }

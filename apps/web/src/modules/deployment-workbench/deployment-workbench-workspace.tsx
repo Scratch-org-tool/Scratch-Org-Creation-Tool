@@ -1330,7 +1330,7 @@ function ResultDetails({ w }: { w: DeploymentWorkbenchState }) {
           <GenericTable rows={grouped.apexTestFailures} />
         </GlassCard>
       )}
-      {w.results?.issues.length ? (
+      {grouped.staticIssues.length ? (
         <GlassCard title="Static analysis issues">
           <div className="max-h-96 overflow-auto rounded-lg border border-border/60">
             <table className="w-full text-sm">
@@ -1341,7 +1341,7 @@ function ResultDetails({ w }: { w: DeploymentWorkbenchState }) {
                 </tr>
               </thead>
               <tbody>
-                {w.results.issues.map((issue) => (
+                {grouped.staticIssues.map((issue) => (
                   <tr key={issue.id} className="border-b border-border/40">
                     <td className="p-2"><StatusBadge status={issue.severity} /></td>
                     <td className="p-2">{issue.engine} · {issue.ruleId}</td>

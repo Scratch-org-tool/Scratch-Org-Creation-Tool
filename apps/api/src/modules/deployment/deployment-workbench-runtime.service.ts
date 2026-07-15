@@ -522,11 +522,13 @@ export class DeploymentWorkbenchRuntimeService {
               strategy?: 'insert' | 'upsert';
               matchField?: string;
             }>,
+            workbenchRunId: run.id,
             createdBy: run.createdBy,
             onLog: (line) => this.log(data.dbJobId, 'stdout', line),
             awaitTerminal: true,
             sequential: chained.sequential !== false,
             stopOnError: chained.stopOnError !== false,
+            isCancelled: () => this.cancelled(data.dbJobId),
           });
           await this.passStage(run.id, currentStage, { jobIds: ids, completed: ids.length });
         }

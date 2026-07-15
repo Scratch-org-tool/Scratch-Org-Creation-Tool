@@ -172,6 +172,7 @@ export interface WorkbenchStage {
 
 export interface WorkbenchIssue {
   id: string;
+  stageId?: string | null;
   engine: string;
   ruleId: string;
   severity: 'info' | 'warning' | 'error' | 'critical';

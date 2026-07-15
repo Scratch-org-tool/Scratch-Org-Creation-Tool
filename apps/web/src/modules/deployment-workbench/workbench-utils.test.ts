@@ -136,6 +136,7 @@ describe('deployment workbench utilities', () => {
       id: 'run',
       status: 'failed',
       stages: [{
+        id: 'validation-stage',
         key: 'validation',
         ordinal: 1,
         required: true,
@@ -145,17 +146,32 @@ describe('deployment workbench utilities', () => {
           raw: { result: { details: { componentFailures: [{ fullName: 'Broken' }] } } },
         },
       }, {
+        id: 'apex-stage',
         key: 'apex_tests',
         ordinal: 2,
         required: true,
         status: 'failed',
+      }, {
+        id: 'static-stage',
+        key: 'static_analysis',
+        ordinal: 3,
+        required: true,
+        status: 'passed',
       }],
       issues: [{
         id: 'issue',
+        stageId: 'static-stage',
         engine: 'pmd',
         ruleId: 'Rule',
         severity: 'error',
         message: 'Static issue',
+      }, {
+        id: 'validation-warning',
+        stageId: 'validation-stage',
+        engine: 'custom-validator',
+        ruleId: 'VALIDATION',
+        severity: 'warning',
+        message: 'Must remain in validation',
       }],
       testResults: [{
         id: 'test',

@@ -679,6 +679,7 @@ export const deploymentWorkbenchCapabilitiesSchema = z.object({
   staticAnalysisEngines: z.array(z.string()),
   supports: z.object({
     dependencies: z.boolean(),
+    includeOptional: z.boolean(),
     destructiveChanges: z.boolean(),
     snapshots: z.boolean(),
     rollback: z.boolean(),
@@ -698,6 +699,7 @@ export const deploymentWorkbenchStatusSchema = z.object({
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
   canApprove: z.boolean(),
+  canReject: z.boolean(),
   canQuickDeploy: z.boolean(),
   canCancel: z.boolean(),
   canResume: z.boolean(),
