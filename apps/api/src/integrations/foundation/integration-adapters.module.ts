@@ -1,8 +1,19 @@
 import { Global, Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { AzureIntegrationService } from '../../modules/integrations/azure-integration.service';
 import { AzureScmAdapter, AzureWorkItemAdapter } from '../azure/azure.adapters';
 import { AzureService } from '../azure/azure.service';
 import { AzureWorkItemsService } from '../azure/azure-work-items.service';
+import { AtlassianConnectionStore } from '../atlassian/atlassian-connection.store';
+import { ATLASSIAN_FETCH } from '../atlassian/atlassian-http.client';
+import { BitbucketScmAdapter } from '../bitbucket/bitbucket.adapter';
+import { JiraWorkItemAdapter } from '../jira/jira.adapter';
+import { IntegrationAdminController } from '../../modules/integrations/integration-admin.controller';
+import { IntegrationAdminService } from '../../modules/integrations/integration-admin.service';
+import { IntegrationWebhookController } from '../../modules/integrations/integration-webhook.controller';
+import { IntegrationWebhookService } from '../../modules/integrations/integration-webhook.service';
+import { IntegrationsController } from '../../modules/integrations/integrations.controller';
+import { IntegrationsService } from '../../modules/integrations/integrations.service';
 import {
   GITHUB_FETCH,
   GITHUB_SLEEP,
@@ -33,12 +44,16 @@ import {
   type WorkItemAdapter,
 } from './adapter.contracts';
 import { ScmAdapterRegistry, WorkItemAdapterRegistry } from './adapter.registry';
+import { IntegrationErrorFilter } from './integration-error.filter';
 
 @Global()
 @Module({
   controllers: [
     ProviderIntegrationController,
     GitHubWebhookController,
+    IntegrationAdminController,
+    IntegrationWebhookController,
+    IntegrationsController,
   ],
   providers: [
     AzureIntegrationService,
@@ -46,6 +61,14 @@ import { ScmAdapterRegistry, WorkItemAdapterRegistry } from './adapter.registry'
     AzureWorkItemsService,
     AzureScmAdapter,
     AzureWorkItemAdapter,
+    { provide: ATLASSIAN_FETCH, useValue: fetch },
+    AtlassianConnectionStore,
+    BitbucketScmAdapter,
+    JiraWorkItemAdapter,
+    IntegrationAdminService,
+    IntegrationWebhookService,
+    IntegrationsService,
+    { provide: APP_FILTER, useClass: IntegrationErrorFilter },
     { provide: GITHUB_AUTH_FETCH, useValue: fetch },
     { provide: GITHUB_FETCH, useValue: fetch },
     {
@@ -64,22 +87,25 @@ import { ScmAdapterRegistry, WorkItemAdapterRegistry } from './adapter.registry'
     GitHubWebhookService,
     {
       provide: SCM_ADAPTERS,
-      inject: [AzureScmAdapter, GitHubScmAdapter],
+      inject: [AzureScmAdapter, GitHubScmAdapter, BitbucketScmAdapter],
       useFactory: (
         azure: AzureScmAdapter,
         github: GitHubScmAdapter,
+        bitbucket: BitbucketScmAdapter,
       ): ScmAdapter[] => [
         azure,
         github,
+        bitbucket,
       ],
     },
     {
       provide: WORK_ITEM_ADAPTERS,
-      inject: [AzureWorkItemAdapter, GitHubWorkItemAdapter],
+      inject: [AzureWorkItemAdapter, GitHubWorkItemAdapter, JiraWorkItemAdapter],
       useFactory: (
         azure: AzureWorkItemAdapter,
         github: GitHubWorkItemAdapter,
-      ): WorkItemAdapter[] => [azure, github],
+        jira: JiraWorkItemAdapter,
+      ): WorkItemAdapter[] => [azure, github, jira],
     },
     ScmAdapterRegistry,
     WorkItemAdapterRegistry,
@@ -94,6 +120,9 @@ import { ScmAdapterRegistry, WorkItemAdapterRegistry } from './adapter.registry'
     GitHubIntegrationService,
     GitHubScmAdapter,
     GitHubWorkItemAdapter,
+    BitbucketScmAdapter,
+    JiraWorkItemAdapter,
+    AtlassianConnectionStore,
   ],
 })
 export class IntegrationAdaptersModule {}

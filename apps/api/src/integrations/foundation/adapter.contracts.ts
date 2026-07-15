@@ -57,6 +57,10 @@ export interface WorkItemQuery extends AdapterContext {
   types?: readonly string[];
   state?: string;
   text?: string;
+  /** Provider-native filter. Jira uses JQL; adapters must still parameterize app filters. */
+  jql?: string;
+  pageSize?: number;
+  pageToken?: string;
 }
 
 export interface WorkItemCreateInput extends AdapterContext {
@@ -65,10 +69,12 @@ export interface WorkItemCreateInput extends AdapterContext {
   description?: string;
   type?: string;
   assigneeLogins?: readonly string[];
+  assigneeId?: string | null;
   priority?: string | number | null;
   severity?: string | null;
   area?: string | null;
   iteration?: string | null;
+  components?: readonly string[];
   labels?: readonly string[];
   state?: string;
   customFields?: Record<string, string | number | null>;
@@ -80,10 +86,12 @@ export interface WorkItemUpdateInput extends AdapterContext {
   description?: string | null;
   type?: string | null;
   assigneeLogins?: readonly string[];
+  assigneeId?: string | null;
   priority?: string | number | null;
   severity?: string | null;
   area?: string | null;
   iteration?: string | null;
+  components?: readonly string[];
   labels?: readonly string[];
   state?: string;
   customFields?: Record<string, string | number | null>;
@@ -108,6 +116,12 @@ export interface AttachmentContent {
   fileName: string;
 }
 
+export interface WorkItemUpload {
+  fileName: string;
+  contentType: string;
+  buffer: Buffer;
+}
+
 export interface WorkItemAdapter {
   readonly provider: WorkItemProvider;
   readonly capabilities: IntegrationCapabilities;
@@ -130,6 +144,12 @@ export interface WorkItemAdapter {
   addComment?(id: string, body: string, project?: string): Promise<WorkItemComment>;
   listIssueTypes?(project: string): Promise<string[]>;
   listAssignees?(project: string): Promise<import('@sfcc/shared').WorkItemUser[]>;
+  listUsers?(project?: string, query?: string): Promise<import('@sfcc/shared').WorkItemUser[]>;
+  uploadAttachment?(
+    id: string,
+    upload: WorkItemUpload,
+    project?: string,
+  ): Promise<WorkItemAttachment>;
   listLabels?(project: string): Promise<string[]>;
   listSubIssues?(id: string, project?: string): Promise<WorkItemSummary[]>;
   addSubIssue?(id: string, subIssueId: string, project?: string): Promise<WorkItemMutationResult>;
