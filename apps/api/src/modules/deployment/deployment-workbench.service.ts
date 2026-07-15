@@ -106,9 +106,12 @@ export class DeploymentWorkbenchService {
       testLevels: ['NoTestRun', 'RunSpecifiedTests', 'RunLocalTests', 'RunAllTestsInOrg'],
       staticAnalysisEngines,
       staticAnalysisAvailability,
+      limitations: {
+        includeOptional: 'Dependency discovery does not classify optional edges, so optional dependencies are not included.',
+      },
       supports: {
         dependencies: true,
-        includeOptional: true,
+        includeOptional: false,
         destructiveChanges: true,
         snapshots: true,
         rollback: true,
@@ -1285,9 +1288,10 @@ export class DeploymentWorkbenchService {
     let selections = parsePackageXml(
       fs.readFileSync(workspace.manifestAbsolutePath, 'utf8'),
     ).selections;
-    const includeOptional = input.input.dependencyPolicy.includeOptional
-      || input.input.dependencyPolicy.mode === 'include_all';
-    let optionalPending = includeOptional
+    // Comparison results classify source/target differences, not dependency
+    // edges. Until discovery can identify optional edges, only include_all may
+    // expand to otherwise unrelated comparison components.
+    let includeAllPending = input.input.dependencyPolicy.mode === 'include_all'
       ? input.access.comparisonSourceSelections ?? []
       : [];
     const iterationCap = Math.min(input.input.dependencyPolicy.maxDepth + 2, 27);
@@ -1302,10 +1306,10 @@ export class DeploymentWorkbenchService {
         }];
       });
       const additions = subtractSelections(
-        mergeMetadataSelections(required, optionalPending),
+        mergeMetadataSelections(required, includeAllPending),
         selections,
       );
-      optionalPending = [];
+      includeAllPending = [];
       if (!componentCount(additions)) break;
 
       const expanded = mergeMetadataSelections(selections, additions);

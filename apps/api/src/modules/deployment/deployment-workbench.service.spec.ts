@@ -106,9 +106,12 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('advertises optional dependency expansion', async () => {
+  it('explains that optional dependency classification is unavailable', async () => {
     await expect(service.capabilities()).resolves.toEqual(expect.objectContaining({
-      supports: expect.objectContaining({ includeOptional: true }),
+      supports: expect.objectContaining({ includeOptional: false }),
+      limitations: expect.objectContaining({
+        includeOptional: expect.stringContaining('does not classify optional edges'),
+      }),
     }));
   });
 
@@ -425,7 +428,7 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     expect(db.deploymentQualityRun.update).not.toHaveBeenCalled();
   });
 
-  it('iteratively retrieves optional org components and their required dependencies', async () => {
+  it('does not treat all comparison components as optional dependencies', async () => {
     const sourceId = '11111111-1111-4111-8111-111111111111';
     const targetId = '22222222-2222-4222-8222-222222222222';
     const comparisonId = '33333333-3333-4333-8333-333333333333';
@@ -514,12 +517,15 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       },
     }, 'user-1');
 
-    expect(resolveSource).toHaveBeenCalledTimes(3);
-    expect(preview.dependencies.resolvedSelections).toEqual(expect.arrayContaining([
-      { metadataType: 'ApexClass', members: ['Optional', 'Selected'] },
-      { metadataType: 'CustomObject', members: ['Required__c'] },
-    ]));
-    expect(cleanups).toHaveLength(3);
+    expect(resolveSource).toHaveBeenCalledTimes(1);
+    expect(preview.dependencies.resolvedSelections).toEqual([
+      { metadataType: 'ApexClass', members: ['Selected'] },
+    ]);
+    expect(preview.dependencies.summary.optionalClassification).toEqual(expect.objectContaining({
+      available: false,
+      requested: true,
+    }));
+    expect(cleanups).toHaveLength(1);
     expect(cleanups.every((cleanup) => cleanup.mock.calls.length === 1)).toBe(true);
   });
 

@@ -184,7 +184,7 @@ describe('DataRollbackService artifacts', () => {
     },
   );
 
-  it('ignores cancelled unused placeholders but rolls back every executed movement', async () => {
+  it('ignores pending, failed, and cancelled placeholders that never received execution work', async () => {
     const service = new DataRollbackService({ acquire: vi.fn() } as never);
     db.dataDeployBatch.findUnique.mockResolvedValue({
       id: 'batch',
@@ -199,8 +199,24 @@ describe('DataRollbackService artifacts', () => {
         rollbackStatus: 'captured',
         recordCount: 10,
       }, {
-        id: 'placeholder',
+        id: 'cancelled-placeholder',
         status: 'cancelled',
+        operation: 'upsert',
+        idempotent: true,
+        rollbackArtifact: null,
+        rollbackStatus: null,
+        recordCount: null,
+      }, {
+        id: 'failed-placeholder',
+        status: 'failed',
+        operation: 'upsert',
+        idempotent: true,
+        rollbackArtifact: null,
+        rollbackStatus: null,
+        recordCount: null,
+      }, {
+        id: 'pending-placeholder',
+        status: 'pending',
         operation: 'upsert',
         idempotent: true,
         rollbackArtifact: null,
@@ -215,8 +231,22 @@ describe('DataRollbackService artifacts', () => {
         afterId: null,
         endId: '001',
       }, {
-        movementId: 'placeholder',
+        movementId: 'cancelled-placeholder',
         status: 'cancelled',
+        jobId: null,
+        recordCount: null,
+        afterId: null,
+        endId: null,
+      }, {
+        movementId: 'failed-placeholder',
+        status: 'failed',
+        jobId: null,
+        recordCount: 10,
+        afterId: '001A',
+        endId: '001B',
+      }, {
+        movementId: 'pending-placeholder',
+        status: 'pending',
         jobId: null,
         recordCount: null,
         afterId: null,

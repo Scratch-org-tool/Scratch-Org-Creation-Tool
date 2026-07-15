@@ -231,7 +231,7 @@ describe('Deployment Workbench dependency preview', () => {
       .toEqual(approved.plan.batches.map((batch) => batch.nodeIds));
   });
 
-  it('honors includeOptional by adding otherwise unrelated pinned components', () => {
+  it('includes no unrelated components when discovery cannot classify optional edges', () => {
     const root = fs.mkdtempSync(path.join(tmpdir(), 'dependency-optional-test-'));
     tempRoots.push(root);
     const classes = path.join(root, 'force-app', 'main', 'default', 'classes');
@@ -257,7 +257,28 @@ describe('Deployment Workbench dependency preview', () => {
       failOnMissing: true,
       allowCycles: false,
     });
-    expect(preview.resolvedSelections[0]?.members).toEqual(['Optional', 'Selected']);
-    expect(preview.summary.optionalIncluded).toBe(1);
+    expect(preview.resolvedSelections[0]?.members).toEqual(['Selected']);
+    expect(preview.summary.optionalIncluded).toBe(0);
+    expect(preview.summary.optionalClassification).toEqual(expect.objectContaining({
+      available: false,
+      requested: true,
+    }));
+
+    fs.writeFileSync(manifestPath, buildPackageXml(preview.resolvedSelections, '62.0'));
+    const execution = buildDependencyPreview('optional-execution', {
+      projectRoot: root,
+      manifestRelative: 'manifest/package.xml',
+      manifestAbsolutePath: manifestPath,
+      mode: 'local_workspace',
+    }, {
+      mode: 'include_required',
+      includeOptional: true,
+      maxDepth: 10,
+      failOnMissing: true,
+      allowCycles: false,
+    });
+    expect(execution.resolvedSelections).toEqual(preview.resolvedSelections);
+    expect(execution.plan.batches.map((batch) => batch.nodeIds))
+      .toEqual(preview.plan.batches.map((batch) => batch.nodeIds));
   });
 });

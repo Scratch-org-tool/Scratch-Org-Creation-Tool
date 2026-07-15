@@ -1201,20 +1201,18 @@ export function buildDependencyPreview(
     decisions.push({ nodeId: node.id, decision: 'included', reason: 'Required transitive dependency' });
   }
 
-  if (mode === 'include_all' || includeOptional) {
+  if (mode === 'include_all') {
     for (const component of all) {
       const node = repo.getOrCreate(component.metadataType, component.apiName, { filePath: component.filePath });
       const existingDecision = decisions.find((decision) => decision.nodeId === node.id);
-      if ((mode === 'include_all' || includeOptional) && existingDecision?.decision === 'excluded') {
+      if (existingDecision?.decision === 'excluded') {
         existingDecision.decision = 'included';
-        existingDecision.reason = mode === 'include_all'
-          ? 'include_all policy'
-          : 'Optional source component included by policy';
+        existingDecision.reason = 'include_all policy';
       } else if (!existingDecision) {
         decisions.push({
           nodeId: node.id,
           decision: 'included',
-          reason: mode === 'include_all' ? 'include_all policy' : 'Optional source component included by policy',
+          reason: 'include_all policy',
         });
       }
     }
@@ -1281,9 +1279,12 @@ export function buildDependencyPreview(
       missing: missing.length,
       cycles: cycles.length,
       truncated: [...depth.values()].some((value) => value > maxDepth),
-      optionalIncluded: includeOptional
-        ? decisions.filter((decision) => decision.reason.startsWith('Optional')).length
-        : 0,
+      optionalIncluded: 0,
+      optionalClassification: {
+        available: false,
+        requested: includeOptional,
+        reason: 'Dependency discovery does not classify optional edges; no optional dependencies were included.',
+      },
     },
   };
 }

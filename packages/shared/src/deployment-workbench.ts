@@ -677,6 +677,9 @@ export const deploymentWorkbenchCapabilitiesSchema = z.object({
   environments: z.array(deploymentEnvironmentSchema),
   testLevels: z.array(apexTestLevelSchema),
   staticAnalysisEngines: z.array(z.string()),
+  limitations: z.object({
+    includeOptional: z.string().optional(),
+  }).strict().optional(),
   supports: z.object({
     dependencies: z.boolean(),
     includeOptional: z.boolean(),

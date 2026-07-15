@@ -467,22 +467,16 @@ export class DataRollbackService {
         .filter((chunk) => chunk.movementId)
         .map((chunk) => [chunk.movementId!, chunk]),
     );
-    const executed = batch.movements.filter((movement) => {
+    const rollbackEligible = batch.movements.filter((movement) => {
       const chunk = chunksByMovement.get(movement.id);
-      const unusedPlaceholder = movement.status === 'cancelled'
-        && !movement.rollbackArtifact
-        && !movement.rollbackStatus
-        && (movement.recordCount == null || movement.recordCount === 0)
-        && Boolean(chunk && (
-          chunk.status === 'cancelled'
-          && !chunk.jobId
-          && chunk.recordCount == null
-          && !chunk.afterId
-          && !chunk.endId
-        ));
-      return !unusedPlaceholder;
+      return Boolean(
+        movement.rollbackArtifact
+        || (movement.recordCount != null && movement.recordCount > 0)
+        || ['running', 'completed'].includes(movement.status)
+        || chunk?.jobId,
+      );
     });
-    const nonTerminal = executed.filter(
+    const nonTerminal = rollbackEligible.filter(
       (movement) => !ROLLBACK_SOURCE_TERMINAL_STATUSES.includes(movement.status),
     );
     if (nonTerminal.length) {
@@ -492,7 +486,7 @@ export class DataRollbackService {
         }`,
       );
     }
-    const unsafe = executed.filter((movement) =>
+    const unsafe = rollbackEligible.filter((movement) =>
       movement.operation !== 'upsert' || !movement.idempotent || !movement.rollbackArtifact);
     if (unsafe.length) {
       const report = {
@@ -507,7 +501,7 @@ export class DataRollbackService {
       throw new BadRequestException(report.reason);
     }
     const results = [];
-    for (const movement of executed) {
+    for (const movement of rollbackEligible) {
       results.push(await this.rollbackMovement(movement.id, userId, policy));
     }
     const awaitingConfirmation = results.some(

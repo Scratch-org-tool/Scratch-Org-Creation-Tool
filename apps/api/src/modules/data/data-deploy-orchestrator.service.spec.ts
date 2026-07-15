@@ -394,6 +394,85 @@ describe('DataDeployOrchestratorService cancellation', () => {
     }));
   });
 
+  it('keeps planBatch publication finalization failures recoverable for startup recovery', async () => {
+    const boundaryArtifact = {
+      kind: 'id-ranges',
+      plannerQuery: 'SELECT Id FROM Account ORDER BY Id LIMIT 10',
+      totalRecords: 10,
+      boundaries: [
+        { chunkIndex: 0, afterId: null, endId: '001Z', recordCount: 10 },
+      ],
+    };
+    const batch = {
+      id: 'batch-1',
+      status: 'running',
+      baseSoql: 'SELECT External__c FROM Account',
+      totalRecords: 10,
+      totalChunks: 1,
+      chunkSize: 25_000,
+      boundaryArtifact,
+      strategy: 'generic',
+      operation: 'upsert',
+      objectName: 'Account',
+      matchField: 'External__c',
+      externalIdField: 'External__c',
+      recordTypeMappings: null,
+      createdBy: 'owner',
+      sourceOrgId: 'source-id',
+      targetOrgId: 'target-id',
+      movementType: 'deploy',
+      rollbackPolicy: 'capture',
+      sourceOrg: { alias: 'source', username: null },
+      targetOrg: { alias: 'target', username: null },
+      maxParallelChunks: 1,
+      quotaConfidence: 'unknown',
+      quotaRemaining: null,
+      chunks: [{
+        id: 'chunk-1',
+        batchId: 'batch-1',
+        chunkIndex: 0,
+        movementId: 'movement-1',
+        status: 'pending',
+        jobId: null,
+        soql: 'SELECT External__c FROM Account',
+        recordCount: 10,
+        attempts: 0,
+      }],
+    };
+    db.dataDeployBatch.findUnique.mockResolvedValue(batch);
+    db.job.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      queue: 'data-deploy',
+      type: 'data_deploy_chunk',
+      payload: { chunkId: 'chunk-1', batchId: 'batch-1' },
+    }));
+    db.$transaction
+      .mockImplementationOnce((callback: (tx: typeof db) => unknown) => callback(db))
+      .mockImplementationOnce((callback: (tx: typeof db) => unknown) => callback(db))
+      .mockRejectedValueOnce(new Error('database unavailable after enqueue'));
+    const log = vi.fn().mockResolvedValue(undefined);
+
+    await expect(service.planBatch('batch-1', log)).rejects.toThrow(
+      'publication finalization failed',
+    );
+
+    expect(addJob).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(
+      'stderr',
+      expect.stringContaining('publication is recoverable'),
+    );
+    expect(log).not.toHaveBeenCalledWith(
+      'stderr',
+      expect.stringContaining('planning failed'),
+    );
+    expect(db.dataDeployChunk.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+    expect(db.dataDeployBatch.update).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+  });
+
   it('terminalizes and refreshes a chunk when queue publication fails', async () => {
     const batch = {
       id: 'batch-1',
