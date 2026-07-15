@@ -8,9 +8,13 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import { memoryStorage } from 'multer';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { RequireRole, RoleGuard } from '../../common/role.guard';
@@ -270,19 +274,28 @@ export class IntegrationsController {
   }
 
   @Post('work-items/:provider/items/:id/attachments')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: memoryStorage(),
+    limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+  }))
   uploadAttachment(
     @CurrentUser() actorId: string,
     @Param('provider') provider: string,
     @Param('id') id: string,
-    @Body() body: { fileName: string; contentType: string; base64: string },
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Query('project') project?: string,
     @Query('connectionId') connectionId?: string,
   ) {
+    if (!file) throw new BadRequestException('A multipart file field named "file" is required');
     return this.service.uploadAttachment(
       actorId,
       provider,
       id,
-      body,
+      {
+        fileName: file.originalname,
+        contentType: file.mimetype,
+        buffer: file.buffer,
+      },
       project,
       connectionId,
     );

@@ -206,7 +206,7 @@ export class IntegrationsService {
     actorId: string,
     provider: string,
     id: string,
-    input: { fileName: string; contentType: string; base64: string },
+    input: { fileName: string; contentType: string; buffer: Buffer },
     project?: string,
     connectionId?: string,
   ) {
@@ -214,16 +214,15 @@ export class IntegrationsService {
     if (!adapter.uploadAttachment) {
       throw new BadRequestException('Attachment uploads are not supported');
     }
-    if (!input.fileName || !input.contentType || !input.base64) {
-      throw new BadRequestException('fileName, contentType, and base64 are required');
+    if (!input.fileName || !input.contentType || !input.buffer.length) {
+      throw new BadRequestException('A non-empty attachment is required');
     }
-    const buffer = Buffer.from(input.base64, 'base64');
-    if (!buffer.length || buffer.length > 25 * 1024 * 1024) {
-      throw new BadRequestException('Attachment must be between 1 byte and 25 MB');
+    if (input.buffer.length > 10 * 1024 * 1024) {
+      throw new BadRequestException('Attachment must not exceed 10 MB');
     }
     return adapter.uploadAttachment(
       id,
-      { fileName: input.fileName, contentType: input.contentType, buffer },
+      input,
       project,
       { connectionId, actorId, isAdmin: true },
     );

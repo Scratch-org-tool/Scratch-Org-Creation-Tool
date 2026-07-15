@@ -14,7 +14,17 @@ WEB_PORT=3000
 API_PORT=3001
 GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 GATEWAY_ENABLED="${GATEWAY_ENABLED:-1}"
+GATEWAY_COMPRESSION_ENABLED="${GATEWAY_COMPRESSION_ENABLED:-1}"
 WEB_UPSTREAM="${WEB_UPSTREAM:-http://127.0.0.1:${WEB_PORT}}"
+TRUST_PROXY="${TRUST_PROXY:-}"
+if [[ "$GATEWAY_ENABLED" == "1" && "$GATEWAY_COMPRESSION_ENABLED" != "0" && "$GATEWAY_COMPRESSION_ENABLED" != "false" ]]; then
+  EDGE_COMPRESSION_ENABLED=1
+else
+  EDGE_COMPRESSION_ENABLED=0
+fi
+if [[ "$GATEWAY_ENABLED" == "1" && -z "$TRUST_PROXY" ]]; then
+  TRUST_PROXY=loopback
+fi
 
 # Number of API instances behind the gateway pool. Instance 1 runs via turbo
 # dev (watch mode); instances 2..N run the compiled API on ports 3002, 3003...
@@ -203,6 +213,7 @@ start_gateway() {
   GATEWAY_HOST="${GATEWAY_HOST:-0.0.0.0}" \
   WEB_UPSTREAM="$WEB_UPSTREAM" \
   API_UPSTREAMS="$API_UPSTREAMS" \
+  GATEWAY_COMPRESSION_ENABLED="$GATEWAY_COMPRESSION_ENABLED" \
     node "$ROOT_DIR/scripts/gateway.mjs" >>"$log_target" 2>&1 &
   echo $! >"$GATEWAY_PID_FILE"
   sleep 1
@@ -231,7 +242,7 @@ start_extra_apis() {
     local port=$((API_PORT + i))
     kill_port "$port"
     log "Starting API instance $((i + 1))/${API_INSTANCES} on :${port}..."
-    (cd "$ROOT_DIR/apps/api" && API_PORT="$port" node dist/main.js) >>"${LOG_FILE}" 2>&1 &
+    (cd "$ROOT_DIR/apps/api" && API_PORT="$port" TRUST_PROXY="$TRUST_PROXY" node dist/main.js) >>"${LOG_FILE}" 2>&1 &
     echo $! >"$ROOT_DIR/.dev/api-${port}.pid"
   done
 }
@@ -299,7 +310,13 @@ cmd_start() {
   if [[ "$mode" == "--bg" ]]; then
     stop_dev_servers
     log "Starting dev servers in background..."
-    API_PROXY_TARGET="${API_PROXY_TARGET:-http://127.0.0.1:${GATEWAY_PORT}}" \
+    local api_proxy_target=""
+    if [[ "$GATEWAY_ENABLED" == "1" ]]; then
+      api_proxy_target="${API_PROXY_TARGET:-http://127.0.0.1:${GATEWAY_PORT}}"
+    fi
+    API_PROXY_TARGET="$api_proxy_target" \
+      EDGE_COMPRESSION_ENABLED="$EDGE_COMPRESSION_ENABLED" \
+      TRUST_PROXY="$TRUST_PROXY" \
       npm run dev:apps >"$LOG_FILE" 2>&1 &
     echo $! >"$PID_FILE"
     sleep 3
@@ -327,9 +344,12 @@ cmd_start() {
   if [[ "$GATEWAY_ENABLED" == "1" ]]; then
     # Route the Next.js /api rewrite through the gateway pool so browser
     # traffic hitting :3000 directly is still load balanced.
-    API_PROXY_TARGET="${API_PROXY_TARGET:-http://127.0.0.1:${GATEWAY_PORT}}" npm run dev:apps
+    API_PROXY_TARGET="${API_PROXY_TARGET:-http://127.0.0.1:${GATEWAY_PORT}}" \
+      EDGE_COMPRESSION_ENABLED="$EDGE_COMPRESSION_ENABLED" \
+      TRUST_PROXY="$TRUST_PROXY" \
+      npm run dev:apps
   else
-    npm run dev:apps
+    API_PROXY_TARGET="" EDGE_COMPRESSION_ENABLED="$EDGE_COMPRESSION_ENABLED" TRUST_PROXY="$TRUST_PROXY" npm run dev:apps
   fi
 }
 
@@ -353,7 +373,14 @@ cmd_restart() {
   log ""
 
   trap 'stop_dev_servers; exit 0' INT TERM
-  API_PROXY_TARGET="${API_PROXY_TARGET:-http://127.0.0.1:${GATEWAY_PORT}}" npm run dev:apps &
+  local api_proxy_target=""
+  if [[ "$GATEWAY_ENABLED" == "1" ]]; then
+    api_proxy_target="${API_PROXY_TARGET:-http://127.0.0.1:${GATEWAY_PORT}}"
+  fi
+  API_PROXY_TARGET="$api_proxy_target" \
+    EDGE_COMPRESSION_ENABLED="$EDGE_COMPRESSION_ENABLED" \
+    TRUST_PROXY="$TRUST_PROXY" \
+    npm run dev:apps &
   echo $! >"$PID_FILE"
   sleep 3
   start_gateway bg
@@ -382,6 +409,7 @@ Environment:
   API_INSTANCES=N   Start N API instances (ports 3001..300N) behind the gateway pool
   GATEWAY_ENABLED=0 Disable the gateway (direct web/API access only)
   GATEWAY_PORT=8080 Gateway listen port
+  GATEWAY_COMPRESSION_ENABLED=0 Disable edge compression (Next gzip remains enabled)
 EOF
 }
 

@@ -18,6 +18,7 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "test": "turbo run test",
+    "test:gateway": "node --test scripts/gateway.test.mjs",
     "db:generate": "npm run generate --workspace=@sfcc/db",
     "db:push": "npm run push --workspace=@sfcc/db",
     "db:migrate": "npm run migrate --workspace=@sfcc/db",
