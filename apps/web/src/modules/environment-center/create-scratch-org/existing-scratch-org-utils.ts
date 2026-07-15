@@ -47,9 +47,7 @@ export function buildExistingScratchOrgCandidates(
     const expirationDate = connection.expiresAt ?? scratch.expirationDate;
     const expired = expirationDate ? Date.parse(expirationDate) <= now : false;
     const latestRun = recentRuns
-      .filter((run) =>
-        run.targetOrgConnectionId === connection.id
-        || run.targetOrgConnection?.id === connection.id)
+      .filter((run) => run.targetOrgConnectionId === connection.id)
       .reduce<RecentScratchOrgRun | undefined>((latest, run) => {
         if (!latest) return run;
         const latestAt = latest.createdAt ? Date.parse(latest.createdAt) : Number.NaN;

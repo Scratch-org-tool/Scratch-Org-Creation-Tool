@@ -37,6 +37,24 @@ export class WorkerRegistry implements OnModuleInit {
     private readonly aiAnalysisWorker: AiAnalysisWorker,
   ) {}
 
+  private isParentRunBlocked(status?: string): boolean {
+    return status === 'failed' || status === 'cancelled';
+  }
+
+  private async cancelBlockedChild(
+    dbJobId: string,
+    currentStatus?: string,
+  ): Promise<void> {
+    if (!currentStatus || ['completed', 'partial', 'failed', 'cancelled'].includes(currentStatus)) {
+      return;
+    }
+    await this.jobsService.updateStatus(dbJobId, 'cancelled');
+    await this.streamService.publish('job_status', {
+      jobId: dbJobId,
+      status: 'cancelled',
+    });
+  }
+
   /** Immutable audit row recording a deployment's terminal state. */
   private async writeDeploymentAudit(
     deploymentId: string,
@@ -119,6 +137,20 @@ export class WorkerRegistry implements OnModuleInit {
         };
         const dbJobId = data.dbJobId;
         if (dbJobId) {
+          const current = await prisma.job.findUnique({
+            where: { id: dbJobId },
+            select: {
+              status: true,
+              parentRun: { select: { status: true } },
+            },
+          });
+          if (
+            current?.status === 'cancelled'
+            || this.isParentRunBlocked(current?.parentRun?.status)
+          ) {
+            await this.cancelBlockedChild(dbJobId, current?.status);
+            return;
+          }
           await this.jobsService.updateStatus(dbJobId, 'running');
           await this.streamService.publish('job_status', { jobId: dbJobId, status: 'running' });
         }
@@ -131,8 +163,20 @@ export class WorkerRegistry implements OnModuleInit {
         try {
           const result = await handler(job) as Record<string, unknown> | undefined;
           if (dbJobId) {
-            const current = await prisma.job.findUnique({ where: { id: dbJobId }, select: { status: true, parentRunId: true, type: true } });
-            if (current?.status === 'cancelled') {
+            const current = await prisma.job.findUnique({
+              where: { id: dbJobId },
+              select: {
+                status: true,
+                parentRunId: true,
+                type: true,
+                parentRun: { select: { status: true } },
+              },
+            });
+            if (
+              current?.status === 'cancelled'
+              || this.isParentRunBlocked(current?.parentRun?.status)
+            ) {
+              await this.cancelBlockedChild(dbJobId, current?.status);
               if (data.deploymentId) {
                 await prisma.deployment.update({
                   where: { id: data.deploymentId },
@@ -159,7 +203,7 @@ export class WorkerRegistry implements OnModuleInit {
               where: { id: runId },
               select: { status: true, intent: true },
             });
-            if (run && ['paused', 'cancelled'].includes(run.status)) {
+            if (run && ['paused', 'cancelled', 'failed'].includes(run.status)) {
               return result;
             }
             if (
@@ -205,9 +249,20 @@ export class WorkerRegistry implements OnModuleInit {
           if (dbJobId) {
             const current = await prisma.job.findUnique({
               where: { id: dbJobId },
-              select: { status: true, parentRunId: true, type: true },
+              select: {
+                status: true,
+                parentRunId: true,
+                type: true,
+                parentRun: { select: { status: true } },
+              },
             });
-            if (current?.status === 'cancelled') return;
+            if (
+              current?.status === 'cancelled'
+              || this.isParentRunBlocked(current?.parentRun?.status)
+            ) {
+              await this.cancelBlockedChild(dbJobId, current?.status);
+              return;
+            }
             await this.jobsService.updateStatus(dbJobId, 'failed', message);
             await this.streamService.publish('job_status', { jobId: dbJobId, status: 'failed', error: message });
 

@@ -82,4 +82,17 @@ describe('existing scratch-org pipeline migration', () => {
     assert.match(migration, /"status" = 'failed'::"JobStatus"/);
     assert.match(migration, /ranked\.target_rank > 1/);
   });
+
+  it('cancels nonterminal child jobs for superseded duplicate runs', () => {
+    const migration = prismaFile(migrationPath);
+    assert.match(migration, /superseded_runs AS \(\s*UPDATE "AutomationRun"/);
+    assert.match(migration, /UPDATE "Job" AS job/);
+    assert.match(
+      migration,
+      /job\."parentRunId" = superseded_runs\."id"/,
+    );
+    assert.match(migration, /"status" = 'cancelled'::"JobStatus"/);
+    assert.match(migration, /'running'::"JobStatus"/);
+    assert.match(migration, /"finishedAt" = COALESCE/);
+  });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ERROR_LOGGER_PACKAGE_ID } from '@sfcc/shared';
 import { ScratchOrgPreparationService } from './scratch-org-preparation.service';
+import { JobCancelledError } from './scratch-org-job.service';
 
 function serviceWithCli(cli: Record<string, unknown>) {
   const service = new ScratchOrgPreparationService();
@@ -101,8 +102,53 @@ describe('ScratchOrgPreparationService', () => {
           isCancellationRequested: vi.fn().mockResolvedValue(true),
         },
       },
-    )).rejects.toThrow('cancelled');
+    )).rejects.toBeInstanceOf(JobCancelledError);
     expect(register).toHaveBeenCalledWith('db-job-1', kill);
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces an active package-process kill as cancellation', async () => {
+    let resolveInstall!: (result: { success: boolean; error?: string }) => void;
+    let registeredKill: (() => void) | undefined;
+    let cancellationRequested = false;
+    const promise = new Promise<{ success: boolean; error?: string }>((resolve) => {
+      resolveInstall = resolve;
+    });
+    const kill = vi.fn(() => {
+      cancellationRequested = true;
+      resolveInstall({ success: false, error: 'Process terminated' });
+    });
+    const register = vi.fn((_jobId: string, handler: () => void) => {
+      registeredKill = handler;
+      return vi.fn();
+    });
+    const service = serviceWithCli({
+      displayOrg: vi.fn().mockResolvedValue({ success: true }),
+      listInstalledPackages: vi.fn().mockResolvedValue({
+        success: true,
+        data: { result: [] },
+      }),
+      installPackageCancellable: vi.fn().mockReturnValue({ promise, kill }),
+    });
+
+    const preparing = service.prepare(
+      { alias: 'scratch' },
+      { verifyAuthentication: true, ensureRequiredPackage: true },
+      undefined,
+      {
+        dbJobId: 'active-job',
+        processRegistry: {
+          register,
+          isCancellationRequested: vi.fn(
+            async () => cancellationRequested,
+          ),
+        },
+      },
+    );
+    await vi.waitFor(() => expect(registeredKill).toBeTypeOf('function'));
+    registeredKill?.();
+
+    await expect(preparing).rejects.toBeInstanceOf(JobCancelledError);
     expect(kill).toHaveBeenCalledTimes(1);
   });
 });

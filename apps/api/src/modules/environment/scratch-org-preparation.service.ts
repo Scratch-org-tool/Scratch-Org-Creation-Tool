@@ -7,6 +7,7 @@ import {
   type SfOrgInfo,
 } from '@sfcc/sf-cli';
 import type { JobProcessRegistryService } from '../jobs/job-process-registry.service';
+import { JobCancelledError } from './scratch-org-job.service';
 
 export interface ScratchOrgPreparationTarget {
   alias: string;
@@ -191,7 +192,7 @@ export class ScratchOrgPreparationService {
         execution
         && await execution.processRegistry.isCancellationRequested(execution.dbJobId)
       ) {
-        throw new Error('Required package installation was cancelled');
+        throw new JobCancelledError('Required package installation was cancelled');
       }
     } finally {
       unregister?.();

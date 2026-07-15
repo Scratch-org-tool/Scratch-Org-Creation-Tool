@@ -53,18 +53,38 @@ WITH ranked_active_targets AS (
       'running'::"JobStatus",
       'paused'::"JobStatus"
     )
+),
+superseded_runs AS (
+  UPDATE "AutomationRun" AS run
+  SET
+    "status" = 'failed'::"JobStatus",
+    "failedStep" = COALESCE(run."failedStep", 'migration_target_uniqueness'),
+    "lastError" = COALESCE(
+      run."lastError",
+      'Superseded by a newer active pipeline for the same scratch target'
+    )
+  FROM ranked_active_targets AS ranked
+  WHERE run."id" = ranked."id"
+    AND ranked.target_rank > 1
+  RETURNING run."id"
 )
-UPDATE "AutomationRun" AS run
+UPDATE "Job" AS job
 SET
-  "status" = 'failed'::"JobStatus",
-  "failedStep" = COALESCE(run."failedStep", 'migration_target_uniqueness'),
-  "lastError" = COALESCE(
-    run."lastError",
-    'Superseded by a newer active pipeline for the same scratch target'
-  )
-FROM ranked_active_targets AS ranked
-WHERE run."id" = ranked."id"
-  AND ranked.target_rank > 1;
+  "status" = 'cancelled'::"JobStatus",
+  "error" = COALESCE(
+    job."error",
+    'Parent pipeline was superseded by a newer active target run'
+  ),
+  "finishedAt" = COALESCE(job."finishedAt", CURRENT_TIMESTAMP)
+FROM superseded_runs
+WHERE job."parentRunId" = superseded_runs."id"
+  AND job."status" IN (
+    'pending'::"JobStatus",
+    'queued'::"JobStatus",
+    'planning'::"JobStatus",
+    'running'::"JobStatus",
+    'paused'::"JobStatus"
+  );
 
 -- A scratch target can have only one active pipeline. Terminal runs remain
 -- unrestricted so the same org can be configured again later.

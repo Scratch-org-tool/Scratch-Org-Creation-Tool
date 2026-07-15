@@ -182,7 +182,7 @@ export class PipelineOrchestratorService {
         ],
       });
     }
-    return prisma.automationRun.findMany({
+    const runs = await prisma.automationRun.findMany({
       where: {
         intent: 'scratch_org_pipeline',
         createdBy: userId,
@@ -195,6 +195,20 @@ export class PipelineOrchestratorService {
       },
       orderBy: { createdAt: 'desc' },
       take: query.limit,
+    });
+    return runs.map(({ checkpoint, ...run }) => {
+      const legacyTargetId = (checkpoint ?? {}) as Record<string, unknown>;
+      return {
+        ...run,
+        targetOrgConnectionId:
+          run.targetOrgConnection?.id
+          ?? run.targetOrgConnectionId
+          ?? (
+            typeof legacyTargetId.targetOrgConnectionId === 'string'
+              ? legacyTargetId.targetOrgConnectionId
+              : null
+          ),
+      };
     });
   }
 
@@ -1005,19 +1019,15 @@ export class PipelineOrchestratorService {
       return { cancelled: false, reason: `Run already ${run.status}` };
     }
 
-    for (const job of run.jobs) {
-      if (!['pending', 'queued', 'running'].includes(job.status)) continue;
-      await this.processRegistry.cancel(job.id);
-      if (job.queue === QUEUE_NAMES.SCRATCH_ORG_CREATE) {
-        this.scratchOrgJobService.cancel(job.id);
-      }
-      if (job.queue === QUEUE_NAMES.METADATA_DEPLOY) {
-        this.metadataDeployJobService.cancel(job.id);
-      }
-      await this.queueService.removeJob(job.queue, job.id);
+    const cancellableJobs = run.jobs.filter((job) =>
+      ['pending', 'queued', 'planning', 'running', 'paused'].includes(job.status));
+
+    await prisma.automationRun.update({
+      where: { id: automationRunId },
+      data: { status: 'cancelled', lastError: null, failedStep: null },
+    });
+    for (const job of cancellableJobs) {
       await this.jobsService.updateStatus(job.id, 'cancelled');
-      await this.jobsService.addLog(job.id, 'stderr', 'Pipeline cancelled by user');
-      await this.streamService.publish('job_status', { jobId: job.id, status: 'cancelled' });
     }
 
     const checkpoint = (run.checkpoint ?? {}) as unknown as PipelineCheckpoint;
@@ -1028,10 +1038,22 @@ export class PipelineOrchestratorService {
       }).catch(() => undefined);
     }
 
-    await prisma.automationRun.update({
-      where: { id: automationRunId },
-      data: { status: 'cancelled', lastError: null, failedStep: null },
-    });
+    for (const job of cancellableJobs) {
+      await this.processRegistry.cancel(job.id);
+      if (job.queue === QUEUE_NAMES.SCRATCH_ORG_CREATE) {
+        this.scratchOrgJobService.cancel(job.id);
+      }
+      if (job.queue === QUEUE_NAMES.METADATA_DEPLOY) {
+        this.metadataDeployJobService.cancel(job.id);
+      }
+    }
+
+    for (const job of cancellableJobs) {
+      await this.queueService.removeJob(job.queue, job.id).catch(() => false);
+      await this.jobsService.addLog(job.id, 'stderr', 'Pipeline cancelled by user');
+      await this.streamService.publish('job_status', { jobId: job.id, status: 'cancelled' });
+    }
+
     await this.streamService.publish('job_status', { automationRunId, status: 'cancelled' });
 
     return { cancelled: true };
@@ -1159,6 +1181,7 @@ export class PipelineOrchestratorService {
       existingOrgOptions: config.existingOrgOptions,
     };
     let job: { id: string } | undefined;
+    let enqueueAttempted = false;
     try {
       await this.requireConfigureExistingTarget(automationRunId, config, checkpoint);
       job = await this.jobsService.create({
@@ -1168,6 +1191,7 @@ export class PipelineOrchestratorService {
         createdBy,
         payload,
       });
+      enqueueAttempted = true;
       await this.queueService.addJob(
         QUEUE_NAMES.ORG_SETUP,
         'prepare_existing_org',
@@ -1185,10 +1209,15 @@ export class PipelineOrchestratorService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (job) {
+        if (enqueueAttempted) {
+          await this.processRegistry.cancel(job.id).catch(() => undefined);
+          await this.queueService.removeJob(QUEUE_NAMES.ORG_SETUP, job.id)
+            .catch(() => false);
+        }
         await prisma.job.update({
           where: { id: job.id },
           data: {
-            status: 'failed',
+            status: enqueueAttempted ? 'cancelled' : 'failed',
             error: `Queueing failed: ${message}`,
             finishedAt: new Date(),
           },

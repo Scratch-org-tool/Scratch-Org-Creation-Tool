@@ -18,6 +18,7 @@ const db = vi.hoisted(() => ({
     update: vi.fn(),
   },
   provisionedUser: { updateMany: vi.fn() },
+  deployment: { update: vi.fn() },
 }));
 
 vi.mock('@sfcc/db', () => ({ prisma: db, Prisma: {} }));
@@ -27,13 +28,30 @@ import { PipelineOrchestratorService } from './pipeline-orchestrator.service';
 function createService(overrides?: {
   queueService?: Record<string, unknown>;
   jobsService?: Record<string, unknown>;
+  processRegistry?: Record<string, unknown>;
+  streamService?: Record<string, unknown>;
   preparation?: Record<string, unknown>;
 }): PipelineOrchestratorService {
+  const queueService = {
+    removeJob: vi.fn().mockResolvedValue(false),
+    ...overrides?.queueService,
+  };
+  const jobsService = {
+    updateStatus: vi.fn().mockResolvedValue({}),
+    addLog: vi.fn().mockResolvedValue({}),
+    ...overrides?.jobsService,
+  };
   return new PipelineOrchestratorService(
-    (overrides?.queueService ?? {}) as never,
-    (overrides?.jobsService ?? {}) as never,
-    {} as never,
-    {} as never,
+    queueService as never,
+    jobsService as never,
+    ({
+      cancel: vi.fn().mockResolvedValue(undefined),
+      ...overrides?.processRegistry,
+    }) as never,
+    ({
+      publish: vi.fn().mockResolvedValue(undefined),
+      ...overrides?.streamService,
+    }) as never,
     {} as never,
     {} as never,
     {} as never,
@@ -332,20 +350,70 @@ describe('PipelineOrchestratorService existing scratch target mode', () => {
     expect(db.automationRun.update).not.toHaveBeenCalled();
   });
 
-  it('fails both the preparation job and run when queueing fails', async () => {
+  it('cancels the preparation job and fails the run when queueing is ambiguous', async () => {
     const create = vi.fn().mockResolvedValue({ id: 'prepare-job' });
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockResolvedValue(true);
     const service = createService({
       jobsService: { create },
-      queueService: { addJob: vi.fn().mockRejectedValue(new Error('Redis unavailable')) },
+      processRegistry: { cancel },
+      queueService: {
+        addJob: vi.fn().mockRejectedValue(new Error('Redis unavailable')),
+        removeJob,
+      },
     });
 
     await expect(service.startPipeline(existingConfig, 'owner-1'))
       .rejects.toThrow('Preparation queueing failed');
+    expect(cancel).toHaveBeenCalledWith('prepare-job');
+    expect(removeJob).toHaveBeenCalledWith('org-setup', 'prepare-job');
     expect(db.job.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'prepare-job' },
-      data: expect.objectContaining({ status: 'failed' }),
+      data: expect.objectContaining({ status: 'cancelled' }),
     }));
     expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-existing' },
+      data: expect.objectContaining({
+        status: 'failed',
+        failedStep: 'prepare_existing_org',
+      }),
+    }));
+  });
+
+  it('compensates an accepted preparation when checkpoint persistence fails', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'prepare-job' });
+    const addJob = vi.fn().mockResolvedValue('prepare-job');
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockResolvedValue(true);
+    db.automationRun.update
+      .mockRejectedValueOnce(new Error('Checkpoint persistence failed'))
+      .mockResolvedValueOnce({});
+    const service = createService({
+      jobsService: { create },
+      processRegistry: { cancel },
+      queueService: { addJob, removeJob },
+    });
+
+    await expect(service.startPipeline(existingConfig, 'owner-1'))
+      .rejects.toThrow('Preparation queueing failed');
+
+    expect(addJob).toHaveBeenCalledWith(
+      'org-setup',
+      'prepare_existing_org',
+      expect.objectContaining({ dbJobId: 'prepare-job' }),
+      'prepare-job',
+      { attempts: 1 },
+    );
+    expect(cancel).toHaveBeenCalledWith('prepare-job');
+    expect(removeJob).toHaveBeenCalledWith('org-setup', 'prepare-job');
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(
+      removeJob.mock.invocationCallOrder[0],
+    );
+    expect(db.job.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'prepare-job' },
+      data: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(db.automationRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
       where: { id: 'run-existing' },
       data: expect.objectContaining({
         status: 'failed',
@@ -452,6 +520,83 @@ describe('PipelineOrchestratorService existing scratch target mode', () => {
         }],
       }),
     }));
+  });
+
+  it('normalizes a legacy checkpoint target into the recent-run DTO', async () => {
+    db.automationRun.findMany.mockResolvedValue([{
+      id: 'legacy-run',
+      status: 'completed',
+      targetOrgConnectionId: null,
+      targetOrgConnection: null,
+      checkpoint: {
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+        internalState: 'not part of the recent-run DTO',
+      },
+    }]);
+
+    const result = await createService().getRecentRuns({}, 'owner-1');
+
+    expect(result).toEqual([expect.objectContaining({
+      id: 'legacy-run',
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+    })]);
+    expect(result[0]).not.toHaveProperty('checkpoint');
+  });
+});
+
+describe('PipelineOrchestratorService cancellation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.automationRun.update.mockResolvedValue({});
+  });
+
+  it('persists and broadcasts active cancellation despite locked BullMQ removal', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-active',
+      status: 'running',
+      createdBy: 'owner-1',
+      checkpoint: {},
+      jobs: [{
+        id: 'prepare-active',
+        queue: 'org-setup',
+        status: 'running',
+      }],
+    });
+    const updateStatus = vi.fn().mockResolvedValue({});
+    const addLog = vi.fn().mockResolvedValue({});
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockRejectedValue(
+      new Error('Job could not be removed because it is locked by another worker'),
+    );
+    const publish = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { updateStatus, addLog },
+      processRegistry: { cancel },
+      queueService: { removeJob },
+      streamService: { publish },
+    });
+
+    await expect(service.cancelRun('run-active', 'owner-1')).resolves.toEqual({
+      cancelled: true,
+    });
+
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-active' },
+      data: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(updateStatus).toHaveBeenCalledWith('prepare-active', 'cancelled');
+    expect(cancel).toHaveBeenCalledWith('prepare-active');
+    expect(removeJob).toHaveBeenCalledWith('org-setup', 'prepare-active');
+    expect(updateStatus.mock.invocationCallOrder[0]).toBeLessThan(
+      cancel.mock.invocationCallOrder[0],
+    );
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(
+      removeJob.mock.invocationCallOrder[0],
+    );
+    expect(publish).toHaveBeenCalledWith('job_status', {
+      automationRunId: 'run-active',
+      status: 'cancelled',
+    });
   });
 });
 

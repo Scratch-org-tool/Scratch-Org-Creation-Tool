@@ -53,6 +53,28 @@ describe('configure-existing scratch org utilities', () => {
     )).toEqual([]);
   });
 
+  it('matches a legacy run through its normalized target id without checkpoint data', () => {
+    const legacyRunDto = {
+      id: 'legacy-run',
+      status: 'completed',
+      targetOrgConnectionId: 'connection-1',
+      targetOrgConnection: null,
+    };
+    const candidates = buildExistingScratchOrgCandidates(
+      [{ id: 'scratch-1', alias: 'existing', status: 'Active' }],
+      [{
+        id: 'connection-1',
+        alias: 'existing',
+        type: 'scratch',
+        status: 'active',
+      }],
+      [legacyRunDto],
+    );
+
+    expect(candidates[0].latestRun).toBe(legacyRunDto);
+    expect(legacyRunDto).not.toHaveProperty('checkpoint');
+  });
+
   it('recomputes latest run state from refreshed runs without a stale active badge', () => {
     const scratchOrgs = [{ id: 'scratch-1', alias: 'existing', status: 'Active' }];
     const connections = [{
