@@ -34,14 +34,13 @@ export class AuthSecurityService {
     return createHash('sha256').update(ip).digest('hex').slice(0, 16);
   }
 
-  extractClientIp(headers: Record<string, string | string[] | undefined>, fallback?: string): string {
-    const forwarded = headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.length > 0) {
-      return forwarded.split(',')[0]?.trim() || fallback || 'unknown';
-    }
-    if (Array.isArray(forwarded) && forwarded[0]) {
-      return forwarded[0].split(',')[0]?.trim() || fallback || 'unknown';
-    }
+  extractClientIp(
+    _headers: Record<string, string | string[] | undefined>,
+    fallback?: string,
+  ): string {
+    // Express derives req.ip from the socket and its configured trust-proxy
+    // policy. Reading X-Forwarded-For directly would let clients spoof the
+    // rate-limit key whenever the API is reachable without that proxy.
     return fallback || 'unknown';
   }
 

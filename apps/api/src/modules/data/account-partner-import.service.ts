@@ -5,7 +5,11 @@ import { join } from 'path';
 import * as XLSX from 'xlsx';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
-import type { BottlerSalesOfficeConfig } from '@sfcc/shared';
+import {
+  escapeSoqlLiteral,
+  toSoqlLiteral,
+  type BottlerSalesOfficeConfig,
+} from '@sfcc/shared';
 import { BOTTLER_CONFIG, normalizeAccountKey, resolveSalesOfficeConfig, type BottlerId } from './bottler-config';
 
 const EMPLOYEE_FIELDS = [
@@ -220,13 +224,14 @@ export class AccountPartnerImportService {
       ? await this.queryOrgDistributionAccounts(target.alias, bottler)
       : {};
 
-    const officeFilter = cfg.offices.map((o) => `'${o.replace(/'/g, "\\'")}'`).join(', ');
+    const officeFilter = cfg.offices.map(toSoqlLiteral).join(', ');
+    const safeBottler = escapeSoqlLiteral(bottler);
     const partnerSoql =
       `SELECT ${PARTNER_FIELDS.join(', ')}, cfs_ob__PartnerFunction__c, cfs_ob__Sales_Office__c, ` +
       `cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c, cfs_ob__EmployeeMaster__r.cfs_ob__External_Id__c, ` +
       `cfs_ob__EmployeeMaster__r.Name, cfs_ob__EmployeeMaster__r.cfs_ob__EmailID__c, ` +
       `cfs_ob__EmployeeMaster__r.cfs_ob__u_Sales_Office__c ` +
-      `FROM cfs_ob__AccountPartner__c WHERE cfs_ob__Bottler__c = '${bottler}' ` +
+      `FROM cfs_ob__AccountPartner__c WHERE cfs_ob__Bottler__c = '${safeBottler}' ` +
       `AND cfs_ob__Sales_Office__c IN (${officeFilter})`;
 
     const result = await this.sfCli.query(source.alias, partnerSoql);
@@ -328,7 +333,7 @@ export class AccountPartnerImportService {
     const workDir = await mkdtemp(join(tmpdir(), 'org-transfer-'));
     try {
     const bottlers = bottler === 'all' ? ['5000', '4900', '4600'] : [bottler];
-    const filter = `cfs_ob__Bottler__c IN (${bottlers.map((b) => `'${b}'`).join(', ')})`;
+    const filter = `cfs_ob__Bottler__c IN (${bottlers.map(toSoqlLiteral).join(', ')})`;
 
     const accountCsv = join(workDir, 'accounts.csv');
     const employeeCsv = join(workDir, 'employees.csv');
@@ -381,9 +386,10 @@ export class AccountPartnerImportService {
   }
 
   private async queryOrgDistributionAccounts(alias: string, bottler: string) {
+    const safeBottler = escapeSoqlLiteral(bottler);
     const soql =
       `SELECT cfs_ob__u_CustomerNumber__c FROM Account ` +
-      `WHERE cfs_ob__Bottler__c = '${bottler}' ` +
+      `WHERE cfs_ob__Bottler__c = '${safeBottler}' ` +
       `AND cfs_ob__u_DistributionChannel__c != null ` +
       `AND cfs_ob__u_CustomerNumber__c != null`;
     const result = await this.sfCli.query(

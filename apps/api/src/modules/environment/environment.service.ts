@@ -350,27 +350,43 @@ export class EnvironmentService {
         org.instanceUrl ?? 'https://login.salesforce.com',
         org.isDevHub ?? false,
       );
-      const record = await prisma.orgConnection.upsert({
+      const existing = await prisma.orgConnection.findUnique({
         where: { alias: org.alias },
-        create: {
-          alias: org.alias,
-          username: org.username,
-          orgId: org.orgId,
-          instanceUrl: org.instanceUrl ?? 'https://login.salesforce.com',
-          type,
-          isDevHub: org.isDevHub ?? false,
-          status: org.connectedStatus === 'Connected' ? 'active' : 'revoked',
-          createdBy: userId,
-        },
-        update: {
-          username: org.username,
-          orgId: org.orgId,
-          instanceUrl: org.instanceUrl ?? undefined,
-          type,
-          isDevHub: org.isDevHub ?? false,
-          status: org.connectedStatus === 'Connected' ? 'active' : 'revoked',
-        },
+        select: { createdBy: true },
       });
+      if (existing && existing.createdBy !== userId) {
+        continue;
+      }
+      const data = {
+        username: org.username,
+        orgId: org.orgId,
+        instanceUrl: org.instanceUrl ?? 'https://login.salesforce.com',
+        type,
+        isDevHub: org.isDevHub ?? false,
+        status: org.connectedStatus === 'Connected' ? 'active' as const : 'revoked' as const,
+      };
+      let record;
+      if (existing) {
+        record = await prisma.orgConnection.update({
+          where: { alias: org.alias },
+          data,
+        });
+      } else {
+        try {
+          record = await prisma.orgConnection.create({
+            data: {
+              alias: org.alias,
+              ...data,
+              createdBy: userId,
+            },
+          });
+        } catch (error) {
+          // A concurrent refresh may have claimed this globally unique alias.
+          // Never fall back to updating a record that belongs to another user.
+          if ((error as { code?: string }).code === 'P2002') continue;
+          throw error;
+        }
+      }
       synced.push(record);
     }
 

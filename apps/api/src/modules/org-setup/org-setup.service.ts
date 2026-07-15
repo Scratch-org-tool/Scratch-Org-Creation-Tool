@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { prisma, Prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import { QUEUE_NAMES, orgSetupSchema } from '@sfcc/shared';
-import { assertResourceOwner } from '../../common/user-tenancy.util';
+import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 
 @Injectable()
@@ -13,6 +13,7 @@ export class OrgSetupService {
 
   async executeSetup(body: unknown, userId: string) {
     const input = orgSetupSchema.parse(body);
+    await assertOrgOwned(input.orgId, userId, prisma);
     const jobs = [];
 
     const setupTypes: Array<{ type: string; config: Record<string, unknown> }> = [];
@@ -52,9 +53,19 @@ export class OrgSetupService {
     return { jobs };
   }
 
-  async listRuns(orgId?: string) {
+  async listRuns(userId: string, orgId?: string) {
+    if (orgId) {
+      await assertOrgOwned(orgId, userId, prisma);
+    }
+    const ownedOrgs = await prisma.orgConnection.findMany({
+      where: userOwnedWhere(userId),
+      select: { id: true },
+    });
+    const ownedOrgIds = ownedOrgs.map((org) => org.id);
     return prisma.orgSetupRun.findMany({
-      where: orgId ? { orgId } : undefined,
+      where: {
+        orgId: orgId ?? { in: ownedOrgIds },
+      },
       orderBy: { createdAt: 'desc' },
       take: 50,
     });

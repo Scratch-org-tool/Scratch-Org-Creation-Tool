@@ -58,7 +58,6 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
   const approve = async (id: string) => {
     await api(`/deployments/${id}/approve`, {
       method: 'POST',
-      body: JSON.stringify({ approvedBy: 'release-manager' }),
     });
     const updated = await api<Deployment[]>('/deployments');
     setDeployments(updated);

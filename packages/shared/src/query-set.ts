@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX, stripLimitOffset } from './org-to-org-data.js';
+import { assertSoqlIdentifier, escapeSoqlLiteral } from './soql.js';
 
 export const querySetEntrySchema = z.object({
   id: z.string().min(1),
@@ -52,7 +53,7 @@ export function buildGenericDeployQuery(input: {
 }): string {
   let query = input.soql?.trim();
   if (!query || !/\bFROM\b/i.test(query)) {
-    query = `SELECT Name FROM ${input.objectName}`;
+    query = `SELECT Name FROM ${assertSoqlIdentifier(input.objectName, 'object name')}`;
   }
   query = stripIdFromSelect(query);
   if (input.recordLimit != null) {
@@ -77,7 +78,11 @@ export function substituteVariables(
 ): string {
   let result = template;
   for (const [key, value] of Object.entries(variables)) {
-    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value.replace(/'/g, "\\'"));
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(
+      new RegExp(`\\{\\{${escapedKey}\\}\\}`, 'g'),
+      escapeSoqlLiteral(value),
+    );
   }
   return result;
 }

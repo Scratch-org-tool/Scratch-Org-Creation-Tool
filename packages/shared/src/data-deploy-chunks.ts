@@ -3,6 +3,7 @@ import {
   DATA_RECORD_LIMIT_MAX,
 } from './org-to-org-data.js';
 import { stripLimitOffset } from './org-to-org-data.js';
+import { escapeSoqlLiteral } from './soql.js';
 
 export interface DataDeployChunkPlan {
   chunkIndex: number;
@@ -23,10 +24,6 @@ const ORDER_BY_RE = /\bORDER\s+BY\s+[\s\S]*?(?=\bLIMIT\b|\bOFFSET\b|$)/i;
 export function stripOrderByLimitOffset(soql: string): string {
   const withoutLimit = stripLimitOffset(soql);
   return withoutLimit.replace(ORDER_BY_RE, '').trim();
-}
-
-function escapeSoqlId(id: string): string {
-  return id.replace(/\\/g, '').replace(/'/g, '');
 }
 
 /**
@@ -62,8 +59,8 @@ export function buildIdRangeChunkSoql(
 ): string {
   let query = stripOrderByLimitOffset(baseSoql.trim().replace(/;+\s*$/, ''));
   const conditions: string[] = [];
-  if (bounds.afterId) conditions.push(`Id > '${escapeSoqlId(bounds.afterId)}'`);
-  if (bounds.endId) conditions.push(`Id <= '${escapeSoqlId(bounds.endId)}'`);
+  if (bounds.afterId) conditions.push(`Id > '${escapeSoqlLiteral(bounds.afterId)}'`);
+  if (bounds.endId) conditions.push(`Id <= '${escapeSoqlLiteral(bounds.endId)}'`);
   for (const condition of conditions) {
     query = injectWhereCondition(query, condition);
   }

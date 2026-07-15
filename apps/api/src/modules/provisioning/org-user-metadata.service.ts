@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
+import { assertResourceOwner } from '../../common/user-tenancy.util';
 
 const DISCOVER_FIELDS = [
   'cfs_ob__Onboarding_Role__c',
@@ -18,9 +19,9 @@ export interface PicklistFieldInfo {
 export class OrgUserMetadataService {
   private readonly sfCli = createSfCliClient();
 
-  async discover(orgId: string) {
+  async discover(orgId: string, userId: string) {
     const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
-    if (!org) throw new NotFoundException('Org not found');
+    assertResourceOwner(org, userId, 'Org');
 
     const alias = org.username ?? org.alias;
     const describe = await this.sfCli.describeSObject(alias, 'User');

@@ -98,7 +98,7 @@ export class OrgsService {
         orgId: org.id,
         alias,
         status: 'cancelled',
-      });
+      }, org.createdBy);
     }
 
     try {
@@ -146,7 +146,7 @@ export class OrgsService {
       orgId: org.id,
       alias: input.alias,
       status: 'authorizing',
-    });
+    }, userId);
 
     const { promise, kill } = this.sfCli.loginWebCancellable(
       input.alias,
@@ -173,7 +173,7 @@ export class OrgsService {
           alias: input.alias,
           status: 'failed',
           error: result.error,
-        });
+        }, userId);
         throw mapSfAuthError(result.error ?? 'Authorization failed');
       }
 
@@ -205,7 +205,7 @@ export class OrgsService {
         orgId: org.id,
         alias: input.alias,
         status: 'authorized',
-      });
+      }, userId);
 
       return this.sanitizeOrg(updated);
     } catch (error) {
@@ -221,7 +221,7 @@ export class OrgsService {
           alias: input.alias,
           status: 'failed',
           error: message,
-        });
+        }, userId);
         throw mapSfAuthError(message);
       }
       throw new BadRequestException('Authorization cancelled');

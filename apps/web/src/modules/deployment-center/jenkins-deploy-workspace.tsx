@@ -80,7 +80,6 @@ export function JenkinsDeployWorkspace() {
     try {
       await api(`/deployments/${id}/approve`, {
         method: 'POST',
-        body: JSON.stringify({ approvedBy: 'release-manager' }),
       });
       const updated = await api<Deployment[]>('/deployments');
       setDeployments(updated);

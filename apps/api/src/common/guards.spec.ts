@@ -7,11 +7,13 @@ import {
   resolveRole,
   canAccessModule,
   getEffectiveModules,
+  sanitizeNextRedirect,
   type UserAccessProfile,
 } from '@sfcc/shared';
 import { RoleGuard } from './role.guard';
 import { ModuleGuard } from './module.guard';
 import { AuthGuard, type AuthenticatedRequest } from './auth.guard';
+import { AuthSecurityService } from '../modules/auth/auth-security.service';
 
 vi.mock('@sfcc/firebase', () => ({
   verifyIdToken: vi.fn(),
@@ -109,6 +111,14 @@ describe('AuthGuard', () => {
     ).rejects.toThrow(UnauthorizedException);
   });
 
+  it('does not accept Firebase ID tokens from query parameters', async () => {
+    const guard = makeGuard();
+    await expect(
+      guard.canActivate(makeContext({ headers: {}, query: { token: 'firebase-id-token' } })),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(verifyIdToken).not.toHaveBeenCalled();
+  });
+
   it('blocks inactive users even with a valid token', async () => {
     vi.mocked(verifyIdToken).mockResolvedValue({ uid: 'u1', email: 'a@b.c' } as never);
     getProfileByFirebaseUid.mockResolvedValue(profile({ status: 'inactive' }));
@@ -182,5 +192,29 @@ describe('module resolution', () => {
     expect(modules).toContain('environment');
     expect(modules).toContain('data');
     expect(modules).not.toContain('copilot');
+  });
+});
+
+describe('client IP resolution', () => {
+  it('ignores untrusted X-Forwarded-For values', () => {
+    const security = new AuthSecurityService({} as never);
+    expect(
+      security.extractClientIp(
+        { 'x-forwarded-for': '203.0.113.9' },
+        '192.0.2.10',
+      ),
+    ).toBe('192.0.2.10');
+  });
+});
+
+describe('post-login redirects', () => {
+  it('allows local paths and rejects external or encoded bypasses', () => {
+    expect(sanitizeNextRedirect('/data-center?tab=cona#runs')).toBe(
+      '/data-center?tab=cona#runs',
+    );
+    expect(sanitizeNextRedirect('https://evil.example')).toBe('/dashboard');
+    expect(sanitizeNextRedirect('//evil.example/path')).toBe('/dashboard');
+    expect(sanitizeNextRedirect('/%2f%2fevil.example')).toBe('/dashboard');
+    expect(sanitizeNextRedirect('/%5cevil.example')).toBe('/dashboard');
   });
 });

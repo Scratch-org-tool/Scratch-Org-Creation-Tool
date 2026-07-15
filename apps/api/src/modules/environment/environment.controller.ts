@@ -3,9 +3,10 @@ import { EnvironmentService } from './environment.service';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
+import { RequireRole, RoleGuard } from '../../common/role.guard';
 
 @Controller('environment')
-@UseGuards(AuthGuard, ModuleGuard)
+@UseGuards(AuthGuard, ModuleGuard, RoleGuard)
 @RequireModule('environment')
 export class EnvironmentController {
   constructor(private readonly environmentService: EnvironmentService) {}
@@ -76,6 +77,7 @@ export class EnvironmentController {
   }
 
   @Post('azure-connection/connect')
+  @RequireRole('admin')
   connectAzureDevOps(@Body() body: unknown, @CurrentUser() userId: string) {
     return this.environmentService.connectAzureDevOps(body, userId);
   }
@@ -86,6 +88,7 @@ export class EnvironmentController {
   }
 
   @Delete('azure-connection')
+  @RequireRole('admin')
   disconnectAzureDevOps() {
     return this.environmentService.disconnectAzureDevOps();
   }

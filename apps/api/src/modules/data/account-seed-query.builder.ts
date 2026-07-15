@@ -1,4 +1,4 @@
-import { ACCOUNT_EXPORT_FIELDS } from '@sfcc/shared';
+import { ACCOUNT_EXPORT_FIELDS, escapeSoqlLiteral } from '@sfcc/shared';
 
 export type AccountGroup = 'Z001' | 'ZFSV' | 'Z003';
 export type Bottler = '5000' | '4900' | '4600';
@@ -12,7 +12,7 @@ export interface AccountSeedRow {
 }
 
 const BASE_WHERE = (bottler: string) =>
-  `cfs_ob__Bottler__c = '${bottler}' ` +
+  `cfs_ob__Bottler__c = '${escapeSoqlLiteral(bottler)}' ` +
   `AND cfs_ob__Bottler__c != null ` +
   `AND cfs_ob__u_SalesOffice__c != null ` +
   `AND cfs_ob__u_CustomerNumber__c != null ` +
@@ -39,12 +39,12 @@ export function buildAccountSeedSoql(row: AccountSeedRow): string {
   const channel =
     row.accountGroup === 'Z003' && row.distributionChannel === 'Z1'
       ? "IN ('Z1', 'Z3')"
-      : `= '${row.distributionChannel}'`;
+      : `= '${escapeSoqlLiteral(row.distributionChannel)}'`;
 
   return (
     `SELECT ${ACCOUNT_EXPORT_FIELDS} FROM Account WHERE ` +
     `${BASE_WHERE(row.bottler)} ` +
-    `AND cfs_ob__u_CustomerAccountGroup__c = '${row.accountGroup}' ` +
+    `AND cfs_ob__u_CustomerAccountGroup__c = '${escapeSoqlLiteral(row.accountGroup)}' ` +
     `AND cfs_ob__u_DistributionChannel__c ${channel} ` +
     `${activeCustomerClause(row.accountGroup)} ` +
     `ORDER BY LastModifiedDate DESC LIMIT ${row.limit}`
@@ -56,12 +56,12 @@ export function buildAccountCountSoql(row: AccountSeedRow): string {
   const channel =
     row.accountGroup === 'Z003' && row.distributionChannel === 'Z1'
       ? "IN ('Z1', 'Z3')"
-      : `= '${row.distributionChannel}'`;
+      : `= '${escapeSoqlLiteral(row.distributionChannel)}'`;
 
   return (
     `SELECT COUNT() FROM Account WHERE ` +
     `${BASE_WHERE(row.bottler)} ` +
-    `AND cfs_ob__u_CustomerAccountGroup__c = '${row.accountGroup}' ` +
+    `AND cfs_ob__u_CustomerAccountGroup__c = '${escapeSoqlLiteral(row.accountGroup)}' ` +
     `AND cfs_ob__u_DistributionChannel__c ${channel} ` +
     `${activeCustomerClause(row.accountGroup)}`
   );

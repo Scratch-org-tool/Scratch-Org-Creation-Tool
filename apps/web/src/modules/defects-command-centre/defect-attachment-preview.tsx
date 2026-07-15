@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
+import DOMPurify from 'dompurify';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import {
   Sheet,
@@ -23,6 +24,14 @@ interface DefectAttachmentPreviewProps {
   projectQuery: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+function sanitizeConvertedHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe', 'object', 'embed'],
+    FORBID_ATTR: ['style'],
+  });
 }
 
 function detectMode(name: string, contentType: string | null): PreviewMode {
@@ -100,13 +109,13 @@ export function DefectAttachmentPreview({
           }
           const sheet = workbook.Sheets[firstSheet];
           const tableHtml = XLSX.utils.sheet_to_html(sheet, { id: 'attachment-preview-table' });
-          setHtmlContent(tableHtml);
+          setHtmlContent(sanitizeConvertedHtml(tableHtml));
           URL.revokeObjectURL(objectUrl);
           objectUrl = null;
         } else if (previewMode === 'word') {
           const buffer = await blob.arrayBuffer();
           const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
-          setHtmlContent(result.value);
+          setHtmlContent(sanitizeConvertedHtml(result.value));
           URL.revokeObjectURL(objectUrl);
           objectUrl = null;
         } else if (previewMode === 'text') {

@@ -16,8 +16,8 @@ export class OrgSetupController {
   }
 
   @Get('runs')
-  listRuns(@Query('orgId') orgId?: string) {
-    return this.orgSetupService.listRuns(orgId);
+  listRuns(@CurrentUser() userId: string, @Query('orgId') orgId?: string) {
+    return this.orgSetupService.listRuns(userId, orgId);
   }
 
   @Get('permission-sets')

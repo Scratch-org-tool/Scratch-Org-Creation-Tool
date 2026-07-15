@@ -11,9 +11,12 @@ async function resolveToken(forceRefresh = false): Promise<string | null> {
   return getIdToken(forceRefresh);
 }
 
-export async function buildAuthHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+export async function buildAuthHeaders(
+  extra?: Record<string, string>,
+  forceRefresh = false,
+): Promise<Record<string, string>> {
   const headers: Record<string, string> = { ...extra };
-  const token = await resolveToken(false);
+  const token = await resolveToken(forceRefresh);
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
 }
@@ -107,10 +110,26 @@ export async function apiBlob(path: string, options?: RequestInit, retried = fal
 }
 
 export async function getStreamUrl(types?: string[], forceRefresh = false): Promise<string> {
+  const token = await resolveToken(forceRefresh);
+  if (!token) throw new Error('Authentication is required for event streams.');
+  const response = await fetch(buildApiUrl('/stream/ticket'), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 401
+        ? 'Session expired — please sign in again.'
+        : 'Unable to open the event stream.',
+    );
+  }
+  const { ticket } = await response.json() as { ticket?: string };
+  if (!ticket) throw new Error('Unable to open the event stream.');
+
   const params = new URLSearchParams();
   if (types?.length) params.set('types', types.join(','));
-  const token = await resolveToken(forceRefresh);
-  if (token) params.set('token', token);
+  params.set('ticket', ticket);
   const qs = params.toString();
   return buildApiUrl(`/stream/events${qs ? `?${qs}` : ''}`);
 }

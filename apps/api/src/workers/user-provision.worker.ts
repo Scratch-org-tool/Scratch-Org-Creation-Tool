@@ -44,8 +44,7 @@ export class UserProvisionWorker {
       await this.streamService.publishJobLog(dbJobId, stream, line);
     };
 
-    const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
-    if (!org) throw new Error('Org not found');
+    const org = await this.assertPayloadBinding({ orgId, batchId, dbJobId });
 
     const alias = org.username ?? org.alias;
     let successCount = 0;
@@ -117,6 +116,48 @@ export class UserProvisionWorker {
     }
 
     return { successCount, failCount };
+  }
+
+  private async assertPayloadBinding(input: {
+    orgId: string;
+    batchId?: string;
+    dbJobId: string;
+  }) {
+    const [org, dbJob, batch] = await Promise.all([
+      prisma.orgConnection.findUnique({ where: { id: input.orgId } }),
+      prisma.job.findUnique({
+        where: { id: input.dbJobId },
+        select: {
+          createdBy: true,
+          payload: true,
+          parentRun: { select: { createdBy: true } },
+        },
+      }),
+      input.batchId
+        ? prisma.provisioningBatch.findUnique({ where: { id: input.batchId } })
+        : Promise.resolve(null),
+    ]);
+    if (!org || !dbJob) throw new Error('Provisioning job resource not found');
+
+    const ownerId =
+      dbJob.createdBy !== 'system'
+        ? dbJob.createdBy
+        : dbJob.parentRun?.createdBy;
+    const storedPayload = dbJob.payload as Record<string, unknown>;
+    if (
+      !ownerId
+      || ownerId === 'system'
+      || org.createdBy !== ownerId
+      || storedPayload.orgId !== input.orgId
+      || (input.batchId && storedPayload.batchId !== input.batchId)
+      || (input.batchId
+        && (!batch
+          || batch.orgId !== input.orgId
+          || batch.createdBy !== ownerId))
+    ) {
+      throw new Error('Provisioning job ownership validation failed');
+    }
+    return org;
   }
 
   private buildUsername(user: ConaUserInput, orgAlias: string): string {

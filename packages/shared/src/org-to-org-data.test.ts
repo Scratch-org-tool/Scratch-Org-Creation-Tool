@@ -220,6 +220,41 @@ describe('buildFilterSoql', () => {
     });
     assert.match(q, /Bottler__c = 'Acme'/);
   });
+
+  it('rejects invalid object, selected-field, and filter identifiers', () => {
+    assert.throws(() =>
+      buildFilterSoql({
+        objectName: 'Account WHERE Id != null',
+        fields: ['Id'],
+        recordLimit: 50,
+      }),
+    );
+    assert.throws(() =>
+      buildFilterSoql({
+        objectName: 'Account',
+        fields: ['Id, (SELECT Id FROM Users)'],
+        recordLimit: 50,
+      }),
+    );
+    assert.throws(() =>
+      buildFilterSoql({
+        objectName: 'Account',
+        fields: ['Id'],
+        recordLimit: 50,
+        filters: [{ field: 'Name OR Id != null', operator: 'eq', value: 'x' }],
+      }),
+    );
+  });
+
+  it('escapes quotes and backslashes in filter literals', () => {
+    const q = buildFilterSoql({
+      objectName: 'Account',
+      fields: ['Id'],
+      recordLimit: 50,
+      filters: [{ field: 'Name', operator: 'eq', value: "A\\B's" }],
+    });
+    assert.match(q, /Name = 'A\\\\B\\'s'/);
+  });
 });
 
 describe('orgToOrgDeployBatchSchema', () => {

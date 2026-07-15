@@ -8,6 +8,7 @@ import {
   AUTH_RESET_SENT,
   AUTH_SIGNUP_FAILED,
   MIN_SIGNUP_PASSWORD_SCORE,
+  sanitizeNextRedirect,
   scorePassword,
 } from '@sfcc/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -42,7 +43,7 @@ export function useAuthForm(mode: AuthMode) {
   const [redirecting, setRedirecting] = useState(false);
   const [forgotLoading, setForgotLoading] = useState(false);
 
-  const next = searchParams.get('next') ?? '/dashboard';
+  const next = sanitizeNextRedirect(searchParams.get('next'));
 
   const passwordStrength = useMemo(
     () => (mode === 'signup' ? scorePassword(password) : null),
@@ -76,6 +77,7 @@ export function useAuthForm(mode: AuthMode) {
 
   useEffect(() => {
     if (!authLoading && user && !redirecting) {
+      clearBootstrapToken();
       setRedirecting(true);
       router.replace(next);
     }
@@ -168,6 +170,7 @@ export function useAuthForm(mode: AuthMode) {
   };
 
   const handleForgotPassword = async () => {
+    clearBootstrapToken();
     setError('');
     setSuccess('');
     if (!email.trim()) {

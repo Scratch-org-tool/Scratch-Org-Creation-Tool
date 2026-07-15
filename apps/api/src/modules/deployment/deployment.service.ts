@@ -247,7 +247,7 @@ export class DeploymentService {
     };
   }
 
-  async approveDeployment(id: string, approvedBy: string, userId: string) {
+  async approveDeployment(id: string, userId: string) {
     const deployment = await prisma.deployment.findUnique({
       where: { id },
       include: { targetOrg: true },
@@ -257,7 +257,7 @@ export class DeploymentService {
 
     await prisma.deployment.update({
       where: { id },
-      data: { approvedBy, approvedAt: new Date(), status: 'queued' },
+      data: { approvedBy: userId, approvedAt: new Date(), status: 'queued' },
     });
 
     if (dep.strategy === 'azure') {
