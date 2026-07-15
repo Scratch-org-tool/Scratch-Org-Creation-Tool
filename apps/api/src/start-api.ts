@@ -19,6 +19,13 @@ function resolveCorsOrigins(): string[] | boolean {
 export async function startApi(): Promise<void> {
   initFirebase();
   const app = await NestFactory.create(AppModule);
+  const trustedProxies = (process.env.TRUST_PROXY ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (trustedProxies.length > 0) {
+    app.getHttpAdapter().getInstance().set('trust proxy', trustedProxies);
+  }
 
   app.enableCors({
     origin: resolveCorsOrigins(),

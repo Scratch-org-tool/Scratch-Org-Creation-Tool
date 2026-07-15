@@ -20,8 +20,8 @@ export class ProvisioningController {
   }
 
   @Get('orgs/:orgId/discover')
-  discoverOrgUsers(@Param('orgId') orgId: string) {
-    return this.orgUserMetadata.discover(orgId);
+  discoverOrgUsers(@Param('orgId') orgId: string, @CurrentUser() userId: string) {
+    return this.orgUserMetadata.discover(orgId, userId);
   }
 
   @Post('bulk')
@@ -30,8 +30,8 @@ export class ProvisioningController {
   }
 
   @Post('cona-users')
-  provisionConaUsers(@Body() body: unknown) {
-    return this.provisioningService.provisionConaUsers(body);
+  provisionConaUsers(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.provisioningService.provisionConaUsers(body, userId);
   }
 
   @Post('parse-csv')

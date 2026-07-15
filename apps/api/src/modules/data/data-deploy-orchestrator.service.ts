@@ -22,6 +22,7 @@ import { generateSfdmuConfigFromSoql } from './sfdmu-config.generator';
 import { BulkThrottleService } from './bulk-throttle.service';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 import { ACTIVE_CHUNK_STATUSES, aggregateBatchStatus, countChunkStatuses } from './batch-status.util';
+import { isUnsafeInsertChunkRetry } from './retry-safety.util';
 
 export type DataDeployStrategy = 'generic' | 'insert' | 'upsert' | 'replicate';
 
@@ -501,6 +502,11 @@ export class DataDeployOrchestratorService {
     if (!chunk || chunk.batchId !== batchId) throw new NotFoundException('Chunk not found');
     if (!['failed', 'cancelled'].includes(chunk.status)) {
       throw new BadRequestException(`Chunk is ${chunk.status} — only failed or cancelled chunks can be retried`);
+    }
+    if (isUnsafeInsertChunkRetry(batch.strategy, Boolean(batch.matchField))) {
+      throw new BadRequestException(
+        'Insert chunks cannot be retried safely because Salesforce may have committed some records; use an upsert strategy or retry only verified failed records',
+      );
     }
     if (!chunk.endId && chunk.chunkIndex > 0) {
       throw new BadRequestException('Chunk bounds were never planned — retry the whole deploy instead');

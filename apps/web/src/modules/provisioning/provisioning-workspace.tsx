@@ -53,15 +53,34 @@ export function ProvisioningWorkspace() {
   const [orgId, setOrgId] = useState('');
   const [csv, setCsv] = useState(SAMPLE_CSV);
   const [parsed, setParsed] = useState<unknown[]>([]);
+  const [parsing, setParsing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; variant: 'success' | 'error' } | null>(null);
 
+  useEffect(() => {
+    setParsed([]);
+    setMessage(null);
+  }, [csv]);
+
   const parseCsv = async () => {
-    const users = await api<unknown[]>('/provisioning/parse-csv', {
-      method: 'POST',
-      body: JSON.stringify({ csv }),
-    });
-    setParsed(users);
+    setParsing(true);
+    setMessage(null);
+    try {
+      const users = await api<unknown[]>('/provisioning/parse-csv', {
+        method: 'POST',
+        body: JSON.stringify({ csv }),
+      });
+      setParsed(users);
+      setMessage({ text: `${users.length} users parsed`, variant: 'success' });
+    } catch (err) {
+      setParsed([]);
+      setMessage({
+        text: err instanceof Error ? err.message : 'CSV parsing failed',
+        variant: 'error',
+      });
+    } finally {
+      setParsing(false);
+    }
   };
 
   const provision = async () => {
@@ -113,8 +132,8 @@ export function ProvisioningWorkspace() {
         <GlassCard title="CSV bulk upload" description="Import users from a CSV file with profiles and permission sets.">
           <FormSection title="CSV import">
             <div>
-              <Label>Target Org</Label>
-              <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+              <Label htmlFor="provisioning-csv-target-org">Target Org</Label>
+              <Select id="provisioning-csv-target-org" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>
@@ -124,8 +143,9 @@ export function ProvisioningWorkspace() {
               </Select>
             </div>
             <div>
-              <Label>CSV Data</Label>
+              <Label htmlFor="provisioning-csv-data">CSV Data</Label>
               <Textarea
+                id="provisioning-csv-data"
                 value={csv}
                 onChange={(e) => setCsv(e.target.value)}
                 className="font-mono text-xs h-52 studio-console overflow-y-auto resize-none"
@@ -133,7 +153,7 @@ export function ProvisioningWorkspace() {
             </div>
           </FormSection>
           <div className="flex gap-2 mt-4">
-            <Button variant="outline" onClick={() => void parseCsv()}>
+            <Button variant="outline" onClick={() => void parseCsv()} loading={parsing}>
               Parse CSV
             </Button>
             <Button onClick={() => void provision()} loading={loading} disabled={!orgId}>

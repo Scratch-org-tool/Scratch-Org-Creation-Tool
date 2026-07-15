@@ -50,10 +50,11 @@ export function OrgToOrgObjectSettings({
       />
 
       <div>
-        <Label>Maximum number of records to deploy</Label>
+        <Label htmlFor="org-object-record-limit">Maximum number of records to deploy</Label>
         <div className="flex flex-wrap items-center gap-2 mt-1 min-w-0">
           <span className="text-sm text-muted-foreground">Deploy up to</span>
           <Input
+            id="org-object-record-limit"
             type="number"
             min={1}
             max={ORG_TO_ORG_RECORD_LIMIT_MAX}
@@ -107,7 +108,7 @@ export function OrgToOrgObjectSettings({
       />
 
       <div>
-        <Label>Reference relationships (optional)</Label>
+        <p className="text-sm font-medium leading-none">Reference relationships (optional)</p>
         <p className="text-xs text-muted-foreground mb-2">
           Lookup fields included when the referenced object is part of this deployment.
         </p>
@@ -139,6 +140,7 @@ export function OrgToOrgObjectSettings({
                           checked={selected}
                           disabled={!ref.deployable}
                           onChange={(e) => onReferenceToggle(ref.name, e.target.checked)}
+                          aria-label={`Include relationship ${ref.label}`}
                         />
                       </td>
                       <td className="px-2 py-1.5">{ref.label}</td>
@@ -164,7 +166,7 @@ export function OrgToOrgObjectSettings({
 
       <div>
         <div className="flex items-center justify-between mb-2">
-          <Label>Matching records (sample)</Label>
+          <p className="text-sm font-medium leading-none">Matching records (sample)</p>
           <span className="text-xs text-muted-foreground">
             {loadingPreview
               ? 'Loading…'

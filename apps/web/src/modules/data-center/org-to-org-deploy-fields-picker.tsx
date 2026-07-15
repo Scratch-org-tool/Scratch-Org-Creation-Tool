@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input, Label } from '@/components/ui/input';
+import { Input } from '@/components/ui/input';
 import { defaultDeployFieldSelection } from '@sfcc/shared';
 import type { OrgToOrgDeployableField } from './types';
 
@@ -63,7 +63,7 @@ export function OrgToOrgDeployFieldsPicker({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Label>Fields to deploy</Label>
+        <p className="text-sm font-medium leading-none">Fields to deploy</p>
         <span className="text-xs text-muted-foreground">
           {selectedFields.length} of {deployableFields.length} selected
         </span>
@@ -76,6 +76,7 @@ export function OrgToOrgDeployFieldsPicker({
       )}
 
       <Input
+        aria-label="Search deployable fields"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         placeholder="Search fields…"
@@ -119,6 +120,7 @@ export function OrgToOrgDeployFieldsPicker({
                       type="checkbox"
                       checked={selectedSet.has(field.name)}
                       onChange={(e) => toggle(field.name, e.target.checked)}
+                      aria-label={`Deploy field ${field.label}`}
                     />
                   </td>
                   <td className="px-2 py-1.5">

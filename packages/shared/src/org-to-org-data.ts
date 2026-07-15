@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  assertSoqlIdentifier,
+  escapeSoqlLiteral,
+  toSoqlLiteral,
+} from './soql.js';
 
 export const ORG_TO_ORG_KEY_SCAN_MAX = 10_000;
 /** @deprecated Use DATA_RECORD_LIMIT_MAX */
@@ -69,6 +74,13 @@ const orgToOrgCompareBaseSchema = z.object({
 });
 
 export const orgToOrgCompareSchema = orgToOrgCompareBaseSchema.superRefine((data, ctx) => {
+  if (data.sourceOrgId === data.targetOrgId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Source and target org must differ',
+      path: ['targetOrgId'],
+    });
+  }
   const hasSoql = Boolean(data.soql?.trim());
   const hasSelection = Boolean(data.selectedRecordIds?.length);
   if (!hasSoql && !hasSelection) {
@@ -93,6 +105,13 @@ const orgToOrgDeployBaseSchema = z.object({
 });
 
 export const orgToOrgDeploySchema = orgToOrgDeployBaseSchema.superRefine((data, ctx) => {
+  if (data.sourceOrgId === data.targetOrgId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Source and target org must differ',
+      path: ['targetOrgId'],
+    });
+  }
   const hasSoql = Boolean(data.soql?.trim());
   const hasSelection = Boolean(data.selectedRecordIds?.length);
   if (!hasSoql && !hasSelection) {
@@ -205,7 +224,7 @@ function uniqueFields(fields: string[]): string[] {
 }
 
 function quoteId(id: string): string {
-  return `'${id.replace(/'/g, "\\'")}'`;
+  return toSoqlLiteral(id);
 }
 
 function buildIdInClause(selectedIds: string[]): string {
@@ -222,12 +241,14 @@ export interface BuildListSoqlInput {
 }
 
 export function buildListSoql(input: BuildListSoqlInput): string {
-  const fieldList = uniqueFields(input.fields.length > 0 ? input.fields : ['Id', 'Name']);
+  const objectName = assertSoqlIdentifier(input.objectName, 'object name');
+  const fieldList = uniqueFields(input.fields.length > 0 ? input.fields : ['Id', 'Name'])
+    .map((field) => assertSoqlIdentifier(field, 'selected field'));
   const limit = input.limit ?? 50;
   const page = input.page ?? 1;
   const offset = (page - 1) * limit;
 
-  let query = `SELECT ${fieldList.join(', ')} FROM ${input.objectName}`;
+  let query = `SELECT ${fieldList.join(', ')} FROM ${objectName}`;
   if (input.selectedIds?.length) {
     query += ` WHERE ${buildIdInClause(input.selectedIds)}`;
   }
@@ -246,8 +267,10 @@ export function buildDeploySoql(input: BuildDeploySoqlInput): string {
   if (input.selectedIds.length === 0) {
     throw new Error('At least one record id is required to build deploy SOQL');
   }
-  const fieldList = uniqueFields(input.fields.length > 0 ? input.fields : ['Id', 'Name']);
-  return `SELECT ${fieldList.join(', ')} FROM ${input.objectName} WHERE ${buildIdInClause(input.selectedIds)}`;
+  const objectName = assertSoqlIdentifier(input.objectName, 'object name');
+  const fieldList = uniqueFields(input.fields.length > 0 ? input.fields : ['Id', 'Name'])
+    .map((field) => assertSoqlIdentifier(field, 'selected field'));
+  return `SELECT ${fieldList.join(', ')} FROM ${objectName} WHERE ${buildIdInClause(input.selectedIds)}`;
 }
 
 export interface ResolveSoqlInput {
@@ -286,6 +309,11 @@ export function stripLimitOffset(soql: string): string {
 export function applySoqlPagination(soql: string, page: number, pageSize: number): string {
   const base = stripLimitOffset(soql);
   const offset = (page - 1) * pageSize;
+  if (offset > 2_000) {
+    throw new Error(
+      'Salesforce supports OFFSET only up to 2,000 rows. Narrow the query or reduce the page size.',
+    );
+  }
   return `${base} LIMIT ${pageSize} OFFSET ${offset}`;
 }
 
@@ -390,7 +418,7 @@ export function buildKeySoql(soql: string, objectName: string, matchField: strin
   const base = stripLimitOffset(soql);
   const whereMatch = base.match(/\bWHERE\b([\s\S]+?)(?:\bORDER\s+BY\b|$)/i);
   const whereClause = whereMatch ? ` WHERE ${whereMatch[1].trim()}` : '';
-  return `SELECT ${matchField} FROM ${objectName}${whereClause} LIMIT ${maxKeys}`;
+  return `SELECT ${assertSoqlIdentifier(matchField, 'match field')} FROM ${assertSoqlIdentifier(objectName, 'object name')}${whereClause} LIMIT ${maxKeys}`;
 }
 
 export interface KeyDiffResult {
@@ -536,36 +564,16 @@ export function normalizeOrgToOrgFilters(
   }));
 }
 
-function escapeSoqlString(value: string): string {
-  return value.replace(/'/g, "\\'");
-}
-
-/** Escape a user-supplied string literal for safe inclusion in single-quoted SOQL. */
-export function escapeSoqlValue(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
-
-const SOQL_IDENTIFIER_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
-
-/** Validate an sObject / field API name before interpolating it into SOQL. */
-export function assertSoqlIdentifier(name: string, label = 'identifier'): string {
-  const trimmed = name?.trim();
-  if (!trimmed || !SOQL_IDENTIFIER_RE.test(trimmed)) {
-    throw new Error(`Invalid SOQL ${label}: ${JSON.stringify(name)}`);
-  }
-  return trimmed;
-}
-
 function buildFilterCondition(row: OrgToOrgFilterRow): string | null {
   if (!row.field?.trim()) return null;
-  const field = row.field.trim();
+  const field = assertSoqlIdentifier(row.field, 'filter field');
   switch (row.operator) {
     case 'eq':
-      return `${field} = '${escapeSoqlString(row.value ?? '')}'`;
+      return `${field} = '${escapeSoqlLiteral(row.value ?? '')}'`;
     case 'neq':
-      return `${field} != '${escapeSoqlString(row.value ?? '')}'`;
+      return `${field} != '${escapeSoqlLiteral(row.value ?? '')}'`;
     case 'contains':
-      return `${field} LIKE '%${escapeSoqlString(row.value ?? '')}%'`;
+      return `${field} LIKE '%${escapeSoqlLiteral(row.value ?? '')}%'`;
     case 'not_empty':
       return `${field} != null`;
     case 'empty':
@@ -575,7 +583,7 @@ function buildFilterCondition(row: OrgToOrgFilterRow): string | null {
         .split(',')
         .map((v) => v.trim())
         .filter(Boolean)
-        .map((v) => `'${escapeSoqlString(v)}'`);
+        .map(toSoqlLiteral);
       return parts.length ? `${field} IN (${parts.join(', ')})` : null;
     }
     default:
@@ -595,7 +603,9 @@ export interface BuildFilterSoqlInput {
 }
 
 export function buildFilterSoql(input: BuildFilterSoqlInput): string {
-  const fieldList = uniqueFields(input.fields.length > 0 ? input.fields : ['Id', 'Name']);
+  const objectName = assertSoqlIdentifier(input.objectName, 'object name');
+  const fieldList = uniqueFields(input.fields.length > 0 ? input.fields : ['Id', 'Name'])
+    .map((field) => assertSoqlIdentifier(field, 'selected field'));
   const conditions: string[] = [];
   const filters = input.filterableFields
     ? normalizeOrgToOrgFilters(input.filters ?? [], input.filterableFields)
@@ -608,7 +618,7 @@ export function buildFilterSoql(input: BuildFilterSoqlInput): string {
     conditions.push(buildIdInClause(input.selectedRecordIds));
   }
 
-  let query = `SELECT ${fieldList.join(', ')} FROM ${input.objectName}`;
+  let query = `SELECT ${fieldList.join(', ')} FROM ${objectName}`;
   if (conditions.length) query += ` WHERE ${conditions.join(' AND ')}`;
   const orderField = fieldList.includes('Name') ? 'Name' : 'Id';
   query += ` ORDER BY ${orderField}`;
@@ -672,6 +682,9 @@ export const orgToOrgDeployBatchSchema = z.object({
   targetOrgId: z.string().uuid(),
   strategy: z.enum(['insert', 'upsert']),
   objects: z.array(orgToOrgObjectDeployConfigSchema).min(1),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export type OrgToOrgPreviewFilterInput = z.infer<typeof orgToOrgPreviewFilterSchema>;

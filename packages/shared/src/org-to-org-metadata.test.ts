@@ -122,7 +122,7 @@ describe('helpers', () => {
 });
 
 describe('buildComparisonItems', () => {
-  it('classifies new, deleted, changed, and same', () => {
+  it('classifies new, deleted, and uninspected pairs', () => {
     const items = buildComparisonItems(
       'CustomObject',
       [
@@ -137,20 +137,20 @@ describe('buildComparisonItems', () => {
     const byName = Object.fromEntries(items.map((i) => [i.fullName, i.diffType]));
     assert.equal(byName['A__c'], 'new');
     assert.equal(byName['B__c'], 'deleted');
-    assert.equal(byName['C__c'], 'same');
+    assert.equal(byName['C__c'], 'unknown');
     const summary = summarizeComparisonItems(items);
     assert.equal(summary.new, 1);
     assert.equal(summary.deleted, 1);
-    assert.equal(summary.same, 1);
+    assert.equal(summary.unknown, 1);
   });
 
-  it('classifyMetadataPair keeps in-both items as same until content diff', () => {
+  it('classifyMetadataPair keeps in-both items unknown until content diff', () => {
     assert.equal(
       classifyMetadataPair(
         { fullName: 'X', lastModifiedDate: '2024-01-01' },
         { fullName: 'X', lastModifiedDate: '2024-02-01' },
       ),
-      'same',
+      'unknown',
     );
   });
 });

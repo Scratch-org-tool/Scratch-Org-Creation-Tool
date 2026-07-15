@@ -14,6 +14,7 @@ import { AuthService } from '../modules/auth/auth.service';
 export interface AuthenticatedRequest {
   headers: Record<string, string | string[] | undefined>;
   query: Record<string, string | string[] | undefined>;
+  ip?: string;
   user?: { uid: string; appUserId: string; email: string };
   userProfile?: UserAccessProfile;
 }
@@ -31,12 +32,6 @@ export function extractBearerToken(request: AuthenticatedRequest): string | null
   return token;
 }
 
-export function extractTokenFromQuery(request: AuthenticatedRequest): string | null {
-  const token = request.query.token;
-  if (!token || Array.isArray(token)) return null;
-  return token;
-}
-
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
@@ -46,7 +41,7 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const token = extractBearerToken(request) ?? extractTokenFromQuery(request);
+    const token = extractBearerToken(request);
     if (!token) {
       throw new UnauthorizedException('Missing authentication token');
     }

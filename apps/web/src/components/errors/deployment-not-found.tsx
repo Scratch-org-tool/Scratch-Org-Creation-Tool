@@ -92,12 +92,12 @@ export function DeploymentNotFound({
           </p>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <Link href={ERROR_PAGE_NAV.login.href} className="sm:w-auto">
-              <Button size="lg" className="w-full min-w-[140px] gap-2 shadow-lg shadow-primary/20">
+            <Button size="lg" className="w-full min-w-[140px] gap-2 shadow-lg shadow-primary/20 sm:w-auto" asChild>
+              <Link href={ERROR_PAGE_NAV.login.href}>
                 <LogIn className="h-4 w-4" />
                 {ERROR_PAGE_NAV.login.label}
-              </Button>
-            </Link>
+              </Link>
+            </Button>
 
             {showReload ? (
               <Button
@@ -110,28 +110,30 @@ export function DeploymentNotFound({
                 Reload page
               </Button>
             ) : (
-              <Link href={ERROR_PAGE_NAV.dashboard.href} className="sm:w-auto">
-                <Button
+              <Button
                   size="lg"
                   variant="secondary"
-                  className="w-full min-w-[140px] gap-2 border-white/10 bg-white/10 text-white hover:bg-white/15"
+                  className="w-full min-w-[140px] gap-2 border-white/10 bg-white/10 text-white hover:bg-white/15 sm:w-auto"
+                  asChild
                 >
+                <Link href={ERROR_PAGE_NAV.dashboard.href}>
                   <Rocket className="h-4 w-4" />
                   Dashboard
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             )}
 
             {showReload ? (
-              <Link href={ERROR_PAGE_NAV.dashboard.href} className="sm:w-auto">
-                <Button
+              <Button
                   size="lg"
                   variant="ghost"
                   className="w-full min-w-[140px] gap-2 border border-white/15 bg-transparent text-white/90 hover:bg-white/10 hover:text-white sm:w-auto"
+                  asChild
                 >
+                <Link href={ERROR_PAGE_NAV.dashboard.href}>
                   {ERROR_PAGE_NAV.dashboard.label}
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             ) : (
               <Button
                 size="lg"

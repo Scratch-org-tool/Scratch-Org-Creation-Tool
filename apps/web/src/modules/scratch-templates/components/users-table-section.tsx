@@ -101,12 +101,13 @@ export function UsersTableSection({
   return (
     <div className="space-y-4">
       <div>
-        <Label>User templates (config-driven)</Label>
+        <Label htmlFor="user-templates-json">User templates (config-driven)</Label>
         <p className="text-xs text-muted-foreground mt-0.5">
           Upload bottler-wise templates JSON or use templates saved with this preset. Slots pick a
           template and set name/email.
         </p>
         <input
+          id="user-templates-json"
           type="file"
           accept=".json,application/json"
           className="mt-2 text-xs"
@@ -144,12 +145,19 @@ export function UsersTableSection({
             <div key={`slot-${i}`} className="rounded-lg border border-border/60 p-3 space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-sm font-medium">User {i + 1}</span>
-                <Button type="button" size="sm" variant="ghost" onClick={() => onSlotsChange(slots.filter((_, idx) => idx !== i))}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onSlotsChange(slots.filter((_, idx) => idx !== i))}
+                  aria-label={`Remove user ${i + 1}`}
+                >
                   <Trash2 className="w-4 h-4 text-destructive" />
                 </Button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Select
+                  aria-label={`User ${i + 1} template`}
                   value={slot.templateId}
                   onChange={(e) => applyTemplate(i, e.target.value)}
                 >
@@ -160,15 +168,15 @@ export function UsersTableSection({
                     </option>
                   ))}
                 </Select>
-                <Select value={slot.role ?? tmpl?.role ?? ''} onChange={(e) => updateSlot(i, { role: e.target.value })}>
+                <Select aria-label={`User ${i + 1} role`} value={slot.role ?? tmpl?.role ?? ''} onChange={(e) => updateSlot(i, { role: e.target.value })}>
                   <option value="">Role…</option>
                   {(roleOptions.length ? roleOptions : [tmpl?.role ?? 'Master Data']).map((v) => (
                     <option key={v} value={v}>{v}</option>
                   ))}
                 </Select>
-                <Input placeholder="First name" value={slot.firstName} onChange={(e) => updateSlot(i, { firstName: e.target.value })} />
-                <Input placeholder="Last name" value={slot.lastName} onChange={(e) => updateSlot(i, { lastName: e.target.value })} />
-                <Input placeholder="Email" type="email" className="sm:col-span-2" value={slot.email} onChange={(e) => updateSlot(i, { email: e.target.value })} />
+                <Input aria-label={`User ${i + 1} first name`} placeholder="First name" value={slot.firstName} onChange={(e) => updateSlot(i, { firstName: e.target.value })} />
+                <Input aria-label={`User ${i + 1} last name`} placeholder="Last name" value={slot.lastName} onChange={(e) => updateSlot(i, { lastName: e.target.value })} />
+                <Input aria-label={`User ${i + 1} email`} placeholder="Email" type="email" className="sm:col-span-2" value={slot.email} onChange={(e) => updateSlot(i, { email: e.target.value })} />
               </div>
               {tmpl && (
                 <p className="text-xs text-muted-foreground">

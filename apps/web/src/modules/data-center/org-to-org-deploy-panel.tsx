@@ -39,8 +39,9 @@ export function OrgToOrgDeployPanel() {
         <div className="flex flex-wrap items-center gap-4 mb-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1 min-w-[280px]">
             <div>
-              <Label>Source org</Label>
+              <Label htmlFor="org-to-org-source-org">Source org</Label>
               <Select
+                id="org-to-org-source-org"
                 value={w.form.sourceOrgId}
                 onChange={(e) => w.setForm({ ...w.form, sourceOrgId: e.target.value })}
               >
@@ -54,8 +55,9 @@ export function OrgToOrgDeployPanel() {
               </Select>
             </div>
             <div>
-              <Label>Target org</Label>
+              <Label htmlFor="org-to-org-target-org">Target org</Label>
               <Select
+                id="org-to-org-target-org"
                 value={w.form.targetOrgId}
                 onChange={(e) => w.setForm({ ...w.form, targetOrgId: e.target.value })}
               >
@@ -69,8 +71,9 @@ export function OrgToOrgDeployPanel() {
               </Select>
             </div>
             <div>
-              <Label>Deploy strategy</Label>
+              <Label htmlFor="org-to-org-deploy-strategy">Deploy strategy</Label>
               <Select
+                id="org-to-org-deploy-strategy"
                 value={w.form.strategy}
                 onChange={(e) =>
                   w.setForm({ ...w.form, strategy: e.target.value as 'insert' | 'upsert' })

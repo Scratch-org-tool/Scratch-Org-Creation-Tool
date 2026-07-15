@@ -3,7 +3,7 @@
 import { motion } from 'framer-motion';
 import { ChevronRight, Crosshair, FileText, Rocket, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { GlassCard, PageSkeleton } from '@/components/studio';
+import { GlassCard, InlineAlert, PageSkeleton } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import { ScratchOrgPageHeader } from './scratch-org-page-header';
 import { ConnectedOrgsPanel } from './connected-orgs-panel';
@@ -230,6 +230,12 @@ export function CreateScratchOrgWorkspace() {
   return (
     <div className="p-4 md:p-6 space-y-6 min-h-0 scrollbar-thin">
       <ScratchOrgPageHeader desktopStep={w.desktopStep} />
+
+      {w.launchError && (
+        <InlineAlert variant="error" onDismiss={() => w.setLaunchError(null)}>
+          {w.launchError}
+        </InlineAlert>
+      )}
 
       {showDataSkeleton ? (
         <PageSkeleton variant="studio-sidebar" />

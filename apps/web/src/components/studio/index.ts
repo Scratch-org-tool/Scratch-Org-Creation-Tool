@@ -16,5 +16,6 @@ export { TimelinePanel, type TimelineStep } from './timeline-panel';
 export { TipsCard } from './tips-card';
 export { WizardSteps } from './wizard-steps';
 export { ConfirmBanner } from './confirm-banner';
+export { ConfirmDialog } from './confirm-dialog';
 export { PageSkeleton } from './page-skeleton';
 export { TabbedWorkspaceShell, type WorkspaceTab } from './tabbed-workspace-shell';

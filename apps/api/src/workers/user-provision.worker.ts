@@ -8,6 +8,10 @@ import {
 } from '@sfcc/shared';
 import { JobsService } from '../modules/jobs/jobs.service';
 import { StreamService } from '../modules/stream/stream.service';
+import {
+  buildStableProvisioningUsername,
+  deriveProvisioningBatchStatus,
+} from '../modules/provisioning/provisioning-status.util';
 
 interface ConaUserInput {
   firstName: string;
@@ -44,8 +48,7 @@ export class UserProvisionWorker {
       await this.streamService.publishJobLog(dbJobId, stream, line);
     };
 
-    const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
-    if (!org) throw new Error('Org not found');
+    const org = await this.assertPayloadBinding({ orgId, batchId, dbJobId });
 
     const alias = org.username ?? org.alias;
     let successCount = 0;
@@ -54,12 +57,30 @@ export class UserProvisionWorker {
     const allModules = conaMode ? await this.discoverModules(alias) : [];
 
     for (const user of users) {
-      const username = user.username ?? this.buildUsername(user, org.alias);
+      const username = user.username?.trim() || buildStableProvisioningUsername(user, org.id);
       const provisioned = batchId
-        ? await prisma.provisionedUser.findFirst({ where: { batchId, username } })
+        ? await prisma.provisionedUser.findFirst({
+            where: {
+              batchId,
+              OR: [{ username }, { email: user.email }],
+            },
+          })
         : null;
 
+      if (provisioned?.status === 'completed') {
+        successCount++;
+        await log('stdout', `Skipping completed user: ${username}`);
+        continue;
+      }
+
       try {
+        if (provisioned) {
+          await prisma.provisionedUser.update({
+            where: { id: provisioned.id },
+            data: { username, status: 'running', error: null },
+          });
+        }
+
         const createFields: Record<string, string> = {
           FirstName: user.firstName,
           LastName: user.lastName,
@@ -69,15 +90,28 @@ export class UserProvisionWorker {
           cfs_ob__Bottler__c: user.bottler,
         };
 
-        const result = await this.sfCli.createUser(alias, createFields);
-        if (!result.success) throw new Error(result.error);
+        let userId = provisioned?.sfUserId ?? await this.findExistingUserId(alias, username);
+        if (!userId) {
+          const result = await this.sfCli.createUser(alias, createFields);
+          if (!result.success) throw new Error(result.error);
+          userId = (result.data as { result?: { id?: string } })?.result?.id;
+          if (!userId) throw new Error(`Salesforce did not return an id for ${username}`);
+          await log('stdout', `Created user: ${username}`);
+        } else {
+          await log('stdout', `Reconciled existing user: ${username}`);
+        }
 
-        const userId = (result.data as { result?: { id?: string } })?.result?.id;
+        if (provisioned) {
+          await prisma.provisionedUser.update({
+            where: { id: provisioned.id },
+            data: { sfUserId: userId },
+          });
+        }
         if (conaMode && userId) {
           await this.applyRestrictedPicklists(alias, userId, user, allModules, log);
         }
 
-        const permSets = user.permissionSets ?? [CONA_ADMIN_EXTENSION_PERMSET];
+        const permSets = [...(user.permissionSets ?? [CONA_ADMIN_EXTENSION_PERMSET])];
         if (conaMode && user.role === 'Master Data') {
           permSets.push(CONA_SUPER_USER_PERMSET);
         }
@@ -91,11 +125,11 @@ export class UserProvisionWorker {
         if (provisioned) {
           await prisma.provisionedUser.update({
             where: { id: provisioned.id },
-            data: { status: 'completed' },
+            data: { status: 'completed', error: null, sfUserId: userId, username },
           });
         }
         successCount++;
-        await log('stdout', `Created user: ${username}`);
+        await log('stdout', `Provisioned user: ${username}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (provisioned) {
@@ -110,18 +144,79 @@ export class UserProvisionWorker {
     }
 
     if (batchId) {
+      const rows = await prisma.provisionedUser.findMany({
+        where: { batchId },
+        select: { status: true },
+      });
+      successCount = rows.filter((row) => row.status === 'completed').length;
+      failCount = rows.filter((row) => row.status === 'failed').length;
       await prisma.provisioningBatch.update({
         where: { id: batchId },
-        data: { status: 'completed', successCount, failCount },
+        data: {
+          status: deriveProvisioningBatchStatus(successCount, failCount, rows.length),
+          successCount,
+          failCount,
+        },
       });
     }
 
     return { successCount, failCount };
   }
 
-  private buildUsername(user: ConaUserInput, orgAlias: string): string {
-    const base = `${user.firstName.replace(/\s/g, '')}${user.lastName.replace(/\s/g, '')}`;
-    return `${base}${Date.now()}@${orgAlias}.scratch`;
+  private async assertPayloadBinding(input: {
+    orgId: string;
+    batchId?: string;
+    dbJobId: string;
+  }) {
+    const [org, dbJob, batch] = await Promise.all([
+      prisma.orgConnection.findUnique({ where: { id: input.orgId } }),
+      prisma.job.findUnique({
+        where: { id: input.dbJobId },
+        select: {
+          createdBy: true,
+          payload: true,
+          parentRun: { select: { createdBy: true } },
+        },
+      }),
+      input.batchId
+        ? prisma.provisioningBatch.findUnique({ where: { id: input.batchId } })
+        : Promise.resolve(null),
+    ]);
+    if (!org || !dbJob) throw new Error('Provisioning job resource not found');
+
+    const ownerId =
+      dbJob.createdBy !== 'system'
+        ? dbJob.createdBy
+        : dbJob.parentRun?.createdBy;
+    const storedPayload = dbJob.payload as Record<string, unknown>;
+    if (
+      !ownerId
+      || ownerId === 'system'
+      || org.createdBy !== ownerId
+      || storedPayload.orgId !== input.orgId
+      || (input.batchId && storedPayload.batchId !== input.batchId)
+      || (input.batchId
+        && (!batch
+          || batch.orgId !== input.orgId
+          || batch.createdBy !== ownerId))
+    ) {
+      throw new Error('Provisioning job ownership validation failed');
+    }
+    return org;
+  }
+
+  private async findExistingUserId(alias: string, username: string): Promise<string | undefined> {
+    const escaped = username.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const result = await this.sfCli.query(
+      alias,
+      `SELECT Id FROM User WHERE Username = '${escaped}' LIMIT 1`,
+    );
+    if (!result.success) {
+      throw new Error(result.error ?? `Failed to reconcile existing user ${username}`);
+    }
+    const records = (result.data as { result?: { records?: Array<{ Id?: string }> } })
+      ?.result?.records ?? [];
+    return records[0]?.Id;
   }
 
   private async discoverModules(alias: string): Promise<string[]> {

@@ -113,8 +113,8 @@ export function OrgToOrgComparePanel({
 
         {activeTab === 'source' && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
+            <nav className="flex items-center justify-between text-xs text-muted-foreground" aria-label="Source records pagination">
+              <span aria-current="page">
                 Page {page} of {totalPages} · {result.sourceRecords.totalSize} record(s) in source
               </span>
               <div className="flex gap-2">
@@ -122,6 +122,7 @@ export function OrgToOrgComparePanel({
                   type="button"
                   disabled={page <= 1 || loading}
                   onClick={() => onPageChange(page - 1)}
+                  aria-label="Previous source records page"
                   className="px-2 py-1 rounded border border-border disabled:opacity-40"
                 >
                   Previous
@@ -130,12 +131,13 @@ export function OrgToOrgComparePanel({
                   type="button"
                   disabled={page >= totalPages || loading}
                   onClick={() => onPageChange(page + 1)}
+                  aria-label="Next source records page"
                   className="px-2 py-1 rounded border border-border disabled:opacity-40"
                 >
                   Next
                 </button>
               </div>
-            </div>
+            </nav>
 
             <div className="overflow-auto max-h-96 border border-border/40 rounded">
               {columns.length > 0 ? (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Label, Select } from '@/components/ui/input';
 import { Wrench } from 'lucide-react';
@@ -39,6 +39,7 @@ export function JenkinsDeployWorkspace() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const branchRequestRef = useRef(0);
 
   useEffect(() => {
     setLoading(true);
@@ -55,8 +56,20 @@ export function JenkinsDeployWorkspace() {
   }, []);
 
   const loadBranches = async (repo: string) => {
-    const b = await api<string[]>(`/deployments/branches?strategy=${strategy}&repo=${repo}`);
-    setBranches(b);
+    const request = ++branchRequestRef.current;
+    setBranches([]);
+    setForm((current) => ({ ...current, repo, branch: '' }));
+    if (!repo) return;
+    try {
+      const b = await api<string[]>(
+        `/deployments/branches?strategy=${strategy}&repo=${encodeURIComponent(repo)}`,
+      );
+      if (branchRequestRef.current === request) setBranches(b);
+    } catch (err) {
+      if (branchRequestRef.current === request) {
+        setError(err instanceof Error ? err.message : 'Failed to load branches');
+      }
+    }
   };
 
   const createDeployment = async () => {
@@ -80,7 +93,6 @@ export function JenkinsDeployWorkspace() {
     try {
       await api(`/deployments/${id}/approve`, {
         method: 'POST',
-        body: JSON.stringify({ approvedBy: 'release-manager' }),
       });
       const updated = await api<Deployment[]>('/deployments');
       setDeployments(updated);
@@ -117,8 +129,9 @@ export function JenkinsDeployWorkspace() {
         <GlassCard title="New Deployment" description="Select target org, job repo, and branch.">
           <FormSection title="Deployment target">
             <div>
-              <Label>Target Org</Label>
+              <Label htmlFor="jenkins-target-org">Target Org</Label>
               <Select
+                id="jenkins-target-org"
                 value={form.targetOrgId}
                 onChange={(e) => setForm({ ...form, targetOrgId: e.target.value })}
               >
@@ -131,11 +144,11 @@ export function JenkinsDeployWorkspace() {
               </Select>
             </div>
             <div>
-              <Label>Repository</Label>
+              <Label htmlFor="jenkins-repository">Repository</Label>
               <Select
+                id="jenkins-repository"
                 value={form.repo}
                 onChange={(e) => {
-                  setForm({ ...form, repo: e.target.value });
                   void loadBranches(e.target.value);
                 }}
               >
@@ -148,8 +161,9 @@ export function JenkinsDeployWorkspace() {
               </Select>
             </div>
             <div>
-              <Label>Branch</Label>
+              <Label htmlFor="jenkins-branch">Branch</Label>
               <Select
+                id="jenkins-branch"
                 value={form.branch}
                 onChange={(e) => setForm({ ...form, branch: e.target.value })}
               >

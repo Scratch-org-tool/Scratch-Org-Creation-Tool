@@ -26,6 +26,7 @@ export class OrgSetupWorker {
       runId?: string;
       dbJobId: string;
     };
+    const org = await this.assertPayloadBinding(data);
 
     if (job.name === 'pipeline_load_org_config') {
       const log = async (stream: 'stdout' | 'stderr', line: string) => {
@@ -55,9 +56,6 @@ export class OrgSetupWorker {
     };
 
     try {
-      const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
-      if (!org) throw new Error('Org not found');
-
       const alias = org.username ?? org.alias;
       await log('stdout', `Running org setup: ${setupType} (org: ${alias})`);
 
@@ -70,15 +68,14 @@ export class OrgSetupWorker {
             log,
           );
           break;
-        case 'theme':
-          await log('stdout', `Theme configured: ${config?.theme}`);
-          break;
         case 'named_credentials':
         case 'custom_settings':
         case 'custom_metadata':
         case 'queues':
-          await log('stdout', `Configured ${setupType}: ${JSON.stringify(config).substring(0, 200)}`);
-          break;
+        case 'theme':
+          throw new Error(
+            `Unsupported setup type "${setupType}": no Salesforce mutation is implemented`,
+          );
         default:
           throw new Error(`Unknown setup type: ${setupType}`);
       }
@@ -91,6 +88,45 @@ export class OrgSetupWorker {
       await markRun('failed');
       throw error;
     }
+  }
+
+  private async assertPayloadBinding(data: {
+    orgId: string;
+    runId?: string;
+    dbJobId: string;
+  }) {
+    const [org, dbJob, setupRun] = await Promise.all([
+      prisma.orgConnection.findUnique({ where: { id: data.orgId } }),
+      prisma.job.findUnique({
+        where: { id: data.dbJobId },
+        select: {
+          createdBy: true,
+          payload: true,
+          parentRun: { select: { createdBy: true } },
+        },
+      }),
+      data.runId
+        ? prisma.orgSetupRun.findUnique({ where: { id: data.runId } })
+        : Promise.resolve(null),
+    ]);
+    if (!org || !dbJob) throw new Error('Org setup job resource not found');
+
+    const ownerId =
+      dbJob.createdBy !== 'system'
+        ? dbJob.createdBy
+        : dbJob.parentRun?.createdBy;
+    const storedPayload = dbJob.payload as Record<string, unknown>;
+    if (
+      !ownerId
+      || ownerId === 'system'
+      || org.createdBy !== ownerId
+      || storedPayload.orgId !== data.orgId
+      || (data.runId && storedPayload.runId !== data.runId)
+      || (data.runId && (!setupRun || setupRun.orgId !== data.orgId))
+    ) {
+      throw new Error('Org setup job ownership validation failed');
+    }
+    return org;
   }
 
   private async assignPermissionSets(

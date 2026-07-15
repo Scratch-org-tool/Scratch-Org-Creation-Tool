@@ -64,6 +64,17 @@ describe('orgToOrgCompareSchema', () => {
       }),
     );
   });
+
+  it('rejects the same source and target org', () => {
+    assert.throws(() =>
+      orgToOrgCompareSchema.parse({
+        sourceOrgId: SOURCE,
+        targetOrgId: SOURCE,
+        objectName: 'Account',
+        soql: 'SELECT Name FROM Account',
+      }),
+    );
+  });
 });
 
 describe('orgToOrgDeploySchema', () => {
@@ -99,6 +110,18 @@ describe('orgToOrgDeploySchema', () => {
       }),
     );
   });
+
+  it('rejects the same source and target org', () => {
+    assert.throws(() =>
+      orgToOrgDeploySchema.parse({
+        sourceOrgId: SOURCE,
+        targetOrgId: SOURCE,
+        objectName: 'Account',
+        soql: 'SELECT Name FROM Account',
+        strategy: 'upsert',
+      }),
+    );
+  });
 });
 
 describe('computeKeyDiff', () => {
@@ -119,6 +142,13 @@ describe('SOQL helpers', () => {
   it('applies pagination with OFFSET', () => {
     const q = applySoqlPagination('SELECT Name FROM Account LIMIT 100', 2, 50);
     assert.match(q, /LIMIT 50 OFFSET 50/);
+  });
+
+  it('rejects pagination beyond the Salesforce OFFSET cap', () => {
+    assert.throws(
+      () => applySoqlPagination('SELECT Name FROM Account', 42, 50),
+      /OFFSET only up to 2,000/,
+    );
   });
 
   it('builds key SOQL with WHERE clause', () => {
@@ -220,6 +250,41 @@ describe('buildFilterSoql', () => {
     });
     assert.match(q, /Bottler__c = 'Acme'/);
   });
+
+  it('rejects invalid object, selected-field, and filter identifiers', () => {
+    assert.throws(() =>
+      buildFilterSoql({
+        objectName: 'Account WHERE Id != null',
+        fields: ['Id'],
+        recordLimit: 50,
+      }),
+    );
+    assert.throws(() =>
+      buildFilterSoql({
+        objectName: 'Account',
+        fields: ['Id, (SELECT Id FROM Users)'],
+        recordLimit: 50,
+      }),
+    );
+    assert.throws(() =>
+      buildFilterSoql({
+        objectName: 'Account',
+        fields: ['Id'],
+        recordLimit: 50,
+        filters: [{ field: 'Name OR Id != null', operator: 'eq', value: 'x' }],
+      }),
+    );
+  });
+
+  it('escapes quotes and backslashes in filter literals', () => {
+    const q = buildFilterSoql({
+      objectName: 'Account',
+      fields: ['Id'],
+      recordLimit: 50,
+      filters: [{ field: 'Name', operator: 'eq', value: "A\\B's" }],
+    });
+    assert.match(q, /Name = 'A\\\\B\\'s'/);
+  });
 });
 
 describe('orgToOrgDeployBatchSchema', () => {
@@ -251,6 +316,17 @@ describe('orgToOrgDeployBatchSchema', () => {
         targetOrgId: TARGET,
         strategy: 'insert',
         objects: [],
+      }),
+    );
+  });
+
+  it('rejects the same source and target org', () => {
+    assert.throws(() =>
+      orgToOrgDeployBatchSchema.parse({
+        sourceOrgId: SOURCE,
+        targetOrgId: SOURCE,
+        strategy: 'upsert',
+        objects: [{ objectName: 'Account', filters: [] }],
       }),
     );
   });

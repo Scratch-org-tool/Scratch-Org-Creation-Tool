@@ -53,7 +53,7 @@ export function persistSidebarOpen(open: boolean) {
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
   open: boolean
-  setOpen: (open: boolean) => void
+  setOpen: React.Dispatch<React.SetStateAction<boolean>>
   openMobile: boolean
   setOpenMobile: (open: boolean) => void
   isMobile: boolean
@@ -96,11 +96,16 @@ const SidebarProvider = React.forwardRef<
 
     // This is the internal state of the sidebar.
     // We use openProp and setOpenProp for control from outside the component.
-    const [_open, _setOpen] = React.useState(() => readSidebarOpen(defaultOpen))
+    // Keep the server and first client render deterministic. User preferences
+    // are applied by SidebarPreferencesSync after its local/cloud read.
+    const [_open, _setOpen] = React.useState(defaultOpen)
     const open = openProp ?? _open
+    const openRef = React.useRef(open)
+    openRef.current = open
     const setOpen = React.useCallback(
       (value: boolean | ((value: boolean) => boolean)) => {
-        const openState = typeof value === "function" ? value(open) : value
+        const openState = typeof value === "function" ? value(openRef.current) : value
+        openRef.current = openState
         if (setOpenProp) {
           setOpenProp(openState)
         } else {
@@ -111,7 +116,7 @@ const SidebarProvider = React.forwardRef<
           persistSidebarOpen(openState)
         }
       },
-      [setOpenProp, open, isMobile]
+      [setOpenProp, isMobile]
     )
 
     // Helper to toggle the sidebar.

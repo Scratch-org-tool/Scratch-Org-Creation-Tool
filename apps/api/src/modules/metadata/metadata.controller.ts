@@ -108,7 +108,7 @@ export class MetadataController {
     @Param('id') id: string,
     @CurrentUser() userId: string,
     @Query('type') type?: string,
-    @Query('diffType') diffType?: 'new' | 'changed' | 'deleted' | 'same',
+    @Query('diffType') diffType?: 'new' | 'changed' | 'deleted' | 'same' | 'unknown',
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,

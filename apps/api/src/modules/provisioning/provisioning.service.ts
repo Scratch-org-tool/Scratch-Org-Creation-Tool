@@ -2,24 +2,26 @@ import { Injectable } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { QUEUE_NAMES, userProvisionSchema, conaUserProvisionSchema } from '@sfcc/shared';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
-import { userOwnedWhere } from '../../common/user-tenancy.util';
+import { assertOrgOwned, userOwnedWhere } from '../../common/user-tenancy.util';
 
 @Injectable()
 export class ProvisioningService {
   constructor(private readonly orchestrator: OrchestratorService) {}
 
-  async provisionConaUsers(body: unknown) {
+  async provisionConaUsers(body: unknown, userId: string) {
     const input = conaUserProvisionSchema.parse(body);
+    await assertOrgOwned(input.orgId, userId, prisma);
     const job = await this.orchestrator.enqueueJob(QUEUE_NAMES.USER_PROVISION, 'cona_user_provision', {
       orgId: input.orgId,
       users: input.users,
       conaMode: true,
-    });
+    }, { createdBy: userId });
     return { jobId: job.id, totalUsers: input.users.length };
   }
 
   async provisionFromCsv(body: unknown, userId: string) {
     const input = userProvisionSchema.parse(body);
+    await assertOrgOwned(input.orgId, userId, prisma);
 
     const batch = await prisma.provisioningBatch.create({
       data: {

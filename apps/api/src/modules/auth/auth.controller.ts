@@ -116,7 +116,7 @@ export class AuthController {
     if (!parsed.success) {
       throw new BadRequestException(AUTH_GENERIC_INVALID);
     }
-    const ip = this.authSecurity.extractClientIp(req.headers);
+    const ip = this.authSecurity.extractClientIp(req.headers, req.ip);
     return this.authService.claimAdmin(
       req.user.uid,
       req.user.email,

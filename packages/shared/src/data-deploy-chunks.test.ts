@@ -74,8 +74,8 @@ test('buildIdRangeChunkSoql neutralises quotes in injected ids (no SOQL injectio
   const q = buildIdRangeChunkSoql('SELECT Id FROM Account', 10, {
     afterId: "001' OR Name != null",
   });
-  // The single quote is stripped so the payload stays inside the string literal.
-  assert.equal(q.includes("Id > '001 OR Name != null'"), true);
+  // The quote is escaped so the payload remains data inside the string literal.
+  assert.equal(q.includes("Id > '001\\' OR Name != null'"), true);
 });
 
 test('buildIdOnlySoql produces an Id-only ordered query', () => {

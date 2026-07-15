@@ -28,8 +28,9 @@ export function SourceOrgsSection({
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
         <div>
-          <Label>Data deployment org</Label>
+          <Label htmlFor="template-data-deployment-org">Data deployment org</Label>
           <Select
+            id="template-data-deployment-org"
             value={dataDeploymentOrgId ?? ''}
             onChange={(e) => onChange({ dataDeploymentOrgId: e.target.value || undefined })}
           >
@@ -42,8 +43,9 @@ export function SourceOrgsSection({
           </Select>
         </div>
         <div>
-          <Label>Custom settings load org</Label>
+          <Label htmlFor="template-custom-settings-org">Custom settings load org</Label>
           <Select
+            id="template-custom-settings-org"
             value={customSettingsOrgId ?? ''}
             onChange={(e) => onChange({ customSettingsOrgId: e.target.value || undefined })}
           >

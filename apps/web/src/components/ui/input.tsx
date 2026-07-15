@@ -72,6 +72,10 @@ export function Select({
   disabled,
   id,
   name,
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
+  'aria-describedby': ariaDescribedBy,
+  required,
 }: React.SelectHTMLAttributes<HTMLSelectElement>) {
   const options = React.useMemo(() => parseSelectOptions(children), [children]);
   const placeholderOption = options.find((o) => o.value === '');
@@ -104,7 +108,14 @@ export function Select({
         }}
         disabled={disabled}
       >
-        <SelectTrigger id={id} className={className}>
+        <SelectTrigger
+          id={id}
+          className={className}
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
+          aria-describedby={ariaDescribedBy}
+          aria-required={required}
+        >
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent position="popper" className="z-[100]">

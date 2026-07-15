@@ -80,7 +80,14 @@ export function CopilotActionCard({ action, onDismiss }: CopilotActionCardProps)
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium text-foreground">{label}</span>
         <div className="flex gap-1 shrink-0">
-          <Button type="button" size="sm" variant="ghost" className="h-7 px-2" onClick={onDismiss}>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2"
+            onClick={onDismiss}
+            aria-label="Dismiss proposed Copilot action"
+          >
             <X className="w-3.5 h-3.5" />
           </Button>
           <Button type="button" size="sm" className="h-7 gap-1" onClick={handleConfirm}>

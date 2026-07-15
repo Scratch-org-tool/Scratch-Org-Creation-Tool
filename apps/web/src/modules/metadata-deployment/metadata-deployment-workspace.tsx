@@ -61,14 +61,14 @@ export function MetadataDeploymentWorkspace() {
           <MetadataDeploymentHistory w={w} />
           {w.activeDeploymentId && (
             <MetadataDeployConsole
-              jobStatus={w.jobStatus}
-              currentStep={w.currentStep}
-              logs={w.logs}
-              logStreams={w.logStreams}
+              jobStatus={w.historyJobStatus}
+              currentStep={w.historyCurrentStep}
+              logs={w.historyLogs}
+              logStreams={w.historyLogStreams}
               loadingLogs={!!w.selectingDeploymentId}
-              logsTruncated={w.logsTruncated}
-              logCount={w.logCount}
-              error={w.error}
+              logsTruncated={w.historyLogsTruncated}
+              logCount={w.historyLogCount}
+              error={w.historyError}
               onClose={w.closeHistoryLogs}
             />
           )}

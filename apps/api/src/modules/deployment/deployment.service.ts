@@ -158,7 +158,7 @@ export class DeploymentService {
   async deployOrgToOrgMetadata(
     body: unknown,
     userId: string,
-    options?: { automationRunId?: string },
+    options?: { automationRunId?: string; deploymentId?: string },
   ) {
     const raw = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {};
     const input = orgToOrgMetadataDeploySchema.parse({
@@ -187,31 +187,72 @@ export class DeploymentService {
 
     const automationRunId = options?.automationRunId ?? (raw.automationRunId as string | undefined);
 
-    const deployment = await prisma.deployment.create({
-      data: {
-        targetOrgId: input.targetOrgId,
-        sourceOrgId: input.sourceOrgId,
-        repo: 'org-to-org',
-        branch: 'metadata',
-        strategy: 'azure',
-        status: 'running',
-        metadata: {
-          deployMode: 'org_to_org',
-          selections: input.selections,
-          validateOnly: input.validateOnly ?? false,
-          tests: input.tests,
-          destructiveSelections: input.destructiveSelections,
-          chainDataDeploy: input.chainDataDeploy,
-          dataDeployConfig: input.dataDeployConfig,
-          automationRunId,
-          comparisonId: input.comparisonId,
-          deploymentName: input.deploymentName,
-          deploymentNotes: input.deploymentNotes,
-        } as Prisma.InputJsonValue,
-        createdBy: userId,
-      },
-      include: { targetOrg: true },
-    });
+    const deploymentMetadata = {
+      deployMode: 'org_to_org',
+      selections: input.selections,
+      validateOnly: input.validateOnly ?? false,
+      tests: input.tests,
+      destructiveSelections: input.destructiveSelections,
+      chainDataDeploy: input.chainDataDeploy,
+      dataDeployConfig: input.dataDeployConfig,
+      automationRunId,
+      comparisonId: input.comparisonId,
+      deploymentName: input.deploymentName,
+      deploymentNotes: input.deploymentNotes,
+    };
+    const existingDeployment = options?.deploymentId
+      ? await prisma.deployment.findUnique({ where: { id: options.deploymentId } })
+      : null;
+    if (
+      options?.deploymentId &&
+      (!existingDeployment ||
+        existingDeployment.createdBy !== userId ||
+        existingDeployment.sourceOrgId !== input.sourceOrgId ||
+        existingDeployment.targetOrgId !== input.targetOrgId)
+    ) {
+      throw new NotFoundException('Existing deployment for resume not found');
+    }
+    const deployment = existingDeployment
+      ? await prisma.deployment.update({
+          where: { id: existingDeployment.id },
+          data: {
+            status: 'running',
+            metadata: {
+              ...((existingDeployment.metadata as Record<string, unknown> | null) ?? {}),
+              ...deploymentMetadata,
+            } as Prisma.InputJsonValue,
+          },
+          include: { targetOrg: true },
+        })
+      : await prisma.deployment.create({
+          data: {
+            targetOrgId: input.targetOrgId,
+            sourceOrgId: input.sourceOrgId,
+            repo: 'org-to-org',
+            branch: 'metadata',
+            strategy: 'azure',
+            status: 'running',
+            metadata: deploymentMetadata as Prisma.InputJsonValue,
+            createdBy: userId,
+          },
+          include: { targetOrg: true },
+        });
+
+    if (automationRunId) {
+      const run = await prisma.automationRun.findUnique({
+        where: { id: automationRunId },
+        select: { checkpoint: true },
+      });
+      await prisma.automationRun.update({
+        where: { id: automationRunId },
+        data: {
+          checkpoint: {
+            ...((run?.checkpoint as Record<string, unknown> | null) ?? {}),
+            deploymentId: deployment.id,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
 
     const job = await this.metadataDeployQueue.enqueue({
       deploymentId: deployment.id,
@@ -247,7 +288,7 @@ export class DeploymentService {
     };
   }
 
-  async approveDeployment(id: string, approvedBy: string, userId: string) {
+  async approveDeployment(id: string, userId: string) {
     const deployment = await prisma.deployment.findUnique({
       where: { id },
       include: { targetOrg: true },
@@ -257,7 +298,7 @@ export class DeploymentService {
 
     await prisma.deployment.update({
       where: { id },
-      data: { approvedBy, approvedAt: new Date(), status: 'queued' },
+      data: { approvedBy: userId, approvedAt: new Date(), status: 'queued' },
     });
 
     if (dep.strategy === 'azure') {

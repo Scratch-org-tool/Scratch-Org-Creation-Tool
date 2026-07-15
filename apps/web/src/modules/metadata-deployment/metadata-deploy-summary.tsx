@@ -12,7 +12,7 @@ export function MetadataDeploySummary({ w }: { w: MetadataCompareHook }) {
   const source = w.orgById(w.form.sourceOrgId)?.alias ?? 'Source';
   const target = w.orgById(w.form.targetOrgId)?.alias ?? 'Target';
 
-  const counts = { new: 0, changed: 0, deleted: 0, same: 0 };
+  const counts = { new: 0, changed: 0, deleted: 0, same: 0, unknown: 0 };
   for (const row of deployableItems) counts[row.diffType] += 1;
 
   return (
@@ -30,8 +30,9 @@ export function MetadataDeploySummary({ w }: { w: MetadataCompareHook }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <div>
-          <Label>Deployment name</Label>
+          <Label htmlFor="metadata-deployment-name">Deployment name</Label>
           <input
+            id="metadata-deployment-name"
             className="w-full h-9 rounded-md border border-border bg-background px-2 text-xs"
             value={w.form.deploymentName}
             onChange={(e) => w.setForm({ ...w.form, deploymentName: e.target.value })}
@@ -39,8 +40,9 @@ export function MetadataDeploySummary({ w }: { w: MetadataCompareHook }) {
           />
         </div>
         <div>
-          <Label>Test level</Label>
+          <Label htmlFor="metadata-test-level">Test level</Label>
           <Select
+            id="metadata-test-level"
             value={w.form.testLevel}
             onChange={(e) => w.setForm({ ...w.form, testLevel: e.target.value as typeof w.form.testLevel })}
           >
@@ -52,8 +54,9 @@ export function MetadataDeploySummary({ w }: { w: MetadataCompareHook }) {
       </div>
 
       <div className="mb-4">
-        <Label>Notes</Label>
+        <Label htmlFor="metadata-deployment-notes">Notes</Label>
         <textarea
+          id="metadata-deployment-notes"
           className="w-full min-h-[4rem] rounded-md border border-border bg-background px-2 py-1.5 text-xs"
           value={w.form.deploymentNotes}
           onChange={(e) => w.setForm({ ...w.form, deploymentNotes: e.target.value })}

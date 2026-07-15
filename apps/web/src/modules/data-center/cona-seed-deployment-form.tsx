@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { FormSection, GlassCard, InlineAlert, StatusBadge } from '@/components/studio';
-import { api, getStreamUrl } from '@/services/api';
+import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 import { Plus, Trash2 } from 'lucide-react';
 
@@ -82,36 +82,6 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     return () => clearInterval(poll);
   }, [jobId]);
 
-  useEffect(() => {
-    if (!jobId) return;
-    let es: EventSource | null = null;
-    let cancelled = false;
-    void (async () => {
-      const url = await getStreamUrl(['job_log', 'job_status']);
-      if (cancelled) return;
-      es = new EventSource(url);
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data as string) as {
-            type: string;
-            payload: { jobId?: string; line?: string; status?: string };
-          };
-          if (data.payload.jobId !== jobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!]);
-          }
-          if (data.type === 'job_status' && data.payload.status) {
-            setJob((j) => (j ? { ...j, status: data.payload.status! } : j));
-          }
-        } catch { /* ignore */ }
-      };
-    })();
-    return () => {
-      cancelled = true;
-      es?.close();
-    };
-  }, [jobId]);
-
   const accountSeedPayload = datasets.includes('Accounts') ? accountRows : undefined;
 
   const validateRows = useCallback(() => {
@@ -123,6 +93,10 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
 
   const handlePreview = async () => {
     if (!sourceOrgId || !targetOrgId) return;
+    if (sourceOrgId === targetOrgId) {
+      setError('Source and target org must differ.');
+      return;
+    }
     setError(null);
     setLoading(true);
     try {
@@ -161,6 +135,10 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
 
   const handleRun = async () => {
     if (!sourceOrgId || !targetOrgId) return;
+    if (sourceOrgId === targetOrgId) {
+      setError('Source and target org must differ.');
+      return;
+    }
     setError(null);
     setLoading(true);
     setLogs([]);
@@ -197,8 +175,8 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
         <FormSection title="Orgs">
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label>Source Org</Label>
-              <Select value={sourceOrgId} onChange={(e) => setSourceOrgId(e.target.value)}>
+              <Label htmlFor="cona-seed-source-org">Source Org</Label>
+              <Select id="cona-seed-source-org" value={sourceOrgId} onChange={(e) => setSourceOrgId(e.target.value)}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>{o.alias}</option>
@@ -206,8 +184,8 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
               </Select>
             </div>
             <div>
-              <Label>Target Org</Label>
-              <Select value={targetOrgId} onChange={(e) => setTargetOrgId(e.target.value)}>
+              <Label htmlFor="cona-seed-target-org">Target Org</Label>
+              <Select id="cona-seed-target-org" value={targetOrgId} onChange={(e) => setTargetOrgId(e.target.value)}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>{o.alias}</option>
@@ -250,8 +228,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                   }`}
                 >
                   <div>
-                    <Label>Group</Label>
+                    <Label htmlFor={`cona-seed-${index}-group`}>Group</Label>
                     <Select
+                      id={`cona-seed-${index}-group`}
                       value={row.accountGroup}
                       onChange={(e) => updateRow(index, { accountGroup: e.target.value as AccountGroup })}
                     >
@@ -261,8 +240,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                     </Select>
                   </div>
                   <div>
-                    <Label>Bottler</Label>
+                    <Label htmlFor={`cona-seed-${index}-bottler`}>Bottler</Label>
                     <Select
+                      id={`cona-seed-${index}-bottler`}
                       value={row.bottler}
                       onChange={(e) => updateRow(index, { bottler: e.target.value as Bottler })}
                     >
@@ -272,8 +252,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                     </Select>
                   </div>
                   <div>
-                    <Label>Channel</Label>
+                    <Label htmlFor={`cona-seed-${index}-channel`}>Channel</Label>
                     <Select
+                      id={`cona-seed-${index}-channel`}
                       value={row.distributionChannel}
                       onChange={(e) =>
                         updateRow(index, { distributionChannel: e.target.value as DistributionChannel })
@@ -284,8 +265,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                     </Select>
                   </div>
                   <div>
-                    <Label>Limit</Label>
+                    <Label htmlFor={`cona-seed-${index}-limit`}>Limit</Label>
                     <Input
+                      id={`cona-seed-${index}-limit`}
                       type="number"
                       min={1}
                       value={row.limit}
@@ -299,6 +281,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                         size="sm"
                         variant="ghost"
                         onClick={() => setAccountRows((rows) => rows.filter((_, i) => i !== index))}
+                        aria-label={`Remove account seed row ${index + 1}`}
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -330,14 +313,14 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
           <Button
             variant="outline"
             onClick={() => void handlePreview()}
-            disabled={!sourceOrgId || !targetOrgId || isRunning}
+            disabled={!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId || isRunning}
             loading={loading && !jobId}
           >
             Preview / validate
           </Button>
           <Button
             onClick={() => void handleRun()}
-            disabled={!sourceOrgId || !targetOrgId || isRunning}
+            disabled={!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId || isRunning}
             loading={loading && !!jobId}
           >
             Run CONA seed

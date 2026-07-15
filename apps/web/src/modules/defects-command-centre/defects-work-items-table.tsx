@@ -71,6 +71,7 @@ export function DefectsWorkItemsTable({
       }
       headerAction={
         <Select
+          aria-label="Filter work items by type"
           value={typeFilter}
           onChange={(e) => onTypeFilterChange(e.target.value)}
           className="h-8 text-xs w-[130px]"
@@ -103,6 +104,7 @@ export function DefectsWorkItemsTable({
           ))}
         </div>
         <Input
+          aria-label="Search work items"
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
           placeholder="Search by title, ID, or tag…"
@@ -134,23 +136,22 @@ export function DefectsWorkItemsTable({
             return (
               <tr
                 key={item.id}
-                onClick={() => onSelect(item.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onSelect(item.id);
-                  }
-                }}
-                role="button"
-                tabIndex={0}
                 className={cn(
-                  'border-b border-border/40 last:border-0 hover:bg-muted/20 transition-colors cursor-pointer',
+                  'border-b border-border/40 last:border-0 hover:bg-muted/20 transition-colors',
                   selected && 'border-l-2 border-l-primary bg-primary/5',
                 )}
               >
                 <IntegrationsTd className="tabular-nums text-muted-foreground">#{item.id}</IntegrationsTd>
                 <IntegrationsTd>
-                  <span className="font-medium line-clamp-2">{item.title}</span>
+                  <button
+                    type="button"
+                    className="font-medium line-clamp-2 text-left hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+                    onClick={() => onSelect(item.id)}
+                    aria-label={`View work item ${item.id}: ${item.title}`}
+                    aria-pressed={selected}
+                  >
+                    {item.title}
+                  </button>
                 </IntegrationsTd>
                 <IntegrationsTd className="text-muted-foreground text-xs">{item.type}</IntegrationsTd>
                 <IntegrationsTd>
@@ -172,12 +173,14 @@ export function DefectsWorkItemsTable({
         <span>
           {total === 0 ? 'No items' : `${start}–${end} of ${total}`}
         </span>
-        <div className="flex gap-2">
+        <nav className="flex gap-2" aria-label="Work items pagination">
+          <span className="sr-only" aria-current="page">Page {page} of {totalPages}</span>
           <Button
             variant="outline"
             size="sm"
             disabled={page <= 1}
             onClick={() => onPageChange(page - 1)}
+            aria-label="Previous work items page"
           >
             Previous
           </Button>
@@ -186,10 +189,11 @@ export function DefectsWorkItemsTable({
             size="sm"
             disabled={page >= totalPages}
             onClick={() => onPageChange(page + 1)}
+            aria-label="Next work items page"
           >
             Next
           </Button>
-        </div>
+        </nav>
       </div>
     </GlassCard>
   );

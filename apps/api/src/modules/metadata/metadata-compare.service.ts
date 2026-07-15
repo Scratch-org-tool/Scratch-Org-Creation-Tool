@@ -27,7 +27,12 @@ interface DiffCacheEntry {
   contentDiffers: boolean;
   loadStatus: 'ok' | 'partial' | 'failed';
   retrieveWarnings?: { source?: string; target?: string };
+  truncated?: boolean;
 }
+
+const MAX_DIFF_CACHE_ENTRIES = 40;
+const MAX_DIFF_XML_CHARS = 200_000;
+const MAX_DIFF_PARTS = 5_000;
 
 interface ProblemFix {
   id: string;
@@ -190,7 +195,7 @@ export class MetadataCompareService {
     const session = await this.getOwnedSession(comparisonId, userId);
     const cache = (session.diffCache as Record<string, DiffCacheEntry> | null) ?? {};
     const cacheKey = `${metadataType}:${fullName}`;
-    if (cache[cacheKey]) return { ...cache[cacheKey], cached: true };
+    if (cache[cacheKey]) return { ...this.boundDiffEntry(cache[cacheKey]), cached: true };
 
     const [sourceOrg, targetOrg] = await Promise.all([
       assertOrgOwned(session.sourceOrgId, userId, prisma),
@@ -200,6 +205,7 @@ export class MetadataCompareService {
     const targetAlias = targetOrg.username ?? targetOrg.alias;
 
     const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-diff-'));
+    try {
     const sourceDir = path.join(baseDir, 'source');
     const targetDir = path.join(baseDir, 'target');
     fs.mkdirSync(sourceDir, { recursive: true });
@@ -232,42 +238,90 @@ export class MetadataCompareService {
       loadStatus = 'failed';
     }
 
-    const lineDiff = diffLines(targetXml, sourceXml);
+    const contentDiffers = sourceXml !== targetXml;
+    const boundedSourceXml = sourceXml.slice(0, MAX_DIFF_XML_CHARS);
+    const boundedTargetXml = targetXml.slice(0, MAX_DIFF_XML_CHARS);
+    const fullLineDiff = diffLines(boundedTargetXml, boundedSourceXml);
+    const lineDiff = fullLineDiff.slice(0, MAX_DIFF_PARTS);
     const diffPayload = lineDiff.map((part) => ({
       value: part.value,
       added: part.added || undefined,
       removed: part.removed || undefined,
     }));
-    const contentDiffers = sourceXml !== targetXml;
 
     const entry: DiffCacheEntry = {
-      sourceXml,
-      targetXml,
+      sourceXml: boundedSourceXml,
+      targetXml: boundedTargetXml,
       diffLines: diffPayload,
       contentDiffers,
       loadStatus,
       retrieveWarnings,
+      truncated:
+        sourceXml.length > MAX_DIFF_XML_CHARS ||
+        targetXml.length > MAX_DIFF_XML_CHARS ||
+        fullLineDiff.length > MAX_DIFF_PARTS,
     };
 
     if (loadStatus !== 'failed') {
-      cache[cacheKey] = entry;
+      const boundedCache = Object.fromEntries(
+        Object.entries(cache)
+          .filter(([key]) => key !== cacheKey)
+          .slice(-(MAX_DIFF_CACHE_ENTRIES - 1))
+          .map(([key, value]) => [key, this.boundDiffEntry(value)]),
+      );
+      boundedCache[cacheKey] = entry;
       await prisma.metadataComparison.update({
         where: { id: comparisonId },
-        data: { diffCache: cache as object },
+        data: { diffCache: boundedCache as object },
       });
     }
 
-    if (contentDiffers && item && item.diffType === 'same') {
+    if (
+      loadStatus !== 'failed'
+      && contentDiffers
+      && item
+      && (item.diffType === 'same' || item.diffType === 'unknown')
+    ) {
       await this.upgradeItemDiffType(comparisonId, metadataType, fullName, 'changed');
-    } else if (!contentDiffers && item && item.diffType === 'changed') {
+    } else if (
+      loadStatus !== 'failed'
+      && !contentDiffers
+      && item
+      && (item.diffType === 'changed' || item.diffType === 'unknown')
+    ) {
       await this.upgradeItemDiffType(comparisonId, metadataType, fullName, 'same');
     }
 
-    try {
-      fs.rmSync(baseDir, { recursive: true, force: true });
-    } catch { /* ignore */ }
-
     return { ...entry, cached: false };
+    } finally {
+      try {
+        fs.rmSync(baseDir, { recursive: true, force: true });
+      } catch { /* best-effort cleanup */ }
+    }
+  }
+
+  private boundDiffEntry(entry: DiffCacheEntry): DiffCacheEntry {
+    const originalSourceXml = String(entry.sourceXml ?? '');
+    const originalTargetXml = String(entry.targetXml ?? '');
+    const sourceXml = originalSourceXml.slice(0, MAX_DIFF_XML_CHARS);
+    const targetXml = originalTargetXml.slice(0, MAX_DIFF_XML_CHARS);
+    const fullDiff = diffLines(targetXml, sourceXml);
+    const boundedDiff = fullDiff.slice(0, MAX_DIFF_PARTS);
+    return {
+      ...entry,
+      sourceXml,
+      targetXml,
+      diffLines: boundedDiff.map((part) => ({
+        value: part.value,
+        added: part.added || undefined,
+        removed: part.removed || undefined,
+      })),
+      truncated:
+        entry.truncated ||
+        originalSourceXml.length > MAX_DIFF_XML_CHARS ||
+        originalTargetXml.length > MAX_DIFF_XML_CHARS ||
+        fullDiff.length > MAX_DIFF_PARTS,
+    };
   }
 
   private async upgradeItemDiffType(
@@ -317,7 +371,7 @@ export class MetadataCompareService {
     const allItems = (session.items as MetadataCompareItem[] | null) ?? [];
     const selected = input.selectedItems.length
       ? input.selectedItems
-      : allItems.filter((i) => i.diffType !== 'same');
+      : allItems.filter((i) => i.diffType !== 'same' && i.diffType !== 'unknown');
 
     const fixes: ProblemFix[] = [];
     const warnings: ProblemFix[] = [];
@@ -354,7 +408,11 @@ export class MetadataCompareService {
     const deployable = selected.filter(
       (s) => {
         const k = `${s.metadataType}::${s.fullName}`;
-        return !excluded.has(k) && !excluded.has(s.fullName) && s.diffType !== 'deleted' && s.diffType !== 'same';
+        return !excluded.has(k)
+          && !excluded.has(s.fullName)
+          && s.diffType !== 'deleted'
+          && s.diffType !== 'same'
+          && s.diffType !== 'unknown';
       },
     );
 

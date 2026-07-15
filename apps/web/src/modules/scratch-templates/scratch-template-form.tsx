@@ -308,16 +308,18 @@ export function ScratchTemplateForm({
                 <FormSection title="Details">
                   <div className="space-y-3">
                     <div>
-                      <Label>Name</Label>
+                      <Label htmlFor="scratch-template-name">Name</Label>
                       <Input
+                        id="scratch-template-name"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="CONA Sprint Setup"
                       />
                     </div>
                     <div>
-                      <Label>Description</Label>
+                      <Label htmlFor="scratch-template-description">Description</Label>
                       <Textarea
+                        id="scratch-template-description"
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
                         placeholder="Full CONA scratch pipeline with bundled custom settings…"
@@ -333,15 +335,17 @@ export function ScratchTemplateForm({
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <Label>Scratch definition file</Label>
+                        <Label htmlFor="scratch-template-definition">Scratch definition file</Label>
                         <Input
+                          id="scratch-template-definition"
                           value={config.template ?? ''}
                           onChange={(e) => setConfig({ ...config, template: e.target.value })}
                         />
                       </div>
                       <div>
-                        <Label>Default duration (days)</Label>
+                        <Label htmlFor="scratch-template-duration">Default duration (days)</Label>
                         <Input
+                          id="scratch-template-duration"
                           type="number"
                           min={1}
                           max={30}
@@ -359,8 +363,9 @@ export function ScratchTemplateForm({
                       Pre-install Error Logger package
                     </label>
                     <div>
-                      <Label>Default manifest path</Label>
+                      <Label htmlFor="scratch-template-manifest">Default manifest path</Label>
                       <Input
+                        id="scratch-template-manifest"
                         value={config.azureDeploy?.manifestPath ?? DEFAULT_AZURE_MANIFEST_PATH}
                         onChange={(e) =>
                           setConfig({

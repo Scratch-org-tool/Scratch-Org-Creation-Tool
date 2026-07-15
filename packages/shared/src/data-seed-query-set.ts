@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { applyLimit, querySetEntrySchema, querySetSchema } from './query-set.js';
+import { escapeSoqlLiteral } from './soql.js';
 
 export const accountSeedRuleSchema = z.object({
   id: z.string().min(1),
@@ -78,7 +79,7 @@ export function compileAccountOfficeQueries(
     bottler: rule.bottler,
     distributionChannel: rule.distributionChannel,
     soql: applyLimit(
-      `${withoutLimit} AND cfs_ob__u_SalesOffice__c = '${office.replace(/'/g, "\\'")}'`,
+      `${withoutLimit} AND cfs_ob__u_SalesOffice__c = '${escapeSoqlLiteral(office)}'`,
       rule.perOfficeLimit,
     ),
   }));

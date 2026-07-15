@@ -81,12 +81,12 @@ export function SalesforceOrgsTable({
             <IntegrationsTd>
               <div className="flex items-center justify-end gap-1 flex-wrap">
                 {org.instanceUrl && (
-                  <a href={org.instanceUrl} target="_blank" rel="noreferrer" title="Login to org">
-                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-primary">
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-primary" asChild>
+                    <a href={org.instanceUrl} target="_blank" rel="noreferrer" title={`Login to ${org.alias}`}>
                       <ExternalLink className="w-3 h-3" />
                       Login
-                    </Button>
-                  </a>
+                    </a>
+                  </Button>
                 )}
                 {org.isDevHub && (
                   <Button
@@ -96,6 +96,7 @@ export function SalesforceOrgsTable({
                     disabled={!!disconnectingAlias || org.isDefaultDevHub}
                     onClick={() => onSetDefault(org.alias)}
                     title={org.isDefaultDevHub ? 'Default Dev Hub' : 'Set as default Dev Hub'}
+                    aria-label={org.isDefaultDevHub ? `${org.alias} is the default Dev Hub` : `Set ${org.alias} as default Dev Hub`}
                   >
                     <Star className={`w-3 h-3 ${org.isDefaultDevHub ? 'fill-amber-400 text-amber-400' : ''}`} />
                   </Button>
@@ -107,6 +108,7 @@ export function SalesforceOrgsTable({
                   loading={disconnectingAlias === org.alias}
                   disabled={!!disconnectingAlias}
                   onClick={() => onDisconnect(org.alias)}
+                  aria-label={`Disconnect Salesforce org ${org.alias}`}
                 >
                   <Unplug className="w-3 h-3" />
                 </Button>

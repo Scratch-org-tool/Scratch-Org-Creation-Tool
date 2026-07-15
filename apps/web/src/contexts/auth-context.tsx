@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -139,20 +140,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<MeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const profileUserIdRef = useRef<string | null>(null);
 
   const refreshProfile = useCallback(async (firebaseUser?: User | null) => {
     const current = firebaseUser ?? user;
     if (!current) {
+      profileUserIdRef.current = null;
       setProfile(null);
       setProfileError(null);
       return;
     }
     try {
       const me = await loadProfile(current);
+      profileUserIdRef.current = current.uid;
       setProfile(me);
       setProfileError(null);
     } catch {
-      setProfile(null);
+      // Keep a profile that was already verified for this Firebase user.
+      // Transient API failures must not revoke the UI's last known access.
+      if (profileUserIdRef.current !== current.uid) setProfile(null);
       setProfileError(AUTH_GENERIC_INVALID);
     }
   }, [user]);
@@ -171,10 +177,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser?.uid !== profileUserIdRef.current) {
+        setProfile(null);
+      }
       setUser(firebaseUser);
       if (firebaseUser) {
         await refreshProfile(firebaseUser);
       } else {
+        profileUserIdRef.current = null;
         setProfile(null);
         setProfileError(null);
       }
@@ -198,6 +208,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? await signInWithCustomToken(auth, result.customToken)
       : await signInWithEmailAndPassword(auth, email, password);
     setProfile(result.profile);
+    profileUserIdRef.current = credential.user.uid;
     setProfileError(null);
     setUser(credential.user);
   }, []);
@@ -222,6 +233,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? await signInWithCustomToken(auth, result.customToken)
       : await signInWithEmailAndPassword(auth, email, password);
     setProfile(result.profile);
+    profileUserIdRef.current = credential.user.uid;
     setProfileError(null);
     setUser(credential.user);
   }, []);
@@ -230,6 +242,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const auth = getFirebaseAuth();
     if (auth) await firebaseSignOut(auth);
     setUser(null);
+    profileUserIdRef.current = null;
     setProfile(null);
     setProfileError(null);
   }, []);

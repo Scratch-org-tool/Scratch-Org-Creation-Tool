@@ -4,6 +4,7 @@ export * from './queues/index.js';
 export * from './constants.js';
 export * from './auth.js';
 export * from './sanitize.js';
+export * from './soql.js';
 export * from './query-set.js';
 export * from './sfdmu-export.js';
 export * from './azure-utils.js';

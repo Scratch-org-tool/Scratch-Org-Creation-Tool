@@ -5,7 +5,12 @@ import { join } from 'path';
 import * as XLSX from 'xlsx';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
-import type { BottlerSalesOfficeConfig } from '@sfcc/shared';
+import {
+  escapeSoqlLiteral,
+  toSoqlLiteral,
+  type BottlerSalesOfficeConfig,
+} from '@sfcc/shared';
+import { removeTempDir } from '../../common/temp-cleanup.util';
 import { BOTTLER_CONFIG, normalizeAccountKey, resolveSalesOfficeConfig, type BottlerId } from './bottler-config';
 
 const EMPLOYEE_FIELDS = [
@@ -45,13 +50,13 @@ interface ProcessOptions {
 @Injectable()
 export class AccountPartnerImportService {
   private readonly sfCli = createSfCliClient();
-  private readonly artifactDirs = new Map<string, string>();
+  private readonly artifactDirs = new Map<string, { dir: string; timer: NodeJS.Timeout }>();
 
   async processExcel(options: ProcessOptions) {
     const cfg = BOTTLER_CONFIG[options.bottler];
     const workDir = await mkdtemp(join(tmpdir(), `partner-${options.bottler}-`));
     await mkdir(workDir, { recursive: true });
-    this.artifactDirs.set(`${options.bottler}:${options.targetOrgId}`, workDir);
+    await this.retainArtifacts(`${options.bottler}:${options.targetOrgId}`, workDir);
 
     let buffer: Buffer;
     if (options.excelBase64) {
@@ -173,29 +178,35 @@ export class AccountPartnerImportService {
   }
 
   async loadFromArtifacts(bottler: BottlerId, targetOrgId: string, dryRun = false) {
-    const workDir = this.artifactDirs.get(`${bottler}:${targetOrgId}`);
-    if (!workDir) throw new Error('No processed artifacts — run process first');
+    const artifactKey = `${bottler}:${targetOrgId}`;
+    const retained = this.artifactDirs.get(artifactKey);
+    if (!retained) throw new Error('No processed artifacts — run process first');
+    const workDir = retained.dir;
 
     const target = await this.resolveOrg(targetOrgId);
     if (dryRun) return { dryRun: true, workDir };
 
-    const empCsv = join(workDir, 'employee_master.csv');
-    const partnerCsv = join(workDir, 'account_partners.csv');
+    try {
+      const empCsv = join(workDir, 'employee_master.csv');
+      const partnerCsv = join(workDir, 'account_partners.csv');
 
-    const emp = await this.sfCli.upsertBulk('cfs_ob__EmployeeMaster__c', empCsv, 'cfs_ob__EmployeeNo__c', target.alias, 15, { cwd: workDir });
-    if (!emp.success) throw new Error(emp.error ?? 'Employee upsert failed');
+      const emp = await this.sfCli.upsertBulk('cfs_ob__EmployeeMaster__c', empCsv, 'cfs_ob__EmployeeNo__c', target.alias, 15, { cwd: workDir });
+      if (!emp.success) throw new Error(emp.error ?? 'Employee upsert failed');
 
-    const partners = await this.sfCli.upsertBulk(
-      'cfs_ob__AccountPartner__c',
-      partnerCsv,
-      'cfs_ob__AccountPartnerExternalId__c',
-      target.alias,
-      15,
-      { cwd: workDir },
-    );
-    if (!partners.success) throw new Error(partners.error ?? 'Partner upsert failed');
+      const partners = await this.sfCli.upsertBulk(
+        'cfs_ob__AccountPartner__c',
+        partnerCsv,
+        'cfs_ob__AccountPartnerExternalId__c',
+        target.alias,
+        15,
+        { cwd: workDir },
+      );
+      if (!partners.success) throw new Error(partners.error ?? 'Partner upsert failed');
 
-    return { success: true, workDir };
+      return { success: true, workDir };
+    } finally {
+      await this.releaseArtifacts(artifactKey, workDir);
+    }
   }
 
   async transferOrgToOrgMatched(
@@ -214,19 +225,20 @@ export class AccountPartnerImportService {
     const target = await this.resolveOrg(targetOrgId);
     const workDir = await mkdtemp(join(tmpdir(), `partner-matched-${bottler}-`));
     await mkdir(workDir, { recursive: true });
-    this.artifactDirs.set(`${bottler}:${targetOrgId}`, workDir);
+    await this.retainArtifacts(`${bottler}:${targetOrgId}`, workDir);
 
     const orgLookup = options?.matchOrgDistribution !== false
       ? await this.queryOrgDistributionAccounts(target.alias, bottler)
       : {};
 
-    const officeFilter = cfg.offices.map((o) => `'${o.replace(/'/g, "\\'")}'`).join(', ');
+    const officeFilter = cfg.offices.map(toSoqlLiteral).join(', ');
+    const safeBottler = escapeSoqlLiteral(bottler);
     const partnerSoql =
       `SELECT ${PARTNER_FIELDS.join(', ')}, cfs_ob__PartnerFunction__c, cfs_ob__Sales_Office__c, ` +
       `cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c, cfs_ob__EmployeeMaster__r.cfs_ob__External_Id__c, ` +
       `cfs_ob__EmployeeMaster__r.Name, cfs_ob__EmployeeMaster__r.cfs_ob__EmailID__c, ` +
       `cfs_ob__EmployeeMaster__r.cfs_ob__u_Sales_Office__c ` +
-      `FROM cfs_ob__AccountPartner__c WHERE cfs_ob__Bottler__c = '${bottler}' ` +
+      `FROM cfs_ob__AccountPartner__c WHERE cfs_ob__Bottler__c = '${safeBottler}' ` +
       `AND cfs_ob__Sales_Office__c IN (${officeFilter})`;
 
     const result = await this.sfCli.query(source.alias, partnerSoql);
@@ -328,7 +340,7 @@ export class AccountPartnerImportService {
     const workDir = await mkdtemp(join(tmpdir(), 'org-transfer-'));
     try {
     const bottlers = bottler === 'all' ? ['5000', '4900', '4600'] : [bottler];
-    const filter = `cfs_ob__Bottler__c IN (${bottlers.map((b) => `'${b}'`).join(', ')})`;
+    const filter = `cfs_ob__Bottler__c IN (${bottlers.map(toSoqlLiteral).join(', ')})`;
 
     const accountCsv = join(workDir, 'accounts.csv');
     const employeeCsv = join(workDir, 'employees.csv');
@@ -381,9 +393,10 @@ export class AccountPartnerImportService {
   }
 
   private async queryOrgDistributionAccounts(alias: string, bottler: string) {
+    const safeBottler = escapeSoqlLiteral(bottler);
     const soql =
       `SELECT cfs_ob__u_CustomerNumber__c FROM Account ` +
-      `WHERE cfs_ob__Bottler__c = '${bottler}' ` +
+      `WHERE cfs_ob__Bottler__c = '${safeBottler}' ` +
       `AND cfs_ob__u_DistributionChannel__c != null ` +
       `AND cfs_ob__u_CustomerNumber__c != null`;
     const result = await this.sfCli.query(
@@ -403,6 +416,32 @@ export class AccountPartnerImportService {
     const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
     if (!org) throw new Error('Org not found');
     return { ...org, alias: org.username ?? org.alias };
+  }
+
+  private async retainArtifacts(key: string, dir: string): Promise<void> {
+    const existing = this.artifactDirs.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      await removeTempDir(existing.dir);
+    }
+    const configuredTtl = Number(process.env.PARTNER_ARTIFACT_TTL_MS ?? 60 * 60 * 1000);
+    const ttlMs = Number.isFinite(configuredTtl) && configuredTtl > 0
+      ? configuredTtl
+      : 60 * 60 * 1000;
+    const timer = setTimeout(() => {
+      void this.releaseArtifacts(key, dir);
+    }, ttlMs);
+    timer.unref();
+    this.artifactDirs.set(key, { dir, timer });
+  }
+
+  private async releaseArtifacts(key: string, dir: string): Promise<void> {
+    const retained = this.artifactDirs.get(key);
+    if (retained?.dir === dir) {
+      clearTimeout(retained.timer);
+      this.artifactDirs.delete(key);
+    }
+    await removeTempDir(dir);
   }
 
   private async writeCsv(path: string, headers: string[], rows: Record<string, string>[]) {

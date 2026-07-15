@@ -1,7 +1,14 @@
 'use client';
 
-import { Check, Copy, ExternalLink, X } from 'lucide-react';
+import { Check, Copy, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { GlassCard, PageSkeleton } from '@/components/studio';
 import type { ScratchOrgCredentials } from './types';
 
@@ -23,7 +30,14 @@ function CredentialRow({
         <p className="text-sm font-mono break-all">{value || '—'}</p>
       </div>
       {value && (
-        <Button variant="ghost" size="sm" className="shrink-0 h-8 w-8 p-0" onClick={onCopy} title={`Copy ${label}`}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0 h-8 w-8 p-0"
+          onClick={onCopy}
+          title={`Copy ${label}`}
+          aria-label={`Copy ${label}`}
+        >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
         </Button>
       )}
@@ -54,21 +68,22 @@ export function ScratchOrgCredentialsDrawer({
   onRegenerate,
   onCopyAll,
 }: ScratchOrgCredentialsDrawerProps) {
-  if (!alias) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-md h-full sm:h-auto sm:max-h-[90vh] sm:m-4 sm:rounded-xl overflow-hidden flex flex-col bg-card border border-border shadow-xl">
+    <Sheet open={Boolean(alias)} onOpenChange={(open) => !open && onClose()}>
+      {alias && (
+      <SheetContent
+        side="right"
+        className="w-full max-w-md sm:max-w-md h-full p-0 gap-0 overflow-hidden flex flex-col bg-card"
+      >
+        <SheetHeader className="sr-only">
+          <SheetTitle>Scratch Org Credentials</SheetTitle>
+          <SheetDescription>{alias}</SheetDescription>
+        </SheetHeader>
         <GlassCard
           title="Scratch Org Credentials"
           description={alias}
           className="h-full flex flex-col border-0 rounded-none sm:rounded-xl shadow-none"
           contentClassName="overflow-y-auto scrollbar-thin flex-1"
-          headerAction={
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={onClose}>
-              <X className="w-4 h-4" />
-            </Button>
-          }
         >
           {loading && <PageSkeleton variant="form" />}
           {!loading && credentials && (
@@ -98,6 +113,7 @@ export function ScratchOrgCredentialsDrawer({
                     size="sm"
                     className="h-8 w-8 p-0 shrink-0"
                     onClick={() => onCopy('password', credentials.password!)}
+                    aria-label="Copy Password"
                   >
                     {copiedField === 'password' ? (
                       <Check className="w-3.5 h-3.5 text-green-400" />
@@ -151,17 +167,18 @@ export function ScratchOrgCredentialsDrawer({
                 {copiedField === 'all' ? 'Copied!' : 'Copy All'}
               </Button>
               {credentials.loginUrl && (
-                <a href={credentials.loginUrl} target="_blank" rel="noreferrer">
-                  <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" asChild>
+                  <a href={credentials.loginUrl} target="_blank" rel="noreferrer">
                     <ExternalLink className="w-4 h-4 mr-2" />
                     Open
-                  </Button>
-                </a>
+                  </a>
+                </Button>
               )}
             </div>
           )}
         </GlassCard>
-      </div>
-    </div>
+      </SheetContent>
+      )}
+    </Sheet>
   );
 }

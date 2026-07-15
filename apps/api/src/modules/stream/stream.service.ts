@@ -58,8 +58,8 @@ export class StreamService implements OnModuleInit {
 
   /**
    * Subscribe to the event stream scoped to a user. Non-admin users only
-   * receive events they own; events with no resolvable owner are treated as
-   * system-wide and delivered to everyone (they carry no other user's data).
+   * receive events they own. Ownerless events fail closed because event
+   * payloads may contain sensitive job, org, or authentication details.
    */
   subscribe(
     types?: StreamEvent['type'][],
@@ -68,8 +68,9 @@ export class StreamService implements OnModuleInit {
     return this.events$.pipe(
       filter((e) => !types || types.includes(e.type)),
       filter((e) => {
-        if (!scope || scope.isAdmin) return true;
-        if (!e.ownerId || e.ownerId === 'system') return true;
+        if (!scope) return false;
+        if (scope.isAdmin) return true;
+        if (!e.ownerId || e.ownerId === 'system') return false;
         return e.ownerId === scope.userId;
       }),
       map((e) => e),

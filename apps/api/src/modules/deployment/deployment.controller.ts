@@ -38,10 +38,9 @@ export class DeploymentController {
   @Post(':id/approve')
   approve(
     @Param('id') id: string,
-    @Body('approvedBy') approvedBy: string,
     @CurrentUser() userId: string,
   ) {
-    return this.deploymentService.approveDeployment(id, approvedBy, userId);
+    return this.deploymentService.approveDeployment(id, userId);
   }
 
   @Post(':id/rollback')

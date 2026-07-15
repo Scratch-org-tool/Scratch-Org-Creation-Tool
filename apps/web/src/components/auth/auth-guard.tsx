@@ -32,36 +32,30 @@ export function ModuleRouteGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
+  const module = moduleForPath(pathname);
+  const orgUsersPath =
+    pathname === '/org-setup' ||
+    pathname.startsWith('/org-setup/') ||
+    pathname === '/user-provisioning' ||
+    pathname.startsWith('/user-provisioning/');
+  const customSettingsPath =
+    pathname === '/custom-settings-load' || pathname.startsWith('/custom-settings-load/');
+  const authorized = !profile
+    ? false
+    : orgUsersPath
+      ? canAccessModule(profile, 'org-setup') || canAccessModule(profile, 'provisioning')
+      : customSettingsPath
+        ? canAccessModule(profile, 'data')
+        : !module || canAccessModule(profile, module);
+
   useEffect(() => {
-    if (loading || !user || !profile) return;
-    const module = moduleForPath(pathname);
-    if (!module) return;
+    if (loading || !user || !profile || authorized) return;
+    router.replace('/dashboard?locked=1');
+  }, [authorized, loading, user, profile, router]);
 
-    const orgUsersPath =
-      pathname === '/org-setup' ||
-      pathname.startsWith('/org-setup/') ||
-      pathname === '/user-provisioning' ||
-      pathname.startsWith('/user-provisioning/');
-
-    const customSettingsPath =
-      pathname === '/custom-settings-load' || pathname.startsWith('/custom-settings-load/');
-
-    if (orgUsersPath) {
-      const allowed =
-        canAccessModule(profile, 'org-setup') || canAccessModule(profile, 'provisioning');
-      if (!allowed) router.replace('/dashboard?locked=1');
-      return;
-    }
-
-    if (customSettingsPath) {
-      if (!canAccessModule(profile, 'data')) router.replace('/dashboard?locked=1');
-      return;
-    }
-
-    if (!canAccessModule(profile, module)) {
-      router.replace('/dashboard?locked=1');
-    }
-  }, [loading, user, profile, pathname, router]);
-
+  if (loading || (user && !profile)) {
+    return <PageLoader label="Checking access..." fullScreen />;
+  }
+  if (!user || !authorized) return null;
   return <>{children}</>;
 }
