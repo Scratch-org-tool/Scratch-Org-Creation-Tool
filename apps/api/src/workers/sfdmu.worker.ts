@@ -51,7 +51,7 @@ export class SfdmuWorker {
       }
     };
 
-    if (this.processRegistry.isCancelled(dbJobId)) {
+    if (await this.processRegistry.isCancellationRequested(dbJobId)) {
       await log('stderr', 'Job was cancelled before it started');
       if (movementId) {
         await prisma.dataMovement.update({
@@ -89,7 +89,7 @@ export class SfdmuWorker {
         slots.push(await this.bulkThrottle.acquire(alias));
       }
 
-      if (this.processRegistry.isCancelled(dbJobId)) {
+      if (await this.processRegistry.isCancellationRequested(dbJobId)) {
         throw new Error('Job cancelled by user');
       }
 
@@ -131,7 +131,7 @@ export class SfdmuWorker {
       return result.data;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const cancelled = this.processRegistry.isCancelled(dbJobId);
+      const cancelled = await this.processRegistry.isCancellationRequested(dbJobId);
       if (movementId) {
         await prisma.dataMovement.update({
           where: { id: movementId },

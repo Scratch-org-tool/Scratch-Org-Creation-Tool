@@ -17,6 +17,7 @@ import { PipelineOrchestratorService } from '../orchestrator/pipeline-orchestrat
 import { JobCancelledError } from '../environment/scratch-org-job.service';
 import type { PipelineStepId } from '@sfcc/shared';
 import { PipelineStepError } from '../../workers/metadata-deploy.worker';
+import { resolvePipelineSuccessAction } from '../orchestrator/pipeline-dispatch.util';
 
 @Injectable()
 export class WorkerRegistry implements OnModuleInit {
@@ -75,12 +76,21 @@ export class WorkerRegistry implements OnModuleInit {
 
     const jobs = await prisma.job.findMany({
       where: { parentRunId: runId },
-      select: { status: true, error: true },
+      select: { id: true, type: true, status: true, error: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
     });
+    const latestMetadata = [...jobs]
+      .reverse()
+      .find((job) => job.type === 'pipeline_metadata_deploy');
+    const relevantJobs = latestMetadata
+      ? jobs.filter((job) =>
+          job.id === latestMetadata.id ||
+          (job.type !== 'pipeline_metadata_deploy' && job.createdAt >= latestMetadata.createdAt))
+      : jobs;
     const terminal = ['completed', 'failed', 'cancelled'];
-    if (jobs.length === 0 || jobs.some((j) => !terminal.includes(j.status))) return;
+    if (relevantJobs.length === 0 || relevantJobs.some((j) => !terminal.includes(j.status))) return;
 
-    const failed = jobs.filter((j) => j.status === 'failed');
+    const failed = relevantJobs.filter((j) => j.status === 'failed');
     await prisma.automationRun.update({
       where: { id: runId },
       data: {
@@ -144,12 +154,26 @@ export class WorkerRegistry implements OnModuleInit {
           if (runId && options?.pipelineJobType) {
             const run = await prisma.automationRun.findUnique({
               where: { id: runId },
-              select: { status: true },
+              select: { status: true, intent: true },
             });
             if (run && ['paused', 'cancelled'].includes(run.status)) {
               return result;
             }
-            await this.pipelineOrchestrator.handleJobSucceeded(runId, options.pipelineJobType, result);
+            if (
+              run &&
+              resolvePipelineSuccessAction(run.intent, options.pipelineJobType) === 'combined_metadata'
+            ) {
+              if (data.deploymentId) {
+                await prisma.deployment.update({
+                  where: { id: data.deploymentId },
+                  data: { status: 'completed' },
+                }).catch(() => undefined);
+                await this.writeDeploymentAudit(data.deploymentId, 'completed', undefined, result);
+              }
+              await this.completeChainedRunIfDone(runId);
+            } else {
+              await this.pipelineOrchestrator.handleJobSucceeded(runId, options.pipelineJobType, result);
+            }
           } else if (runId && job.name === 'cona_user_provision') {
             await this.pipelineOrchestrator.handleJobSucceeded(runId, 'cona_user_provision', result);
           } else if (runId && job.name === 'cona_seed') {

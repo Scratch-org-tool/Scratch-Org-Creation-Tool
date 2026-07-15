@@ -68,15 +68,14 @@ export class OrgSetupWorker {
             log,
           );
           break;
-        case 'theme':
-          await log('stdout', `Theme configured: ${config?.theme}`);
-          break;
         case 'named_credentials':
         case 'custom_settings':
         case 'custom_metadata':
         case 'queues':
-          await log('stdout', `Configured ${setupType}: ${JSON.stringify(config).substring(0, 200)}`);
-          break;
+        case 'theme':
+          throw new Error(
+            `Unsupported setup type "${setupType}": no Salesforce mutation is implemented`,
+          );
         default:
           throw new Error(`Unknown setup type: ${setupType}`);
       }

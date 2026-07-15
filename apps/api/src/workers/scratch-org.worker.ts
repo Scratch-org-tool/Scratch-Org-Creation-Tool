@@ -11,6 +11,7 @@ import {
   type ScratchOrgSkipStepKey,
 } from '@sfcc/shared';
 import { JobsService } from '../modules/jobs/jobs.service';
+import { JobProcessRegistryService } from '../modules/jobs/job-process-registry.service';
 import { StreamService } from '../modules/stream/stream.service';
 import { JobCancelledError, ScratchOrgJobService } from '../modules/environment/scratch-org-job.service';
 import { encrypt } from '../common/crypto.util';
@@ -45,6 +46,7 @@ export class ScratchOrgWorker {
     private readonly jobsService: JobsService,
     private readonly streamService: StreamService,
     private readonly scratchOrgJobService: ScratchOrgJobService,
+    private readonly processRegistry: JobProcessRegistryService,
   ) {
     this.projectRoot = process.env.SF_PROJECT_ROOT ?? join(process.cwd(), '../..');
     this.sfCli = createSfCliClient({ cwd: this.projectRoot });
@@ -86,7 +88,7 @@ export class ScratchOrgWorker {
     };
 
     const setStep = async (step: string) => {
-      if (this.scratchOrgJobService.isCancelled(dbJobId)) throw new JobCancelledError();
+      await this.assertNotCancelled(dbJobId);
       await prisma.job.update({
         where: { id: dbJobId },
         data: { currentStep: step, status: 'running' },
@@ -114,10 +116,6 @@ export class ScratchOrgWorker {
 
     const markStepDone = async (step: WorkflowStep, extra?: Partial<PipelineCheckpoint>) => {
       await persistCheckpoint({ scratchSubStep: step, ...extra });
-    };
-
-    const assertNotCancelled = () => {
-      if (this.scratchOrgJobService.isCancelled(dbJobId)) throw new JobCancelledError();
     };
 
     let generatedPassword: string | undefined;
@@ -340,7 +338,7 @@ export class ScratchOrgWorker {
         },
       );
 
-      assertNotCancelled();
+      await this.assertNotCancelled(dbJobId);
 
       await setStep(WORKFLOW_STEPS[6]);
       await prisma.job.update({
@@ -437,14 +435,15 @@ export class ScratchOrgWorker {
       : this.sfCli.runCancellable(args, { json: options?.json });
 
     this.scratchOrgJobService.setKill(dbJobId, cancellable.kill);
+    const unregisterDistributedKill = this.processRegistry.register(dbJobId, cancellable.kill);
     try {
       const result = await cancellable.promise;
-      if (this.scratchOrgJobService.isCancelled(dbJobId)) {
-        throw new JobCancelledError();
-      }
+      await this.assertNotCancelled(dbJobId);
       return result;
     } finally {
+      unregisterDistributedKill();
       this.scratchOrgJobService.clearKill(dbJobId);
+      this.processRegistry.clear(dbJobId);
     }
   }
 
@@ -468,10 +467,17 @@ export class ScratchOrgWorker {
       if (skipKey && this.scratchOrgJobService.shouldSkip(dbJobId, skipKey)) {
         return;
       }
-      if (this.scratchOrgJobService.isCancelled(dbJobId)) {
-        throw new JobCancelledError();
-      }
+      await this.assertNotCancelled(dbJobId);
       throw new Error(result.error ?? 'CLI command failed');
+    }
+  }
+
+  private async assertNotCancelled(dbJobId: string): Promise<void> {
+    if (
+      this.scratchOrgJobService.isCancelled(dbJobId) ||
+      await this.processRegistry.isCancellationRequested(dbJobId)
+    ) {
+      throw new JobCancelledError();
     }
   }
 }

@@ -1,8 +1,12 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type IORedis from 'ioredis';
+import { prisma } from '@sfcc/db';
 import { QueueService } from '../queue/queue.service';
 
 const CANCEL_CHANNEL = 'sfcc:job-cancel';
+const CANCEL_KEY_PREFIX = 'sfcc:job-cancelled:';
+const CANCEL_TTL_SECONDS = 24 * 60 * 60;
+const MAX_LOCAL_CANCELLATIONS = 10_000;
 
 /**
  * Tracks kill handlers for long-running worker child processes (bulk exports,
@@ -16,7 +20,7 @@ const CANCEL_CHANNEL = 'sfcc:job-cancel';
 @Injectable()
 export class JobProcessRegistryService implements OnModuleInit, OnModuleDestroy {
   private readonly killHandlers = new Map<string, Set<() => void>>();
-  private readonly cancelledJobs = new Set<string>();
+  private readonly cancelledJobs = new Map<string, number>();
   private subscriber: IORedis | null = null;
 
   constructor(private readonly queueService: QueueService) {}
@@ -37,7 +41,7 @@ export class JobProcessRegistryService implements OnModuleInit, OnModuleDestroy 
   }
 
   register(dbJobId: string, kill: () => void): () => void {
-    if (this.cancelledJobs.has(dbJobId)) {
+    if (this.isCancelled(dbJobId)) {
       kill();
       return () => undefined;
     }
@@ -55,12 +59,44 @@ export class JobProcessRegistryService implements OnModuleInit, OnModuleDestroy 
   }
 
   isCancelled(dbJobId: string): boolean {
-    return this.cancelledJobs.has(dbJobId);
+    const expiresAt = this.cancelledJobs.get(dbJobId);
+    if (!expiresAt) return false;
+    if (expiresAt <= Date.now()) {
+      this.cancelledJobs.delete(dbJobId);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Check local, Redis, and Postgres cancellation state. Postgres is the
+   * durable source of truth if a worker starts after the pub/sub broadcast.
+   */
+  async isCancellationRequested(dbJobId: string): Promise<boolean> {
+    if (this.isCancelled(dbJobId)) return true;
+
+    const redis = this.queueService.getConnection();
+    const redisCancelled = redis
+      ? await redis.exists(`${CANCEL_KEY_PREFIX}${dbJobId}`).catch(() => 0)
+      : 0;
+    if (redisCancelled > 0) {
+      this.rememberCancellation(dbJobId);
+      return true;
+    }
+
+    const job = await prisma.job.findUnique({
+      where: { id: dbJobId },
+      select: { status: true },
+    }).catch(() => null);
+    if (job?.status === 'cancelled') {
+      this.rememberCancellation(dbJobId);
+      return true;
+    }
+    return false;
   }
 
   clear(dbJobId: string) {
     this.killHandlers.delete(dbJobId);
-    this.cancelledJobs.delete(dbJobId);
   }
 
   /** Cancel across all API instances. */
@@ -68,12 +104,15 @@ export class JobProcessRegistryService implements OnModuleInit, OnModuleDestroy 
     this.killLocal(dbJobId);
     const redis = this.queueService.getConnection();
     if (redis) {
-      await redis.publish(CANCEL_CHANNEL, dbJobId).catch(() => undefined);
+      await Promise.all([
+        redis.set(`${CANCEL_KEY_PREFIX}${dbJobId}`, '1', 'EX', CANCEL_TTL_SECONDS),
+        redis.publish(CANCEL_CHANNEL, dbJobId),
+      ]).catch(() => undefined);
     }
   }
 
   private killLocal(dbJobId: string) {
-    this.cancelledJobs.add(dbJobId);
+    this.rememberCancellation(dbJobId);
     const handlers = this.killHandlers.get(dbJobId);
     if (handlers) {
       for (const kill of handlers) {
@@ -85,9 +124,22 @@ export class JobProcessRegistryService implements OnModuleInit, OnModuleDestroy 
       }
       this.killHandlers.delete(dbJobId);
     }
-    // Avoid unbounded growth of the cancelled set.
-    if (this.cancelledJobs.size > 10_000) {
-      this.cancelledJobs.clear();
+  }
+
+  private rememberCancellation(dbJobId: string) {
+    // Map insertion order gives us an inexpensive LRU: refresh this entry,
+    // prune expired entries, then evict only the oldest entries over the cap.
+    this.cancelledJobs.delete(dbJobId);
+    this.cancelledJobs.set(dbJobId, Date.now() + CANCEL_TTL_SECONDS * 1000);
+    const now = Date.now();
+    for (const [jobId, expiresAt] of this.cancelledJobs) {
+      if (expiresAt > now) break;
+      this.cancelledJobs.delete(jobId);
+    }
+    while (this.cancelledJobs.size > MAX_LOCAL_CANCELLATIONS) {
+      const oldest = this.cancelledJobs.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.cancelledJobs.delete(oldest);
     }
   }
 }
