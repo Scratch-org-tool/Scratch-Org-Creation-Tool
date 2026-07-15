@@ -11,7 +11,7 @@ const db = vi.hoisted(() => ({
     update: vi.fn(),
   },
   job: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
-  orgConnection: { findUnique: vi.fn() },
+  orgConnection: { findUnique: vi.fn(), findMany: vi.fn() },
   provisioningBatch: {
     create: vi.fn(),
     findUnique: vi.fn(),
@@ -27,6 +27,7 @@ import { PipelineOrchestratorService } from './pipeline-orchestrator.service';
 function createService(overrides?: {
   queueService?: Record<string, unknown>;
   jobsService?: Record<string, unknown>;
+  preparation?: Record<string, unknown>;
 }): PipelineOrchestratorService {
   return new PipelineOrchestratorService(
     (overrides?.queueService ?? {}) as never,
@@ -39,6 +40,11 @@ function createService(overrides?: {
     {} as never,
     {} as never,
     {} as never,
+    (overrides?.preparation ?? {
+      requireOwnedActiveScratchTarget: vi.fn().mockImplementation(async (id: string) => ({
+        target: await db.orgConnection.findUnique({ where: { id } }),
+      })),
+    }) as never,
   );
 }
 
@@ -72,6 +78,7 @@ describe('PipelineOrchestratorService provider-neutral resume', () => {
     db.automationRun.findUnique.mockResolvedValue(legacyRun());
     db.automationRun.updateMany.mockResolvedValue({ count: 1 });
     db.automationRun.update.mockResolvedValue({});
+    db.job.update.mockResolvedValue({});
     db.job.findFirst.mockResolvedValue(null);
   });
 
@@ -175,14 +182,29 @@ describe('PipelineOrchestratorService existing scratch target mode', () => {
     db.orgConnection.findUnique.mockResolvedValue({
       id: existingConfig.existingOrgConnectionId,
       alias: 'existing',
+      username: 'existing@scratch.example',
+      orgId: '00Dscratch',
       createdBy: 'owner-1',
       type: 'scratch',
       status: 'active',
       expiresAt: new Date('2099-08-01T00:00:00Z'),
     });
     db.automationRun.create.mockResolvedValue({ id: 'run-existing' });
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      createdBy: 'owner-1',
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      config: existingConfig,
+      checkpoint: {
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+        resumeFrom: 'prepare_existing_org',
+      },
+    });
     db.automationRun.update.mockResolvedValue({});
     db.job.findFirst.mockResolvedValue(null);
+    db.orgConnection.findMany.mockResolvedValue([{
+      id: existingConfig.existingOrgConnectionId,
+    }]);
   });
 
   it('primes creation checkpoints and queues preparation, never scratch creation', async () => {
@@ -284,6 +306,98 @@ describe('PipelineOrchestratorService existing scratch target mode', () => {
     await expect(service.startPipeline(existingConfig, 'owner-1')).rejects.toMatchObject({
       response: expect.objectContaining({ conflictRunId: 'run-conflict' }),
     });
+    expect(db.automationRun.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        intent: 'scratch_org_pipeline',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      }),
+    }));
+    expect(db.automationRun.findFirst.mock.calls[0][0].where).not.toHaveProperty('launchMode');
+  });
+
+  it('does not turn a terminal uniqueness-race failure back into an active paused run', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      status: 'failed',
+      createdBy: 'owner-1',
+      checkpoint: {
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    await createService().handleJobFailed(
+      'run-existing',
+      'scratch_org_create',
+      'Another active pipeline claimed the scratch target',
+    );
+    expect(db.automationRun.update).not.toHaveBeenCalled();
+  });
+
+  it('fails both the preparation job and run when queueing fails', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'prepare-job' });
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob: vi.fn().mockRejectedValue(new Error('Redis unavailable')) },
+    });
+
+    await expect(service.startPipeline(existingConfig, 'owner-1'))
+      .rejects.toThrow('Preparation queueing failed');
+    expect(db.job.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'prepare-job' },
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-existing' },
+      data: expect.objectContaining({
+        status: 'failed',
+        failedStep: 'prepare_existing_org',
+      }),
+    }));
+  });
+
+  it('releases target uniqueness when preparation job creation fails', async () => {
+    const service = createService({
+      jobsService: {
+        create: vi.fn().mockRejectedValue(new Error('Postgres unavailable')),
+      },
+      queueService: { addJob: vi.fn() },
+    });
+
+    await expect(service.startPipeline(existingConfig, 'owner-1'))
+      .rejects.toThrow('Preparation queueing failed');
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-existing' },
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+    expect(db.job.update).not.toHaveBeenCalled();
+  });
+
+  it('reruns authoritative target validation before claiming a paused existing run', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      intent: 'scratch_org_pipeline',
+      status: 'paused',
+      createdBy: 'owner-1',
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      config: existingConfig,
+      checkpoint: {
+        completedSteps: ['scratch_org_create'],
+        resumeFrom: 'prepare_existing_org',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    const requireOwnedActiveScratchTarget = vi.fn()
+      .mockRejectedValue(new Error('Selected scratch org expiration is missing or has passed'));
+    const service = createService({
+      preparation: { requireOwnedActiveScratchTarget },
+    });
+
+    await expect(service.resumeRun('run-existing', {}, 'owner-1'))
+      .rejects.toThrow('expiration');
+    expect(requireOwnedActiveScratchTarget).toHaveBeenCalledWith(
+      existingConfig.existingOrgConnectionId,
+      'owner-1',
+    );
+    expect(db.automationRun.updateMany).not.toHaveBeenCalled();
   });
 
   it('scopes recent target filters to the caller and target alias/org fields', async () => {
@@ -293,14 +407,50 @@ describe('PipelineOrchestratorService existing scratch target mode', () => {
       where: expect.objectContaining({
         intent: 'scratch_org_pipeline',
         createdBy: 'owner-1',
-        targetOrgConnection: {
+        AND: [expect.objectContaining({
           OR: expect.arrayContaining([
-            { alias: { contains: 'existing', mode: 'insensitive' } },
-            { orgId: { contains: 'existing', mode: 'insensitive' } },
+            expect.objectContaining({
+              targetOrgConnection: {
+                OR: expect.arrayContaining([
+                  { alias: { contains: 'existing', mode: 'insensitive' } },
+                  { orgId: { contains: 'existing', mode: 'insensitive' } },
+                ]),
+              },
+            }),
+            expect.objectContaining({
+              targetOrgConnectionId: null,
+              checkpoint: {
+                path: ['targetOrgConnectionId'],
+                equals: existingConfig.existingOrgConnectionId,
+              },
+            }),
           ]),
-        },
+        })],
       }),
       take: 5,
+    }));
+  });
+
+  it('filters target-id history through both relational and legacy checkpoint targets', async () => {
+    db.automationRun.findMany.mockResolvedValue([]);
+    await createService().getRecentRuns({
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+    }, 'owner-1');
+    expect(db.automationRun.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: [{
+          OR: [
+            { targetOrgConnectionId: existingConfig.existingOrgConnectionId },
+            {
+              targetOrgConnectionId: null,
+              checkpoint: {
+                path: ['targetOrgConnectionId'],
+                equals: existingConfig.existingOrgConnectionId,
+              },
+            },
+          ],
+        }],
+      }),
     }));
   });
 });

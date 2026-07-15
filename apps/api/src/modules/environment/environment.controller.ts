@@ -38,6 +38,7 @@ export class EnvironmentController {
   }
 
   @Post('scratch-orgs/adopt')
+  @RequireRole('admin')
   adoptScratchOrg(@Body() body: unknown, @CurrentUser() userId: string) {
     return this.environmentService.adoptScratchOrg(body, userId);
   }

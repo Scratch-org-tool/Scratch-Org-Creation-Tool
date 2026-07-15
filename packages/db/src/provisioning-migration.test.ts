@@ -31,3 +31,55 @@ describe('provisioned user batch username uniqueness', () => {
     assert.match(migration, /"ProvisionedUser_batchId_username_key"/);
   });
 });
+
+describe('existing scratch-org pipeline migration', () => {
+  const migrationPath =
+    'migrations/20260715133000_existing_scratch_org_pipeline/migration.sql';
+
+  it('uses immutable typed enum comparisons for the active-target partial index', () => {
+    const migration = prismaFile(migrationPath);
+    assert.doesNotMatch(migration, /"status"::text/);
+    assert.match(migration, /'pending'::"JobStatus"/);
+    assert.match(migration, /'paused'::"JobStatus"/);
+    assert.match(migration, /"intent" = 'scratch_org_pipeline'/);
+    assert.doesNotMatch(
+      migration.slice(migration.indexOf('CREATE UNIQUE INDEX')),
+      /"launchMode" = 'configure_existing'/,
+    );
+  });
+
+  it('backfills valid relational targets before enforcing uniqueness', () => {
+    const migration = prismaFile(migrationPath);
+    const backfillPosition = migration.indexOf('UPDATE "AutomationRun" AS run');
+    const uniquePosition = migration.indexOf(
+      'CREATE UNIQUE INDEX "AutomationRun_active_scratch_target_key"',
+    );
+    assert.ok(backfillPosition >= 0);
+    assert.ok(uniquePosition > backfillPosition);
+    assert.match(
+      migration,
+      /jsonb_typeof\(run\."checkpoint" -> 'targetOrgConnectionId'\) = 'string'/,
+    );
+    assert.match(
+      migration,
+      /org\."id" = run\."checkpoint" ->> 'targetOrgConnectionId'/,
+    );
+    assert.match(migration, /\^\[0-9a-f\]\{8\}/);
+  });
+
+  it('terminates legacy duplicate active targets before creating the index', () => {
+    const migration = prismaFile(migrationPath);
+    const rankingPosition = migration.indexOf('WITH ranked_active_targets AS');
+    const uniquePosition = migration.indexOf(
+      'CREATE UNIQUE INDEX "AutomationRun_active_scratch_target_key"',
+    );
+    assert.ok(rankingPosition >= 0);
+    assert.ok(uniquePosition > rankingPosition);
+    assert.match(
+      migration,
+      /row_number\(\) OVER \(\s*PARTITION BY "targetOrgConnectionId"/,
+    );
+    assert.match(migration, /"status" = 'failed'::"JobStatus"/);
+    assert.match(migration, /ranked\.target_rank > 1/);
+  });
+});

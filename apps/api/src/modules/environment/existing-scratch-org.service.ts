@@ -9,7 +9,6 @@ import {
   scratchOrgAdoptSchema,
   type ScratchOrgPipelineInput,
 } from '@sfcc/shared';
-import { createSfCliClient, type SfOrgInfo } from '@sfcc/sf-cli';
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 import { ScratchTemplatesService } from '../scratch-templates/scratch-templates.service';
 import { ScratchOrgPreparationService } from './scratch-org-preparation.service';
@@ -39,10 +38,6 @@ const ACTIVE_RUN_STATUSES = [
 
 @Injectable()
 export class ExistingScratchOrgService {
-  private readonly sfCli = createSfCliClient({
-    cwd: process.env.SF_PROJECT_ROOT ?? process.cwd(),
-  });
-
   constructor(
     private readonly templates: ScratchTemplatesService,
     private readonly scmSources: ScmSourceService,
@@ -72,37 +67,15 @@ export class ExistingScratchOrgService {
       return this.result(config, undefined, steps);
     }
 
-    const target = await prisma.orgConnection.findUnique({
-      where: { id: config.existingOrgConnectionId },
-    });
-    const scratch = target
-      ? await prisma.scratchOrg.findUnique({ where: { alias: target.alias } })
-      : null;
-    const now = new Date();
+    let target;
     const targetErrors: string[] = [];
-    if (!target || target.createdBy !== userId) {
-      targetErrors.push('Existing scratch org target was not found');
-    } else {
-      if (target.type !== 'scratch') targetErrors.push('Selected org is not a scratch org');
-      if (target.status !== 'active') targetErrors.push('Selected scratch org is not active');
-      if (target.expiresAt && target.expiresAt <= now) targetErrors.push('Selected scratch org has expired');
-      if (scratch) {
-        if (scratch.createdBy !== userId) {
-          targetErrors.push('Scratch org association is not owned by the caller');
-        }
-        if (
-          (scratch.orgId && target.orgId && scratch.orgId !== target.orgId)
-          || (scratch.username && target.username && scratch.username !== target.username)
-        ) {
-          targetErrors.push('Scratch org association does not match the selected connection');
-        }
-        if (scratch.status.toLowerCase() !== 'active') {
-          targetErrors.push('Associated scratch org is not active');
-        }
-        if (scratch.expirationDate && scratch.expirationDate <= now) {
-          targetErrors.push('Associated scratch org has expired');
-        }
-      }
+    try {
+      ({ target } = await this.preparation.requireOwnedActiveScratchTarget(
+        config.existingOrgConnectionId,
+        userId,
+      ));
+    } catch (error) {
+      targetErrors.push(error instanceof Error ? error.message : String(error));
     }
     steps.push({
       step: 'target',
@@ -112,28 +85,11 @@ export class ExistingScratchOrgService {
 
     if (target && !targetErrors.length) {
       const options = config.existingOrgOptions;
-      if (options.verifyAuthentication) {
-        try {
-          await this.preparation.verifyAuthentication(target);
-          steps.push({
-            step: 'authentication',
-            status: 'required',
-            messages: ['Salesforce CLI authentication verified'],
-          });
-        } catch (error) {
-          steps.push({
-            step: 'authentication',
-            status: 'error',
-            messages: [error instanceof Error ? error.message : String(error)],
-          });
-        }
-      } else {
-        steps.push({
-          step: 'authentication',
-          status: 'skipped',
-          messages: ['Authentication verification was disabled for this launch'],
-        });
-      }
+      steps.push({
+        step: 'authentication',
+        status: 'required',
+        messages: ['Live Salesforce CLI scratch identity verified'],
+      });
 
       if (options.ensureRequiredPackage) {
         try {
@@ -181,7 +137,6 @@ export class ExistingScratchOrgService {
       const candidates = await prisma.automationRun.findMany({
         where: {
           intent: 'scratch_org_pipeline',
-          createdBy: userId,
           status: { in: [...ACTIVE_RUN_STATUSES] },
         },
         orderBy: { createdAt: 'desc' },
@@ -228,25 +183,21 @@ export class ExistingScratchOrgService {
 
   async adopt(body: unknown, userId: string) {
     const { alias } = scratchOrgAdoptSchema.parse(body);
-    const listed = await this.sfCli.listOrgs();
-    if (!listed.success) {
-      throw new BadRequestException(listed.error ?? 'Unable to list Salesforce CLI orgs');
+    let live;
+    try {
+      live = await this.preparation.requireLiveScratchIdentity({ alias });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('not authenticated as a scratch org')) {
+        throw new NotFoundException(message);
+      }
+      throw new BadRequestException(message);
     }
-    const cliScratchOrgs = (listed.data?.result?.scratchOrgs ?? []) as SfOrgInfo[];
-    const cliOrg = cliScratchOrgs.find((org) => org.alias === alias || org.username === alias);
-    if (!cliOrg) {
-      throw new NotFoundException(`Authenticated scratch org alias "${alias}" was not found`);
-    }
-
-    const display = await this.sfCli.displayOrg(alias);
-    if (!display.success) {
-      throw new BadRequestException(`Scratch org "${alias}" is not authenticated in Salesforce CLI`);
-    }
-    const details = (display.data as { result?: SfOrgInfo })?.result ?? cliOrg;
-    const resolvedAlias = cliOrg.alias ?? alias;
-    const username = details.username ?? cliOrg.username;
-    if (!username) throw new BadRequestException('Salesforce CLI did not return a scratch org username');
-    const orgId = details.orgId ?? details.id ?? cliOrg.orgId ?? cliOrg.id;
+    const cliOrg = live.listed;
+    const details = live.details;
+    const resolvedAlias = cliOrg.alias!;
+    const username = live.username;
+    const orgId = live.orgId;
 
     const [connectionCollision, scratchCollision] = await Promise.all([
       prisma.orgConnection.findFirst({
@@ -275,17 +226,7 @@ export class ExistingScratchOrgService {
       throw new ConflictException('Scratch org is already associated with another user');
     }
 
-    const expirationDate = details.expirationDate
-      ? new Date(details.expirationDate)
-      : cliOrg.expirationDate
-        ? new Date(cliOrg.expirationDate)
-        : null;
-    if (expirationDate && Number.isNaN(expirationDate.getTime())) {
-      throw new BadRequestException('Salesforce CLI returned an invalid scratch org expiration date');
-    }
-    if (expirationDate && expirationDate <= new Date()) {
-      throw new BadRequestException('Scratch org has expired');
-    }
+    const expirationDate = live.expirationDate;
     const instanceUrl = details.instanceUrl ?? cliOrg.instanceUrl;
     if (!instanceUrl) throw new BadRequestException('Salesforce CLI did not return an instance URL');
 
@@ -302,6 +243,7 @@ export class ExistingScratchOrgService {
               instanceUrl,
               loginUrl: details.loginUrl ?? cliOrg.loginUrl,
               expirationDate,
+              devHubAlias: live.devHub,
               status: 'Active',
             },
             })
@@ -313,6 +255,7 @@ export class ExistingScratchOrgService {
               instanceUrl,
               loginUrl: details.loginUrl ?? cliOrg.loginUrl,
               expirationDate,
+              devHubAlias: live.devHub,
               status: 'Active',
               createdBy: userId,
             },

@@ -60,7 +60,11 @@ export interface SfOrgInfo {
   loginUrl?: string;
   isDevHub?: boolean;
   connectedStatus?: string;
+  status?: string;
   expirationDate?: string;
+  devHubAlias?: string;
+  devHubUsername?: string;
+  devHubOrgId?: string;
 }
 
 export interface SfInstalledPackage {
@@ -513,13 +517,21 @@ export class SfCliClient extends EventEmitter {
   }
 
   async installPackage(packageId: string, targetOrg: string, waitMinutes = 30): Promise<SfCommandResult> {
-    return this.runStreaming([
+    return this.installPackageCancellable(packageId, targetOrg, waitMinutes).promise;
+  }
+
+  installPackageCancellable(
+    packageId: string,
+    targetOrg: string,
+    waitMinutes = 30,
+  ): { promise: Promise<SfCommandResult>; kill: () => void } {
+    return this.runStreamingCancellable([
       'package', 'install',
       '--package', packageId,
       '--target-org', targetOrg,
       '--wait', String(waitMinutes),
       '--no-prompt',
-    ]);
+    ], undefined, { timeoutMs: waitMinutesToTimeoutMs(waitMinutes) });
   }
 
   // Deploy commands

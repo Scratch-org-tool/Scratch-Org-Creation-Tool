@@ -158,38 +158,32 @@ export class ScratchOrgWorker {
         const pwdResult = await this.runCli(dbJobId, [
           'org', 'generate', 'password', '--target-org', username,
         ], { json: true });
-        if (pwdResult.success) {
-          await this.logCliResult(pwdResult, log, dbJobId);
-          generatedPassword = extractPasswordFromCliResult(pwdResult);
-        } else {
-          await log(
-            `Warning: credentials are unavailable (${pwdResult.error ?? 'password generation failed'}); continuing`,
-            'stderr',
+        await this.logCliResult(pwdResult, log, dbJobId);
+        generatedPassword = extractPasswordFromCliResult(pwdResult);
+        if (!generatedPassword) {
+          throw new Error(
+            'Salesforce CLI did not return the generated password; resume the run to retry password recovery',
           );
         }
-        if (generatedPassword) {
-          await prisma.scratchOrg.upsert({
-            where: { alias: config.alias },
-            create: {
-              alias: config.alias,
-              username,
-              password: encrypt(generatedPassword),
-              devHubAlias: config.devHubAlias,
-              status: 'Active',
-              jobId: dbJobId,
-              createdBy: ownerUserId,
-            },
-            update: {
-              password: encrypt(generatedPassword),
-              jobId: dbJobId,
-              createdBy: ownerUserId,
-            },
-          });
-          await log('Password captured for credentials view');
-        } else {
-          await log('Warning: Password generated but could not be stored — use Regenerate Password in Credentials view', 'stderr');
-        }
-        await log(generatedPassword ? 'Password Generated' : 'Password unavailable; continuing');
+        await prisma.scratchOrg.upsert({
+          where: { alias: config.alias },
+          create: {
+            alias: config.alias,
+            username,
+            password: encrypt(generatedPassword),
+            devHubAlias: config.devHubAlias,
+            status: 'Active',
+            jobId: dbJobId,
+            createdBy: ownerUserId,
+          },
+          update: {
+            password: encrypt(generatedPassword),
+            jobId: dbJobId,
+            createdBy: ownerUserId,
+          },
+        });
+        await log('Password captured for credentials view');
+        await log('Password Generated');
         await markStepDone(WORKFLOW_STEPS[1]);
       } else {
         await log(`Skipped: ${WORKFLOW_STEPS[1]} (already completed)`);
@@ -296,6 +290,7 @@ export class ScratchOrgWorker {
             { alias: config.alias, username },
             { verifyAuthentication: false, ensureRequiredPackage: true },
             log,
+            { dbJobId, processRegistry: this.processRegistry },
           );
         },
       );
