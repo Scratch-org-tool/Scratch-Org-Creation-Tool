@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { api } from '@/services/api';
+import { api, ApiError } from '@/services/api';
 import { fetchOrgsList } from '@/hooks/use-orgs';
 import { useJobEventStream } from '@/hooks/use-job-event-stream';
 import { useGitMetadataSource } from '@/modules/source-control/use-git-metadata-source';
@@ -15,7 +15,9 @@ import {
   type AutomationRunView,
   type ConnectedOrgRow,
   type PipelineStepLabel,
+  type ExistingOrgOptions,
   type ScratchOrgFormState,
+  type ScratchOrgLaunchMode,
   type SkipStepKey,
 } from '@/components/scratch-org/types';
 import {
@@ -27,11 +29,15 @@ import {
 import { sessionRequest } from './session-request';
 import {
   DEFAULT_FORM,
+  DEFAULT_EXISTING_ORG_OPTIONS,
   type AzureDefaults,
   type AzureRepo,
   type AzureStatus,
   type DesktopStep,
   type MobileView,
+  type ExistingOrgEligibility,
+  type ExistingScratchOrgCandidate,
+  type RecentScratchOrgRun,
   type ScratchCredentials,
 } from './types';
 import {
@@ -43,9 +49,11 @@ import {
   buildTemplateLaunchRequest,
   completedRunAlias,
   formFromRunConfig,
+  launchTargetFromRun,
   metadataSourceFromForm,
   retrieveCredentialsWithRetry,
 } from './template-v2-workspace-utils';
+import { buildExistingScratchOrgCandidates } from './existing-scratch-org-utils';
 
 async function fetchAzureBranches(project: string, repo: string): Promise<string[]> {
   const params = new URLSearchParams({ repo, project });
@@ -105,8 +113,13 @@ export function useScratchOrgWorkspace() {
   const searchParams = useSearchParams();
   const urlTemplateId = searchParams.get('templateId');
   const urlRunId = searchParams.get('runId');
+  const urlMode = searchParams.get('mode');
+  const urlExistingOrgConnectionId = searchParams.get('orgConnectionId');
 
-  const eagerSnapshot = useMemo(() => readEagerSnapshot(), []);
+  const storedSnapshot = useMemo(() => readEagerSnapshot(), []);
+  const explicitExistingTarget =
+    urlMode === 'configure' && Boolean(urlExistingOrgConnectionId) && !urlRunId;
+  const eagerSnapshot = explicitExistingTarget ? null : storedSnapshot;
   const eagerRunId = getUrlRunId() ?? eagerSnapshot?.automationRunId ?? null;
   const metadataSource = useGitMetadataSource({
     defaultManifestPath: eagerSnapshot?.form.azureManifestPath ?? DEFAULT_FORM.azureManifestPath,
@@ -126,7 +139,13 @@ export function useScratchOrgWorkspace() {
 
   const isMountedRef = useRef(true);
   const bootstrapGenerationRef = useRef(0);
+  const eligibilityGenerationRef = useRef(0);
   const formRef = useRef<ScratchOrgFormState>({ ...DEFAULT_FORM });
+  const modeRef = useRef<ScratchOrgLaunchMode>('create_new');
+  const existingOrgConnectionIdRef = useRef('');
+  const existingOrgOptionsRef = useRef<ExistingOrgOptions>({
+    ...DEFAULT_EXISTING_ORG_OPTIONS,
+  });
   const terminalHandledRef = useRef<string | null>(null);
 
   const [initialLoading, setInitialLoading] = useState(true);
@@ -139,6 +158,23 @@ export function useScratchOrgWorkspace() {
   const [form, setForm] = useState<ScratchOrgFormState>(() =>
     eagerSnapshot?.form ? { ...eagerSnapshot.form } : { ...DEFAULT_FORM },
   );
+  const [mode, setMode] = useState<ScratchOrgLaunchMode>(() =>
+    urlMode === 'configure' ? 'configure_existing' : eagerSnapshot?.mode ?? 'create_new',
+  );
+  const [existingOrgConnectionId, setExistingOrgConnectionId] = useState(
+    () => urlExistingOrgConnectionId ?? eagerSnapshot?.existingOrgConnectionId ?? '',
+  );
+  const [existingOrgOptions, setExistingOrgOptions] = useState<ExistingOrgOptions>(
+    () => eagerSnapshot?.existingOrgOptions ?? { ...DEFAULT_EXISTING_ORG_OPTIONS },
+  );
+  const [existingCandidates, setExistingCandidates] = useState<ExistingScratchOrgCandidate[]>([]);
+  const [recentRuns, setRecentRuns] = useState<RecentScratchOrgRun[]>([]);
+  const [eligibility, setEligibility] = useState<ExistingOrgEligibility | null>(null);
+  const [eligibilityLoading, setEligibilityLoading] = useState(false);
+  const [eligibilityError, setEligibilityError] = useState<string | null>(null);
+  const [eligibilityRefresh, setEligibilityRefresh] = useState(0);
+  const [destructiveConfirmed, setDestructiveConfirmed] = useState(false);
+  const [skipCreateConfirmed, setSkipCreateConfirmed] = useState(false);
   const [installPackage, setInstallPackage] = useState(
     () => eagerSnapshot?.installPackage ?? true,
   );
@@ -171,6 +207,9 @@ export function useScratchOrgWorkspace() {
   const [templatePreviewLoading, setTemplatePreviewLoading] = useState(false);
 
   formRef.current = form;
+  modeRef.current = mode;
+  existingOrgConnectionIdRef.current = existingOrgConnectionId;
+  existingOrgOptionsRef.current = existingOrgOptions;
 
   useEffect(() => {
     const selected = metadataSource.source;
@@ -227,6 +266,12 @@ export function useScratchOrgWorkspace() {
       const params = new URLSearchParams();
       const templateId = urlTemplateId ?? formRef.current.templateId;
       if (templateId) params.set('templateId', templateId);
+      if (modeRef.current === 'configure_existing') {
+        params.set('mode', 'configure');
+        if (existingOrgConnectionIdRef.current) {
+          params.set('orgConnectionId', existingOrgConnectionIdRef.current);
+        }
+      }
       if (runId) params.set('runId', runId);
       const qs = params.toString();
       router.replace(qs ? `${SCRATCH_ORG_PAGE}?${qs}` : SCRATCH_ORG_PAGE, { scroll: false });
@@ -243,6 +288,9 @@ export function useScratchOrgWorkspace() {
       wizardStep: 0 | 1;
       mobileView: MobileView;
       startedAt: number | null;
+      mode: ScratchOrgLaunchMode;
+      existingOrgConnectionId: string;
+      existingOrgOptions: ExistingOrgOptions;
     }>) => {
       const id = overrides?.automationRunId ?? automationRunId;
       if (!id) return;
@@ -250,13 +298,25 @@ export function useScratchOrgWorkspace() {
         automationRunId: id,
         form: overrides?.form ?? formRef.current,
         installPackage: overrides?.installPackage ?? installPackage,
+        mode: overrides?.mode ?? modeRef.current,
+        existingOrgConnectionId:
+          overrides?.existingOrgConnectionId ?? existingOrgConnectionIdRef.current,
+        existingOrgOptions:
+          overrides?.existingOrgOptions ?? existingOrgOptionsRef.current,
         desktopStep: overrides?.desktopStep ?? desktopStep,
         wizardStep: overrides?.wizardStep ?? wizardStep,
         mobileView: overrides?.mobileView ?? mobileView,
         startedAt: new Date(overrides?.startedAt ?? startedAt ?? Date.now()).toISOString(),
       });
     },
-    [automationRunId, installPackage, desktopStep, wizardStep, mobileView, startedAt],
+    [
+      automationRunId,
+      installPackage,
+      desktopStep,
+      wizardStep,
+      mobileView,
+      startedAt,
+    ],
   );
 
   const loadDefaults = useCallback(async () => {
@@ -351,11 +411,20 @@ export function useScratchOrgWorkspace() {
           terminalHandledRef.current = terminalKey;
         } catch {
           if (isMountedRef.current) {
-            setRestoredBanner(
-              `Pipeline completed. Credentials for ${alias} are not available yet; reload to retry.`,
-            );
+            if (modeRef.current === 'configure_existing') {
+              setCredentials({ alias });
+              setMobileView('success');
+              setRestoredBanner(
+                `Configuration completed for ${alias}. Generate or reset its password if credentials are unavailable.`,
+              );
+              terminalHandledRef.current = terminalKey;
+            } else {
+              setRestoredBanner(
+                `Pipeline completed. Credentials for ${alias} are not available yet; reload to retry.`,
+              );
+            }
           }
-          return;
+          if (modeRef.current !== 'configure_existing') return;
         }
 
         if (isMountedRef.current) {
@@ -406,6 +475,16 @@ export function useScratchOrgWorkspace() {
       if (snapshot) {
         setForm(snapshot.form);
         setInstallPackage(snapshot.installPackage);
+        const snapshotMode = snapshot.mode ?? 'create_new';
+        modeRef.current = snapshotMode;
+        setMode(snapshotMode);
+        const snapshotTarget = snapshot.existingOrgConnectionId ?? '';
+        existingOrgConnectionIdRef.current = snapshotTarget;
+        setExistingOrgConnectionId(snapshotTarget);
+        const snapshotOptions =
+          snapshot.existingOrgOptions ?? { ...DEFAULT_EXISTING_ORG_OPTIONS };
+        existingOrgOptionsRef.current = snapshotOptions;
+        setExistingOrgOptions(snapshotOptions);
         setDesktopStep(snapshot.desktopStep);
         setWizardStep(snapshot.wizardStep);
         setMobileView(snapshot.mobileView);
@@ -418,12 +497,21 @@ export function useScratchOrgWorkspace() {
       try {
         const r = await refreshRunWithRetry(runId);
         if (!isCurrent()) return;
-        if (!snapshot) {
-          const restoredForm = formFromRunConfig(r, formRef.current);
-          formRef.current = restoredForm;
-          setForm(restoredForm);
-          metadataSource.setSource(metadataSourceFromForm(restoredForm));
-        }
+        const restoredForm = formFromRunConfig(r, snapshot?.form ?? formRef.current);
+        const restoredTarget = launchTargetFromRun(r);
+        formRef.current = restoredForm;
+        modeRef.current = restoredTarget.mode;
+        existingOrgConnectionIdRef.current = restoredTarget.existingOrgConnectionId;
+        existingOrgOptionsRef.current = restoredTarget.existingOrgOptions;
+        setForm(restoredForm);
+        setMode(restoredTarget.mode);
+        setExistingOrgConnectionId(restoredTarget.existingOrgConnectionId);
+        setExistingOrgOptions(restoredTarget.existingOrgOptions);
+        const savedInstallPackage = (r.config as { installPackage?: unknown } | undefined)
+          ?.installPackage;
+        if (typeof savedInstallPackage === 'boolean') setInstallPackage(savedInstallPackage);
+        if (!snapshot && r.createdAt) setStartedAt(new Date(r.createdAt).getTime());
+        metadataSource.setSource(metadataSourceFromForm(restoredForm));
         await hydrateRunState(r, { fromRestore: true, alias: formRef.current.alias });
       } catch (err) {
         if (isCurrent() && isNotFoundError(err)) {
@@ -444,7 +532,7 @@ export function useScratchOrgWorkspace() {
       isMountedRef.current &&
       bootstrapGenerationRef.current === generation &&
       !signal.aborted;
-    const [hubList, templateList, allOrgs] = await Promise.all([
+    const [hubList, templateList, allOrgs, scratchOrgs, recentRunList] = await Promise.all([
       sessionRequest('scratch-bootstrap-connected-orgs', () =>
         api<ConnectedOrgRow[]>('/environment/connected-orgs/refresh', {
           method: 'POST',
@@ -457,15 +545,38 @@ export function useScratchOrgWorkspace() {
         { signal },
       ).catch(() => []),
       fetchOrgsList({ signal }).catch(() => []),
+      api<Array<{
+        id: string;
+        alias: string;
+        username?: string | null;
+        orgId?: string | null;
+        status: string;
+        expirationDate?: string | null;
+        devHubAlias?: string | null;
+      }>>('/environment/scratch-orgs', { signal }).catch(() => []),
+      api<RecentScratchOrgRun[]>('/environment/automation-runs/recent?limit=50', {
+        signal,
+      }).catch(() => []),
     ]);
     if (!isCurrent()) return;
 
     setOrgs(hubList);
     setTemplates(templateList);
     setSourceOrgs(allOrgs);
+    setRecentRuns(recentRunList);
+    const candidates = buildExistingScratchOrgCandidates(
+      scratchOrgs,
+      allOrgs,
+      recentRunList,
+    );
+    setExistingCandidates(candidates);
     const hubs = hubList.filter((o) => o.isDevHub || o.orgType === 'Dev Hub');
     setForm((f) => ({
       ...f,
+      alias:
+        candidates.find((candidate) =>
+          candidate.orgConnectionId === urlExistingOrgConnectionId)?.alias
+        ?? f.alias,
       devHubAlias: hubs.find((h) => h.isDefaultDevHub)?.alias ?? hubs[0]?.alias ?? f.devHubAlias,
       templateId:
         urlTemplateId ??
@@ -473,7 +584,7 @@ export function useScratchOrgWorkspace() {
         f.templateId,
     }));
 
-    const snapshot = loadWorkspaceSnapshot();
+    const snapshot = explicitExistingTarget ? null : loadWorkspaceSnapshot();
     const resolvedRunId = urlRunId ?? snapshot?.automationRunId ?? null;
 
     if (resolvedRunId) {
@@ -483,7 +594,7 @@ export function useScratchOrgWorkspace() {
         snapshot?.automationRunId === resolvedRunId ? snapshot : null,
         isCurrent,
       );
-    } else {
+    } else if (!(urlMode === 'configure' && urlExistingOrgConnectionId)) {
       try {
         const active = await api<{ automationRunId: string | null }>(
           '/environment/automation-runs/active?intent=scratch_org_pipeline',
@@ -499,7 +610,14 @@ export function useScratchOrgWorkspace() {
     }
 
     if (isCurrent()) setInitialLoading(false);
-  }, [restoreRun, urlRunId, urlTemplateId]);
+  }, [
+    restoreRun,
+    explicitExistingTarget,
+    urlExistingOrgConnectionId,
+    urlMode,
+    urlRunId,
+    urlTemplateId,
+  ]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -654,8 +772,24 @@ export function useScratchOrgWorkspace() {
   void jobIdsKey;
 
   const templateLaunchRequest = useMemo(
-    () => buildTemplateLaunchRequest(form, metadataSource.gitSource, installPackage),
-    [form, installPackage, metadataSource.gitSource],
+    () => buildTemplateLaunchRequest(
+      form,
+      metadataSource.gitSource,
+      installPackage,
+      {
+        mode,
+        existingOrgConnectionId: existingOrgConnectionId || undefined,
+        existingOrgOptions,
+      },
+    ),
+    [
+      existingOrgConnectionId,
+      existingOrgOptions,
+      form,
+      installPackage,
+      metadataSource.gitSource,
+      mode,
+    ],
   );
 
   useEffect(() => {
@@ -724,9 +858,82 @@ export function useScratchOrgWorkspace() {
     };
   }, [form.alias, form.templateId, templateLaunchRequest, templateMeta]);
 
+  useEffect(() => {
+    if (
+      mode !== 'configure_existing'
+      || !existingOrgConnectionId
+      || !metadataSource.gitSource
+      || templatePreviewLoading
+      || (templateMeta && (!templatePreview || templatePreview.errors.length > 0))
+    ) {
+      setEligibility(null);
+      setEligibilityLoading(false);
+      setEligibilityError(null);
+      return;
+    }
+
+    const generation = ++eligibilityGenerationRef.current;
+    const controller = new AbortController();
+    setEligibilityLoading(true);
+    setEligibilityError(null);
+    const timer = setTimeout(() => {
+      void api<ExistingOrgEligibility>('/environment/scratch-org/pipeline/eligibility', {
+        method: 'POST',
+        signal: controller.signal,
+        body: JSON.stringify(templateLaunchRequest),
+      }).then((result) => {
+        if (
+          isMountedRef.current
+          && generation === eligibilityGenerationRef.current
+          && !controller.signal.aborted
+        ) {
+          setEligibility(result);
+        }
+      }).catch((error) => {
+        if (
+          isMountedRef.current
+          && generation === eligibilityGenerationRef.current
+          && !controller.signal.aborted
+        ) {
+          setEligibility(null);
+          setEligibilityError(
+            error instanceof Error ? error.message : 'Eligibility check failed',
+          );
+        }
+      }).finally(() => {
+        if (
+          isMountedRef.current
+          && generation === eligibilityGenerationRef.current
+          && !controller.signal.aborted
+        ) {
+          setEligibilityLoading(false);
+        }
+      });
+    }, 350);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    eligibilityRefresh,
+    existingOrgConnectionId,
+    metadataSource.gitSource,
+    mode,
+    templateLaunchRequest,
+    templateMeta,
+    templatePreview,
+    templatePreviewLoading,
+  ]);
+
   const canLaunch =
-    !!form.alias &&
-    !!form.devHubAlias &&
+    (mode === 'create_new'
+      ? !!form.alias && !!form.devHubAlias
+      : !!existingOrgConnectionId
+        && !eligibilityLoading
+        && eligibility?.eligible === true
+        && destructiveConfirmed
+        && skipCreateConfirmed) &&
     !!metadataSource.gitSource &&
     !templatePreviewLoading &&
     (!templateMeta || Boolean(templatePreview && templatePreview.errors.length === 0));
@@ -741,6 +948,7 @@ export function useScratchOrgWorkspace() {
     setStartedAt(now);
     try {
       let payload: Record<string, unknown> = {
+        mode: 'create_new',
         alias: form.alias,
         duration: form.duration,
         devHubAlias: form.devHubAlias,
@@ -754,6 +962,16 @@ export function useScratchOrgWorkspace() {
         gitSource: metadataSource.gitSource,
         skipSteps: buildSkipSteps({ installPackage }),
       };
+
+      if (mode === 'configure_existing') {
+        if (!eligibility?.eligible) {
+          throw new Error('Resolve eligibility errors before launching.');
+        }
+        payload = {
+          ...templateLaunchRequest,
+          skipSteps: buildSkipSteps({ installPackage }),
+        };
+      }
 
       if (form.templateId) {
         if (templatePreviewLoading) throw new Error('Wait for the server launch plan preview.');
@@ -781,6 +999,9 @@ export function useScratchOrgWorkspace() {
         automationRunId: res.automationRunId,
         form,
         installPackage,
+        mode,
+        existingOrgConnectionId,
+        existingOrgOptions,
         desktopStep: 2,
         wizardStep,
         mobileView: 'progress',
@@ -788,6 +1009,23 @@ export function useScratchOrgWorkspace() {
       });
     } catch (err) {
       setStartedAt(null);
+      if (err instanceof ApiError) {
+        const conflictRunId =
+          typeof err.details.conflictRunId === 'string'
+            ? err.details.conflictRunId
+            : undefined;
+        if (
+          conflictRunId
+          && (
+            err.code === 'ACTIVE_TARGET_PIPELINE'
+            || err.status === 409
+          )
+        ) {
+          await restoreRun(conflictRunId);
+          setRestoredBanner('An active pipeline already targets this org. Its progress was restored.');
+          return;
+        }
+      }
       setLaunchError(err instanceof Error ? err.message : 'Failed to launch scratch org pipeline');
     } finally {
       setSubmitting(false);
@@ -826,6 +1064,8 @@ export function useScratchOrgWorkspace() {
 
   const resetForm = () => {
     clearWorkspaceSnapshot();
+    modeRef.current = 'create_new';
+    existingOrgConnectionIdRef.current = '';
     syncRunIdInUrl(null);
     setForm((f) => ({
       ...DEFAULT_FORM,
@@ -835,6 +1075,14 @@ export function useScratchOrgWorkspace() {
       azureBranch: f.azureBranch,
     }));
     setInstallPackage(true);
+    setMode('create_new');
+    setExistingOrgConnectionId('');
+    setExistingOrgOptions({ ...DEFAULT_EXISTING_ORG_OPTIONS });
+    existingOrgOptionsRef.current = { ...DEFAULT_EXISTING_ORG_OPTIONS };
+    setEligibility(null);
+    setEligibilityError(null);
+    setDestructiveConfirmed(false);
+    setSkipCreateConfirmed(false);
     setWizardStep(0);
     setDesktopStep(0);
     setAutomationRunId(null);
@@ -845,6 +1093,68 @@ export function useScratchOrgWorkspace() {
     setStartedAt(null);
     setRestoredBanner(null);
     terminalHandledRef.current = null;
+  };
+
+  const selectMode = (nextMode: ScratchOrgLaunchMode) => {
+    modeRef.current = nextMode;
+    setMode(nextMode);
+    setDestructiveConfirmed(false);
+    setSkipCreateConfirmed(false);
+    setEligibility(null);
+    if (nextMode === 'create_new') {
+      existingOrgConnectionIdRef.current = '';
+      setExistingOrgConnectionId('');
+    }
+    syncRunIdInUrl(null);
+  };
+
+  const selectExistingOrg = (orgConnectionId: string) => {
+    existingOrgConnectionIdRef.current = orgConnectionId;
+    setExistingOrgConnectionId(orgConnectionId);
+    const candidate = existingCandidates.find(
+      (item) => item.orgConnectionId === orgConnectionId,
+    );
+    if (candidate) {
+      setForm((current) => ({ ...current, alias: candidate.alias }));
+    }
+    setDestructiveConfirmed(false);
+    setSkipCreateConfirmed(false);
+    setEligibility(null);
+    syncRunIdInUrl(null);
+  };
+
+  const openRun = (runId: string) => restoreRun(runId);
+
+  const cancelConflictRun = async (runId: string) => {
+    setStopping(true);
+    try {
+      await api(`/environment/automation-runs/${runId}/cancel`, { method: 'POST' });
+      setEligibilityRefresh((value) => value + 1);
+      const refreshed = await api<RecentScratchOrgRun[]>(
+        '/environment/automation-runs/recent?limit=50',
+      ).catch(() => recentRuns);
+      setRecentRuns(refreshed);
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const regenerateExistingPassword = async () => {
+    const alias = credentials?.alias || formRef.current.alias;
+    if (!alias) return;
+    setSubmitting(true);
+    setLaunchError(null);
+    try {
+      const result = await api<{ password: string }>(
+        `/environment/scratch-orgs/${encodeURIComponent(alias)}/regenerate-password`,
+        { method: 'POST' },
+      );
+      setCredentials((current) => ({ ...(current ?? { alias }), password: result.password }));
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : 'Password reset failed');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const selectDevHub = (alias: string) => {
@@ -861,6 +1171,14 @@ export function useScratchOrgWorkspace() {
   };
 
   const activeSubtext = useMemo(() => {
+    const preparation = run?.jobs?.findLast((job) => job.type === 'prepare_existing_org');
+    if (preparation?.status === 'running') {
+      const preparationLogs = preparation.logs?.map((log) => log.line) ?? [];
+      if (preparationLogs.some((line) => line.includes('Checking required package'))) {
+        return 'Verifying or installing the required package…';
+      }
+      return 'Verifying existing org authentication…';
+    }
     const step = scratchJob?.currentStep ?? '';
     if (step.includes('Install')) return 'Installing Error Logger Package…';
     if (step.includes('Create')) return 'Creating scratch org via Dev Hub…';
@@ -878,6 +1196,7 @@ export function useScratchOrgWorkspace() {
       scratchJobStep: scratchJob?.currentStep,
       skippedSteps,
       sourceControlConnected: metadataSource.connected,
+      launchMode: mode,
     });
 
   void tick;
@@ -885,6 +1204,21 @@ export function useScratchOrgWorkspace() {
   return {
     router,
     initialLoading,
+    mode,
+    selectMode,
+    existingOrgConnectionId,
+    selectExistingOrg,
+    existingOrgOptions,
+    setExistingOrgOptions,
+    existingCandidates,
+    recentRuns,
+    eligibility,
+    eligibilityLoading,
+    eligibilityError,
+    destructiveConfirmed,
+    setDestructiveConfirmed,
+    skipCreateConfirmed,
+    setSkipCreateConfirmed,
     orgs,
     devHubs,
     templates,
@@ -923,6 +1257,9 @@ export function useScratchOrgWorkspace() {
     launchPipeline,
     cancelRun,
     resumeRun,
+    openRun,
+    cancelConflictRun,
+    regenerateExistingPassword,
     resetForm,
     loadDefaults,
     selectDevHub,

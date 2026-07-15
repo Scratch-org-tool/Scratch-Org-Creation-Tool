@@ -12,12 +12,27 @@ export const PIPELINE_STEPS_UI = [
   'Complete',
 ] as const;
 
-export type PipelineStepLabel = (typeof PIPELINE_STEPS_UI)[number];
+export const EXISTING_PIPELINE_STEPS_UI = [
+  'Create Scratch Org',
+  'Generate Password',
+  'Retrieve Org Details',
+  'Prepare Existing Org',
+  'Git Metadata Deploy',
+  'Assign Permission Set',
+  'Load Custom Settings',
+  'Load Org Config',
+  'Complete',
+] as const;
+
+export type PipelineStepLabel =
+  | (typeof PIPELINE_STEPS_UI)[number]
+  | (typeof EXISTING_PIPELINE_STEPS_UI)[number];
 
 export type StepState = 'done' | 'active' | 'pending' | 'skipped' | 'failed';
 
 export const PIPELINE_STEP_LABEL_BY_ID: Record<string, PipelineStepLabel> = {
   scratch_org_create: 'Create Scratch Org',
+  prepare_existing_org: 'Prepare Existing Org',
   git_metadata_deploy: 'Git Metadata Deploy',
   azure_metadata_deploy: 'Git Metadata Deploy',
   assign_permission_set: 'Assign Permission Set',
@@ -33,6 +48,7 @@ export function formatPipelineStepId(stepId?: string | null): string {
 export function isPipelineResumable(failedStep?: string | null): boolean {
   return (
     failedStep === 'scratch_org_create' ||
+    failedStep === 'prepare_existing_org' ||
     failedStep === 'git_metadata_deploy' ||
     failedStep === 'azure_metadata_deploy' ||
     failedStep === 'assign_permission_set' ||
@@ -81,10 +97,27 @@ export interface ScratchOrgFormState {
 export interface AutomationRunView {
   id: string;
   status: string;
+  launchMode?: ScratchOrgLaunchMode;
+  targetOrgConnectionId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
   failedStep?: string | null;
   lastError?: string | null;
   config?: {
+    mode?: ScratchOrgLaunchMode;
+    alias?: string;
+    existingOrgConnectionId?: string;
+    existingOrgOptions?: ExistingOrgOptions;
+    templateId?: string;
+    devHubAlias?: string;
+    duration?: number;
+    template?: string;
+    description?: string;
+    gitSource?: Record<string, unknown>;
+    azureDeploy?: Record<string, unknown>;
     sourceOrgId?: string;
+    dataDeploymentOrgId?: string;
+    customSettingsOrgId?: string;
     dataSeed?: {
       datasets?: string[];
       querySection?: {
@@ -102,6 +135,8 @@ export interface AutomationRunView {
     resumeFrom?: string;
     awaitingUserActions?: boolean;
     targetOrgConnectionId?: string;
+    launchMode?: ScratchOrgLaunchMode;
+    skippedSteps?: string[];
     userActionsCompleted?: string[];
   };
   jobs?: Array<{
@@ -138,10 +173,15 @@ export function getStepStates(
     scratchJobStep?: string;
     skippedSteps: Set<SkipStepKey>;
     sourceControlConnected: boolean;
+    launchMode?: ScratchOrgLaunchMode;
   },
 ): StepState {
   const { run, scratchJobStep, skippedSteps, sourceControlConnected } = opts;
-  const idx = PIPELINE_STEPS_UI.indexOf(label);
+  const launchMode = opts.launchMode ?? 'create_new';
+  const stepList: readonly PipelineStepLabel[] = launchMode === 'configure_existing'
+    ? EXISTING_PIPELINE_STEPS_UI
+    : PIPELINE_STEPS_UI;
+  const idx = stepList.indexOf(label);
   const completed = run?.checkpoint?.completedSteps ?? [];
   const scratchDone = completed.includes('scratch_org_create');
   const azureDone =
@@ -156,7 +196,22 @@ export function getStepStates(
     ? PIPELINE_STEP_LABEL_BY_ID[run.failedStep]
     : undefined;
 
+  if (
+    launchMode === 'configure_existing'
+    && ['Create Scratch Org', 'Generate Password', 'Retrieve Org Details'].includes(label)
+  ) return 'skipped';
+
   if (runPaused && failedUiLabel === label) return 'failed';
+
+  if (label === 'Prepare Existing Org') {
+    const preparation = run?.jobs?.findLast((job) => job.type === 'prepare_existing_org');
+    if (completed.includes('prepare_existing_org') || preparation?.status === 'completed') return 'done';
+    if (preparation?.status === 'failed' || (runPaused && run?.failedStep === 'prepare_existing_org')) {
+      return 'failed';
+    }
+    if (preparation && ['pending', 'queued', 'running'].includes(preparation.status)) return 'active';
+    return 'pending';
+  }
 
   if (label === 'Install Package' && skippedSteps.has('installPackages')) return 'skipped';
   if ((label === 'Git Metadata Deploy' || label === 'Assign Permission Set') && !sourceControlConnected) {
@@ -186,7 +241,10 @@ export function getStepStates(
       metaRunning &&
       (metaJob?.currentStep?.includes('Connecting') || metaJob?.currentStep?.includes('Azure'))
     ) return 'active';
-    if (scratchDone && !azureDone) return metaRunning ? 'active' : 'pending';
+    if (
+      (scratchDone || completed.includes('prepare_existing_org'))
+      && !azureDone
+    ) return metaRunning ? 'active' : 'pending';
     return 'pending';
   }
 
@@ -219,4 +277,11 @@ export function buildSkipSteps(options: {
   const steps: SkipStepKey[] = ['deployMetadata', 'assignPermissions'];
   if (!options.installPackage) steps.unshift('installPackages');
   return steps;
+}
+
+export type ScratchOrgLaunchMode = 'create_new' | 'configure_existing';
+
+export interface ExistingOrgOptions {
+  verifyAuthentication: boolean;
+  ensureRequiredPackage: boolean;
 }

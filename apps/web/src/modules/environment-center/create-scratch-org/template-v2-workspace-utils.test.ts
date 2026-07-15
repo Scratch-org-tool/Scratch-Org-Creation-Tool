@@ -4,6 +4,7 @@ import {
   buildTemplateLaunchRequest,
   completedRunAlias,
   formFromRunConfig,
+  launchTargetFromRun,
   metadataSourceFromForm,
   retrieveCredentialsWithRetry,
   runtimeEmailPoolOverride,
@@ -36,11 +37,54 @@ describe('Template V2 launch and recovery contracts', () => {
     });
     expect(buildTemplateLaunchRequest(form, { provider: 'github' }, true))
       .toMatchObject({
+        mode: 'create_new',
         templateId: 'template-id',
         runtimeEmailPoolOverride: {
           emails: ['one@example.com', 'two@example.com'],
         },
       });
+  });
+
+  it('uses the configure-existing launch contract without create-only fields', () => {
+    const form = {
+      devHubAlias: 'must-not-send',
+      alias: 'must-not-send',
+      duration: 7,
+      template: 'must-not-send.json',
+      description: '',
+      azureProject: '',
+      azureRepo: 'repo',
+      azureBranch: 'main',
+      azureManifestPath: 'manifest/package.xml',
+      gitProvider: 'github',
+      gitConnectionId: '',
+      gitNamespace: '',
+      gitRepositoryId: '',
+      templateId: 'template-id',
+      sourceOrgId: '',
+      dataDeploymentOrgId: '',
+      customSettingsOrgId: '',
+      runtimeEmailPool: '',
+    } satisfies ScratchOrgFormState;
+    const payload = buildTemplateLaunchRequest(form, { provider: 'github' }, true, {
+      mode: 'configure_existing',
+      existingOrgConnectionId: 'target-id',
+      existingOrgOptions: {
+        verifyAuthentication: true,
+        ensureRequiredPackage: false,
+      },
+    });
+    expect(payload).toMatchObject({
+      mode: 'configure_existing',
+      existingOrgConnectionId: 'target-id',
+      existingOrgOptions: {
+        verifyAuthentication: true,
+        ensureRequiredPackage: false,
+      },
+    });
+    expect(payload).not.toHaveProperty('alias');
+    expect(payload).not.toHaveProperty('devHubAlias');
+    expect(payload).not.toHaveProperty('duration');
   });
 
   it('uses only the synchronous saved run alias for credential recovery', () => {
@@ -103,6 +147,30 @@ describe('Template V2 launch and recovery contracts', () => {
       repo: 'saved-org/saved-repo',
       branch: 'release',
       manifestPath: 'manifest/saved.xml',
+    });
+  });
+
+  it('hydrates configure-existing mode and target from immutable run config', () => {
+    expect(launchTargetFromRun({
+      id: 'run',
+      status: 'running',
+      launchMode: 'configure_existing',
+      targetOrgConnectionId: 'database-target',
+      config: {
+        mode: 'configure_existing',
+        existingOrgConnectionId: 'config-target',
+        existingOrgOptions: {
+          verifyAuthentication: false,
+          ensureRequiredPackage: true,
+        },
+      },
+    })).toEqual({
+      mode: 'configure_existing',
+      existingOrgConnectionId: 'config-target',
+      existingOrgOptions: {
+        verifyAuthentication: false,
+        ensureRequiredPackage: true,
+      },
     });
   });
 

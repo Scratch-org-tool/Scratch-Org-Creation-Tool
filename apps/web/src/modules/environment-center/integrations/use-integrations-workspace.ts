@@ -43,7 +43,7 @@ const DEFAULT_SF_FORM: SalesforceConnectForm = {
   orgType: 'production',
 };
 
-const INTEGRATIONS_CACHE_KEY = 'integrations:workspace';
+const INTEGRATIONS_CACHE_KEY = 'integrations:workspace:v2';
 
 type IntegrationsCache = {
   orgs: ConnectedOrg[];
@@ -123,8 +123,19 @@ export function useIntegrationsWorkspace() {
   }, []);
 
   const refreshScratchOrgs = useCallback(async () => {
-    const data = await api<ScratchOrg[]>('/environment/scratch-orgs');
-    setScratchOrgs(data);
+    const [data, connections] = await Promise.all([
+      api<ScratchOrg[]>('/environment/scratch-orgs'),
+      api<Array<{ id: string; alias: string; type?: string }>>('/orgs').catch(() => []),
+    ]);
+    const connectionIds = new Map(
+      connections
+        .filter((connection) => connection.type === 'scratch')
+        .map((connection) => [connection.alias, connection.id]),
+    );
+    setScratchOrgs(data.map((org) => ({
+      ...org,
+      orgConnectionId: connectionIds.get(org.alias),
+    })));
   }, []);
 
   const loadAzureStatus = useCallback(async () => {

@@ -4,6 +4,12 @@ import type { ScratchOrgFormState } from '@/components/scratch-org/types';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
 import type { ResolvedTemplateV2Preview } from './template-v2-runtime';
+import type {
+  ExistingOrgEligibility,
+  ExistingScratchOrgCandidate,
+} from './types';
+import { CheckCircle2, SkipForward } from 'lucide-react';
+import { packageEligibilitySummary } from './existing-scratch-org-utils';
 
 interface ScratchOrgReviewProps {
   form: ScratchOrgFormState;
@@ -13,6 +19,17 @@ interface ScratchOrgReviewProps {
   dataOrgAlias?: string;
   settingsOrgAlias?: string;
   templatePreview?: ResolvedTemplateV2Preview | null;
+  mode?: 'create_new' | 'configure_existing';
+  existingTarget?: ExistingScratchOrgCandidate;
+  eligibility?: ExistingOrgEligibility | null;
+  existingOrgOptions?: {
+    verifyAuthentication: boolean;
+    ensureRequiredPackage: boolean;
+  };
+  destructiveConfirmed?: boolean;
+  onDestructiveConfirmedChange?: (confirmed: boolean) => void;
+  skipCreateConfirmed?: boolean;
+  onSkipCreateConfirmedChange?: (confirmed: boolean) => void;
 }
 
 export function ScratchOrgReview({
@@ -23,6 +40,14 @@ export function ScratchOrgReview({
   dataOrgAlias,
   settingsOrgAlias,
   templatePreview,
+  mode = 'create_new',
+  existingTarget,
+  eligibility,
+  existingOrgOptions,
+  destructiveConfirmed,
+  onDestructiveConfirmedChange,
+  skipCreateConfirmed,
+  onSkipCreateConfirmedChange,
 }: ScratchOrgReviewProps) {
   const cfg = templatePreview?.config ?? templateMeta?.config;
   const customSettings = cfg?.customSettings as { mode?: string; enabled?: boolean } | undefined;
@@ -34,18 +59,24 @@ export function ScratchOrgReview({
     autoRunUsers?: boolean;
   } | undefined;
 
-  const rows: [string, string][] = [
-    ['Dev Hub', form.devHubAlias],
-    ['Alias', form.alias],
-  ];
+  const rows: [string, string][] = mode === 'configure_existing'
+    ? [
+        ['Mode', 'Configure existing'],
+        ['Target', existingTarget?.alias ?? form.alias],
+        ['Org connection ID', existingTarget?.orgConnectionId ?? 'Not selected'],
+      ]
+    : [
+        ['Dev Hub', form.devHubAlias],
+        ['Alias', form.alias],
+      ];
 
   if (templateMeta) {
     rows.push(['Template', templateMeta.name]);
-  } else {
+  } else if (mode === 'create_new') {
     rows.push(['Duration', `${form.duration} days`], ['Scratch def', form.template]);
   }
 
-  if (form.description) rows.push(['Description', form.description]);
+  if (form.description && mode === 'create_new') rows.push(['Description', form.description]);
   const resolvedDataOrgId = cfg?.dataDeploymentOrgId ?? cfg?.sourceOrgId;
   const resolvedSettingsOrgId = customSettings?.enabled === false
     ? undefined
@@ -71,7 +102,7 @@ export function ScratchOrgReview({
     ]);
   }
   if (form.azureManifestPath) rows.push(['Manifest', form.azureManifestPath]);
-  rows.push(['Install package', installPackage ? 'Yes' : 'No']);
+  if (mode === 'create_new') rows.push(['Install package', installPackage ? 'Yes' : 'No']);
 
   if (templateMeta) {
     rows.push([
@@ -103,6 +134,9 @@ export function ScratchOrgReview({
 
   return (
     <div className="space-y-4">
+      <h3 id="scratch-org-review-title" tabIndex={-1} className="sr-only">
+        Review scratch org pipeline
+      </h3>
       {templatePreview?.errors.map((error) => (
         <p key={error} className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>
       ))}
@@ -117,6 +151,71 @@ export function ScratchOrgReview({
           </div>
         ))}
       </dl>
+      {mode === 'configure_existing' && (
+        <>
+          <section
+            className="rounded-lg border border-border/60 bg-card/30 p-4"
+            aria-labelledby="will-run-title"
+          >
+            <h4 id="will-run-title" className="text-sm font-medium mb-3">Will Run</h4>
+            <ol className="space-y-2 text-xs">
+              {[
+                ['Create scratch org', 'Skipped — using the selected existing org', true],
+                ['Generate password', 'Skipped — existing credentials are preserved', true],
+                ['Retrieve newly created org details', 'Skipped — target details already exist', true],
+                [
+                  'Prepare existing org',
+                  `${existingOrgOptions?.verifyAuthentication ? 'Verify authentication' : 'Skip authentication verification'}; ${
+                    packageEligibilitySummary(
+                      existingOrgOptions?.ensureRequiredPackage ?? true,
+                      eligibility?.steps.find((step) => step.step === 'required_package')?.messages,
+                    )
+                  }`,
+                  false,
+                ],
+                ['Deploy Git metadata', `${form.azureRepo} / ${form.azureBranch}`, false],
+                ['Assign permission set', 'Run after metadata deployment', false],
+                ['Load custom settings and org configuration', 'Use resolved template and runtime overrides', false],
+                ['Run ordered queries, partner data, and users', 'Continue with Template V2 post-deploy actions', false],
+              ].map(([label, detail, skipped], index) => (
+                <li key={String(label)} className="flex items-start gap-2">
+                  <span className="w-5 h-5 rounded-full border border-border flex items-center justify-center shrink-0">
+                    {skipped
+                      ? <SkipForward className="w-3 h-3 text-muted-foreground" />
+                      : <CheckCircle2 className="w-3 h-3 text-primary" />}
+                  </span>
+                  <span>
+                    <strong>{index + 1}. {label}</strong>
+                    <span className="block text-muted-foreground mt-0.5">{detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <fieldset className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+            <legend className="px-1 text-sm font-medium">Deployment confirmations</legend>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={destructiveConfirmed}
+                onChange={(event) => onDestructiveConfirmedChange?.(event.target.checked)}
+              />
+              <span>I understand this deployment may overwrite or remove configuration in the selected org.</span>
+            </label>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={skipCreateConfirmed}
+                onChange={(event) => onSkipCreateConfirmedChange?.(event.target.checked)}
+              />
+              <span>I confirm the pipeline must skip org creation, password generation, and new-org detail retrieval.</span>
+            </label>
+          </fieldset>
+        </>
+      )}
       {templatePreview?.users.length ? (
         <div className="rounded-lg border border-border/60 overflow-x-auto">
           <table className="w-full text-xs">

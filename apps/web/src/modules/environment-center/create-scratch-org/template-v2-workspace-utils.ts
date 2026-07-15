@@ -1,4 +1,9 @@
-import type { AutomationRunView, ScratchOrgFormState } from '@/components/scratch-org/types';
+import type {
+  AutomationRunView,
+  ExistingOrgOptions,
+  ScratchOrgFormState,
+  ScratchOrgLaunchMode,
+} from '@/components/scratch-org/types';
 import type { ScratchCredentials } from './types';
 import { parseRuntimeEmailPool } from './template-v2-runtime';
 
@@ -82,11 +87,25 @@ export function buildTemplateLaunchRequest(
   form: ScratchOrgFormState,
   gitSource: unknown,
   installPackage: boolean,
+  target: {
+    mode?: ScratchOrgLaunchMode;
+    existingOrgConnectionId?: string;
+    existingOrgOptions?: ExistingOrgOptions;
+  } = {},
 ): Record<string, unknown> {
+  const mode = target.mode ?? 'create_new';
   return {
-    alias: form.alias,
-    duration: form.duration,
-    devHubAlias: form.devHubAlias,
+    mode,
+    ...(mode === 'create_new'
+      ? {
+          alias: form.alias,
+          duration: form.duration,
+          devHubAlias: form.devHubAlias,
+        }
+      : {
+          existingOrgConnectionId: target.existingOrgConnectionId,
+          existingOrgOptions: target.existingOrgOptions,
+        }),
     description: form.description || undefined,
     sourceOrgId: form.dataDeploymentOrgId || form.sourceOrgId || undefined,
     dataDeploymentOrgId: form.dataDeploymentOrgId || form.sourceOrgId || undefined,
@@ -95,6 +114,30 @@ export function buildTemplateLaunchRequest(
     gitSource,
     installPackage,
     runtimeEmailPoolOverride: runtimeEmailPoolOverride(form.runtimeEmailPool),
+  };
+}
+
+export function launchTargetFromRun(run: AutomationRunView): {
+  mode: ScratchOrgLaunchMode;
+  existingOrgConnectionId: string;
+  existingOrgOptions: ExistingOrgOptions;
+} {
+  const config = run.config;
+  const mode = config?.mode
+    ?? run.launchMode
+    ?? run.checkpoint?.launchMode
+    ?? 'create_new';
+  return {
+    mode,
+    existingOrgConnectionId:
+      config?.existingOrgConnectionId
+      ?? run.targetOrgConnectionId
+      ?? run.checkpoint?.targetOrgConnectionId
+      ?? '',
+    existingOrgOptions: config?.existingOrgOptions ?? {
+      verifyAuthentication: true,
+      ensureRequiredPackage: true,
+    },
   };
 }
 

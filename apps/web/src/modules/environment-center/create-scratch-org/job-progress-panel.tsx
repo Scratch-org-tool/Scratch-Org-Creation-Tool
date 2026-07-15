@@ -10,6 +10,7 @@ import { ExecutionLogConsole } from '@/components/scratch-org/execution-log-cons
 import { ScratchOrgSuccessBanner } from '@/components/scratch-org/scratch-org-success';
 import { formatPipelineStepId } from '@/components/scratch-org/types';
 import type { AutomationRunView, PipelineStepLabel, StepState } from '@/components/scratch-org/types';
+import type { ScratchOrgLaunchMode } from '@/components/scratch-org/types';
 import type { ScratchCredentials } from './types';
 import type { StreamConnectionState } from '@/hooks/use-job-event-stream';
 import { cn } from '@/utils/cn';
@@ -73,6 +74,9 @@ interface JobProgressPanelProps {
   wizardPreviewStep?: number;
   compact?: boolean;
   logHeightRem?: number;
+  launchMode?: ScratchOrgLaunchMode;
+  onGeneratePassword?: () => void;
+  generatingPassword?: boolean;
 }
 
 export function JobProgressPanel({
@@ -105,19 +109,35 @@ export function JobProgressPanel({
   wizardPreviewStep = 0,
   compact,
   logHeightRem,
+  launchMode = 'create_new',
+  onGeneratePassword,
+  generatingPassword,
 }: JobProgressPanelProps) {
+  const preparationJob = run?.jobs?.findLast((job) => job.type === 'prepare_existing_org');
+  const preparationResult = preparationJob?.result as {
+    authenticated?: boolean | null;
+    packageAction?: 'already_installed' | 'installed' | 'skipped';
+  } | undefined;
   if (!automationRunId) {
     const previewSteps = [
       { label: 'Configure', icon: ClipboardList, active: wizardPreviewStep === 0 },
       { label: 'Review', icon: Eye, active: wizardPreviewStep === 1 },
-      { label: 'Create', icon: Rocket, active: wizardPreviewStep === 2 },
+      {
+        label: launchMode === 'configure_existing' ? 'Deploy' : 'Create',
+        icon: Rocket,
+        active: wizardPreviewStep === 2,
+      },
     ];
     return (
       <div className="flex flex-col min-h-0">
         <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground shrink-0">
           <Rocket className="w-9 h-9 mb-3 opacity-30" />
-          <p className="text-sm font-medium text-foreground">Ready to create</p>
-          <p className="text-xs mt-1">Configure your scratch org and start the pipeline.</p>
+          <p className="text-sm font-medium text-foreground">
+            {launchMode === 'configure_existing' ? 'Ready to configure' : 'Ready to create'}
+          </p>
+          <p className="text-xs mt-1">
+            Configure your scratch org pipeline and start deployment.
+          </p>
         </div>
         <ul className="space-y-2 shrink-0 border-t border-border/60 pt-4">
           {previewSteps.map((step) => (
@@ -247,7 +267,7 @@ export function JobProgressPanel({
                 className={cn('gap-1 mt-2', compact ? 'h-7 text-xs' : 'mt-3')}
               >
                 <RotateCcw className="w-3 h-3" />
-                Retry
+                {launchMode === 'configure_existing' ? 'Retry configuration' : 'Retry'}
               </Button>
             )}
           </InlineAlert>
@@ -264,7 +284,39 @@ export function JobProgressPanel({
           getState={getState}
           activeSubtext={activeSubtext}
           compact={compact}
+          launchMode={launchMode}
         />
+
+        {launchMode === 'configure_existing' && preparationJob && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs" aria-label="Existing org preparation status">
+            <div className="rounded-md border border-border/60 p-2">
+              <span className="text-muted-foreground">Authentication</span>
+              <strong className="block mt-0.5">
+                {preparationResult?.authenticated === true
+                  ? 'Verified'
+                  : preparationResult?.authenticated === null
+                    ? 'Skipped'
+                    : preparationJob.status === 'running'
+                      ? 'Verifying…'
+                      : 'Pending'}
+              </strong>
+            </div>
+            <div className="rounded-md border border-border/60 p-2">
+              <span className="text-muted-foreground">Required package</span>
+              <strong className="block mt-0.5">
+                {preparationResult?.packageAction === 'already_installed'
+                  ? 'Already installed'
+                  : preparationResult?.packageAction === 'installed'
+                    ? 'Installed'
+                    : preparationResult?.packageAction === 'skipped'
+                      ? 'Skipped'
+                      : preparationJob.status === 'running'
+                        ? 'Checking / installing…'
+                        : 'Pending'}
+              </strong>
+            </div>
+          </div>
+        )}
 
         {run && <TemplateV2Progress run={run} />}
 
@@ -319,6 +371,9 @@ export function JobProgressPanel({
             expirationDate={credentials.expirationDate}
             onViewDetails={onViewDetails}
             compact={compact}
+            mode={launchMode}
+            onGeneratePassword={onGeneratePassword}
+            generatingPassword={generatingPassword}
           />
           {!compact && (
             <Link href="/data-center?tab=cona" className="text-sm text-primary hover:underline block">

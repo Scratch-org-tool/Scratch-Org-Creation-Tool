@@ -50,6 +50,7 @@ export interface ConnectedOrg {
 
 export interface ScratchOrg {
   id: string;
+  orgConnectionId?: string;
   alias: string;
   username: string;
   orgId?: string | null;
