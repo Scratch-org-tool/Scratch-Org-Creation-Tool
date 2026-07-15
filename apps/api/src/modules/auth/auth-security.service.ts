@@ -166,7 +166,10 @@ export class AuthSecurityService {
     const key = `auth:lock:profile:${this.hashUserId(userId)}`;
     return this.withLocalLock(key, async () => {
       const redis = this.queueService.getConnection();
-      if (!redis) return operation();
+      if (!redis) {
+        this.logger.warn('auth_profile_lock_redis_unavailable');
+        throw new Error('Account profile update lock unavailable');
+      }
 
       const token = randomUUID();
       let acquired = false;
@@ -189,35 +192,67 @@ export class AuthSecurityService {
         } while (!acquired && Date.now() < deadline);
       } catch {
         this.logger.warn('auth_profile_lock_redis_failed');
-        return operation();
+        throw new Error('Account profile update lock unavailable');
       }
 
       if (!acquired) {
         throw new Error('Account profile update lock timed out');
       }
 
+      let lockFailure: Error | null = null;
+      let renewalInFlight: Promise<void> | null = null;
       const renew = setInterval(() => {
-        redis.eval(
+        if (renewalInFlight || lockFailure) return;
+        renewalInFlight = redis.eval(
           "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end",
           1,
           key,
           token,
           String(ACCOUNT_MUTATION_LOCK_TTL_MS),
-        ).catch(() => undefined);
+        ).then((renewed) => {
+          if (renewed !== 1) {
+            lockFailure = new Error('Account profile update lock ownership lost');
+          }
+        }).catch(() => {
+          lockFailure = new Error('Account profile update lock renewal failed');
+        }).finally(() => {
+          renewalInFlight = null;
+        });
       }, ACCOUNT_MUTATION_LOCK_TTL_MS / 3);
       renew.unref?.();
 
+      let result!: T;
+      let operationFailed = false;
+      let operationError: unknown;
       try {
-        return await operation();
+        result = await operation();
+      } catch (error) {
+        operationFailed = true;
+        operationError = error;
       } finally {
         clearInterval(renew);
-        await redis.eval(
-          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
-          1,
-          key,
-          token,
-        ).catch(() => undefined);
+        await renewalInFlight;
+        try {
+          const released = await redis.eval(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
+            1,
+            key,
+            token,
+          );
+          if (released !== 1) {
+            lockFailure ??= new Error('Account profile update lock ownership lost');
+          }
+        } catch {
+          lockFailure ??= new Error('Account profile update lock release failed');
+        }
       }
+
+      if (lockFailure) {
+        this.logger.warn('auth_profile_lock_operation_failed');
+        throw lockFailure;
+      }
+      if (operationFailed) throw operationError;
+      return result;
     });
   }
 

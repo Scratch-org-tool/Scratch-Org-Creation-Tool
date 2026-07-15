@@ -22,6 +22,13 @@ export interface AccountActionErrors {
 
 export interface LatestRequestGate {
   current: number;
+  authoritativeDisplayName?: string;
+}
+
+export interface DisplayNameSyncSequence {
+  requestId: number;
+  isCurrent: () => boolean;
+  latest: () => { requestId: number; displayName: string };
 }
 
 export type OptimisticUpdateResult<T> =
@@ -43,22 +50,38 @@ export async function runOptimisticDisplayNameUpdate<T extends { displayName: st
   displayName: string;
   setProfile: (profile: T) => void;
   request: () => Promise<T>;
-  syncFirebase?: (displayName: string) => Promise<void>;
+  syncFirebase?: (
+    displayName: string,
+    sequence: DisplayNameSyncSequence,
+  ) => Promise<void>;
   reconcile?: () => Promise<void>;
 }): Promise<OptimisticUpdateResult<T>> {
   const requestId = ++input.gate.current;
+  input.gate.authoritativeDisplayName = input.snapshot.displayName;
   input.setProfile({ ...input.snapshot, displayName: input.displayName });
 
   try {
     const response = await input.request();
     if (requestId !== input.gate.current) return { status: 'stale', profile: null };
 
+    input.gate.authoritativeDisplayName = response.displayName;
     input.setProfile(response);
     let syncWarning: string | undefined;
     if (input.syncFirebase) {
       try {
-        await input.syncFirebase(response.displayName);
+        await input.syncFirebase(response.displayName, {
+          requestId,
+          isCurrent: () => requestId === input.gate.current,
+          latest: () => ({
+            requestId: input.gate.current,
+            displayName:
+              input.gate.authoritativeDisplayName ?? response.displayName,
+          }),
+        });
       } catch {
+        if (requestId !== input.gate.current) {
+          return { status: 'stale', profile: null };
+        }
         try {
           await input.reconcile?.();
         } catch {
@@ -68,16 +91,20 @@ export async function runOptimisticDisplayNameUpdate<T extends { displayName: st
         syncWarning = DISPLAY_NAME_SYNC_WARNING;
       }
     }
+    if (requestId !== input.gate.current) return { status: 'stale', profile: null };
     return { status: 'success', profile: response, ...(syncWarning ? { syncWarning } : {}) };
   } catch (error) {
     if (requestId !== input.gate.current) return { status: 'stale', profile: null };
+    input.gate.authoritativeDisplayName = input.snapshot.displayName;
     input.setProfile(input.snapshot);
     throw error;
   }
 }
 
 export interface FirebaseDisplayNameSyncDependencies {
-  updateProfile: () => Promise<void>;
+  displayName: string;
+  sequence: DisplayNameSyncSequence;
+  updateProfile: (displayName: string) => Promise<void>;
   reload: () => Promise<void>;
   refreshContext: () => void;
 }
@@ -85,14 +112,64 @@ export interface FirebaseDisplayNameSyncDependencies {
 export async function synchronizeFirebaseDisplayName(
   dependencies: FirebaseDisplayNameSyncDependencies,
 ): Promise<void> {
+  const reconcileLatest = async (): Promise<void> => {
+    while (true) {
+      const latest = dependencies.sequence.latest();
+      await dependencies.updateProfile(latest.displayName);
+      const afterUpdate = dependencies.sequence.latest();
+      if (
+        afterUpdate.requestId !== latest.requestId
+        || afterUpdate.displayName !== latest.displayName
+      ) {
+        continue;
+      }
+
+      await dependencies.reload();
+      const afterReload = dependencies.sequence.latest();
+      if (
+        afterReload.requestId !== latest.requestId
+        || afterReload.displayName !== latest.displayName
+      ) {
+        continue;
+      }
+      dependencies.refreshContext();
+      return;
+    }
+  };
+
   try {
-    await dependencies.updateProfile();
-    await dependencies.reload();
-  } finally {
-    // Firebase mutates the User object in place, so force the context value to
-    // refresh even when the object identity does not change.
+    await dependencies.updateProfile(dependencies.displayName);
+  } catch (error) {
+    if (!dependencies.sequence.isCurrent()) {
+      await reconcileLatest();
+      return;
+    }
     dependencies.refreshContext();
+    throw error;
   }
+  if (!dependencies.sequence.isCurrent()) {
+    await reconcileLatest();
+    return;
+  }
+
+  try {
+    await dependencies.reload();
+  } catch (error) {
+    if (!dependencies.sequence.isCurrent()) {
+      await reconcileLatest();
+      return;
+    }
+    dependencies.refreshContext();
+    throw error;
+  }
+  if (!dependencies.sequence.isCurrent()) {
+    await reconcileLatest();
+    return;
+  }
+
+  // Firebase mutates the User object in place, so force the context value to
+  // refresh even when the object identity does not change.
+  dependencies.refreshContext();
 }
 
 function friendlyValidationMessage(

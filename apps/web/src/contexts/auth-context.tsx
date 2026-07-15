@@ -320,9 +320,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: 'PATCH',
         body: JSON.stringify(requestBody),
       }),
-      syncFirebase: (nextDisplayName) => synchronizeFirebaseDisplayName({
-        updateProfile: () => updateFirebaseProfile(firebaseUser, {
-          displayName: nextDisplayName,
+      syncFirebase: (nextDisplayName, sequence) => synchronizeFirebaseDisplayName({
+        displayName: nextDisplayName,
+        sequence,
+        updateProfile: (authoritativeDisplayName) => updateFirebaseProfile(firebaseUser, {
+          displayName: authoritativeDisplayName,
         }),
         reload: () => reloadFirebaseUser(firebaseUser),
         refreshContext: () => refreshUserContext(auth.currentUser),

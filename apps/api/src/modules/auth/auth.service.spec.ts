@@ -111,6 +111,25 @@ describe('AuthService self-service accounts', () => {
     });
   });
 
+  it('returns 503 without touching either profile when the distributed lock fails', async () => {
+    security.withAccountMutationLock.mockRejectedValue(
+      new Error('Account profile update lock unavailable'),
+    );
+
+    await expect(
+      service.updateMe(
+        'uid-1',
+        profile.id,
+        { displayName: 'New Name' },
+        { ip: '203.0.113.10' },
+      ),
+    ).rejects.toMatchObject({
+      status: HttpStatus.SERVICE_UNAVAILABLE,
+    });
+    expect(firebaseAdmin.updateFirebaseAuthDisplayName).not.toHaveBeenCalled();
+    expect(users.updateAppUser).not.toHaveBeenCalled();
+  });
+
   it('compensates Firebase when the AppUser update fails', async () => {
     users.updateAppUser.mockRejectedValue(new Error('database unavailable'));
 

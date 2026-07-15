@@ -158,26 +158,57 @@ describe('AuthSecurityService account action controls', () => {
     ).resolves.toBe(false);
   });
 
-  it('serializes same-user profile mutations in the local fallback', async () => {
-    const order: string[] = [];
-    let releaseFirst!: () => void;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+  it('fails closed without Redis instead of using an instance-local lock', async () => {
+    const operation = vi.fn();
 
-    const first = service.withAccountMutationLock('uid-1', async () => {
-      order.push('first-start');
-      await firstGate;
-      order.push('first-end');
-    });
-    const second = service.withAccountMutationLock('uid-1', async () => {
-      order.push('second-start');
-    });
+    await expect(
+      service.withAccountMutationLock('uid-1', operation),
+    ).rejects.toThrow(/lock unavailable/i);
+    expect(operation).not.toHaveBeenCalled();
+  });
 
-    await vi.waitFor(() => expect(order).toEqual(['first-start']));
-    releaseFirst();
-    await Promise.all([first, second]);
-    expect(order).toEqual(['first-start', 'first-end', 'second-start']);
+  it('fails closed when Redis lock acquisition errors', async () => {
+    const operation = vi.fn();
+    service = new AuthSecurityService({
+      getConnection: () => ({
+        set: vi.fn().mockRejectedValue(new Error('redis unavailable')),
+      }),
+    } as unknown as QueueService);
+
+    await expect(
+      service.withAccountMutationLock('uid-1', operation),
+    ).rejects.toThrow(/lock unavailable/i);
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('releases only the lock token it acquired and fails closed if ownership changed', async () => {
+    let lockToken: string | null = null;
+    const operation = vi.fn(async () => {
+      lockToken = 'replacement-owner';
+      return 'mutated';
+    });
+    const redis = {
+      set: vi.fn(async (_key: string, token: string) => {
+        lockToken = token;
+        return 'OK';
+      }),
+      eval: vi.fn(
+        async (script: string, _keyCount: number, _key: string, token: string) => {
+          if (lockToken !== token) return 0;
+          if (script.includes("'DEL'")) lockToken = null;
+          return 1;
+        },
+      ),
+    };
+    service = new AuthSecurityService({
+      getConnection: () => redis,
+    } as unknown as QueueService);
+
+    await expect(
+      service.withAccountMutationLock('uid-1', operation),
+    ).rejects.toThrow(/ownership lost/i);
+    expect(operation).toHaveBeenCalledOnce();
+    expect(lockToken).toBe('replacement-owner');
   });
 
   it('serializes same-user mutations across instances with a Redis lock', async () => {

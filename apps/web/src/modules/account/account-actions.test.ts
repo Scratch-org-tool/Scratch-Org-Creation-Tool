@@ -11,6 +11,7 @@ import {
   runOptimisticDisplayNameUpdate,
   synchronizeFirebaseDisplayName,
   validatePasswordChange,
+  type DisplayNameSyncSequence,
   type LatestRequestGate,
 } from './account-actions';
 
@@ -49,16 +50,26 @@ describe('optimistic display-name updates', () => {
       { displayName: 'Ada Lovelace', role: 'user' },
       { displayName: 'Ada L.', role: 'user' },
     ]);
-    expect(syncFirebase).toHaveBeenCalledWith('Ada L.');
+    expect(syncFirebase).toHaveBeenCalledWith(
+      'Ada L.',
+      expect.objectContaining({ requestId: 1 }),
+    );
     expect(result.status).toBe('success');
   });
 
   it('updates and reloads Firebase before refreshing AuthContext state', async () => {
     const calls: string[] = [];
+    const sequence: DisplayNameSyncSequence = {
+      requestId: 1,
+      isCurrent: () => true,
+      latest: () => ({ requestId: 1, displayName: 'Ada Lovelace' }),
+    };
 
     await synchronizeFirebaseDisplayName({
-      updateProfile: async () => {
-        calls.push('updateProfile');
+      displayName: 'Ada Lovelace',
+      sequence,
+      updateProfile: async (displayName) => {
+        calls.push(`updateProfile:${displayName}`);
       },
       reload: async () => {
         calls.push('reload');
@@ -66,7 +77,11 @@ describe('optimistic display-name updates', () => {
       refreshContext: () => calls.push('refreshContext'),
     });
 
-    expect(calls).toEqual(['updateProfile', 'reload', 'refreshContext']);
+    expect(calls).toEqual([
+      'updateProfile:Ada Lovelace',
+      'reload',
+      'refreshContext',
+    ]);
   });
 
   it('keeps the authoritative name and warns when Firebase sync fails', async () => {
@@ -139,6 +154,127 @@ describe('optimistic display-name updates', () => {
     first.reject(new Error('stale failure'));
     await expect(firstRun).resolves.toEqual({ status: 'stale', profile: null });
     expect(states.at(-1)).toEqual({ displayName: 'Server second' });
+  });
+
+  it('reconciles an older Firebase completion to the latest successful name', async () => {
+    const gate: LatestRequestGate = { current: 0 };
+    const firstUpdate = deferred<void>();
+    const profileStates: Array<{ displayName: string }> = [];
+    const userStates: string[] = [];
+    const updateCalls: string[] = [];
+    let firebaseDisplayName = 'Ada';
+    let firstWrite = true;
+
+    const updateProfile = async (displayName: string) => {
+      updateCalls.push(displayName);
+      if (displayName === 'Server first' && firstWrite) {
+        firstWrite = false;
+        await firstUpdate.promise;
+      }
+      firebaseDisplayName = displayName;
+    };
+    const syncFirebase = (
+      displayName: string,
+      sequence: DisplayNameSyncSequence,
+    ) => synchronizeFirebaseDisplayName({
+      displayName,
+      sequence,
+      updateProfile,
+      reload: async () => undefined,
+      refreshContext: () => userStates.push(firebaseDisplayName),
+    });
+
+    const olderRun = runOptimisticDisplayNameUpdate({
+      gate,
+      snapshot: { displayName: 'Ada' },
+      displayName: 'First',
+      setProfile: (next) => profileStates.push(next),
+      request: async () => ({ displayName: 'Server first' }),
+      syncFirebase,
+    });
+    await vi.waitFor(() => expect(updateCalls).toEqual(['Server first']));
+
+    const latestRun = runOptimisticDisplayNameUpdate({
+      gate,
+      snapshot: { displayName: 'Server first' },
+      displayName: 'Second',
+      setProfile: (next) => profileStates.push(next),
+      request: async () => ({ displayName: 'Server second' }),
+      syncFirebase,
+    });
+    await expect(latestRun).resolves.toMatchObject({
+      status: 'success',
+      profile: { displayName: 'Server second' },
+    });
+    expect(firebaseDisplayName).toBe('Server second');
+
+    firstUpdate.resolve(undefined);
+    await expect(olderRun).resolves.toEqual({ status: 'stale', profile: null });
+
+    expect(updateCalls).toEqual([
+      'Server first',
+      'Server second',
+      'Server second',
+    ]);
+    expect(profileStates.at(-1)).toEqual({ displayName: 'Server second' });
+    expect(userStates).toEqual(['Server second', 'Server second']);
+    expect(firebaseDisplayName).toBe('Server second');
+  });
+
+  it('does not publish an older user after its delayed reload completes', async () => {
+    const gate: LatestRequestGate = { current: 0 };
+    const firstReload = deferred<void>();
+    const profileStates: Array<{ displayName: string }> = [];
+    const userStates: string[] = [];
+    let firebaseDisplayName = 'Ada';
+    let loadedDisplayName = 'Ada';
+    let reloadCount = 0;
+
+    const syncFirebase = (
+      displayName: string,
+      sequence: DisplayNameSyncSequence,
+    ) => synchronizeFirebaseDisplayName({
+      displayName,
+      sequence,
+      updateProfile: async (nextDisplayName) => {
+        firebaseDisplayName = nextDisplayName;
+      },
+      reload: async () => {
+        reloadCount += 1;
+        const reloadedName = firebaseDisplayName;
+        if (reloadCount === 1) await firstReload.promise;
+        loadedDisplayName = reloadedName;
+      },
+      refreshContext: () => userStates.push(loadedDisplayName),
+    });
+
+    const olderRun = runOptimisticDisplayNameUpdate({
+      gate,
+      snapshot: { displayName: 'Ada' },
+      displayName: 'First',
+      setProfile: (next) => profileStates.push(next),
+      request: async () => ({ displayName: 'Server first' }),
+      syncFirebase,
+    });
+    await vi.waitFor(() => expect(reloadCount).toBe(1));
+
+    const latestRun = runOptimisticDisplayNameUpdate({
+      gate,
+      snapshot: { displayName: 'Server first' },
+      displayName: 'Second',
+      setProfile: (next) => profileStates.push(next),
+      request: async () => ({ displayName: 'Server second' }),
+      syncFirebase,
+    });
+    await expect(latestRun).resolves.toMatchObject({ status: 'success' });
+    expect(userStates).toEqual(['Server second']);
+
+    firstReload.resolve(undefined);
+    await expect(olderRun).resolves.toEqual({ status: 'stale', profile: null });
+
+    expect(profileStates.at(-1)).toEqual({ displayName: 'Server second' });
+    expect(userStates).toEqual(['Server second', 'Server second']);
+    expect(loadedDisplayName).toBe('Server second');
   });
 
   it('builds a sanitized request without privilege-bearing fields', () => {
