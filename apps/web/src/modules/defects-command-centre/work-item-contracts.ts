@@ -30,6 +30,7 @@ export interface WorkItemOperationCapabilities {
   addComments: boolean;
   readAttachments: boolean;
   uploadAttachments: boolean;
+  deleteAttachments: boolean;
   readHistory: boolean;
   transitionState: boolean;
   readSubissues: boolean;
@@ -44,6 +45,7 @@ export type GranularIntegrationCapabilities = IntegrationCapabilities & Partial<
   update: boolean;
   comments: boolean;
   attachmentUploads: boolean;
+  attachmentDeletes: boolean;
   issueTypes: boolean;
   users: boolean;
   labels: boolean;
@@ -61,6 +63,7 @@ export function workItemOperationCapabilities(
     addComments: Boolean(capabilities.comments),
     readAttachments: capabilities.attachments,
     uploadAttachments: Boolean(capabilities.attachmentUploads),
+    deleteAttachments: Boolean(capabilities.attachmentDeletes),
     readHistory: capabilities.history,
     transitionState: capabilities.stateTransitions,
     readSubissues: Boolean(capabilities.subIssues),

@@ -43,7 +43,7 @@ export class AzureService {
 
   /** Lists repos org-wide unless an explicit project filter is passed. */
   async listRepos(projectFilter?: string, connectionId?: string) {
-    const creds = await this.azureIntegration.getCredentials(connectionId);
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'scm');
     if (!creds) return [];
     const project = projectFilter?.trim() || undefined;
     return this.fetchAllRepos(creds.orgSlug, creds.pat, project);
@@ -79,7 +79,7 @@ export class AzureService {
   }
 
   async listBranches(project: string | undefined, repo: string, connectionId?: string) {
-    const creds = await this.azureIntegration.getCredentials(connectionId);
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'scm');
     if (!creds || !repo.trim()) return [];
 
     let proj = this.resolveProject(creds, project);
@@ -103,7 +103,7 @@ export class AzureService {
     branch: string,
     connectionId?: string,
   ): Promise<{ workspaceDir: string; cleanup: () => Promise<void> }> {
-    const creds = await this.azureIntegration.getCredentials(connectionId);
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'scm');
     if (!creds) throw new Error('Azure DevOps is not connected');
 
     const org = normalizeAzureOrgSlug(creds.orgSlug);
@@ -155,7 +155,7 @@ export class AzureService {
     variables?: AzurePipelineVariables,
     connectionId?: string,
   ) {
-    if (!(await this.azureIntegration.getCredentials(connectionId))) {
+    if (!(await this.azureIntegration.getCredentials(connectionId, 'scm'))) {
       throw new Error('Azure DevOps is not connected');
     }
     console.log('[Azure] Pipeline trigger (stub)', { project, repo, branch, variables });

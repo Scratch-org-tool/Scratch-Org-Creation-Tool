@@ -84,7 +84,7 @@ export class AzureWorkItemsService {
     projectOverride?: string,
     connectionId?: string,
   ): Promise<{ orgSlug: string; project: string; pat: string }> {
-    const creds = await this.azureIntegration.getCredentials(connectionId);
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'workItems');
     if (!creds) {
       throw new NotFoundException({
         code: 'AZURE_NOT_CONNECTED',
@@ -105,7 +105,7 @@ export class AzureWorkItemsService {
   }
 
   async resolveDefaultProject(connectionId?: string): Promise<string | null> {
-    const creds = await this.azureIntegration.getCredentials(connectionId);
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'workItems');
     if (!creds) return null;
     return (
       normalizeAzureProject(creds.project) ??
@@ -123,8 +123,8 @@ export class AzureWorkItemsService {
     source: 'database' | 'environment' | null;
   } | null> {
     const [creds, status] = await Promise.all([
-      this.azureIntegration.getCredentials(connectionId),
-      this.azureIntegration.getStatus(connectionId),
+      this.azureIntegration.getCredentials(connectionId, 'workItems'),
+      this.azureIntegration.getStatus(connectionId, 'workItems'),
     ]);
     if (!creds) return null;
     return {
@@ -143,7 +143,7 @@ export class AzureWorkItemsService {
   }
 
   async listProjects(connectionId?: string): Promise<AzureDevOpsProjectOption[]> {
-    const creds = await this.azureIntegration.getCredentials(connectionId);
+    const creds = await this.azureIntegration.getCredentials(connectionId, 'workItems');
     if (!creds) {
       throw new NotFoundException({
         code: 'AZURE_NOT_CONNECTED',

@@ -281,7 +281,8 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
             <DefectAttachmentsPanel
               attachments={w.attachments}
               loading={w.detailLoading}
-              writable={w.operations.uploadAttachments}
+              uploadable={w.operations.uploadAttachments}
+              deletable={w.operations.deleteAttachments}
               mutating={w.mutating}
               error={w.sectionErrors.attachments}
               contentPath={(attachmentId) =>

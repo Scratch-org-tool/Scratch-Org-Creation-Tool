@@ -82,6 +82,7 @@ export class IntegrationAdminService {
             webhooks: false,
             attachments: true,
             attachmentUploads: true,
+            attachmentDeletes: false,
             history: true,
             stateTransitions: true,
             issueTypes: true,
@@ -220,7 +221,7 @@ export class IntegrationAdminService {
   }
 
   async verifyScm(provider: string, connectionId: string) {
-    if (provider === 'azure_devops') return this.azure.verify(connectionId);
+    if (provider === 'azure_devops') return this.azure.verify(connectionId, 'scm');
     if (provider === 'github') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.verify(connectionId);
@@ -240,7 +241,7 @@ export class IntegrationAdminService {
   }
 
   async verifyWorkItems(provider: string, connectionId: string) {
-    if (provider === 'azure_boards') return this.azure.verify(connectionId);
+    if (provider === 'azure_boards') return this.azure.verify(connectionId, 'workItems');
     if (provider === 'github_issues') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.verifyWorkItem(connectionId);
@@ -260,7 +261,7 @@ export class IntegrationAdminService {
   }
 
   async disconnectScm(provider: string, connectionId: string) {
-    if (provider === 'azure_devops') return this.azure.disconnect(connectionId);
+    if (provider === 'azure_devops') return this.azure.disconnect(connectionId, 'scm');
     if (provider === 'github') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.disconnect(connectionId);
@@ -271,7 +272,7 @@ export class IntegrationAdminService {
   }
 
   async disconnectWorkItems(provider: string, connectionId: string) {
-    if (provider === 'azure_boards') return this.azure.disconnect(connectionId);
+    if (provider === 'azure_boards') return this.azure.disconnect(connectionId, 'workItems');
     if (provider === 'github_issues') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.disconnectWorkItem(connectionId);

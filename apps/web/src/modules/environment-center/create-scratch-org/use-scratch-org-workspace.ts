@@ -23,6 +23,7 @@ import {
   saveWorkspaceSnapshot,
   type ScratchOrgWorkspaceSnapshot,
 } from './scratch-org-workspace-storage';
+import { sessionRequest } from './session-request';
 import {
   DEFAULT_FORM,
   type AzureDefaults,
@@ -462,11 +463,12 @@ export function useScratchOrgWorkspace() {
       bootstrapGenerationRef.current === generation &&
       !signal.aborted;
     const [hubList, templateList, allOrgs] = await Promise.all([
-      api<ConnectedOrgRow[]>('/environment/connected-orgs/refresh', {
-        method: 'POST',
-        signal,
-      }).catch(
-        () => api<ConnectedOrgRow[]>('/environment/connected-orgs', { signal }),
+      sessionRequest('scratch-bootstrap-connected-orgs', () =>
+        api<ConnectedOrgRow[]>('/environment/connected-orgs/refresh', {
+          method: 'POST',
+        }).catch(
+          () => api<ConnectedOrgRow[]>('/environment/connected-orgs'),
+        ),
       ),
       api<Array<{ id: string; name: string; isSystem: boolean }>>(
         '/environment/scratch-templates',

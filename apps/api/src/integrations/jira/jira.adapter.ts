@@ -44,6 +44,7 @@ const JIRA_CAPABILITIES = {
   webhooks: true,
   attachments: true,
   attachmentUploads: true,
+  attachmentDeletes: false,
   history: true,
   stateTransitions: true,
   issueTypes: true,

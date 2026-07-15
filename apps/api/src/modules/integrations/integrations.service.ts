@@ -203,6 +203,7 @@ export class IntegrationsService {
   }
 
   uploadAttachment(
+    actorId: string,
     provider: string,
     id: string,
     input: { fileName: string; contentType: string; base64: string },
@@ -224,7 +225,7 @@ export class IntegrationsService {
       id,
       { fileName: input.fileName, contentType: input.contentType, buffer },
       project,
-      { connectionId },
+      { connectionId, actorId, isAdmin: true },
     );
   }
 }

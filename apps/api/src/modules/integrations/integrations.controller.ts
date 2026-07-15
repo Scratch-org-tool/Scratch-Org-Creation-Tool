@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard } from '../../common/auth.guard';
+import { CurrentUser } from '../../common/current-user.decorator';
 import { RequireRole, RoleGuard } from '../../common/role.guard';
 import type {
   WorkItemCreateInput,
@@ -270,13 +271,21 @@ export class IntegrationsController {
 
   @Post('work-items/:provider/items/:id/attachments')
   uploadAttachment(
+    @CurrentUser() actorId: string,
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Body() body: { fileName: string; contentType: string; base64: string },
     @Query('project') project?: string,
     @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.uploadAttachment(provider, id, body, project, connectionId);
+    return this.service.uploadAttachment(
+      actorId,
+      provider,
+      id,
+      body,
+      project,
+      connectionId,
+    );
   }
 
   @Get('work-items/:provider/items/:id/attachments/:attachmentId/content')

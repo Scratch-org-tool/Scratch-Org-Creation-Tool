@@ -19,6 +19,7 @@ export const integrationCapabilitiesSchema = z.object({
   webhooks: z.boolean().default(false),
   attachments: z.boolean().default(false),
   attachmentUploads: z.boolean().default(false),
+  attachmentDeletes: z.boolean().default(false),
   history: z.boolean().default(false),
   stateTransitions: z.boolean().default(false),
   issueTypes: z.boolean().default(false),

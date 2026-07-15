@@ -99,8 +99,12 @@ describe('ScmSourceService', () => {
     expect(db.scmConnection.findUnique).not.toHaveBeenCalled();
   });
 
-  it('enforces binding provider, connection, and repository boundaries', async () => {
+  it('makes every bound repository coordinate authoritative', async () => {
     const bitbucket = adapter('bitbucket');
+    db.scmConnection.findUnique.mockResolvedValue({
+      provider: 'bitbucket',
+      status: 'connected',
+    });
     db.projectBinding.findUnique.mockResolvedValue({
       scmConnection: {
         id: 'bb-connection',
@@ -115,13 +119,67 @@ describe('ScmSourceService', () => {
     });
     const service = new ScmSourceService(new ScmAdapterRegistry([bitbucket]));
 
+    await expect(service.resolve({
+      provider: 'bitbucket',
+      bindingId: 'binding-1',
+      connectionId: 'bb-connection',
+      namespace: 'workspace',
+      project: 'workspace',
+      repositoryId: 'repo-id',
+      repo: 'bound-repo',
+      branch: 'main',
+    })).resolves.toMatchObject({
+      connectionId: 'bb-connection',
+      namespace: 'workspace',
+      project: 'workspace',
+      repositoryId: 'repo-id',
+      repo: 'bound-repo',
+    });
+
+    const base = {
+      provider: 'bitbucket' as const,
+      bindingId: 'binding-1',
+      connectionId: 'bb-connection',
+      namespace: 'workspace',
+      project: 'workspace',
+      repositoryId: 'repo-id',
+      repo: 'bound-repo',
+      branch: 'main',
+    };
+    for (const override of [
+      { namespace: 'other-workspace' },
+      { project: 'other-project' },
+      { repositoryId: 'other-id' },
+      { repo: 'other-repo' },
+    ]) {
+      await expect(service.checkout({ ...base, ...override })).rejects.toThrow(
+        'does not match the selected SCM binding',
+      );
+    }
+    expect(bitbucket.checkout).not.toHaveBeenCalled();
+
     await expect(
       service.resolve({
         provider: 'bitbucket',
         bindingId: 'binding-1',
-        repo: 'another-repo',
+        connectionId: 'other-connection',
+        repo: 'bound-repo',
         branch: 'main',
       }),
-    ).rejects.toThrow('Repository does not match');
+    ).rejects.toThrow('does not belong');
+  });
+
+  it('rejects the Azure work-item environment sentinel at the SCM boundary', async () => {
+    const azure = adapter('azure_devops');
+    const service = new ScmSourceService(new ScmAdapterRegistry([azure]));
+
+    await expect(service.resolve({
+      provider: 'azure_devops',
+      connectionId: 'environment-azure-boards',
+      project: 'Core',
+      repo: 'metadata',
+      branch: 'main',
+    })).rejects.toThrow('cannot be used for SCM');
+    expect(azure.checkout).not.toHaveBeenCalled();
   });
 });

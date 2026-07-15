@@ -203,7 +203,11 @@ describe('GitHubWorkItemAdapter', () => {
       new DisabledGitHubAttachmentStore(),
     );
     await expect(adapter.getConnectionStatus()).resolves.toMatchObject({
-      capabilities: { attachments: false },
+      capabilities: {
+        attachments: false,
+        attachmentUploads: false,
+        attachmentDeletes: false,
+      },
     });
     await expect(adapter.listAttachments('acme/repo#1')).resolves.toEqual([]);
   });
@@ -233,6 +237,10 @@ describe('GitHubWorkItemAdapter', () => {
       }),
     } as unknown as GitHubAttachmentStore;
     const adapter = new GitHubWorkItemAdapter(integration, api, attachments);
+    expect(adapter.capabilities).toMatchObject({
+      attachmentUploads: true,
+      attachmentDeletes: true,
+    });
 
     const result = await adapter.uploadAttachment!(
       'acme/repo#7',

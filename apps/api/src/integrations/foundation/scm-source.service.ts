@@ -5,7 +5,10 @@ import {
   type GitSourceConfig,
   type ScmProvider,
 } from '@sfcc/shared';
-import { AZURE_ENV_SCM_CONNECTION_ID } from '../../modules/integrations/azure-integration.service';
+import {
+  AZURE_ENV_SCM_CONNECTION_ID,
+  AZURE_ENV_WORK_ITEM_CONNECTION_ID,
+} from '../../modules/integrations/azure-integration.service';
 import { ScmAdapterRegistry } from './adapter.registry';
 
 @Injectable()
@@ -30,25 +33,31 @@ export class ScmSourceService {
       if (resolved.connectionId && resolved.connectionId !== connection.id) {
         throw new BadRequestException('SCM binding does not belong to gitSource.connectionId');
       }
-      if (
-        binding.repositoryName &&
-        resolved.repo !== binding.repositoryName &&
-        resolved.repo !== `${binding.projectKey ?? binding.externalProjectId}/${binding.repositoryName}`
-      ) {
-        throw new BadRequestException('Repository does not match the selected SCM binding');
-      }
       const metadata = (binding.metadata ?? {}) as Record<string, unknown>;
       const boundNamespace =
         typeof metadata.workspace === 'string' ? metadata.workspace : undefined;
+      const boundProject = binding.projectKey ?? binding.externalProjectId;
+      const boundRepositoryId = binding.repositoryId ?? undefined;
+      const boundRepo = binding.repositoryName ?? undefined;
+      this.assertBoundValue('namespace', resolved.namespace, boundNamespace);
+      this.assertBoundValue('project', resolved.project, boundProject);
+      this.assertBoundValue('repositoryId', resolved.repositoryId, boundRepositoryId);
+      this.assertBoundValue('repo', resolved.repo, boundRepo);
       resolved = {
         ...resolved,
         connectionId: connection.id,
-        namespace: resolved.namespace ?? boundNamespace,
-        project: resolved.project ?? binding.projectKey ?? binding.externalProjectId,
-        repositoryId: resolved.repositoryId ?? binding.repositoryId ?? undefined,
+        namespace: boundNamespace ?? resolved.namespace,
+        project: boundProject,
+        repositoryId: boundRepositoryId ?? resolved.repositoryId,
+        repo: boundRepo ?? resolved.repo,
       };
     }
 
+    if (resolved.connectionId === AZURE_ENV_WORK_ITEM_CONNECTION_ID) {
+      throw new BadRequestException(
+        'Azure Boards environment connection cannot be used for SCM operations',
+      );
+    }
     if (resolved.connectionId && resolved.connectionId !== AZURE_ENV_SCM_CONNECTION_ID) {
       const connection = await prisma.scmConnection.findUnique({
         where: { id: resolved.connectionId },
@@ -82,6 +91,16 @@ export class ScmSourceService {
   async checkout(source: GitSourceConfig) {
     const resolved = await this.requireActive(source);
     return this.registry.get(resolved.provider).checkout(resolved);
+  }
+
+  private assertBoundValue(
+    field: 'namespace' | 'project' | 'repositoryId' | 'repo',
+    requested: string | undefined,
+    bound: string | undefined,
+  ): void {
+    if (bound && requested && requested !== bound) {
+      throw new BadRequestException(`${field} does not match the selected SCM binding`);
+    }
   }
 
   private providerLabel(provider: ScmProvider): string {

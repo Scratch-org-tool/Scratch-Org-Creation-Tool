@@ -79,6 +79,7 @@ describe('provider-neutral work-item routing', () => {
       webhooks: false,
       attachments: true,
       attachmentUploads: true,
+      attachmentDeletes: true,
       history: true,
       stateTransitions: true,
       issueTypes: true,
@@ -91,6 +92,7 @@ describe('provider-neutral work-item routing', () => {
       edit: true,
       addComments: true,
       uploadAttachments: true,
+      deleteAttachments: true,
       readSubissues: true,
       addSubissues: true,
     });
@@ -100,12 +102,14 @@ describe('provider-neutral work-item routing', () => {
       update: false,
       comments: false,
       attachmentUploads: false,
+      attachmentDeletes: true,
       subIssues: false,
     })).toMatchObject({
       create: false,
       edit: false,
       addComments: false,
       uploadAttachments: false,
+      deleteAttachments: true,
       readSubissues: false,
       transitionState: true,
     });

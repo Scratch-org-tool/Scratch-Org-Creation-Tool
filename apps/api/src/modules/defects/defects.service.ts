@@ -463,7 +463,7 @@ export class DefectsService {
     const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
     this.capability(
       resolved,
-      'attachments',
+      'attachmentDeletes',
       resolved.adapter.deleteAttachment,
       'Attachment deletion',
     );

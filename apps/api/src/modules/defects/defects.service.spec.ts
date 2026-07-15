@@ -37,6 +37,7 @@ const capabilities = {
   webhooks: true,
   attachments: true,
   attachmentUploads: true,
+  attachmentDeletes: true,
   history: true,
   stateTransitions: true,
   issueTypes: true,
@@ -273,6 +274,24 @@ describe('DefectsService provider authorization', () => {
       'acme/repo',
       { connectionId: 'github_issues-connection', actorId: 'app-user', isAdmin: true },
     );
+  });
+
+  it('gates deletion separately from attachment uploads', async () => {
+    Object.defineProperty(github, 'capabilities', {
+      value: { ...capabilities, attachmentUploads: true, attachmentDeletes: false },
+    });
+    vi.mocked(github.getWorkItem).mockResolvedValue(
+      item('github_issues', 'acme/repo#8', 'provider-user-1'),
+    );
+
+    await expect(service.deleteAttachment(
+      'app-user',
+      true,
+      'acme/repo#8',
+      'attachment-1',
+      { provider: 'github_issues', project: 'acme/repo' },
+    )).rejects.toThrow('Attachment deletion');
+    expect(github.deleteAttachment).not.toHaveBeenCalled();
   });
 
   it('preserves the legacy Azure list shape and assignment behavior', async () => {

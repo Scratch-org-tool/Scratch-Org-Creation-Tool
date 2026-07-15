@@ -185,6 +185,7 @@ export const DEFAULT_WORK_ITEM_CAPABILITIES: IntegrationCapabilities = {
   webhooks: false,
   attachments: false,
   attachmentUploads: false,
+  attachmentDeletes: false,
   history: false,
   stateTransitions: false,
   issueTypes: false,

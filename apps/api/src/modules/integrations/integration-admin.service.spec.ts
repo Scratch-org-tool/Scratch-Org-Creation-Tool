@@ -63,4 +63,27 @@ describe('IntegrationAdminService identity mappings', () => {
       externalLogin: 'other',
     })).rejects.toMatchObject({ status: 409 });
   });
+
+  it('marks Azure admin operations with the requested connection kind', async () => {
+    const azure = {
+      verify: vi.fn().mockResolvedValue({ verified: true }),
+      disconnect: vi.fn().mockResolvedValue({ disconnected: true }),
+    };
+    const service = new IntegrationAdminService(
+      {} as never,
+      {} as never,
+      {} as never,
+      azure as never,
+    );
+
+    await service.verifyScm('azure_devops', 'scm-id');
+    await service.verifyWorkItems('azure_boards', 'work-item-id');
+    await service.disconnectScm('azure_devops', 'scm-id');
+    await service.disconnectWorkItems('azure_boards', 'work-item-id');
+
+    expect(azure.verify).toHaveBeenNthCalledWith(1, 'scm-id', 'scm');
+    expect(azure.verify).toHaveBeenNthCalledWith(2, 'work-item-id', 'workItems');
+    expect(azure.disconnect).toHaveBeenNthCalledWith(1, 'scm-id', 'scm');
+    expect(azure.disconnect).toHaveBeenNthCalledWith(2, 'work-item-id', 'workItems');
+  });
 });

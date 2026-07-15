@@ -16,12 +16,14 @@ export interface AzureCredentials {
 
 export const AZURE_ENV_SCM_CONNECTION_ID = 'environment-azure-devops';
 export const AZURE_ENV_WORK_ITEM_CONNECTION_ID = 'environment-azure-boards';
+export type AzureConnectionKind = 'scm' | 'workItems';
 
 @Injectable()
 export class AzureIntegrationService {
-  async getStatus(connectionId?: string) {
+  async getStatus(connectionId?: string, kind?: AzureConnectionKind) {
+    if (connectionId) this.assertEnvironmentKind(connectionId, kind);
     if (connectionId && !this.isEnvironmentConnection(connectionId)) {
-      const neutral = await this.findNeutralConnection(connectionId);
+      const neutral = await this.findNeutralConnection(connectionId, kind);
       if (!neutral) {
         return { connected: false, source: null, orgSlug: null, project: null, status: null };
       }
@@ -55,9 +57,13 @@ export class AzureIntegrationService {
     };
   }
 
-  async getCredentials(connectionId?: string): Promise<AzureCredentials | null> {
+  async getCredentials(
+    connectionId?: string,
+    kind?: AzureConnectionKind,
+  ): Promise<AzureCredentials | null> {
+    if (connectionId) this.assertEnvironmentKind(connectionId, kind);
     if (connectionId && !this.isEnvironmentConnection(connectionId)) {
-      const neutral = await this.findNeutralConnection(connectionId);
+      const neutral = await this.findNeutralConnection(connectionId, kind);
       if (!neutral || !['connected', 'degraded'].includes(neutral.status)) return null;
       const metadata = this.metadata(neutral.metadata);
       return {
@@ -153,6 +159,7 @@ export class AzureIntegrationService {
               webhooks: false,
               attachments: true,
               attachmentUploads: true,
+              attachmentDeletes: false,
               history: true,
               stateTransitions: true,
               issueTypes: true,
@@ -176,12 +183,12 @@ export class AzureIntegrationService {
     };
   }
 
-  async verify(connectionId?: string) {
-    const creds = await this.getCredentials(connectionId);
+  async verify(connectionId?: string, kind?: AzureConnectionKind) {
+    const creds = await this.getCredentials(connectionId, kind);
     if (!creds) throw new NotFoundException('No Azure DevOps connection configured');
     await this.verifyPat(creds.orgSlug, creds.pat, creds.project);
     if (connectionId && !this.isEnvironmentConnection(connectionId)) {
-      const neutral = await this.findNeutralConnection(connectionId);
+      const neutral = await this.findNeutralConnection(connectionId, kind);
       if (!neutral) throw new NotFoundException('Azure DevOps connection not found');
       const verifiedAt = new Date();
       const pair = neutral.legacyAzureDevOpsConnectionId
@@ -206,14 +213,15 @@ export class AzureIntegrationService {
     };
   }
 
-  async disconnect(connectionId?: string) {
+  async disconnect(connectionId?: string, kind?: AzureConnectionKind) {
     if (connectionId) {
+      this.assertEnvironmentKind(connectionId, kind);
       if (this.isEnvironmentConnection(connectionId)) {
         throw new BadRequestException(
           'Environment-backed Azure DevOps connections must be removed from server configuration',
         );
       }
-      const neutral = await this.findNeutralConnection(connectionId);
+      const neutral = await this.findNeutralConnection(connectionId, kind);
       if (!neutral) throw new NotFoundException('Azure DevOps connection not found');
       const deleted = await prisma.$transaction(async (tx) => {
         if (neutral.legacyAzureDevOpsConnectionId) {
@@ -250,7 +258,10 @@ export class AzureIntegrationService {
     return { disconnected: true, count: deleted.count };
   }
 
-  private async findNeutralConnection(connectionId: string) {
+  private async findNeutralConnection(
+    connectionId: string,
+    expectedKind?: AzureConnectionKind,
+  ) {
     const [scm, workItems] = await Promise.all([
       prisma.scmConnection.findFirst({
         where: { id: connectionId, provider: 'azure_devops' },
@@ -259,16 +270,44 @@ export class AzureIntegrationService {
         where: { id: connectionId, provider: 'azure_boards' },
       }),
     ]);
-    return scm
+    const connection = scm
       ? { ...scm, kind: 'scm' as const }
       : workItems
         ? { ...workItems, kind: 'workItems' as const }
         : null;
+    if (connection && expectedKind && connection.kind !== expectedKind) {
+      throw new BadRequestException(
+        `Azure ${this.kindLabel(connection.kind)} connection cannot be used for ${this.kindLabel(expectedKind)} operations`,
+      );
+    }
+    return connection;
   }
 
   private isEnvironmentConnection(connectionId: string): boolean {
     return connectionId === AZURE_ENV_SCM_CONNECTION_ID ||
       connectionId === AZURE_ENV_WORK_ITEM_CONNECTION_ID;
+  }
+
+  private assertEnvironmentKind(
+    connectionId: string,
+    expectedKind?: AzureConnectionKind,
+  ): void {
+    if (!expectedKind) return;
+    const actualKind =
+      connectionId === AZURE_ENV_SCM_CONNECTION_ID
+        ? 'scm'
+        : connectionId === AZURE_ENV_WORK_ITEM_CONNECTION_ID
+          ? 'workItems'
+          : null;
+    if (actualKind && actualKind !== expectedKind) {
+      throw new BadRequestException(
+        `Azure ${this.kindLabel(actualKind)} environment connection cannot be used for ${this.kindLabel(expectedKind)} operations`,
+      );
+    }
+  }
+
+  private kindLabel(kind: AzureConnectionKind): string {
+    return kind === 'scm' ? 'SCM' : 'work-item';
   }
 
   private environmentCredentials(): AzureCredentials | null {

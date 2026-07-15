@@ -32,6 +32,7 @@ describe('AzureScmAdapter compatibility', () => {
       namespace: 'acme',
     });
     expect(status).not.toHaveProperty('pat');
+    expect(integration.getStatus).toHaveBeenCalledWith(undefined, 'scm');
 
     expect(await adapter.listRepositories({ project: 'Core' })).toEqual([
       {
@@ -77,6 +78,7 @@ describe('AzureWorkItemAdapter compatibility', () => {
       update: true,
       comments: true,
       attachmentUploads: true,
+      attachmentDeletes: false,
       issueTypes: true,
       users: false,
       labels: false,

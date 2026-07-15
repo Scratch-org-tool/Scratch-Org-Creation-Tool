@@ -51,6 +51,7 @@ const EMPTY_CAPABILITIES: GranularIntegrationCapabilities = {
   webhooks: false,
   attachments: false,
   attachmentUploads: false,
+  attachmentDeletes: false,
   history: false,
   stateTransitions: false,
   issueTypes: false,
@@ -675,7 +676,7 @@ export function useDefectsWorkspace() {
 
   const deleteAttachment = useCallback(async (attachmentId: string) => {
     if (!selectedId) return;
-    if (!operations.uploadAttachments) throw new Error('Attachment deletion is not supported by this provider.');
+    if (!operations.deleteAttachments) throw new Error('Attachment deletion is not supported by this provider.');
     setMutating(true);
     try {
       await api(
@@ -686,7 +687,7 @@ export function useDefectsWorkspace() {
     } finally {
       setMutating(false);
     }
-  }, [context, operations.uploadAttachments, selectedId]);
+  }, [context, operations.deleteAttachments, selectedId]);
 
   const addSubIssue = useCallback(async (subIssueId: string) => {
     if (!selectedId) return;

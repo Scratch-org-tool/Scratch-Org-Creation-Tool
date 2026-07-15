@@ -279,6 +279,7 @@ export class AtlassianConnectionStore {
       webhooks: true,
       attachments: true,
       attachmentUploads: true,
+      attachmentDeletes: false,
       history: true,
       stateTransitions: true,
       issueTypes: true,

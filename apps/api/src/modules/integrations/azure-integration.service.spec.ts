@@ -26,6 +26,7 @@ vi.mock('../../common/crypto.util', () => ({
 
 import {
   AZURE_ENV_SCM_CONNECTION_ID,
+  AZURE_ENV_WORK_ITEM_CONNECTION_ID,
   AzureIntegrationService,
 } from './azure-integration.service';
 
@@ -79,7 +80,7 @@ describe('AzureIntegrationService connection selection', () => {
     });
     const service = new AzureIntegrationService();
 
-    await expect(service.getCredentials('wi-second')).resolves.toEqual({
+    await expect(service.getCredentials('wi-second', 'workItems')).resolves.toEqual({
       orgSlug: 'second-org',
       pat: 'plain:second-pat',
       project: 'Second',
@@ -95,13 +96,80 @@ describe('AzureIntegrationService connection selection', () => {
     process.env.AZURE_DEFAULT_PROJECT = 'EnvProject';
     const service = new AzureIntegrationService();
 
-    await expect(service.getCredentials(AZURE_ENV_SCM_CONNECTION_ID)).resolves.toEqual({
+    await expect(service.getCredentials(AZURE_ENV_SCM_CONNECTION_ID, 'scm')).resolves.toEqual({
       orgSlug: 'env-org',
       pat: 'env-pat',
       project: 'EnvProject',
     });
     expect(db.scmConnection.findFirst).not.toHaveBeenCalled();
     expect(db.workItemConnection.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects cross-kind database connection ids', async () => {
+    db.scmConnection.findFirst.mockResolvedValue({
+      id: 'scm-only',
+      provider: 'azure_devops',
+      externalAccountId: 'org',
+      displayName: 'org',
+      namespace: 'org',
+      encryptedCredentials: 'pat',
+      status: 'connected',
+      metadata: {},
+      legacyAzureDevOpsConnectionId: null,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    const service = new AzureIntegrationService();
+
+    await expect(service.getCredentials('scm-only', 'workItems')).rejects.toThrow(
+      'SCM connection cannot be used for work-item',
+    );
+
+    db.scmConnection.findFirst.mockResolvedValue(null);
+    db.workItemConnection.findFirst.mockResolvedValue({
+      id: 'work-items-only',
+      provider: 'azure_boards',
+      externalAccountId: 'org',
+      displayName: 'org',
+      namespace: 'org',
+      encryptedCredentials: 'pat',
+      status: 'connected',
+      metadata: {},
+      legacyAzureDevOpsConnectionId: null,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    await expect(service.getStatus('work-items-only', 'scm')).rejects.toThrow(
+      'work-item connection cannot be used for SCM',
+    );
+  });
+
+  it('rejects cross-kind environment sentinels without database lookup', async () => {
+    const service = new AzureIntegrationService();
+
+    await expect(
+      service.getCredentials(AZURE_ENV_SCM_CONNECTION_ID, 'workItems'),
+    ).rejects.toThrow('SCM environment connection cannot be used for work-item');
+    await expect(
+      service.getStatus(AZURE_ENV_WORK_ITEM_CONNECTION_ID, 'scm'),
+    ).rejects.toThrow('work-item environment connection cannot be used for SCM');
+    expect(db.scmConnection.findFirst).not.toHaveBeenCalled();
+    expect(db.workItemConnection.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('preserves legacy no-id credential selection', async () => {
+    db.azureDevOpsConnection.findFirst.mockResolvedValue({
+      orgSlug: 'legacy-org',
+      project: 'Legacy',
+      pat: 'legacy-pat',
+      status: 'active',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    const service = new AzureIntegrationService();
+
+    await expect(service.getCredentials(undefined, 'workItems')).resolves.toEqual({
+      orgSlug: 'legacy-org',
+      pat: 'plain:legacy-pat',
+      project: 'Legacy',
+    });
   });
 
   it('disconnects only the selected paired Azure connection', async () => {

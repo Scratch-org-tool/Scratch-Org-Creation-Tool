@@ -53,6 +53,7 @@ const WORK_ITEM_CAPABILITIES = {
   webhooks: true,
   attachments: true,
   attachmentUploads: true,
+  attachmentDeletes: true,
   history: true,
   stateTransitions: true,
   issueTypes: true,

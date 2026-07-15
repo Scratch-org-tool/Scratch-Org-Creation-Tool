@@ -21,7 +21,8 @@ import { DefectAttachmentPreview } from './defect-attachment-preview';
 interface DefectAttachmentsPanelProps {
   attachments: WorkItemAttachment[];
   loading?: boolean;
-  writable: boolean;
+  uploadable: boolean;
+  deletable: boolean;
   mutating: boolean;
   error?: string;
   contentPath: (attachmentId: string) => string;
@@ -47,7 +48,8 @@ function formatSize(size: number | null): string {
 export function DefectAttachmentsPanel({
   attachments,
   loading,
-  writable,
+  uploadable,
+  deletable,
   mutating,
   error,
   contentPath,
@@ -102,7 +104,7 @@ export function DefectAttachmentsPanel({
           <p className="text-xs font-medium text-muted-foreground">
             Attachments ({attachments.length})
           </p>
-          {writable && (
+          {uploadable && (
             <>
               <input
                 ref={inputRef}
@@ -162,7 +164,7 @@ export function DefectAttachmentsPanel({
                     >
                       <Download className="w-3.5 h-3.5" />
                     </Button>
-                    {writable && (
+                    {deletable && (
                       <Button
                         variant="outline"
                         size="icon"

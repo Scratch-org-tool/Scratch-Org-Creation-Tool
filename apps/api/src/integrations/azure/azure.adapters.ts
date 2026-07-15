@@ -48,6 +48,7 @@ const AZURE_WORK_ITEM_CAPABILITIES = {
   webhooks: false,
   attachments: true,
   attachmentUploads: true,
+  attachmentDeletes: false,
   history: true,
   stateTransitions: true,
   issueTypes: true,
@@ -67,7 +68,7 @@ export class AzureScmAdapter implements ScmAdapter {
   ) {}
 
   async getConnectionStatus(context: AdapterContext = {}): Promise<ScmConnectionStatus> {
-    const status = await this.integration.getStatus(context.connectionId);
+    const status = await this.integration.getStatus(context.connectionId, 'scm');
     return {
       ...('connectionId' in status && status.connectionId ? { id: status.connectionId } : {}),
       provider: this.provider,

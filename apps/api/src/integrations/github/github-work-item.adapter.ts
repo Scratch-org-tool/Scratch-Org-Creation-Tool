@@ -47,6 +47,7 @@ const CAPABILITIES = {
   webhooks: true,
   attachments: true,
   attachmentUploads: true,
+  attachmentDeletes: true,
   history: true,
   stateTransitions: true,
   issueTypes: true,
@@ -114,7 +115,12 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
   readonly provider = 'github_issues' as const;
   get capabilities() {
     const available = this.attachments.available;
-    return { ...CAPABILITIES, attachments: available, attachmentUploads: available };
+    return {
+      ...CAPABILITIES,
+      attachments: available,
+      attachmentUploads: available && typeof this.uploadAttachment === 'function',
+      attachmentDeletes: available && typeof this.deleteAttachment === 'function',
+    };
   }
 
   constructor(
@@ -596,6 +602,11 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     project?: string,
     context: AdapterContext = {},
   ): Promise<WorkItemAttachment> {
+    if (!context.actorId) {
+      throw new IntegrationError('authorization_failed', 'Authenticated attachment actor is required', {
+        provider: this.provider,
+      });
+    }
     const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.issueRef(id, project);
     // Verifies the issue is visible to this installation before persisting bytes.

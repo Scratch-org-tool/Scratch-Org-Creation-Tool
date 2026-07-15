@@ -57,4 +57,46 @@ describe('IntegrationsService work-item connection routing', () => {
     );
     expect(adapter.listSubIssues).toHaveBeenCalledWith('CORE-1', 'CORE', context);
   });
+
+  it('passes the authenticated admin actor to GitHub attachment uploads', async () => {
+    const adapter = {
+      provider: 'github_issues',
+      uploadAttachment: vi.fn().mockResolvedValue({ id: 'attachment-1' }),
+    } as unknown as WorkItemAdapter;
+    const service = new IntegrationsService(
+      {} as never,
+      {} as never,
+      new WorkItemAdapterRegistry([adapter]),
+      {} as never,
+      {} as never,
+    );
+
+    await service.uploadAttachment(
+      'admin-user',
+      'github_issues',
+      'acme/repo#7',
+      {
+        fileName: 'proof.txt',
+        contentType: 'text/plain',
+        base64: Buffer.from('proof').toString('base64'),
+      },
+      'acme/repo',
+      'github-connection',
+    );
+
+    expect(adapter.uploadAttachment).toHaveBeenCalledWith(
+      'acme/repo#7',
+      expect.objectContaining({
+        fileName: 'proof.txt',
+        contentType: 'text/plain',
+        buffer: Buffer.from('proof'),
+      }),
+      'acme/repo',
+      {
+        connectionId: 'github-connection',
+        actorId: 'admin-user',
+        isAdmin: true,
+      },
+    );
+  });
 });
