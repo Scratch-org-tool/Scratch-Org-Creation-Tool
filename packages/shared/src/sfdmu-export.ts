@@ -4,7 +4,10 @@ import { extractObjectFromSoql } from './query-set.js';
 import { bottlerSalesOfficeConfigSchema } from './bottler-sales-office-config.js';
 import { dataSeedQuerySetSchema } from './data-seed-query-set.js';
 import { querySectionSchema } from './query-section.js';
-import { userProvisioningConfigSchema } from './user-provision-template.js';
+import {
+  unresolvedV2Profiles,
+  userProvisioningConfigSchema,
+} from './user-provision-template.js';
 
 export const sfdmuExportObjectSchema = z.object({
   query: z.string().min(1),
@@ -132,6 +135,16 @@ export const scratchPipelineTemplateConfigSchema =
         message: 'query_section partner mode requires dataSeed.querySection.accountPartnerPlan',
         path: ['dataSeed', 'querySection', 'accountPartnerPlan'],
       });
+    }
+    if (config.version === 2 && config.userProvisioning) {
+      const unresolved = unresolvedV2Profiles(config.userProvisioning);
+      if (unresolved.length) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `V2 provisioning requires a resolvable profile for: ${unresolved.join(', ')}`,
+          path: ['userProvisioning', 'defaultProfile'],
+        });
+      }
     }
   });
 

@@ -13,13 +13,10 @@ import {
   getDataDeploymentOrgId,
   pipelineResumeSchema,
   pipelineRunActionsSchema,
-  resolveUserProvisionSlots,
-  expandUserGenerators,
-  generateEmailStyleUsername,
-  formatProvisioningUsername,
   hasInsertOperation,
-  resolveRoleBottlerMapping,
+  resolveUserProvisioningPlan,
   userProvisioningConfigSchema,
+  type ResolvedProvisionUser,
 } from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
@@ -50,6 +47,9 @@ export interface PipelineCheckpoint {
   awaitingUserActions?: boolean;
   userActionsCompleted?: UserTriggeredPipelineStepId[];
   failedUserAction?: UserTriggeredPipelineStepId;
+  partialUserActions?: UserTriggeredPipelineStepId[];
+  provisioningBatchId?: string;
+  resolvedProvisioningUsers?: ResolvedProvisionUser[];
   fullyProvisioned?: boolean;
   artifacts?: {
     manifestPath?: string;
@@ -255,6 +255,10 @@ export class PipelineOrchestratorService {
         const completed = new Set(checkpoint.userActionsCompleted ?? []);
         completed.add(action);
         checkpoint.userActionsCompleted = [...completed];
+        const partial = new Set(checkpoint.partialUserActions ?? []);
+        if (Number(result?.failCount ?? 0) > 0) partial.add(action);
+        else partial.delete(action);
+        checkpoint.partialUserActions = [...partial];
         checkpoint.failedUserAction = undefined;
         await prisma.automationRun.update({
           where: { id: automationRunId },
@@ -533,66 +537,151 @@ export class PipelineOrchestratorService {
 
     for (const action of actions) {
       if (action === 'provision_users') {
-        const users = this.resolveProvisioningUsers(config, automationRunId);
-        if (!users.length) throw new Error('No users configured in pipeline config');
-        config.userProvisioning = {
-          ...config.userProvisioning,
-          users,
-        };
-        await prisma.automationRun.update({
-          where: { id: automationRunId },
-          data: { config: config as unknown as Prisma.InputJsonValue },
-        });
-        const batch = await prisma.provisioningBatch.create({
-          data: {
-            orgId: targetOrgId,
-            totalRows: users.length,
-            status: 'queued',
-            createdBy: run.createdBy,
-            users: {
-              create: users.map((user) => ({
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email,
-                username: user.username!,
-                profile: user.profile,
-                role: user.role,
-                permissionSets: user.permissionSets ?? [],
-                status: 'queued',
-              })),
+        let resolvedUsers = checkpoint.resolvedProvisioningUsers;
+        let batchId = checkpoint.provisioningBatchId;
+        let users: ResolvedProvisionUser[];
+        if (!resolvedUsers || !batchId) {
+          resolvedUsers = this.resolveProvisioningUsers(config, automationRunId);
+          if (!resolvedUsers.length) throw new Error('No users configured in pipeline config');
+          if (config.version === 2) {
+            const missingProfile = resolvedUsers.find((user) => !user.profile);
+            if (missingProfile) {
+              throw new Error(`V2 provisioning profile is required for ${missingProfile.username}`);
+            }
+          }
+          try {
+            const batch = await prisma.$transaction(async (transaction) => {
+              const created = await transaction.provisioningBatch.create({
+                data: {
+                  orgId: targetOrgId,
+                  totalRows: resolvedUsers!.length,
+                  status: 'queued',
+                  createdBy: run.createdBy,
+                  users: {
+                    create: resolvedUsers!.map((user) => ({
+                      firstName: user.firstName,
+                      lastName: user.lastName,
+                      email: user.email,
+                      username: user.username!,
+                      profile: user.profile,
+                      role: user.role,
+                      permissionSets: user.permissionSets ?? [],
+                      status: 'queued',
+                    })),
+                  },
+                },
+              });
+              checkpoint.resolvedProvisioningUsers = resolvedUsers;
+              checkpoint.provisioningBatchId = created.id;
+              await transaction.automationRun.update({
+                where: { id: automationRunId },
+                data: { checkpoint: checkpoint as unknown as Prisma.InputJsonValue },
+              });
+              return created;
+            });
+            batchId = batch.id;
+          } catch (error) {
+            if ((error as { code?: string })?.code === 'P2002') {
+              throw new Error('Resolved provisioning plan contains duplicate usernames');
+            }
+            throw error;
+          }
+          users = resolvedUsers;
+        } else {
+          const batch = await prisma.provisioningBatch.findUnique({
+            where: { id: batchId },
+            include: { users: true },
+          });
+          if (!batch || batch.orgId !== targetOrgId || batch.createdBy !== run.createdBy) {
+            throw new Error('Checkpointed provisioning batch is invalid');
+          }
+          const retryable = new Set(
+            batch.users
+              .filter((user) => user.status === 'failed')
+              .map((user) => user.username.toLowerCase()),
+          );
+          users = resolvedUsers.filter((user) => retryable.has(user.username!.toLowerCase()));
+          if (!users.length) {
+            throw new Error('Provisioning batch has no failed users to retry');
+          }
+          await prisma.provisionedUser.updateMany({
+            where: {
+              batchId,
+              username: { in: users.map((user) => user.username!) },
+              status: 'failed',
             },
-          },
-        });
-        const job = await this.jobsService.create({
-          queue: QUEUE_NAMES.USER_PROVISION,
-          type: 'cona_user_provision',
-          parentRunId: automationRunId,
-          createdBy: run.createdBy,
-          payload: {
-            orgId: targetOrgId,
-            batchId: batch.id,
-            users,
-            conaMode: true,
-            strictMetadata: config.version === 2,
-            automationRunId,
-          },
-        });
-        await this.queueService.addJob(QUEUE_NAMES.USER_PROVISION, 'cona_user_provision', {
+            data: { status: 'queued', error: null },
+          });
+          await prisma.provisioningBatch.update({
+            where: { id: batchId },
+            data: { status: 'queued' },
+          });
+        }
+        if (!batchId) throw new Error('Provisioning batch checkpoint was not created');
+        const execution = userProvisioningConfigSchema.parse(
+          config.userProvisioning ?? {},
+        ).execution;
+        const payload = {
           orgId: targetOrgId,
-          batchId: batch.id,
+          batchId,
           users,
           conaMode: true,
           strictMetadata: config.version === 2,
-          dbJobId: job.id,
+          discoveryPolicy: config.userProvisioning?.discoveryPolicy ?? 'best_effort',
+          discoveryFailurePolicy: execution?.discoveryFailurePolicy ?? 'fail',
+          failurePolicy: execution?.failurePolicy ?? 'fail_fast',
           automationRunId,
-        }, job.id);
+        };
+        let job: { id: string } | undefined;
+        try {
+          job = await this.jobsService.create({
+            queue: QUEUE_NAMES.USER_PROVISION,
+            type: 'cona_user_provision',
+            parentRunId: automationRunId,
+            createdBy: run.createdBy,
+            payload,
+          });
+          await this.queueService.addJob(QUEUE_NAMES.USER_PROVISION, 'cona_user_provision', {
+            ...payload,
+            dbJobId: job.id,
+          }, job.id);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await prisma.provisionedUser.updateMany({
+            where: {
+              batchId,
+              username: { in: users.map((user) => user.username!) },
+              status: 'queued',
+            },
+            data: { status: 'failed', error: `Queueing failed: ${message}` },
+          });
+          const rows = await prisma.provisionedUser.findMany({
+            where: { batchId },
+            select: { status: true },
+          });
+          const successCount = rows.filter((row) => row.status === 'completed').length;
+          const failCount = rows.filter((row) => row.status === 'failed').length;
+          await prisma.provisioningBatch.update({
+            where: { id: batchId },
+            data: {
+              status: successCount > 0 ? 'partial' : 'failed',
+              successCount,
+              failCount,
+            },
+          });
+          if (job) {
+            await this.jobsService.updateStatus(job.id, 'failed', message).catch(() => undefined);
+          }
+          throw error;
+        }
         jobs.push({ action, jobId: job.id });
       }
 
       if (action === 'load_data_seed') {
         const sourceOrgId = getDataDeploymentOrgId({
           dataDeploymentOrgId: config.dataDeploymentOrgId,
-          sourceOrgId: config.dataDeploymentOrgId ?? config.sourceOrgId,
+          customSettingsOrgId: config.customSettingsOrgId,
+          sourceOrgId: config.sourceOrgId,
         });
         if (!sourceOrgId) throw new Error('dataDeploymentOrgId required for data seed');
         const datasets = config.dataSeed?.datasets ?? ['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'];
@@ -646,7 +735,8 @@ export class PipelineOrchestratorService {
         };
         const sourceOrgId = getDataDeploymentOrgId({
           dataDeploymentOrgId: config.dataDeploymentOrgId,
-          sourceOrgId: config.dataDeploymentOrgId ?? config.sourceOrgId,
+          customSettingsOrgId: config.customSettingsOrgId,
+          sourceOrgId: config.sourceOrgId,
         });
         const job = await this.jobsService.create({
           queue: QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT,
@@ -1102,44 +1192,7 @@ export class PipelineOrchestratorService {
   }
 
   private resolveProvisioningUsers(config: ScratchOrgPipelineInput, automationRunId: string) {
-    const provisioning = userProvisioningConfigSchema.parse(config.userProvisioning ?? {});
-    const slotted = provisioning.slots?.length
-      ? resolveUserProvisionSlots(provisioning.slots, provisioning.templates ?? [])
-      : [];
-    const generated = provisioning.userGenerators?.length
-      ? expandUserGenerators(provisioning.userGenerators, {
-          automationRunId,
-          teams: provisioning.teams,
-          roleBottlerMappings: provisioning.roleBottlerMappings,
-          usernamePolicy: provisioning.usernamePolicy,
-          emailPolicy: provisioning.emailPolicy,
-        })
-      : [];
-    return [...(provisioning.users ?? []), ...slotted, ...generated].map((user, index) => {
-      const mapping = resolveRoleBottlerMapping(
-        user.role,
-        user.bottler,
-        provisioning.roleBottlerMappings ?? [],
-      );
-      return {
-        ...user,
-        profile: user.profile ?? mapping?.profile,
-        permissionSets: user.permissionSets ?? mapping?.permissionSets ?? [],
-        modules: user.modules ?? mapping?.modules ?? [],
-        locations: user.locations ?? mapping?.locations ?? [],
-        username: user.username ?? formatProvisioningUsername(
-          generateEmailStyleUsername({
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            domain: provisioning.usernamePolicy?.domain,
-            uniqueKey: `${automationRunId}-${index + 1}`,
-          }),
-          provisioning.usernamePolicy?.pattern,
-          { runId: automationRunId, ordinal: index + 1 },
-        ),
-      };
-    });
+    return resolveUserProvisioningPlan(config.userProvisioning ?? {}, automationRunId);
   }
 
   private async completeAutoPipeline(
@@ -1154,7 +1207,7 @@ export class PipelineOrchestratorService {
     await prisma.automationRun.update({
       where: { id: automationRunId },
       data: {
-        status: 'completed',
+        status: checkpoint.partialUserActions?.length ? 'partial' : 'completed',
         failedStep: null,
         lastError: null,
         checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
@@ -1162,7 +1215,7 @@ export class PipelineOrchestratorService {
     });
     await this.streamService.publish('job_status', {
       automationRunId,
-      status: 'completed',
+      status: checkpoint.partialUserActions?.length ? 'partial' : 'completed',
       awaitingUserActions,
       fullyProvisioned: checkpoint.fullyProvisioned ?? false,
     });

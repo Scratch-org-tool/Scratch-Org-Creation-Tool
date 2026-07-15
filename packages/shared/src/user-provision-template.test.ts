@@ -7,6 +7,7 @@ import {
   formatProvisioningUsername,
   normalizeRoleSlug,
   resolveRoleBottlerMapping,
+  resolveUserProvisioningPlan,
   stableDeterministicShuffle,
   userProvisioningConfigSchema,
   type RoleBottlerMapping,
@@ -192,5 +193,96 @@ describe('deterministic user helpers', () => {
     assert.equal(new Set(first.map((user) => user.email)).size, 3);
     assert.equal(new Set(first.map((user) => user.username)).size, 3);
     assert.ok(first.every((user) => user.username?.endsWith('@users.example.com')));
+  });
+
+  it('applies Salesforce roles and profiles to explicit, slotted, and generated users', () => {
+    const users = resolveUserProvisioningPlan({
+      defaultProfile: 'Standard User',
+      emailPolicy: { strategy: 'generated', domain: 'mail.example.com' },
+      roleBottlerMappings: [{
+        role: 'Field Sales',
+        bottler: '5000',
+        salesforceRole: 'Sales Rep',
+        profile: 'Mapped Profile',
+        permissionSets: ['Sales'],
+      }],
+      users: [{
+        firstName: 'Explicit',
+        lastName: 'User',
+        email: 'explicit@example.com',
+        role: 'Field Sales',
+        bottler: '5000',
+      }],
+      templates: [{
+        id: 'sales',
+        label: 'Sales',
+        role: 'Field Sales',
+        bottler: '5000',
+      }],
+      slots: [{
+        templateId: 'sales',
+        firstName: 'Slot',
+        lastName: 'User',
+        email: 'slot@example.com',
+      }],
+      userGenerators: [{
+        id: 'generated',
+        count: 1,
+        role: 'Field Sales',
+        bottler: '5000',
+      }],
+    }, 'run-role-map');
+
+    assert.equal(users.length, 3);
+    assert.ok(users.every((user) => user.role === 'Sales Rep'));
+    assert.ok(users.every((user) => user.profile === 'Mapped Profile'));
+  });
+
+  it('adds stable per-user entropy to constant patterns and enforces Salesforce length', () => {
+    const config = {
+      defaultProfile: 'Standard User',
+      usernamePolicy: {
+        strategy: 'email_style' as const,
+        pattern: `${'provisioned'.repeat(12)}@users.example.com`,
+        seed: 'automation_run' as const,
+      },
+      users: [1, 2].map((ordinal) => ({
+        firstName: `User${ordinal}`,
+        lastName: 'WithAnExtremelyLongNameThatMustStillProduceAValidSalesforceUsername',
+        email: `user${ordinal}@example.com`,
+        role: 'Rep',
+        bottler: '5000',
+      })),
+    };
+    const first = resolveUserProvisioningPlan(config, 'stable-run');
+    const second = resolveUserProvisioningPlan(config, 'stable-run');
+    assert.deepEqual(first, second);
+    assert.equal(new Set(first.map((user) => user.username)).size, 2);
+    assert.ok(first.every((user) =>
+      Boolean(user.username?.includes('@')) && user.username!.length <= 80));
+  });
+
+  it('does not duplicate a previously persisted generator expansion on resume', () => {
+    const generator: UserGenerator = {
+      id: 'resume-generator',
+      count: 1,
+      role: 'Rep',
+      bottler: '5000',
+      firstNamePrefix: 'Generated',
+    };
+    const options = {
+      automationRunId: 'resume-run',
+      emailPolicy: { strategy: 'generated' as const, domain: 'mail.example.com' },
+      defaultProfile: 'Standard User',
+    };
+    const persisted = expandUserGenerators([generator], options)[0];
+    const resolved = resolveUserProvisioningPlan({
+      defaultProfile: 'Standard User',
+      emailPolicy: options.emailPolicy,
+      users: [persisted],
+      userGenerators: [generator],
+    }, options.automationRunId);
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0].username, persisted.username);
   });
 });

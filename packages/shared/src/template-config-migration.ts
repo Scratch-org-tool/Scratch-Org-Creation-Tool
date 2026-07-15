@@ -19,8 +19,9 @@ export function migrateTemplateConfig(
   config: ScratchPipelineTemplateConfig,
 ): ScratchPipelineTemplateConfig {
   const legacy = config.sourceOrgId;
-  const dataDeploymentOrgId = config.dataDeploymentOrgId ?? legacy;
-  const customSettingsOrgId = config.customSettingsOrgId ?? legacy;
+  const hasDualOrgFields = Boolean(config.dataDeploymentOrgId || config.customSettingsOrgId);
+  const dataDeploymentOrgId = config.dataDeploymentOrgId ?? (hasDualOrgFields ? undefined : legacy);
+  const customSettingsOrgId = config.customSettingsOrgId ?? (hasDualOrgFields ? undefined : legacy);
 
   const migrated: ScratchPipelineTemplateConfig = {
     ...config,
@@ -43,11 +44,13 @@ export function migrateTemplateConfig(
 }
 
 export function getDataDeploymentOrgId(config: OrgIdConfig): string | undefined {
-  return config.dataDeploymentOrgId ?? config.sourceOrgId;
+  return config.dataDeploymentOrgId
+    ?? (!config.dataDeploymentOrgId && !config.customSettingsOrgId ? config.sourceOrgId : undefined);
 }
 
 export function getCustomSettingsOrgId(config: OrgIdConfig): string | undefined {
-  return config.customSettingsOrgId ?? config.sourceOrgId;
+  return config.customSettingsOrgId
+    ?? (!config.dataDeploymentOrgId && !config.customSettingsOrgId ? config.sourceOrgId : undefined);
 }
 
 function inferLegacyCategory(objectName: string): QueryCategory {
@@ -257,6 +260,7 @@ export function migrateTemplateConfigToV2(
           ...config.userProvisioning,
           users: migratedUsers,
           roleBottlerMappings: mappingsFromLegacyTemplates(config),
+          defaultProfile: config.userProvisioning.defaultProfile ?? 'Standard User',
           discoveryPolicy: config.userProvisioning.discoveryPolicy ?? 'best_effort',
           usernamePolicy: config.userProvisioning.usernamePolicy ?? {
             strategy: 'email_style',

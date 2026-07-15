@@ -50,15 +50,12 @@ export class OrgUserMetadataService {
       const controller = field.controllerName
         ? fields.find((candidate) => candidate.name === field.controllerName)
         : undefined;
-      const controllerValues = (controller?.picklistValues ?? [])
-        .filter((value) => value.active)
-        .map((value) => value.value);
       picklists.push({
         name: fieldName,
         values,
         controllerName: field.controllerName,
         dependencies: field.controllerName
-          ? buildPicklistDependencies(activeValues, controllerValues)
+          ? buildPicklistDependencies(activeValues, controller?.picklistValues ?? [])
           : undefined,
       });
     }

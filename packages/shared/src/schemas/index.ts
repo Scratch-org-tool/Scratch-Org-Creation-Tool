@@ -19,7 +19,10 @@ import {
   sfdmuExportSchema,
   scratchPipelineTemplateConfigSchema,
 } from '../sfdmu-export.js';
-import { userProvisioningConfigSchema } from '../user-provision-template.js';
+import {
+  unresolvedV2Profiles,
+  userProvisioningConfigSchema,
+} from '../user-provision-template.js';
 
 export * from './auth.js';
 
@@ -199,6 +202,16 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
       message: 'V2 resumable custom settings do not support Insert; use Upsert',
       path: ['customSettings', 'exportConfig'],
     });
+  }
+  if (value.version === 2 && value.userProvisioning) {
+    const unresolved = unresolvedV2Profiles(value.userProvisioning);
+    if (unresolved.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `V2 provisioning requires a resolvable profile for: ${unresolved.join(', ')}`,
+        path: ['userProvisioning', 'defaultProfile'],
+      });
+    }
   }
 }).transform(normalizeGitSourceConfig);
 

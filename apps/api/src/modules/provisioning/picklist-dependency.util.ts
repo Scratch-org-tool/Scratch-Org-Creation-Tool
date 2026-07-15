@@ -24,12 +24,20 @@ export function decodeValidFor(validFor: string | undefined, controllerValues: s
 
 export function buildPicklistDependencies(
   values: SalesforcePicklistValue[],
-  controllerValues: string[],
+  controllerMetadata: SalesforcePicklistValue[] | string[],
 ): PicklistDependency[] {
+  const fullControllerOrder = controllerMetadata.map((value) =>
+    typeof value === 'string' ? value : value.value);
+  const activeControllers = new Set(
+    controllerMetadata
+      .filter((value) => typeof value === 'string' || value.active)
+      .map((value) => typeof value === 'string' ? value : value.value),
+  );
   return values
     .filter((value) => value.active)
     .map((value) => ({
       value: value.value,
-      validFor: decodeValidFor(value.validFor, controllerValues),
+      validFor: decodeValidFor(value.validFor, fullControllerOrder)
+        .filter((controller) => activeControllers.has(controller)),
     }));
 }

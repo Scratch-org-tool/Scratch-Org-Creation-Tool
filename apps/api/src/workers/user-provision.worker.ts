@@ -27,6 +27,8 @@ interface ConaUserInput {
   profile?: string;
 }
 
+class MetadataValidationError extends Error {}
+
 @Injectable()
 export class UserProvisionWorker {
   private readonly sfCli = createSfCliClient();
@@ -37,13 +39,26 @@ export class UserProvisionWorker {
   ) {}
 
   async process(job: Job) {
-    const { orgId, batchId, users, dbJobId, conaMode, strictMetadata } = job.data as {
+    const {
+      orgId,
+      batchId,
+      users,
+      dbJobId,
+      conaMode,
+      strictMetadata,
+      discoveryPolicy = 'best_effort',
+      discoveryFailurePolicy = 'fail',
+      failurePolicy = 'fail_fast',
+    } = job.data as {
       orgId: string;
       batchId?: string;
       users: ConaUserInput[];
       dbJobId: string;
       conaMode?: boolean;
       strictMetadata?: boolean;
+      discoveryPolicy?: 'strict' | 'best_effort' | 'disabled';
+      discoveryFailurePolicy?: 'fail' | 'continue';
+      failurePolicy?: 'fail_fast' | 'continue';
     };
 
     const log = async (stream: 'stdout' | 'stderr', line: string) => {
@@ -59,24 +74,70 @@ export class UserProvisionWorker {
 
     let metadata: { profileIds: Map<string, string> } | undefined;
     try {
-      metadata = conaMode ? await this.preflightUsers(alias, users, Boolean(strictMetadata)) : undefined;
+      if (conaMode && discoveryPolicy === 'disabled') {
+        metadata = this.disabledDiscoveryProfiles(users, Boolean(strictMetadata));
+        await log('stdout', 'Target User metadata discovery disabled by policy');
+      } else if (conaMode) {
+        try {
+          metadata = await this.preflightUsers(
+            alias,
+            users,
+            Boolean(strictMetadata || discoveryPolicy === 'strict'),
+          );
+        } catch (error) {
+          if (
+            error instanceof MetadataValidationError
+            || discoveryPolicy === 'strict'
+            || discoveryFailurePolicy === 'fail'
+          ) {
+            throw error;
+          }
+          metadata = this.disabledDiscoveryProfiles(users, Boolean(strictMetadata));
+          await log(
+            'stderr',
+            `Target metadata discovery failed; continuing by policy: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (batchId) {
         await prisma.provisionedUser.updateMany({
-          where: { batchId, status: { not: 'completed' } },
+          where: {
+            batchId,
+            username: {
+              in: users.map((user) =>
+                user.username?.trim() || buildStableProvisioningUsername(user, org.id)),
+            },
+            status: { not: 'completed' },
+          },
           data: { status: 'failed', error: message },
+        });
+        const rows = await prisma.provisionedUser.findMany({
+          where: { batchId },
+          select: { status: true },
         });
         await prisma.provisioningBatch.update({
           where: { id: batchId },
-          data: { status: 'failed', failCount: users.length, successCount: 0 },
+          data: {
+            status: deriveProvisioningBatchStatus(
+              rows.filter((row) => row.status === 'completed').length,
+              rows.filter((row) => row.status === 'failed').length,
+              rows.length,
+            ),
+            failCount: rows.filter((row) => row.status === 'failed').length,
+            successCount: rows.filter((row) => row.status === 'completed').length,
+          },
         });
       }
       await log('stderr', `Provisioning preflight failed: ${message}`);
       throw error;
     }
 
-    for (const user of users) {
+    for (let userIndex = 0; userIndex < users.length; userIndex += 1) {
+      const user = users[userIndex];
       const username = user.username?.trim() || buildStableProvisioningUsername(user, org.id);
       const provisioned = batchId
         ? await prisma.provisionedUser.findFirst({
@@ -166,6 +227,26 @@ export class UserProvisionWorker {
         }
         failCount++;
         await log('stderr', `Failed user ${username}: ${message}`);
+        if (failurePolicy === 'fail_fast') {
+          const remainingUsernames = users
+            .slice(userIndex + 1)
+            .map((remaining) =>
+              remaining.username?.trim() || buildStableProvisioningUsername(remaining, org.id));
+          if (batchId && remainingUsernames.length) {
+            await prisma.provisionedUser.updateMany({
+              where: {
+                batchId,
+                username: { in: remainingUsernames },
+                status: { not: 'completed' },
+              },
+              data: {
+                status: 'failed',
+                error: 'Not attempted because fail_fast stopped the batch',
+              },
+            });
+          }
+          break;
+        }
       }
     }
 
@@ -186,14 +267,16 @@ export class UserProvisionWorker {
       });
     }
 
-    if (failCount > 0) {
+    if (failCount > 0 && failurePolicy === 'fail_fast') {
       throw new Error(
-        failCount === users.length
-          ? `All ${failCount} user(s) failed provisioning`
-          : `${failCount} of ${users.length} user(s) failed provisioning; completed users will be skipped on resume`,
+        `${failCount} user(s) failed provisioning; only failed rows will be retried`,
       );
     }
-    return { successCount, failCount };
+    return {
+      successCount,
+      failCount,
+      partial: failurePolicy === 'continue' && failCount > 0,
+    };
   }
 
   private async assertPayloadBinding(input: {
@@ -265,7 +348,9 @@ export class UserProvisionWorker {
       'cfs_ob__u_Locations__c',
     ];
     const missing = fieldNames.filter((name) => !fields.some((field) => field.name === name));
-    if (strict && missing.length) throw new Error(`Target User fields are missing: ${missing.join(', ')}`);
+    if (strict && missing.length) {
+      throw new MetadataValidationError(`Target User fields are missing: ${missing.join(', ')}`);
+    }
 
     const [profilesResult, permissionSetsResult] = await Promise.all([
       this.sfCli.query(alias, 'SELECT Id, Name FROM Profile ORDER BY Name LIMIT 500'),
@@ -294,36 +379,68 @@ export class UserProvisionWorker {
       return [];
     };
     for (const user of users) {
-      if (strict && !user.profile) throw new Error(`Profile is required for ${user.username ?? user.email}`);
-      if (user.profile && !profileIds.has(user.profile)) throw new Error(`Unknown profile: ${user.profile}`);
+      if (strict && !user.profile) {
+        throw new MetadataValidationError(`Profile is required for ${user.username ?? user.email}`);
+      }
+      if (user.profile && !profileIds.has(user.profile)) {
+        throw new MetadataValidationError(`Unknown profile: ${user.profile}`);
+      }
       for (const permissionSet of user.permissionSets ?? []) {
-        if (!permissionSets.has(permissionSet)) throw new Error(`Unknown permission set: ${permissionSet}`);
+        if (!permissionSets.has(permissionSet)) {
+          throw new MetadataValidationError(`Unknown permission set: ${permissionSet}`);
+        }
       }
       for (const fieldName of fieldNames) {
         const allowed = picklists.get(fieldName);
         for (const value of userValue(user, fieldName)) {
-          if (allowed && !allowed.has(value)) throw new Error(`Invalid ${fieldName} value "${value}"`);
+          if (allowed && !allowed.has(value)) {
+            throw new MetadataValidationError(`Invalid ${fieldName} value "${value}"`);
+          }
         }
         const field = fields.find((candidate) => candidate.name === fieldName);
         if (!field?.controllerName) continue;
         const controller = fields.find((candidate) => candidate.name === field.controllerName);
-        const controllerValues = (controller?.picklistValues ?? [])
-          .filter((value) => value.active)
-          .map((value) => value.value);
-        const dependencies = buildPicklistDependencies(field.picklistValues ?? [], controllerValues);
+        const dependencies = buildPicklistDependencies(
+          field.picklistValues ?? [],
+          controller?.picklistValues ?? [],
+        );
         const selectedControllerValues = new Set(userValue(user, field.controllerName));
         for (const selected of userValue(user, fieldName)) {
           const dependency = dependencies.find((candidate) => candidate.value === selected);
           if (
-            dependency?.validFor.length
+            dependency
             && !dependency.validFor.some((controllerValue) => selectedControllerValues.has(controllerValue))
           ) {
-            throw new Error(
+            throw new MetadataValidationError(
               `Value "${selected}" for ${fieldName} is invalid for ${field.controllerName}`,
             );
           }
         }
       }
+    }
+    return { profileIds };
+  }
+
+  private disabledDiscoveryProfiles(users: ConaUserInput[], strict: boolean) {
+    const profileIds = new Map<string, string>();
+    for (const user of users) {
+      if (!user.profile) {
+        if (strict) {
+          throw new MetadataValidationError(
+            `Profile is required for ${user.username ?? user.email}`,
+          );
+        }
+        continue;
+      }
+      if (!/^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/.test(user.profile)) {
+        if (strict) {
+          throw new MetadataValidationError(
+            `Profile "${user.profile}" cannot be resolved while discovery is unavailable`,
+          );
+        }
+        continue;
+      }
+      profileIds.set(user.profile, user.profile);
     }
     return { profileIds };
   }

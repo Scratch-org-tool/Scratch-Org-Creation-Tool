@@ -315,6 +315,8 @@ model ProvisionedUser {
   error          String?
   sfUserId       String?
   createdAt      DateTime          @default(now())
+
+  @@unique([batchId, username])
 }
 
 model KnowledgeChunk {

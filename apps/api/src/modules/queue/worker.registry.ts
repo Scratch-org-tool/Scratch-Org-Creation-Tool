@@ -141,9 +141,12 @@ export class WorkerRegistry implements OnModuleInit {
               }
               return result;
             }
-            if (current?.status !== 'completed') {
-              await this.jobsService.updateStatus(dbJobId, 'completed');
-              await this.streamService.publish('job_status', { jobId: dbJobId, status: 'completed' });
+            const terminalStatus = job.name === 'cona_user_provision' && result?.partial
+              ? 'partial'
+              : 'completed';
+            if (current?.status !== terminalStatus) {
+              await this.jobsService.updateStatus(dbJobId, terminalStatus);
+              await this.streamService.publish('job_status', { jobId: dbJobId, status: terminalStatus });
             }
           }
 

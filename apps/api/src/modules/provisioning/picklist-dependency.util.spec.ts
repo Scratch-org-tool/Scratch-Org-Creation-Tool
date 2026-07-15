@@ -16,4 +16,21 @@ describe('Salesforce picklist dependency decoding', () => {
       { value: 'North', validFor: ['4900'] },
     ]);
   });
+
+  it('decodes against inactive controller positions before filtering them', () => {
+    expect(buildPicklistDependencies([
+      { value: 'OnlyThird', active: true, validFor: Buffer.from([0x20]).toString('base64') },
+    ], [
+      { value: 'First', active: true },
+      { value: 'InactiveMiddle', active: false },
+      { value: 'Third', active: true },
+    ])).toEqual([{ value: 'OnlyThird', validFor: ['Third'] }]);
+  });
+
+  it('retains an empty dependency set as an explicit restriction', () => {
+    expect(buildPicklistDependencies([
+      { value: 'NeverValid', active: true, validFor: Buffer.from([0]).toString('base64') },
+    ], [{ value: 'Controller', active: true }]))
+      .toEqual([{ value: 'NeverValid', validFor: [] }]);
+  });
 });

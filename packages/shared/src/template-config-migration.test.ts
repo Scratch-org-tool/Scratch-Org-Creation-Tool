@@ -5,6 +5,7 @@ import {
   type ScratchPipelineTemplateConfig,
 } from './sfdmu-export.js';
 import {
+  migrateTemplateConfig,
   migrateTemplateConfigToV2,
 } from './template-config-migration.js';
 
@@ -116,6 +117,45 @@ describe('ScratchPipelineTemplateConfig V2 compatibility', () => {
       /accountPartnerPlan/,
     );
   });
+
+  it('requires every V2 user source to resolve a target profile', () => {
+    assert.throws(
+      () => scratchPipelineTemplateConfigSchema.parse({
+        version: 2,
+        userProvisioning: {
+          users: [{
+            firstName: 'Missing',
+            lastName: 'Profile',
+            email: 'missing@example.com',
+            role: 'Rep',
+            bottler: '5000',
+          }],
+        },
+      }),
+      /resolvable profile/,
+    );
+    assert.doesNotThrow(
+      () => scratchPipelineTemplateConfigSchema.parse({
+        version: 2,
+        userProvisioning: {
+          defaultProfile: 'Standard User',
+          users: [{
+            firstName: 'Defaulted',
+            lastName: 'Profile',
+            email: 'defaulted@example.com',
+            role: 'Rep',
+            bottler: '5000',
+          }],
+          userGenerators: [{
+            id: 'mapped',
+            count: 1,
+            role: 'Lead',
+            bottler: '5000',
+          }],
+        },
+      }),
+    );
+  });
 });
 
 describe('migrateTemplateConfigToV2', () => {
@@ -195,6 +235,7 @@ describe('migrateTemplateConfigToV2', () => {
       ['onboarding', 'z001-rule', 'account-z003-4900-z3'],
     );
     assert.equal(migrated.userProvisioning?.roleBottlerMappings?.[0].role, 'Rep');
+    assert.equal(migrated.userProvisioning?.defaultProfile, 'Standard User');
     assert.equal(migrated.userProvisioning?.execution?.concurrency, 1);
     assert.equal(scratchPipelineTemplateConfigSchema.parse(migrated).version, 2);
   });
@@ -241,4 +282,31 @@ describe('migrateTemplateConfigToV2', () => {
     });
     assert.throws(() => migrateTemplateConfigToV2(legacy), /Insert custom settings/);
   });
+
+  it('uses deprecated sourceOrgId only when both dual source fields are absent', () => {
+    const legacy = 'c9111cc6-1f69-4789-97f7-b4ed736fdeca';
+    const data = 'd9111cc6-1f69-4789-97f7-b4ed736fdeca';
+    assert.deepEqual(
+      migrateTemplateConfig({ sourceOrgId: legacy } as ScratchPipelineTemplateConfig),
+      expectSources(legacy, legacy, legacy),
+    );
+    const migrated = migrateTemplateConfig({
+      sourceOrgId: legacy,
+      dataDeploymentOrgId: data,
+    } as ScratchPipelineTemplateConfig);
+    assert.equal(migrated.dataDeploymentOrgId, data);
+    assert.equal(migrated.customSettingsOrgId, undefined);
+  });
 });
+
+function expectSources(
+  sourceOrgId: string,
+  dataDeploymentOrgId: string,
+  customSettingsOrgId: string,
+) {
+  return {
+    sourceOrgId,
+    dataDeploymentOrgId,
+    customSettingsOrgId,
+  };
+}

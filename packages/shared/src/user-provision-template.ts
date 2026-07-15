@@ -59,6 +59,8 @@ export const userProvisionSlotSchema = z.object({
   bottler: bottlerIdSchema.optional(),
   modules: z.array(z.string()).optional(),
   locations: z.array(z.string()).optional(),
+  profile: z.string().min(1).optional(),
+  permissionSets: z.array(z.string().min(1)).optional(),
 });
 
 export const concreteProvisionUserSchema = z.object({
@@ -87,6 +89,8 @@ export const userGeneratorSchema = z.object({
   lastNamePrefix: z.string().min(1).optional(),
   modules: z.array(z.string()).optional(),
   locations: z.array(z.string()).optional(),
+  profile: z.string().min(1).optional(),
+  permissionSets: z.array(z.string().min(1)).optional(),
 });
 
 export const userProvisionExecutionSchema = z.object({
@@ -98,6 +102,7 @@ export const userProvisionExecutionSchema = z.object({
 
 export const userProvisioningConfigSchema = z.object({
   discoveryPolicy: userDiscoveryPolicySchema.optional(),
+  defaultProfile: z.string().min(1).optional(),
   usernamePolicy: usernamePolicySchema.optional(),
   emailPolicy: emailPolicySchema.optional(),
   roleBottlerMappings: z.array(roleBottlerMappingSchema).optional(),
@@ -187,6 +192,8 @@ export function resolveUserProvisionSlots(
       bottler: slot.bottler ?? tmpl.bottler,
       modules: slot.modules ?? tmpl.modules,
       locations: slot.locations ?? tmpl.locations,
+      ...(slot.profile ? { profile: slot.profile } : {}),
+      ...(slot.permissionSets ? { permissionSets: slot.permissionSets } : {}),
     };
   });
 }
@@ -214,6 +221,23 @@ function hashSeed(seed: string): number {
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
+}
+
+function stableEntropy(seed: string): string {
+  return `${hashSeed(seed).toString(36)}${hashSeed(`sfcc:${seed}`).toString(36)}`.slice(0, 13);
+}
+
+function assertAndLimitEmailUsername(username: string): string {
+  const match = username.trim().match(/^([^@\s]+)@([^@\s]+)$/);
+  if (!match || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(match[2])) {
+    throw new Error('Username must be in email format');
+  }
+  const maxLocalLength = 80 - match[2].length - 1;
+  if (maxLocalLength < 1) throw new Error('Username domain is too long');
+  const local = match[1].slice(0, maxLocalLength).replace(/[.+_-]+$/g, '') || 'u';
+  const result = `${local}@${match[2]}`;
+  if (result.length > 80) throw new Error('Username must be at most 80 characters');
+  return result;
 }
 
 function seededRandom(seed: string): () => number {
@@ -292,7 +316,13 @@ export function generateEmailStyleUsername(input: EmailStyleUsernameInput): stri
     .replace(/^[._-]+|[._-]+$/g, '');
   const local = emailMatch?.[1] || nameLocal || 'user';
   const unique = normalizeRoleSlug(input.uniqueKey) || hashSeed(input.uniqueKey).toString(36);
-  return `${local}+${unique}@${domain}`;
+  const candidate = `${local}+${unique}@${domain}`;
+  if (candidate.length <= 80) return assertAndLimitEmailUsername(candidate);
+  const entropy = stableEntropy(input.uniqueKey);
+  const maxLocal = 80 - domain.length - entropy.length - 2;
+  return assertAndLimitEmailUsername(
+    `${local.slice(0, Math.max(1, maxLocal))}+${entropy}@${domain}`,
+  );
 }
 
 export const generateUniqueUsername = generateEmailStyleUsername;
@@ -300,19 +330,33 @@ export const generateUniqueUsername = generateEmailStyleUsername;
 export function formatProvisioningUsername(
   username: string,
   pattern: string | undefined,
-  values: { runId: string; generatorId?: string; ordinal: number },
+  values: { runId: string; generatorId?: string; ordinal: number; userKey?: string },
 ): string {
-  if (!pattern) return username;
-  const formatted = pattern
+  if (!pattern) return assertAndLimitEmailUsername(username);
+  const entropy = stableEntropy(
+    `${values.runId}:${values.userKey ?? values.generatorId ?? 'user'}:${values.ordinal}`,
+  );
+  let formatted = pattern
     .replace(/\{\{local\}\}/g, username.split('@')[0])
     .replace(/\{\{domain\}\}/g, username.split('@')[1])
     .replace(/\{\{runId\}\}/g, normalizeRoleSlug(values.runId))
     .replace(/\{\{generatorId\}\}/g, normalizeRoleSlug(values.generatorId ?? 'user'))
-    .replace(/\{\{ordinal\}\}/g, String(values.ordinal));
-  if (!/^[^@\s]+@[^@\s]+$/.test(formatted)) {
-    throw new Error('Username pattern produced an invalid username');
+    .replace(/\{\{ordinal\}\}/g, String(values.ordinal))
+    .replace(/\{\{entropy\}\}/g, entropy);
+  if (!pattern.includes('{{local}}') && !pattern.includes('{{entropy}}')) {
+    const at = formatted.lastIndexOf('@');
+    if (at <= 0) throw new Error('Username pattern produced an invalid username');
+    formatted = `${formatted.slice(0, at)}+${entropy}${formatted.slice(at)}`;
   }
-  return formatted;
+  if (formatted.length > 80) {
+    const at = formatted.lastIndexOf('@');
+    if (at <= 0) throw new Error('Username pattern produced an invalid username');
+    const domain = formatted.slice(at + 1);
+    const maxPrefix = 80 - domain.length - entropy.length - 2;
+    if (maxPrefix < 1) throw new Error('Username pattern domain is too long');
+    formatted = `${formatted.slice(0, maxPrefix)}+${entropy}@${domain}`;
+  }
+  return assertAndLimitEmailUsername(formatted);
 }
 
 export function resolveRoleBottlerMapping(
@@ -338,6 +382,7 @@ export interface ExpandUserGeneratorsOptions {
   roleBottlerMappings?: readonly RoleBottlerMapping[];
   usernamePolicy?: z.input<typeof usernamePolicySchema>;
   emailPolicy?: z.input<typeof emailPolicySchema>;
+  defaultProfile?: string;
 }
 
 export function expandUserGenerators(
@@ -411,6 +456,7 @@ export function expandUserGenerators(
         runId: options.automationRunId,
         generatorId: generator.id,
         ordinal,
+        userKey: uniqueKey,
       });
       result.push({
         firstName,
@@ -423,10 +469,119 @@ export function expandUserGenerators(
         locations: generator.locations ?? mapping?.locations ?? [],
         teamId: generator.teamId,
         generatorId: generator.id,
-        profile: mapping?.profile,
-        permissionSets: mapping?.permissionSets ?? [],
+        profile: generator.profile ?? mapping?.profile ?? options.defaultProfile,
+        permissionSets: generator.permissionSets ?? mapping?.permissionSets ?? [],
       });
     }
   }
   return result;
+}
+
+/**
+ * Resolve every supported user source once into the immutable plan used by
+ * previews, database rows, and queue payloads.
+ */
+export function resolveUserProvisioningPlan(
+  input: z.input<typeof userProvisioningConfigSchema> | UserProvisioningConfig,
+  automationRunId: string,
+): ResolvedProvisionUser[] {
+  const config = userProvisioningConfigSchema.parse(input);
+  const slotted = config.slots?.length
+    ? resolveUserProvisionSlots(config.slots, config.templates ?? [])
+    : [];
+  const generated = config.userGenerators?.length
+    ? expandUserGenerators(config.userGenerators, {
+        automationRunId,
+        teams: config.teams,
+        roleBottlerMappings: config.roleBottlerMappings,
+        usernamePolicy: config.usernamePolicy,
+        emailPolicy: config.emailPolicy,
+        defaultProfile: config.defaultProfile,
+      })
+    : [];
+  const candidates = [...(config.users ?? []), ...slotted, ...generated];
+  const exactUsers = new Set<string>();
+  const resolved = candidates.filter((user) => {
+    const key = JSON.stringify([
+      user.firstName,
+      user.lastName,
+      user.email.trim().toLowerCase(),
+      user.username?.trim().toLowerCase(),
+    ]);
+    if (exactUsers.has(key)) return false;
+    exactUsers.add(key);
+    return true;
+  }).map((user, index) => {
+    const mapping = resolveRoleBottlerMapping(
+      user.role,
+      user.bottler,
+      config.roleBottlerMappings ?? [],
+    );
+    const ordinal = index + 1;
+    const userKey = `${automationRunId}:${user.email.trim().toLowerCase()}:${ordinal}`;
+    const username = user.username
+      ? assertAndLimitEmailUsername(user.username)
+      : formatProvisioningUsername(
+          generateEmailStyleUsername({
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            domain: config.usernamePolicy?.domain,
+            uniqueKey: userKey,
+          }),
+          config.usernamePolicy?.pattern,
+          {
+            runId: automationRunId,
+            generatorId: (user as ResolvedProvisionUser).generatorId,
+            ordinal,
+            userKey,
+          },
+        );
+    return {
+      ...user,
+      username,
+      role: mapping?.salesforceRole ?? user.role,
+      profile: user.profile ?? mapping?.profile ?? config.defaultProfile,
+      permissionSets: user.permissionSets ?? mapping?.permissionSets ?? [],
+      modules: user.modules ?? mapping?.modules ?? [],
+      locations: user.locations ?? mapping?.locations ?? [],
+    };
+  });
+  const usernames = new Set<string>();
+  for (const user of resolved) {
+    const username = user.username!.toLowerCase();
+    if (usernames.has(username)) {
+      throw new Error(`Resolved provisioning usernames are not unique: ${user.username}`);
+    }
+    usernames.add(username);
+  }
+  return resolved;
+}
+
+export function unresolvedV2Profiles(config: UserProvisioningConfig): string[] {
+  const missing: string[] = [];
+  const mappings = config.roleBottlerMappings ?? [];
+  const check = (label: string, role: string, bottler: string, profile?: string) => {
+    const mapping = resolveRoleBottlerMapping(role, bottler, mappings);
+    if (!(profile ?? mapping?.profile ?? config.defaultProfile)) missing.push(label);
+  };
+  for (const user of config.users ?? []) {
+    check(user.email, user.role, user.bottler, user.profile);
+  }
+  for (const generator of config.userGenerators ?? []) {
+    check(`generator:${generator.id}`, generator.role, generator.bottler, generator.profile);
+  }
+  const templates = new Map((config.templates ?? []).map((template) => [template.id, template]));
+  for (const slot of config.slots ?? []) {
+    const template = templates.get(slot.templateId);
+    if (template) {
+      check(
+        slot.email,
+        slot.role ?? template.role,
+        slot.bottler ?? template.bottler,
+        slot.profile,
+      );
+    }
+  }
+  return missing;
 }

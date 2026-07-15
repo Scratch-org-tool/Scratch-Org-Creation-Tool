@@ -4,11 +4,8 @@ import {
   QUEUE_NAMES,
   userProvisionSchema,
   conaUserProvisionSchema,
-  expandUserGenerators,
   generateEmailStyleUsername,
-  formatProvisioningUsername,
-  resolveRoleBottlerMapping,
-  resolveUserProvisionSlots,
+  resolveUserProvisioningPlan,
   userProvisioningConfigSchema,
 } from '@sfcc/shared';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
@@ -27,53 +24,42 @@ export class ProvisioningService {
     if (!input.orgId) throw new Error('orgId is required');
     const config = userProvisioningConfigSchema.parse(input.config ?? {});
     const runId = input.automationRunId ?? `preview-${input.orgId}`;
-    const users = [
-      ...(config.users ?? []),
-      ...(config.slots?.length
-        ? resolveUserProvisionSlots(config.slots, config.templates ?? [])
-        : []),
-      ...(config.userGenerators?.length
-        ? expandUserGenerators(config.userGenerators, {
-            automationRunId: runId,
-            teams: config.teams,
-            roleBottlerMappings: config.roleBottlerMappings,
-            usernamePolicy: config.usernamePolicy,
-            emailPolicy: config.emailPolicy,
-          })
-        : []),
-    ].map((user, index) => {
-      const mapping = resolveRoleBottlerMapping(
-        user.role,
-        user.bottler,
-        config.roleBottlerMappings ?? [],
-      );
+    const users = resolveUserProvisioningPlan(config, runId);
+    const discoveryPolicy = config.discoveryPolicy ?? 'best_effort';
+    const discoveryFailurePolicy = config.execution?.discoveryFailurePolicy ?? 'fail';
+    const warnings: string[] = [];
+    if (discoveryPolicy === 'disabled') {
+      const errors = users
+        .filter((user) => !user.profile)
+        .map((user) => `${user.username}: missing profile`);
       return {
-        ...user,
-        profile: user.profile ?? mapping?.profile,
-        permissionSets: user.permissionSets ?? mapping?.permissionSets ?? [],
-        modules: user.modules ?? mapping?.modules ?? [],
-        locations: user.locations ?? mapping?.locations ?? [],
-        username: user.username ?? formatProvisioningUsername(
-          generateEmailStyleUsername({
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            domain: config.usernamePolicy?.domain,
-            uniqueKey: `${runId}-${index + 1}`,
-          }),
-          config.usernamePolicy?.pattern,
-          { runId, ordinal: index + 1 },
-        ),
+        ok: errors.length === 0,
+        users,
+        metadata: null,
+        errors,
+        warnings: ['Target metadata discovery is disabled'],
       };
-    });
-    const metadata = await this.orgUserMetadata.discover(input.orgId, userId);
+    }
+    let metadata: Awaited<ReturnType<OrgUserMetadataService['discover']>>;
+    try {
+      metadata = await this.orgUserMetadata.discover(input.orgId, userId);
+    } catch (error) {
+      if (discoveryPolicy === 'strict' || discoveryFailurePolicy === 'fail') throw error;
+      warnings.push(
+        `Target metadata discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      const errors = users
+        .filter((user) => !user.profile)
+        .map((user) => `${user.username}: missing profile`);
+      return { ok: errors.length === 0, users, metadata: null, errors, warnings };
+    }
     const picklists = new Map(metadata.picklists.map((field) => [field.name, new Set(field.values)]));
     const profiles = new Set(metadata.profiles.flatMap((profile) => [profile.Id, profile.Name]));
     const permissionSets = new Set(metadata.permissionSets.map((permissionSet) => permissionSet.Name));
     const errors: string[] = [];
     for (const user of users) {
       if (!user.profile || !profiles.has(user.profile)) errors.push(`${user.username}: invalid or missing profile`);
-      for (const permissionSet of user.permissionSets) {
+      for (const permissionSet of user.permissionSets ?? []) {
         if (!permissionSets.has(permissionSet)) errors.push(`${user.username}: unknown permission set ${permissionSet}`);
       }
       for (const [field, values] of [
@@ -86,7 +72,7 @@ export class ProvisioningService {
           if (!picklists.get(field)?.has(value)) errors.push(`${user.username}: invalid ${field} value ${value}`);
           const metadataField = metadata.picklists.find((candidate) => candidate.name === field);
           const dependency = metadataField?.dependencies?.find((candidate) => candidate.value === value);
-          if (dependency?.validFor.length && metadataField?.controllerName) {
+          if (dependency && metadataField?.controllerName) {
             const controllerValues = metadataField.controllerName === 'cfs_ob__Bottler__c'
               ? [user.bottler]
               : metadataField.controllerName === 'cfs_ob__Onboarding_Role__c'
@@ -101,8 +87,12 @@ export class ProvisioningService {
         }
       }
     }
-    if (metadata.missingFields.length) errors.push(`Missing User fields: ${metadata.missingFields.join(', ')}`);
-    return { ok: errors.length === 0, users, metadata, errors };
+    if (discoveryPolicy === 'strict' && metadata.missingFields.length) {
+      errors.push(`Missing User fields: ${metadata.missingFields.join(', ')}`);
+    } else if (metadata.missingFields.length) {
+      warnings.push(`Missing User fields: ${metadata.missingFields.join(', ')}`);
+    }
+    return { ok: errors.length === 0, users, metadata, errors, warnings };
   }
 
   async provisionConaUsers(body: unknown, userId: string) {
@@ -119,15 +109,25 @@ export class ProvisioningService {
   async provisionFromCsv(body: unknown, userId: string) {
     const input = userProvisionSchema.parse(body);
     await assertOrgOwned(input.orgId, userId, prisma);
+    const users = input.users.map((user) => ({
+      ...user,
+      username: user.username?.trim()
+        || generateEmailStyleUsername({
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          uniqueKey: `${input.orgId}:${user.email}`,
+        }),
+    }));
 
     const batch = await prisma.provisioningBatch.create({
       data: {
         orgId: input.orgId,
-        totalRows: input.users.length,
+        totalRows: users.length,
         status: 'queued',
         createdBy: userId,
         users: {
-          create: input.users.map((u) => ({
+          create: users.map((u) => ({
             firstName: u.firstName,
             lastName: u.lastName,
             email: u.email,
@@ -145,10 +145,10 @@ export class ProvisioningService {
     const job = await this.orchestrator.enqueueJob(QUEUE_NAMES.USER_PROVISION, 'bulk_provision', {
       orgId: input.orgId,
       batchId: batch.id,
-      users: input.users,
+      users,
     }, { createdBy: userId });
 
-    return { batchId: batch.id, jobId: job.id, totalUsers: input.users.length };
+    return { batchId: batch.id, jobId: job.id, totalUsers: users.length };
   }
 
   async listBatches(userId: string) {

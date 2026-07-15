@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({
+  $transaction: vi.fn(),
   automationRun: {
     findUnique: vi.fn(),
     updateMany: vi.fn(),
     update: vi.fn(),
   },
   job: { findFirst: vi.fn() },
+  provisioningBatch: {
+    create: vi.fn(),
+    findUnique: vi.fn(),
+    update: vi.fn(),
+  },
+  provisionedUser: { updateMany: vi.fn() },
 }));
 
 vi.mock('@sfcc/db', () => ({ prisma: db, Prisma: {} }));
@@ -205,5 +212,153 @@ describe('PipelineOrchestratorService V2 job ownership', () => {
       parentRunId: 'run-1',
       createdBy: 'owner-1',
     }));
+  });
+});
+
+describe('PipelineOrchestratorService provisioning retry checkpoints', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.$transaction.mockImplementation(async (callback) => callback(db));
+    db.provisionedUser.updateMany.mockResolvedValue({ count: 1 });
+    db.provisioningBatch.update.mockResolvedValue({});
+  });
+
+  it('reuses the original batch and queues only failed immutable users', async () => {
+    const resolvedUsers = [{
+      firstName: 'Done',
+      lastName: 'User',
+      email: 'done@example.com',
+      username: 'done+run@example.com',
+      role: 'Rep',
+      bottler: '5000',
+      modules: [],
+      locations: [],
+      profile: 'Standard User',
+      permissionSets: [],
+    }, {
+      firstName: 'Retry',
+      lastName: 'User',
+      email: 'retry@example.com',
+      username: 'retry+run@example.com',
+      role: 'Rep',
+      bottler: '5000',
+      modules: [],
+      locations: [],
+      profile: 'Standard User',
+      permissionSets: [],
+    }];
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-1',
+      status: 'paused',
+      createdBy: 'owner-1',
+      config: {
+        version: 2,
+        userProvisioning: {
+          defaultProfile: 'Standard User',
+          execution: {
+            mode: 'sequential',
+            concurrency: 1,
+            failurePolicy: 'fail_fast',
+            discoveryFailurePolicy: 'fail',
+          },
+        },
+      },
+      checkpoint: {
+        targetOrgConnectionId: 'target-1',
+        provisioningBatchId: 'batch-original',
+        resolvedProvisioningUsers: resolvedUsers,
+      },
+    });
+    db.provisioningBatch.findUnique.mockResolvedValue({
+      id: 'batch-original',
+      orgId: 'target-1',
+      createdBy: 'owner-1',
+      users: [
+        { username: 'done+run@example.com', status: 'completed' },
+        { username: 'retry+run@example.com', status: 'failed' },
+      ],
+    });
+    const create = vi.fn().mockResolvedValue({ id: 'retry-job' });
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob },
+    });
+
+    await service.runUserActions('run-1', { actions: ['provision_users'] }, 'owner-1');
+
+    expect(db.provisioningBatch.create).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        batchId: 'batch-original',
+        users: [resolvedUsers[1]],
+      }),
+    }));
+    expect(addJob).toHaveBeenCalledWith(
+      expect.any(String),
+      'cona_user_provision',
+      expect.objectContaining({
+        batchId: 'batch-original',
+        users: [resolvedUsers[1]],
+      }),
+      'retry-job',
+    );
+  });
+
+  it('checkpoints the resolved plan and batch atomically before queueing the same usernames', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-new',
+      status: 'running',
+      createdBy: 'owner-1',
+      config: {
+        version: 2,
+        userProvisioning: {
+          defaultProfile: 'Standard User',
+          users: [{
+            firstName: 'Generated',
+            lastName: 'Username',
+            email: 'generated@example.com',
+            role: 'Rep',
+            bottler: '5000',
+          }],
+        },
+      },
+      checkpoint: { targetOrgConnectionId: 'target-1' },
+    });
+    db.provisioningBatch.create.mockResolvedValue({ id: 'batch-new' });
+    db.automationRun.update.mockResolvedValue({});
+    const create = vi.fn().mockResolvedValue({ id: 'new-job' });
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob },
+    });
+
+    await service.runUserActions('run-new', { actions: ['provision_users'] }, 'owner-1');
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    const checkpoint = db.automationRun.update.mock.calls[0][0].data.checkpoint;
+    expect(checkpoint.provisioningBatchId).toBe('batch-new');
+    const username = checkpoint.resolvedProvisioningUsers[0].username;
+    expect(db.provisioningBatch.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        users: { create: [expect.objectContaining({ username })] },
+      }),
+    }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        batchId: 'batch-new',
+        users: [expect.objectContaining({ username })],
+      }),
+    }));
+    expect(addJob).toHaveBeenCalledWith(
+      expect.any(String),
+      'cona_user_provision',
+      expect.objectContaining({
+        batchId: 'batch-new',
+        users: [expect.objectContaining({ username })],
+      }),
+      'new-job',
+    );
   });
 });

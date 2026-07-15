@@ -76,4 +76,63 @@ describe('ScratchTemplatesService authoritative launch merge', () => {
     });
     expect(result.pipelineSteps.autoRunUsers).toBe(false);
   });
+
+  it('keeps an explicit template custom-settings source when only runtime data is selected', () => {
+    const result = new ScratchTemplatesService().mergeTemplateWithLaunch({
+      dataDeploymentOrgId: templateSource,
+      customSettingsOrgId: runtimeSettingsSource,
+    }, {
+      alias: 'sources',
+      devHubAlias: 'devhub',
+      dataDeploymentOrgId: runtimeDataSource,
+      sourceOrgId: runtimeDataSource,
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+    });
+    expect(result.dataDeploymentOrgId).toBe(runtimeDataSource);
+    expect(result.customSettingsOrgId).toBe(runtimeSettingsSource);
+  });
+
+  it('validates and applies runtime email pools after server-side V2 migration', async () => {
+    const service = new ScratchTemplatesService();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      id: templateId,
+      name: 'Email pool',
+      config: {
+        gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+        userProvisioning: {
+          teams: [{
+            id: 'sales',
+            emailPool: { emails: ['template@example.com'] },
+          }],
+          userGenerators: [{
+            id: 'sales-users',
+            count: 1,
+            role: 'Rep',
+            bottler: '5000',
+            teamId: 'sales',
+          }],
+        },
+      },
+    } as never);
+
+    const result = await service.resolveLaunch({
+      templateId,
+      alias: 'pool',
+      devHubAlias: 'devhub',
+      runtimeEmailPool: 'runtime.one@example.com\nruntime.two@example.com',
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+    }, 'owner');
+    expect(result.userProvisioning?.teams?.[0].emailPool.emails).toEqual([
+      'runtime.one@example.com',
+      'runtime.two@example.com',
+    ]);
+
+    await expect(service.resolveLaunch({
+      templateId,
+      alias: 'pool',
+      devHubAlias: 'devhub',
+      runtimeEmailPool: ['not', 'a string'],
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+    }, 'owner')).rejects.toThrow('must be a string');
+  });
 });
