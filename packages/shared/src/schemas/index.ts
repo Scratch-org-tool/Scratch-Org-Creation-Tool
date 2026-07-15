@@ -146,11 +146,13 @@ export const dataReplicationSchema = z.object({
       path: ['querySet'],
     });
   }
-  addDataOperationIssue(data, context);
-}).transform((data) => ({
-  ...data,
-  ...resolveDataWriteOperation(data.operation, data.externalIdField),
-}));
+  // A replication-level operation is an override, not a default manufactured
+  // by parsing. When omitted, each query resolves its own operation (including
+  // inferring upsert from that query's explicit external ID).
+  if (data.operation !== undefined || data.externalIdField !== undefined) {
+    addDataOperationIssue(data, context);
+  }
+});
 
 export const querySetCompileSchema = z.object({
   enabledTemplateIds: z.array(z.string()).min(1),

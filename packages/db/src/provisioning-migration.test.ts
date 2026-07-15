@@ -159,3 +159,23 @@ describe('deployment workbench foundation migration', () => {
     assert.match(migration, /ON DELETE CASCADE/);
   });
 });
+
+describe('durable Data Center rollback migration', () => {
+  const migrationPath =
+    'migrations/20260715193000_durable_data_rollback/migration.sql';
+
+  it('stores one encrypted, checksummed artifact per movement with retention', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+
+    assert.match(schema, /model DataRollbackArtifact/);
+    assert.match(schema, /movementId\s+String\s+@unique/);
+    assert.match(schema, /ciphertext\s+Bytes/);
+    assert.match(schema, /expiresAt\s+DateTime/);
+    assert.match(migration, /"ciphertext" BYTEA NOT NULL/);
+    assert.match(migration, /"sha256" TEXT NOT NULL/);
+    assert.match(migration, /DataRollbackArtifact_movementId_key/);
+    assert.match(migration, /ON DELETE CASCADE/);
+    assert.doesNotMatch(migration, /\b(?:DROP TABLE|DELETE FROM|TRUNCATE TABLE)\b/i);
+  });
+});

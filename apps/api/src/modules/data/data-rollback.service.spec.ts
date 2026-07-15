@@ -1,12 +1,15 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({
-  dataMovement: { findUnique: vi.fn(), update: vi.fn() },
+  dataMovement: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   dataDeployBatch: { findUnique: vi.fn(), update: vi.fn() },
+  dataRollbackArtifact: { findUnique: vi.fn(), create: vi.fn() },
+}));
+const sfCli = vi.hoisted(() => ({
+  query: vi.fn(),
+  updateBulk: vi.fn(),
+  deleteBulk: vi.fn(),
 }));
 
 vi.mock('@sfcc/db', () => ({
@@ -14,25 +17,34 @@ vi.mock('@sfcc/db', () => ({
   Prisma: {},
 }));
 vi.mock('@sfcc/sf-cli', () => ({
-  createSfCliClient: () => ({}),
+  createSfCliClient: () => sfCli,
 }));
 
 import { DataRollbackService } from './data-rollback.service';
 
-const roots: string[] = [];
+let storedArtifact: Record<string, unknown> | null;
 
-afterEach(async () => {
+beforeEach(() => {
+  storedArtifact = null;
+  db.dataRollbackArtifact.findUnique.mockImplementation(async () => storedArtifact);
+  db.dataRollbackArtifact.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+    storedArtifact = {
+      id: 'artifact-1',
+      algorithm: 'aes-256-gcm+gzip',
+      createdAt: new Date(),
+      ...data,
+    };
+    return storedArtifact;
+  });
+});
+
+afterEach(() => {
   vi.clearAllMocks();
   delete process.env.DATA_ROLLBACK_ENCRYPTION_KEY;
-  delete process.env.DATA_ROLLBACK_ARTIFACT_DIR;
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe('DataRollbackService artifacts', () => {
   it('round-trips bounded gzip+AES-GCM artifacts without plaintext leakage', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'rollback-artifact-test-'));
-    roots.push(root);
-    process.env.DATA_ROLLBACK_ARTIFACT_DIR = root;
     process.env.DATA_ROLLBACK_ENCRYPTION_KEY = randomBytes(32).toString('base64');
     const service = new DataRollbackService({ acquire: vi.fn() } as never);
     const payload = {
@@ -43,17 +55,15 @@ describe('DataRollbackService artifacts', () => {
       insertedExternalIds: ['NEW-KEY'],
     };
     const metadata = await service.writeArtifact('movement', payload);
-    const ciphertext = await readFile(metadata.path);
+    const ciphertext = Buffer.from(storedArtifact!.ciphertext as Uint8Array);
     expect(ciphertext.toString('utf8')).not.toContain('SECRET-KEY');
     await expect(service.readArtifact(metadata)).resolves.toEqual(payload);
+    expect(metadata.storage).toBe('database');
     expect(metadata.previousCount).toBe(1);
     expect(metadata.insertedCount).toBe(1);
   });
 
   it('blocks artifacts larger than the explicit safety bound', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'rollback-artifact-test-'));
-    roots.push(root);
-    process.env.DATA_ROLLBACK_ARTIFACT_DIR = root;
     process.env.DATA_ROLLBACK_ENCRYPTION_KEY = randomBytes(32).toString('base64');
     const service = new DataRollbackService({ acquire: vi.fn() } as never);
     await expect(service.writeArtifact('too-large', {
@@ -63,6 +73,67 @@ describe('DataRollbackService artifacts', () => {
       previousRows: [{ Name: 'x'.repeat(500) }],
       insertedExternalIds: [],
     }, 100)).rejects.toThrow(/exceeds configured/);
+  });
+
+  it('keeps the first durable artifact immutable across retries', async () => {
+    process.env.DATA_ROLLBACK_ENCRYPTION_KEY = randomBytes(32).toString('base64');
+    const service = new DataRollbackService({ acquire: vi.fn() } as never);
+    const firstPayload = {
+      version: 1 as const,
+      objectName: 'Account',
+      externalIdField: 'External__c',
+      previousRows: [{ Id: '001', External__c: 'A', Name: 'Before' }],
+      insertedExternalIds: [],
+    };
+    const first = await service.writeArtifact('movement', firstPayload);
+    const second = await service.writeArtifact('movement', {
+      ...firstPayload,
+      previousRows: [{ Id: '001', External__c: 'A', Name: 'After' }],
+    });
+
+    expect(second.artifactId).toBe(first.artifactId);
+    expect(db.dataRollbackArtifact.create).toHaveBeenCalledTimes(1);
+    await expect(service.readArtifact(second)).resolves.toEqual(firstPayload);
+  });
+
+  it('restores existing rows before requiring explicit inserted-row deletion', async () => {
+    process.env.DATA_ROLLBACK_ENCRYPTION_KEY = randomBytes(32).toString('base64');
+    const acquire = vi.fn().mockResolvedValue({ release: vi.fn() });
+    const service = new DataRollbackService({ acquire } as never);
+    const artifact = await service.writeArtifact('movement', {
+      version: 1,
+      objectName: 'Account',
+      externalIdField: 'External__c',
+      previousRows: [{ Id: '001', External__c: 'A', Name: 'Before' }],
+      insertedExternalIds: ['NEW'],
+    });
+    db.dataMovement.findUnique.mockResolvedValue({
+      id: 'movement',
+      createdBy: 'owner',
+      operation: 'upsert',
+      idempotent: true,
+      rollbackArtifact: artifact,
+      rollbackStatus: 'captured',
+      rollbackReport: null,
+      targetOrg: { alias: 'target', username: null },
+    });
+    db.dataMovement.updateMany.mockResolvedValue({ count: 1 });
+    db.dataMovement.update.mockResolvedValue({});
+    sfCli.updateBulk.mockResolvedValue({ success: true });
+
+    const report = await service.rollbackMovement(
+      'movement',
+      'owner',
+      { deleteInserted: false },
+    );
+
+    expect(sfCli.updateBulk).toHaveBeenCalledTimes(1);
+    expect(sfCli.deleteBulk).not.toHaveBeenCalled();
+    expect(report).toEqual(expect.objectContaining({
+      status: 'awaiting_delete_confirmation',
+      restored: 1,
+      requiresDeleteInsertedConfirmation: true,
+    }));
   });
 
   it('reports and blocks automatic rollback for non-idempotent inserts', async () => {
@@ -82,9 +153,9 @@ describe('DataRollbackService artifacts', () => {
       { deleteInserted: false },
     )).rejects.toThrow(/only for idempotent upserts/);
     expect(db.dataMovement.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: {
+      data: expect.objectContaining({
         rollbackReport: expect.objectContaining({ safe: false }),
-      },
+      }),
     }));
   });
 });

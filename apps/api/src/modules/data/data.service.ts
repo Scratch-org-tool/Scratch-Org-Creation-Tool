@@ -122,6 +122,10 @@ export class DataService {
     return this.dataDeployOrchestrator.cancelBatch(batchId, userId);
   }
 
+  async cancelMovement(movementId: string, userId: string) {
+    return this.dataDeployOrchestrator.cancelMovement(movementId, userId);
+  }
+
   async cancelBatchGroup(groupId: string, userId: string) {
     return this.dataDeployOrchestrator.cancelBatchGroup(groupId, userId);
   }
@@ -722,8 +726,12 @@ export class DataService {
           ...input.querySet,
           queries: input.querySet.queries.map((query) => ({
             ...query,
-            operation: query.operation ?? input.operation,
-            externalIdField: query.externalIdField ?? input.externalIdField,
+            ...(query.operation == null && input.operation != null
+              ? { operation: input.operation }
+              : {}),
+            ...(query.externalIdField == null && input.externalIdField != null
+              ? { externalIdField: input.externalIdField }
+              : {}),
           })),
         }, input.recordLimit ?? 200)
       : input.soql
@@ -736,8 +744,8 @@ export class DataService {
               label: 'Replication query',
               object: extractObjectFromSoql(input.soql) ?? 'Unknown',
               soql: input.soql,
-              operation: input.operation,
-              externalIdField: input.externalIdField,
+              ...(input.operation != null ? { operation: input.operation } : {}),
+              ...(input.externalIdField != null ? { externalIdField: input.externalIdField } : {}),
             }],
           }, input.recordLimit ?? 200)
         : null;
@@ -784,8 +792,8 @@ export class DataService {
 
     const recordTypeMappings = input.recordTypeMappings ?? {};
 
-    const recordLimit = input.recordLimit ?? querySet.defaultLimit ?? 200;
     const mainQuery = querySet.queries[0];
+    const recordLimit = input.recordLimit ?? mainQuery?.limit ?? querySet.defaultLimit ?? 200;
 
     if (
       this.dataDeployOrchestrator.shouldChunk(recordLimit)

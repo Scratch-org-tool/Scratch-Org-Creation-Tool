@@ -58,6 +58,15 @@ export interface CreateDataDeployBatchInput {
   rollbackPolicy?: 'none' | 'capture';
 }
 
+type DataChunkBoundary = {
+  chunkIndex: number;
+  afterId: string | null;
+  endId: string;
+  recordCount: number;
+};
+
+const BLOCKED_BY_PREREQUISITE_PREFIX = 'Blocked by failed prerequisite: ';
+
 function resolveOrgTarget(org: { alias: string; username?: string | null }): string {
   return org.username ?? org.alias;
 }
@@ -98,6 +107,67 @@ export class DataDeployOrchestratorService {
     if (!batch) throw new NotFoundException('Data deploy batch not found');
     assertResourceOwner(batch, userId, 'Data deploy batch');
     return batch;
+  }
+
+  async cancelMovement(id: string, userId: string) {
+    const movement = await prisma.dataMovement.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        createdBy: true,
+        status: true,
+        batchId: true,
+        movementType: true,
+      },
+    });
+    if (!movement) throw new NotFoundException('Data movement not found');
+    assertResourceOwner(movement, userId, 'Data movement');
+    if (movement.batchId) {
+      throw new BadRequestException('Batched movements must be cancelled through their deploy batch');
+    }
+
+    const jobs = await prisma.job.findMany({
+      where: {
+        createdBy: userId,
+        queue: { in: [QUEUE_NAMES.DATA_DEPLOY, QUEUE_NAMES.SFDMU_RUN] },
+        payload: { path: ['movementId'], equals: id },
+      },
+      select: { id: true, queue: true },
+    });
+    const activeStatuses = ['pending', 'queued', 'planning', 'running', 'paused'] as const;
+    const now = new Date();
+    const changed = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.dataMovement.updateMany({
+        where: { id, createdBy: userId, status: { in: [...activeStatuses] } },
+        data: { status: 'cancelled' },
+      });
+      if (jobs.length) {
+        await tx.job.updateMany({
+          where: { id: { in: jobs.map((job) => job.id) }, status: { in: [...activeStatuses] } },
+          data: {
+            status: 'cancelled',
+            currentStep: 'Cancelled',
+            error: 'Cancelled by user',
+            finishedAt: now,
+          },
+        });
+      }
+      return claimed.count > 0;
+    });
+
+    // Re-broadcast even for an idempotent repeat: a previous API process may
+    // have committed cancellation and died before removing/killing the job.
+    for (const job of jobs) {
+      await this.queue.removeJob(job.queue, job.id).catch(() => false);
+      await this.processRegistry.cancel(job.id);
+    }
+    return {
+      movementId: id,
+      status: changed ? 'cancelled' : movement.status,
+      cancelled: changed || movement.status === 'cancelled',
+      idempotent: !changed,
+      cancelledJobs: jobs.length,
+    };
   }
 
   async cancelBatch(id: string, userId: string) {
@@ -347,7 +417,7 @@ export class DataDeployOrchestratorService {
       },
     });
     if (!batch) throw new Error(`Data deploy batch ${batchId} not found`);
-    if (!['planning', 'queued'].includes(batch.status)) {
+    if (!['planning', 'queued', 'running'].includes(batch.status)) {
       await log('stdout', `Batch ${batchId} already ${batch.status} — skipping plan`);
       return { batchId, skipped: true };
     }
@@ -359,6 +429,31 @@ export class DataDeployOrchestratorService {
     const idCsvPath = join(workDir, 'chunk-ids.csv');
 
     try {
+      const savedBoundaries = this.readBoundaryArtifact(batch.boundaryArtifact);
+      if (savedBoundaries) {
+        await log('stdout', `Resuming ${savedBoundaries.length} persisted chunk boundary/boundaries`);
+        const activated = await this.activateChunkBoundaries(
+          batchId,
+          batch.baseSoql,
+          idSoql,
+          savedBoundaries,
+          batch.totalRecords,
+          true,
+        );
+        if (!activated) return { batchId, cancelled: true };
+        const released = await this.releaseReadyChunks(batchId);
+        await log('stdout', `Released ${released} resumed chunk(s)`);
+        return {
+          batchId,
+          totalChunks: savedBoundaries.length,
+          totalRecords: savedBoundaries.reduce((sum, boundary) => sum + boundary.recordCount, 0),
+          resumed: true,
+        };
+      }
+      if (batch.status === 'running') {
+        throw new Error('Running batch is missing a valid boundary artifact and cannot be safely replanned');
+      }
+
       await mkdir(workDir, { recursive: true });
       await log('stdout', `Planning ${batch.totalChunks} chunk(s) for ${batch.objectName ?? 'object'}`);
       await log('stdout', `Boundary query: ${idSoql}`);
@@ -405,65 +500,19 @@ export class DataDeployOrchestratorService {
       }
 
       const boundaries = computeChunkBoundaries(ids, batch.chunkSize);
-
-      // Drop chunks planned for records that do not exist.
-      const extraChunks = batch.chunks.filter((c) => c.chunkIndex >= boundaries.length);
-      if (extraChunks.length > 0) {
-        await prisma.dataDeployChunk.updateMany({
-          where: { id: { in: extraChunks.map((c) => c.id) } },
-          data: { status: 'cancelled', error: 'Chunk not needed — fewer records than requested limit' },
-        });
-        await prisma.dataMovement.updateMany({
-          where: { id: { in: extraChunks.map((c) => c.movementId).filter((v): v is string => Boolean(v)) } },
-          data: { status: 'cancelled' },
-        });
-      }
-
-      const activated = await prisma.dataDeployBatch.updateMany({
-        where: { id: batchId, status: { in: ['planning', 'queued'] } },
-        data: {
-          status: 'running',
-          totalChunks: boundaries.length,
-          totalRecords: ids.length,
-          boundaryArtifact: {
-            kind: 'id-ranges',
-            plannerQuery: idSoql,
-            totalRecords: ids.length,
-            boundaries,
-          } as unknown as Prisma.InputJsonValue,
-        },
-      });
-      if (activated.count === 0) {
+      const activated = await this.activateChunkBoundaries(
+        batchId,
+        batch.baseSoql,
+        idSoql,
+        boundaries,
+        ids.length,
+      );
+      if (!activated) {
         await log('stderr', 'Batch planning stopped before chunk release');
         return { batchId, cancelled: true };
       }
 
       for (const boundary of boundaries) {
-        const chunk = batch.chunks.find((c) => c.chunkIndex === boundary.chunkIndex);
-        if (!chunk) continue;
-        const chunkSoql = buildIdRangeChunkSoql(batch.baseSoql, boundary.recordCount, {
-          afterId: boundary.afterId,
-          endId: boundary.endId,
-        });
-        await prisma.dataDeployChunk.updateMany({
-          where: { id: chunk.id, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
-          data: {
-            soql: chunkSoql,
-            afterId: boundary.afterId,
-            endId: boundary.endId,
-            status: 'pending',
-            recordCount: boundary.recordCount,
-          },
-        });
-        if (chunk.movementId) {
-          await prisma.dataMovement.updateMany({
-            where: {
-              id: chunk.movementId,
-              status: { in: ['pending', 'queued', 'planning', 'running'] },
-            },
-            data: { soql: chunkSoql, status: 'pending' },
-          });
-        }
         await log('stdout', `Chunk ${boundary.chunkIndex + 1}/${boundaries.length} planned (${boundary.recordCount} records)`);
       }
 
@@ -495,6 +544,104 @@ export class DataDeployOrchestratorService {
       if (dbJobId) this.processRegistry.clear(dbJobId);
       await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  private readBoundaryArtifact(value: Prisma.JsonValue): DataChunkBoundary[] | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const boundaries = (value as Record<string, unknown>).boundaries;
+    if (!Array.isArray(boundaries) || boundaries.length === 0) return null;
+    const valid = boundaries.every((boundary) => {
+      if (!boundary || typeof boundary !== 'object' || Array.isArray(boundary)) return false;
+      const item = boundary as Record<string, unknown>;
+      return Number.isInteger(item.chunkIndex)
+        && (item.afterId === null || typeof item.afterId === 'string')
+        && typeof item.endId === 'string'
+        && Number.isInteger(item.recordCount)
+        && Number(item.recordCount) > 0;
+    });
+    return valid ? boundaries as DataChunkBoundary[] : null;
+  }
+
+  /**
+   * Persist every bound and its movement query in the same transaction that
+   * publishes the boundary artifact and running state. A planner crash can
+   * therefore leave either an entirely plannable batch or an entirely
+   * resumable batch, never a running batch with placeholder chunks.
+   */
+  private async activateChunkBoundaries(
+    batchId: string,
+    baseSoql: string,
+    plannerQuery: string,
+    boundaries: DataChunkBoundary[],
+    totalRecords: number,
+    resume = false,
+  ): Promise<boolean> {
+    return prisma.$transaction(async (tx) => {
+      const current = await tx.dataDeployBatch.findUnique({
+        where: { id: batchId },
+        include: { chunks: { orderBy: { chunkIndex: 'asc' } } },
+      });
+      const allowedStatuses = resume ? ['planning', 'queued', 'running'] : ['planning', 'queued'];
+      if (!current || !allowedStatuses.includes(current.status)) return false;
+
+      const byIndex = new Map(current.chunks.map((chunk) => [chunk.chunkIndex, chunk]));
+      for (const boundary of boundaries) {
+        const chunk = byIndex.get(boundary.chunkIndex);
+        if (!chunk) throw new Error(`Missing chunk placeholder ${boundary.chunkIndex}`);
+        const soql = buildIdRangeChunkSoql(baseSoql, boundary.recordCount, {
+          afterId: boundary.afterId,
+          endId: boundary.endId,
+        });
+        await tx.dataDeployChunk.update({
+          where: { id: chunk.id },
+          data: {
+            soql,
+            afterId: boundary.afterId,
+            endId: boundary.endId,
+            recordCount: boundary.recordCount,
+          },
+        });
+        if (chunk.movementId) {
+          await tx.dataMovement.update({
+            where: { id: chunk.movementId },
+            data: { soql },
+          });
+        }
+      }
+
+      const extra = current.chunks.filter((chunk) => chunk.chunkIndex >= boundaries.length);
+      if (extra.length) {
+        await tx.dataDeployChunk.updateMany({
+          where: { id: { in: extra.map((chunk) => chunk.id) } },
+          data: { status: 'cancelled', error: 'Chunk not needed — fewer records than requested limit' },
+        });
+        const movementIds = extra
+          .map((chunk) => chunk.movementId)
+          .filter((id): id is string => Boolean(id));
+        if (movementIds.length) {
+          await tx.dataMovement.updateMany({
+            where: { id: { in: movementIds } },
+            data: { status: 'cancelled' },
+          });
+        }
+      }
+
+      await tx.dataDeployBatch.update({
+        where: { id: batchId },
+        data: {
+          status: 'running',
+          totalChunks: boundaries.length,
+          totalRecords,
+          boundaryArtifact: {
+            kind: 'id-ranges',
+            plannerQuery,
+            totalRecords,
+            boundaries,
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
+      return true;
+    });
   }
 
   private async enqueueChunkJob(
@@ -628,7 +775,7 @@ export class DataDeployOrchestratorService {
   }
 
   async releaseReadyChunks(batchId: string): Promise<number> {
-    const released = await this.bulkThrottle.withSchedulerLock(batchId, async () => {
+    const released = await this.bulkThrottle.withSchedulerLock(batchId, async (lease) => {
       const batch = await prisma.dataDeployBatch.findUnique({
         where: { id: batchId },
         include: {
@@ -661,6 +808,7 @@ export class DataDeployOrchestratorService {
       let queued = 0;
       for (const chunk of pending) {
         if (queued >= count) break;
+        await lease?.assertOwned();
         const claimed = await prisma.dataDeployChunk.updateMany({
           where: { id: chunk.id, status: 'pending' },
           data: { status: 'queued', error: null, errorDetails: Prisma.DbNull },
@@ -780,6 +928,9 @@ export class DataDeployOrchestratorService {
           : {}),
       },
     }).catch(() => undefined);
+    if ((status === 'failed' || status === 'partial') && current) {
+      await this.blockDependentBatches(batchId);
+    }
     if (status === 'completed') {
       const batch = await prisma.dataDeployBatch.findUnique({
         where: { id: batchId },
@@ -790,7 +941,7 @@ export class DataDeployOrchestratorService {
   }
 
   async releaseReadyObjectBatches(groupId: string): Promise<number> {
-    const batches = await prisma.dataDeployBatch.findMany({
+    let batches = await prisma.dataDeployBatch.findMany({
       where: { groupId },
       orderBy: { createdAt: 'asc' },
     });
@@ -800,6 +951,41 @@ export class DataDeployOrchestratorService {
         .map((batch) => batch.objectKey ?? batch.objectName)
         .filter((key): key is string => Boolean(key)),
     );
+    const releasableBlocked = batches.filter((batch) =>
+      batch.status === 'failed'
+      && batch.error?.startsWith(BLOCKED_BY_PREREQUISITE_PREFIX)
+      && batch.dependsOn.every((dependency) => completed.has(dependency)));
+    for (const batch of releasableBlocked) {
+      await prisma.$transaction(async (tx) => {
+        const reopened = await tx.dataDeployBatch.updateMany({
+          where: {
+            id: batch.id,
+            status: 'failed',
+            error: { startsWith: BLOCKED_BY_PREREQUISITE_PREFIX },
+          },
+          data: { status: 'pending', error: null, failedChunks: 0 },
+        });
+        if (!reopened.count) return;
+        await tx.dataDeployChunk.updateMany({
+          where: {
+            batchId: batch.id,
+            status: 'failed',
+            error: { startsWith: BLOCKED_BY_PREREQUISITE_PREFIX },
+          },
+          data: { status: 'pending', error: null, errorDetails: Prisma.DbNull },
+        });
+        await tx.dataMovement.updateMany({
+          where: { batchId: batch.id, status: 'failed' },
+          data: { status: 'pending' },
+        });
+      });
+    }
+    if (releasableBlocked.length) {
+      batches = await prisma.dataDeployBatch.findMany({
+        where: { groupId },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
     const ready = batches.filter((batch) =>
       batch.status === 'pending'
       && batch.dependsOn.every((dependency) => completed.has(dependency)));
@@ -808,6 +994,63 @@ export class DataDeployOrchestratorService {
       if (await this.startBatch(batch.id)) started += 1;
     }
     return started;
+  }
+
+  private async blockDependentBatches(failedBatchId: string): Promise<void> {
+    const failed = await prisma.dataDeployBatch.findUnique({
+      where: { id: failedBatchId },
+      select: { groupId: true, objectKey: true, objectName: true },
+    });
+    if (!failed?.groupId) return;
+    const failedKey = failed.objectKey ?? failed.objectName;
+    if (!failedKey) return;
+    const batches = await prisma.dataDeployBatch.findMany({
+      where: { groupId: failed.groupId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const blockedKeys = new Set([failedKey]);
+    const descendants: typeof batches = [];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const batch of batches) {
+        const key = batch.objectKey ?? batch.objectName;
+        if (!key || blockedKeys.has(key)) continue;
+        if (batch.dependsOn.some((dependency) => blockedKeys.has(dependency))) {
+          blockedKeys.add(key);
+          descendants.push(batch);
+          changed = true;
+        }
+      }
+    }
+    for (const descendant of descendants) {
+      const reason = `${BLOCKED_BY_PREREQUISITE_PREFIX}${failedKey}`;
+      await prisma.$transaction(async (tx) => {
+        const blocked = await tx.dataDeployBatch.updateMany({
+          where: {
+            id: descendant.id,
+            status: { in: ['pending', 'planning', 'queued'] },
+          },
+          data: { status: 'failed', error: reason },
+        });
+        if (!blocked.count) return;
+        await tx.dataDeployChunk.updateMany({
+          where: { batchId: descendant.id, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
+          data: {
+            status: 'failed',
+            error: reason,
+            errorDetails: { phase: 'dependency', prerequisite: failedKey } as Prisma.InputJsonValue,
+          },
+        });
+        await tx.dataMovement.updateMany({
+          where: {
+            batchId: descendant.id,
+            status: { in: ['pending', 'planning', 'queued'] },
+          },
+          data: { status: 'failed' },
+        });
+      });
+    }
   }
 
   /** Re-enqueue a single failed/cancelled chunk (resumable deploys). */

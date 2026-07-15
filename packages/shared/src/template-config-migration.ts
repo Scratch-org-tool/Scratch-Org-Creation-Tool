@@ -69,20 +69,31 @@ function legacyQueryToSectionQuery(
   index: number,
 ): QuerySectionQuery {
   const category = inferLegacyCategory(query.object);
+  const operation = query.operation ?? (query.externalIdField ? 'upsert' : undefined);
+  if (!operation) {
+    throw new Error(
+      `Cannot safely migrate legacy query ${query.id}: operation is missing and no externalIdField was provided`,
+    );
+  }
+  if (operation === 'upsert' && !query.externalIdField) {
+    throw new Error(
+      `Cannot safely migrate legacy upsert query ${query.id} without an explicit externalIdField`,
+    );
+  }
   return {
     id: query.id,
     name: query.label,
     enabled: true,
-    order: index,
-    stage: index,
+    order: query.order ?? index,
+    stage: query.order ?? index,
     category,
     object: query.object,
     soql: query.soql,
     limit: query.limit ?? 200,
-    operation: 'upsert',
-    externalIdField: defaultExternalIdField(category, query.object) ?? 'Name',
+    operation,
+    externalIdField: query.externalIdField,
     variables: query.variables ?? {},
-    dependsOn: [],
+    dependsOn: query.dependsOn ?? [],
   };
 }
 
@@ -235,6 +246,15 @@ export function migrateTemplateConfigToV2(
   }
   if (hasInsertOperation(config.customSettings?.exportConfig)) {
     throw new Error('Cannot migrate Insert custom settings to resumable V2; use Upsert');
+  }
+  const unsafeCustomUpsert = config.customSettings?.exportConfig?.objects.find(
+    (object) => object.operation.toLowerCase() === 'upsert' && !object.externalId?.trim(),
+  );
+  if (unsafeCustomUpsert) {
+    throw new Error(
+      `Cannot safely migrate custom settings upsert ${unsafeCustomUpsert.name ?? unsafeCustomUpsert.query} `
+      + 'without an explicit externalId',
+    );
   }
   const querySection = buildMigratedQuerySection(config);
   const templates = config.userProvisioning?.templates ?? [];

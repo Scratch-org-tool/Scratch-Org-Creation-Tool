@@ -95,6 +95,32 @@ describe('DataPreflightService strict gate', () => {
     );
   });
 
+  it('does not treat Name as an external ID without describe metadata', async () => {
+    sfCli.describeSObject.mockReset();
+    sfCli.describeSObject
+      .mockResolvedValueOnce({
+        data: { result: { fields: [{ name: 'Name' }] } },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          result: {
+            fields: [{ name: 'Name', externalId: false, idLookup: false, createable: true, updateable: true }],
+          },
+        },
+      });
+    const report = await new DataPreflightService().runPreflight(
+      request({
+        soql: 'SELECT Name FROM Account',
+        externalIdField: 'Name',
+      }),
+      'owner',
+    );
+    expect(report.ok).toBe(false);
+    expect(report.fieldIssues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'Name', issue: 'not_external_id' }),
+    ]));
+  });
+
   it('blocks unknown quota by default and permits only an explicit warning policy', async () => {
     sfCli.listOrgLimits.mockRejectedValue(new Error('limits unavailable'));
     const blocked = await new DataPreflightService().runPreflight(request(), 'owner');

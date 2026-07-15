@@ -1,8 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
 import { prisma, Prisma } from '@sfcc/db';
@@ -26,7 +31,8 @@ export interface DataRollbackPayload {
 
 export interface EncryptedRollbackArtifact {
   version: 1;
-  path: string;
+  storage: 'database';
+  artifactId: string;
   algorithm: 'aes-256-gcm+gzip';
   iv: string;
   authTag: string;
@@ -35,7 +41,22 @@ export interface EncryptedRollbackArtifact {
   uncompressedBytes: number;
   previousCount: number;
   insertedCount: number;
+  expiresAt: string;
 }
+
+type DurableArtifactRow = {
+  id: string;
+  ciphertext: Uint8Array;
+  algorithm: string;
+  iv: string;
+  authTag: string;
+  sha256: string;
+  compressedBytes: number;
+  uncompressedBytes: number;
+  previousCount: number;
+  insertedCount: number;
+  expiresAt: Date;
+};
 
 function parseCsv(text: string): Array<Record<string, string>> {
   const records: string[][] = [];
@@ -78,6 +99,27 @@ export class DataRollbackService {
     this.encryptionKey();
   }
 
+  async getMovementRollbackStatus(movementId: string, userId: string) {
+    const movement = await prisma.dataMovement.findUnique({
+      where: { id: movementId },
+      select: {
+        id: true,
+        createdBy: true,
+        rollbackStatus: true,
+        rollbackReport: true,
+        rollbackArtifact: true,
+      },
+    });
+    if (!movement) throw new NotFoundException('Data movement not found');
+    assertResourceOwner(movement, userId, 'Data movement');
+    return {
+      movementId,
+      status: movement.rollbackStatus ?? 'not_available',
+      available: Boolean(movement.rollbackArtifact),
+      report: movement.rollbackReport,
+    };
+  }
+
   private encryptionKey(): Buffer {
     const configured = process.env.DATA_ROLLBACK_ENCRYPTION_KEY?.trim();
     if (!configured) {
@@ -97,11 +139,41 @@ export class DataRollbackService {
     return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_ARTIFACT_BYTES;
   }
 
+  private expiresAt(): Date {
+    const configured = Number.parseInt(process.env.DATA_ROLLBACK_RETENTION_DAYS ?? '', 10);
+    const days = Number.isFinite(configured) && configured > 0
+      ? Math.min(configured, 3650)
+      : 30;
+    return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  }
+
+  private metadata(row: DurableArtifactRow): EncryptedRollbackArtifact {
+    return {
+      version: 1,
+      storage: 'database',
+      artifactId: row.id,
+      algorithm: 'aes-256-gcm+gzip',
+      iv: row.iv,
+      authTag: row.authTag,
+      sha256: row.sha256,
+      compressedBytes: row.compressedBytes,
+      uncompressedBytes: row.uncompressedBytes,
+      previousCount: row.previousCount,
+      insertedCount: row.insertedCount,
+      expiresAt: row.expiresAt.toISOString(),
+    };
+  }
+
   async writeArtifact(
-    artifactId: string,
+    movementId: string,
     payload: DataRollbackPayload,
     maxBytes?: number,
   ): Promise<EncryptedRollbackArtifact> {
+    const existing = await prisma.dataRollbackArtifact.findUnique({
+      where: { movementId },
+    });
+    if (existing) return this.metadata(existing);
+
     const plain = Buffer.from(JSON.stringify(payload), 'utf8');
     const limit = this.maxBytes(maxBytes);
     if (plain.byteLength > limit) {
@@ -114,35 +186,55 @@ export class DataRollbackService {
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.encryptionKey(), iv);
     const encrypted = Buffer.concat([cipher.update(compressed), cipher.final()]);
-    const root = process.env.DATA_ROLLBACK_ARTIFACT_DIR?.trim()
-      || join(tmpdir(), 'sfcc-data-rollback');
-    const path = join(root, `${artifactId}.rollback.gz.enc`);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, encrypted, { mode: 0o600 });
-    return {
-      version: 1,
-      path,
-      algorithm: 'aes-256-gcm+gzip',
-      iv: iv.toString('base64'),
-      authTag: cipher.getAuthTag().toString('base64'),
-      sha256: createHash('sha256').update(encrypted).digest('hex'),
-      compressedBytes: compressed.byteLength,
-      uncompressedBytes: plain.byteLength,
-      previousCount: payload.previousRows.length,
-      insertedCount: payload.insertedExternalIds.length,
-    };
+    try {
+      const created = await prisma.dataRollbackArtifact.create({
+        data: {
+          movementId,
+          ciphertext: encrypted,
+          iv: iv.toString('base64'),
+          authTag: cipher.getAuthTag().toString('base64'),
+          sha256: createHash('sha256').update(encrypted).digest('hex'),
+          compressedBytes: compressed.byteLength,
+          uncompressedBytes: plain.byteLength,
+          previousCount: payload.previousRows.length,
+          insertedCount: payload.insertedExternalIds.length,
+          expiresAt: this.expiresAt(),
+        },
+      });
+      return this.metadata(created);
+    } catch (error) {
+      // A concurrent retry may have won the unique movementId insert. Its
+      // immutable snapshot is authoritative; never replace it.
+      const winner = await prisma.dataRollbackArtifact.findUnique({
+        where: { movementId },
+      });
+      if (winner) return this.metadata(winner);
+      throw error;
+    }
   }
 
   async readArtifact(metadata: EncryptedRollbackArtifact): Promise<DataRollbackPayload> {
-    const encrypted = await readFile(metadata.path);
+    if (metadata.storage !== 'database') {
+      throw new Error('Rollback artifact is not in durable database storage');
+    }
+    const stored = await prisma.dataRollbackArtifact.findUnique({
+      where: { id: metadata.artifactId },
+    });
+    if (!stored) throw new Error('Rollback artifact is missing or was removed by retention');
+    if (stored.expiresAt.getTime() <= Date.now()) {
+      throw new Error('Rollback artifact retention period has expired');
+    }
+    const encrypted = Buffer.from(stored.ciphertext);
     const checksum = createHash('sha256').update(encrypted).digest('hex');
-    if (checksum !== metadata.sha256) throw new Error('Rollback artifact checksum mismatch');
+    if (checksum !== metadata.sha256 || checksum !== stored.sha256) {
+      throw new Error('Rollback artifact checksum mismatch');
+    }
     const decipher = createDecipheriv(
       'aes-256-gcm',
       this.encryptionKey(),
-      Buffer.from(metadata.iv, 'base64'),
+      Buffer.from(stored.iv, 'base64'),
     );
-    decipher.setAuthTag(Buffer.from(metadata.authTag, 'base64'));
+    decipher.setAuthTag(Buffer.from(stored.authTag, 'base64'));
     const compressed = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     const plain = await gunzipAsync(compressed);
     return JSON.parse(plain.toString('utf8')) as DataRollbackPayload;
@@ -156,6 +248,26 @@ export class DataRollbackService {
     csvPath: string;
     maxBytes?: number;
   }): Promise<EncryptedRollbackArtifact> {
+    const movement = await prisma.dataMovement.findUnique({
+      where: { id: input.movementId },
+      include: { durableRollback: true },
+    });
+    if (!movement) throw new NotFoundException('Data movement not found');
+    if (movement.durableRollback) {
+      const artifact = this.metadata(movement.durableRollback);
+      await prisma.dataMovement.update({
+        where: { id: input.movementId },
+        data: {
+          rollbackArtifact: artifact as unknown as Prisma.InputJsonValue,
+          rollbackStatus: 'captured',
+        },
+      });
+      return artifact;
+    }
+    if (movement.rollbackArtifact) {
+      throw new Error('Rollback artifact metadata exists but durable ciphertext is missing');
+    }
+
     const sourceRows = parseCsv(await readFile(input.csvPath, 'utf8'));
     const fields = [...new Set(sourceRows.flatMap((row) => Object.keys(row)))]
       .filter((field) => field.toLowerCase() !== 'id');
@@ -181,7 +293,10 @@ export class DataRollbackService {
     const artifact = await this.writeArtifact(input.movementId, payload, input.maxBytes);
     await prisma.dataMovement.update({
       where: { id: input.movementId },
-      data: { rollbackArtifact: artifact as unknown as Prisma.InputJsonValue },
+      data: {
+        rollbackArtifact: artifact as unknown as Prisma.InputJsonValue,
+        rollbackStatus: 'captured',
+      },
     });
     return artifact;
   }
@@ -197,6 +312,12 @@ export class DataRollbackService {
     });
     if (!movement) throw new NotFoundException('Data movement not found');
     assertResourceOwner(movement, userId, 'Data movement');
+    if (movement.rollbackStatus === 'completed' && movement.rollbackReport) {
+      return {
+        ...(movement.rollbackReport as Record<string, unknown>),
+        idempotent: true,
+      };
+    }
     if (movement.operation !== 'upsert' || !movement.idempotent || !movement.rollbackArtifact) {
       const report = {
         safe: false,
@@ -204,29 +325,36 @@ export class DataRollbackService {
       };
       await prisma.dataMovement.update({
         where: { id: movementId },
-        data: { rollbackReport: report },
+        data: { rollbackStatus: 'blocked', rollbackReport: report },
       });
       throw new BadRequestException(report.reason);
     }
+
+    const claimed = await prisma.dataMovement.updateMany({
+      where: {
+        id: movementId,
+        OR: [
+          { rollbackStatus: null },
+          { rollbackStatus: { notIn: ['running', 'completed'] } },
+        ],
+      },
+      data: { rollbackStatus: 'running' },
+    });
+    if (claimed.count === 0) {
+      throw new ConflictException('Rollback is already running or completed');
+    }
+
     const artifact = movement.rollbackArtifact as unknown as EncryptedRollbackArtifact;
-    const payload = await this.readArtifact(artifact);
-    if (payload.insertedExternalIds.length && !policy.deleteInserted) {
-      const report = {
-        safe: false,
-        reason: 'Rollback would require deleting inserted records; set deleteInserted=true explicitly',
-        insertedCount: payload.insertedExternalIds.length,
-      };
-      await prisma.dataMovement.update({
-        where: { id: movementId },
-        data: { rollbackReport: report },
-      });
-      throw new BadRequestException(report.reason);
-    }
-    const targetAlias = movement.targetOrg.username ?? movement.targetOrg.alias;
-    const workDir = join(tmpdir(), 'sfcc-data-rollback', `restore-${movementId}`);
-    await mkdir(workDir, { recursive: true });
-    let deleted = 0;
+    let workDir: string | undefined;
     try {
+      const payload = await this.readArtifact(artifact);
+      const targetAlias = movement.targetOrg.username ?? movement.targetOrg.alias;
+      workDir = join(tmpdir(), 'sfcc-data-rollback', `restore-${movementId}`);
+      await mkdir(workDir, { recursive: true });
+      let deleted = 0;
+
+      // Restoring rows that existed before the deployment is always the safe
+      // first action. Deletion of newly inserted rows remains separately gated.
       if (payload.previousRows.length) {
         const path = join(workDir, 'restore.csv');
         await writeFile(path, serializeBulkCsv(payload.previousRows), 'utf8');
@@ -238,7 +366,7 @@ export class DataRollbackService {
           await slot.release();
         }
       }
-      if (payload.insertedExternalIds.length) {
+      if (payload.insertedExternalIds.length && policy.deleteInserted) {
         const inserted = await this.queryByKeys(
           targetAlias,
           payload.objectName,
@@ -259,18 +387,48 @@ export class DataRollbackService {
           }
         }
       }
+      if (payload.insertedExternalIds.length && !policy.deleteInserted) {
+        const report = {
+          safe: true,
+          status: 'awaiting_delete_confirmation',
+          restored: payload.previousRows.length,
+          deleted: 0,
+          insertedCount: payload.insertedExternalIds.length,
+          requiresDeleteInsertedConfirmation: true,
+          reason: 'Existing rows were restored; set deleteInserted=true to delete records inserted by the deployment',
+        };
+        await prisma.dataMovement.update({
+          where: { id: movementId },
+          data: {
+            rollbackStatus: 'awaiting_delete_confirmation',
+            rollbackReport: report,
+          },
+        });
+        return report;
+      }
       const report = {
         safe: true,
+        status: 'completed',
         restored: payload.previousRows.length,
         deleted,
       };
       await prisma.dataMovement.update({
         where: { id: movementId },
-        data: { rollbackReport: report },
+        data: { rollbackStatus: 'completed', rollbackReport: report },
       });
       return report;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.dataMovement.update({
+        where: { id: movementId },
+        data: {
+          rollbackStatus: 'failed',
+          rollbackReport: { safe: false, status: 'failed', reason: message },
+        },
+      }).catch(() => undefined);
+      throw error;
     } finally {
-      await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+      if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
@@ -299,14 +457,25 @@ export class DataRollbackService {
     for (const movement of batch.movements) {
       results.push(await this.rollbackMovement(movement.id, userId, policy));
     }
+    const awaitingConfirmation = results.some(
+      (result) => (result as Record<string, unknown>).status === 'awaiting_delete_confirmation',
+    );
     await prisma.dataDeployBatch.update({
       where: { id: batchId },
       data: {
-        rollbackStatus: 'completed',
-        rollbackReport: { safe: true, results } as unknown as Prisma.InputJsonValue,
+        rollbackStatus: awaitingConfirmation ? 'awaiting_delete_confirmation' : 'completed',
+        rollbackReport: {
+          safe: true,
+          status: awaitingConfirmation ? 'awaiting_delete_confirmation' : 'completed',
+          results,
+        } as unknown as Prisma.InputJsonValue,
       },
     });
-    return { batchId, status: 'completed', results };
+    return {
+      batchId,
+      status: awaitingConfirmation ? 'awaiting_delete_confirmation' : 'completed',
+      results,
+    };
   }
 
   private async queryByKeys(

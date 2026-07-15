@@ -7,6 +7,7 @@ import {
   topologicallySortDataDependencies,
 } from './data-runtime.js';
 import { normalizeQuerySet } from './query-set.js';
+import { dataReplicationSchema } from './schemas/index.js';
 
 describe('data runtime contracts', () => {
   it('defaults to idempotent upsert only when an external ID exists', () => {
@@ -98,5 +99,29 @@ describe('data runtime contracts', () => {
       normalized.queries.map((query) => [query.operation, query.externalIdField]),
       [['upsert', 'Key__c'], ['upsert', 'External__c']],
     );
+  });
+
+  it('does not manufacture a replication-level insert override', () => {
+    const parsed = dataReplicationSchema.parse({
+      sourceOrgId: '00000000-0000-4000-8000-000000000001',
+      targetOrgId: '00000000-0000-4000-8000-000000000002',
+      querySet: {
+        version: 1,
+        source: 'upload',
+        defaultLimit: 100,
+        queries: [{
+          id: 'accounts',
+          label: 'Accounts',
+          object: 'Account',
+          soql: 'SELECT External__c FROM Account',
+          externalIdField: 'External__c',
+        }],
+      },
+    });
+    assert.equal(parsed.operation, undefined);
+    assert.equal(parsed.externalIdField, undefined);
+    const normalized = normalizeQuerySet(parsed.querySet!);
+    assert.equal(normalized.queries[0]?.operation, 'upsert');
+    assert.equal(normalized.queries[0]?.externalIdField, 'External__c');
   });
 });

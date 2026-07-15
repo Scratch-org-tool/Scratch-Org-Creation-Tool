@@ -347,7 +347,6 @@ export class DataPreflightService {
     } else if (
       !targetExternal.externalId
       && !targetExternal.idLookup
-      && !['id', 'name', 'developername'].includes(externalKey)
     ) {
       input.fieldIssues.push({
         field: externalId,

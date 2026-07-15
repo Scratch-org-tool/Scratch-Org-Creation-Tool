@@ -160,6 +160,19 @@ export class DataController {
     });
   }
 
+  @Get('movements/:id/rollback')
+  getMovementRollbackStatus(
+    @Param('id') id: string,
+    @CurrentUser() userId: string,
+  ) {
+    return this.dataRollback.getMovementRollbackStatus(id, userId);
+  }
+
+  @Post('movements/:id/cancel')
+  cancelMovement(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.dataService.cancelMovement(id, userId);
+  }
+
   @Get('batch-groups/:groupId')
   getBatchGroup(@Param('groupId') groupId: string, @CurrentUser() userId: string) {
     return this.dataService.getBatchGroup(groupId, userId);

@@ -228,6 +228,8 @@ model DataMovement {
   idempotent         Boolean          @default(false)
   rollbackArtifact   Json?
   rollbackReport     Json?
+  rollbackStatus     String?
+  durableRollback    DataRollbackArtifact?
   batchId            String?
   batch              DataDeployBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   chunkIndex         Int?
@@ -237,6 +239,27 @@ model DataMovement {
 
   @@index([createdBy])
   @@index([batchId])
+}
+
+/// Encrypted pre-write rollback snapshot. The unique movement relation makes
+/// the first completed capture immutable across queue retries and API replicas.
+model DataRollbackArtifact {
+  id                String       @id @default(uuid())
+  movementId        String       @unique
+  movement          DataMovement @relation(fields: [movementId], references: [id], onDelete: Cascade)
+  ciphertext        Bytes
+  algorithm         String       @default("aes-256-gcm+gzip")
+  iv                String
+  authTag           String
+  sha256            String
+  compressedBytes   Int
+  uncompressedBytes Int
+  previousCount     Int
+  insertedCount     Int
+  expiresAt         DateTime
+  createdAt         DateTime     @default(now())
+
+  @@index([expiresAt])
 }
 
 model DataDeployBatch {
