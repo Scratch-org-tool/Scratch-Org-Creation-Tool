@@ -25,6 +25,7 @@ export interface UserAccessRow {
   lastActiveAt: string | null;
   createdAt?: string;
   updatedAt?: string;
+  optimisticState?: 'saving';
 }
 
 export interface UserAccessOverview {

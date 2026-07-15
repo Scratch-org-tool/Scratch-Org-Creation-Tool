@@ -37,6 +37,24 @@ export class WorkerRegistry implements OnModuleInit {
     private readonly aiAnalysisWorker: AiAnalysisWorker,
   ) {}
 
+  private isParentRunBlocked(status?: string): boolean {
+    return status === 'failed' || status === 'cancelled';
+  }
+
+  private async cancelBlockedChild(
+    dbJobId: string,
+    currentStatus?: string,
+  ): Promise<void> {
+    if (!currentStatus || ['completed', 'partial', 'failed', 'cancelled'].includes(currentStatus)) {
+      return;
+    }
+    await this.jobsService.updateStatus(dbJobId, 'cancelled');
+    await this.streamService.publish('job_status', {
+      jobId: dbJobId,
+      status: 'cancelled',
+    });
+  }
+
   /** Immutable audit row recording a deployment's terminal state. */
   private async writeDeploymentAudit(
     deploymentId: string,
@@ -119,6 +137,20 @@ export class WorkerRegistry implements OnModuleInit {
         };
         const dbJobId = data.dbJobId;
         if (dbJobId) {
+          const current = await prisma.job.findUnique({
+            where: { id: dbJobId },
+            select: {
+              status: true,
+              parentRun: { select: { status: true } },
+            },
+          });
+          if (
+            current?.status === 'cancelled'
+            || this.isParentRunBlocked(current?.parentRun?.status)
+          ) {
+            await this.cancelBlockedChild(dbJobId, current?.status);
+            return;
+          }
           await this.jobsService.updateStatus(dbJobId, 'running');
           await this.streamService.publish('job_status', { jobId: dbJobId, status: 'running' });
         }
@@ -131,8 +163,20 @@ export class WorkerRegistry implements OnModuleInit {
         try {
           const result = await handler(job) as Record<string, unknown> | undefined;
           if (dbJobId) {
-            const current = await prisma.job.findUnique({ where: { id: dbJobId }, select: { status: true, parentRunId: true, type: true } });
-            if (current?.status === 'cancelled') {
+            const current = await prisma.job.findUnique({
+              where: { id: dbJobId },
+              select: {
+                status: true,
+                parentRunId: true,
+                type: true,
+                parentRun: { select: { status: true } },
+              },
+            });
+            if (
+              current?.status === 'cancelled'
+              || this.isParentRunBlocked(current?.parentRun?.status)
+            ) {
+              await this.cancelBlockedChild(dbJobId, current?.status);
               if (data.deploymentId) {
                 await prisma.deployment.update({
                   where: { id: data.deploymentId },
@@ -141,9 +185,12 @@ export class WorkerRegistry implements OnModuleInit {
               }
               return result;
             }
-            if (current?.status !== 'completed') {
-              await this.jobsService.updateStatus(dbJobId, 'completed');
-              await this.streamService.publish('job_status', { jobId: dbJobId, status: 'completed' });
+            const terminalStatus = job.name === 'cona_user_provision' && result?.partial
+              ? 'partial'
+              : 'completed';
+            if (current?.status !== terminalStatus) {
+              await this.jobsService.updateStatus(dbJobId, terminalStatus);
+              await this.streamService.publish('job_status', { jobId: dbJobId, status: terminalStatus });
             }
           }
 
@@ -156,7 +203,7 @@ export class WorkerRegistry implements OnModuleInit {
               where: { id: runId },
               select: { status: true, intent: true },
             });
-            if (run && ['paused', 'cancelled'].includes(run.status)) {
+            if (run && ['paused', 'cancelled', 'failed'].includes(run.status)) {
               return result;
             }
             if (
@@ -202,9 +249,20 @@ export class WorkerRegistry implements OnModuleInit {
           if (dbJobId) {
             const current = await prisma.job.findUnique({
               where: { id: dbJobId },
-              select: { status: true, parentRunId: true, type: true },
+              select: {
+                status: true,
+                parentRunId: true,
+                type: true,
+                parentRun: { select: { status: true } },
+              },
             });
-            if (current?.status === 'cancelled') return;
+            if (
+              current?.status === 'cancelled'
+              || this.isParentRunBlocked(current?.parentRun?.status)
+            ) {
+              await this.cancelBlockedChild(dbJobId, current?.status);
+              return;
+            }
             await this.jobsService.updateStatus(dbJobId, 'failed', message);
             await this.streamService.publish('job_status', { jobId: dbJobId, status: 'failed', error: message });
 
@@ -212,6 +270,13 @@ export class WorkerRegistry implements OnModuleInit {
             if (runId && options?.failedStep) {
               const failedStep = options.resolveFailedStep?.(error) ?? options.failedStep;
               await this.pipelineOrchestrator.handleJobFailed(runId, failedStep, message);
+            } else if (runId && ['cona_seed', 'account_partner_import', 'cona_user_provision'].includes(job.name)) {
+              const action = job.name === 'cona_seed'
+                ? 'load_data_seed'
+                : job.name === 'account_partner_import'
+                  ? 'load_account_partners'
+                  : 'provision_users';
+              await this.pipelineOrchestrator.handleUserActionFailed(runId, action, message);
             } else if (runId && job.name === 'org_to_org_data_deploy') {
               await this.completeChainedRunIfDone(runId);
             } else if (data.deploymentId) {
@@ -265,7 +330,12 @@ export class WorkerRegistry implements OnModuleInit {
       async (job) => {
         const pipelineOpts = job.name === 'pipeline_load_org_config'
           ? { pipelineJobType: 'pipeline_load_org_config', failedStep: 'load_org_config' as PipelineStepId }
-          : undefined;
+          : job.name === 'prepare_existing_org'
+            ? {
+                pipelineJobType: 'prepare_existing_org',
+                failedStep: 'prepare_existing_org' as PipelineStepId,
+              }
+            : undefined;
         return wrap((j) => this.orgSetupWorker.process(j), pipelineOpts)(job);
       },
     );

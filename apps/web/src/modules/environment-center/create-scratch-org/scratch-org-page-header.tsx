@@ -9,9 +9,13 @@ const DESKTOP_STEPS = ['Configure', 'Review', 'Create'];
 
 interface ScratchOrgPageHeaderProps {
   desktopStep?: number;
+  mode?: 'create_new' | 'configure_existing';
 }
 
-export function ScratchOrgPageHeader({ desktopStep = 0 }: ScratchOrgPageHeaderProps) {
+export function ScratchOrgPageHeader({
+  desktopStep = 0,
+  mode = 'create_new',
+}: ScratchOrgPageHeaderProps) {
   return (
     <div
       className={cn(
@@ -25,13 +29,17 @@ export function ScratchOrgPageHeader({ desktopStep = 0 }: ScratchOrgPageHeaderPr
       <div className="relative p-5 md:p-6 space-y-4">
         <Breadcrumbs className="mb-1" />
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Create Scratch Org</h1>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {mode === 'configure_existing' ? 'Configure Existing Scratch Org' : 'Create Scratch Org'}
+          </h1>
           <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-            Spin up a new Salesforce scratch org and configure pipeline settings.
+            {mode === 'configure_existing'
+              ? 'Deploy metadata and Template V2 configuration to an active scratch org you own.'
+              : 'Spin up a new Salesforce scratch org and configure pipeline settings.'}
           </p>
         </div>
         <WizardSteps
-          steps={DESKTOP_STEPS}
+          steps={mode === 'configure_existing' ? ['Configure', 'Review', 'Deploy'] : DESKTOP_STEPS}
           current={desktopStep}
           connected={false}
           className="max-w-md"

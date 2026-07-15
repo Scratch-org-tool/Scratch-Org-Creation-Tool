@@ -78,7 +78,7 @@ describe('IntegrationsService work-item connection routing', () => {
       {
         fileName: 'proof.txt',
         contentType: 'text/plain',
-        base64: Buffer.from('proof').toString('base64'),
+        buffer: Buffer.from('proof'),
       },
       'acme/repo',
       'github-connection',

@@ -3,9 +3,12 @@ import type { Job } from 'bullmq';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import type { OrgSetupAssignScope } from '@sfcc/shared';
+import type { ExistingOrgOptions } from '@sfcc/shared';
 import { OrgConfigLoaderService } from '../modules/environment/org-config-loader.service';
 import { JobsService } from '../modules/jobs/jobs.service';
+import { JobProcessRegistryService } from '../modules/jobs/job-process-registry.service';
 import { StreamService } from '../modules/stream/stream.service';
+import { ScratchOrgPreparationService } from '../modules/environment/scratch-org-preparation.service';
 
 @Injectable()
 export class OrgSetupWorker {
@@ -15,6 +18,8 @@ export class OrgSetupWorker {
     private readonly jobsService: JobsService,
     private readonly streamService: StreamService,
     private readonly orgConfigLoader: OrgConfigLoaderService,
+    private readonly preparationService: ScratchOrgPreparationService,
+    private readonly processRegistry: JobProcessRegistryService,
   ) {}
 
   async process(job: Job) {
@@ -22,11 +27,40 @@ export class OrgSetupWorker {
       orgId: string;
       setupType?: string;
       config?: Record<string, unknown>;
-      orgConfig?: { upsertQueueIds?: boolean; upsertDomainFields?: boolean; upsertRequestId?: boolean };
+      orgConfig?: {
+        upsertQueueIds?: boolean;
+        upsertDomainFields?: boolean;
+        upsertRequestId?: boolean;
+        bottler?: string;
+        configKey?: string;
+      };
       runId?: string;
+      automationRunId?: string;
+      existingOrgOptions?: ExistingOrgOptions;
       dbJobId: string;
     };
-    const org = await this.assertPayloadBinding(data);
+    const { org, ownerId } = await this.assertPayloadBinding(data);
+
+    if (job.name === 'prepare_existing_org') {
+      const log = async (line: string, stream: 'stdout' | 'stderr' = 'stdout') => {
+        await this.jobsService.addLog(data.dbJobId, stream, line);
+        await this.streamService.publishJobLog(data.dbJobId, stream, line);
+      };
+      const authoritative = await this.preparationService.requireOwnedActiveScratchTarget(
+        org.id,
+        ownerId,
+      );
+      const result = await this.preparationService.prepare(
+        authoritative.target,
+        data.existingOrgOptions ?? {
+          verifyAuthentication: true,
+          ensureRequiredPackage: true,
+        },
+        log,
+        { dbJobId: data.dbJobId, processRegistry: this.processRegistry },
+      );
+      return { prepareExistingOrgCompleted: true, ...result };
+    }
 
     if (job.name === 'pipeline_load_org_config') {
       const log = async (stream: 'stdout' | 'stderr', line: string) => {
@@ -126,7 +160,7 @@ export class OrgSetupWorker {
     ) {
       throw new Error('Org setup job ownership validation failed');
     }
-    return org;
+    return { org, ownerId };
   }
 
   private async assignPermissionSets(

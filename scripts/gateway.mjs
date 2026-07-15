@@ -5,14 +5,25 @@
  * - Routes /api/* to the API upstream pool (round-robin + failover).
  * - Routes everything else to the Next.js web server.
  * - Periodic health checks (/api/health) evict dead upstreams from rotation.
- * - Request timeouts (connect + first byte) with streaming-safe behaviour:
+ * - Request timeouts (connect + response-body idle) with streaming-safe behaviour:
  *   SSE / NDJSON responses are never idle-timed-out once streaming starts.
  * - WebSocket upgrades are proxied to the pool (Next HMR goes to the web upstream).
  */
 import http from 'node:http';
 import net from 'node:net';
+import { PassThrough, Readable, Transform, pipeline } from 'node:stream';
 import { URL } from 'node:url';
 import { ERROR_FALLBACK_HTML, isPlainErrorBody } from './lib/error-fallback-html.mjs';
+import {
+  appendVary,
+  createCompressor,
+  createUpstreamHeaders,
+  isCompressionCandidate,
+  isRetryableMethod,
+  isStreamingPath,
+  negotiateContentEncoding,
+  stripHopByHopHeaders,
+} from './lib/gateway-http.mjs';
 
 const WEB_UPSTREAM = (process.env.WEB_UPSTREAM ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
 const API_UPSTREAMS = (process.env.API_UPSTREAMS ?? process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:3001')
@@ -26,9 +37,15 @@ const HEALTH_CHECK_INTERVAL_MS = Number(process.env.GATEWAY_HEALTH_INTERVAL_MS ?
 const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.GATEWAY_HEALTH_TIMEOUT_MS ?? 3_000);
 const CONNECT_TIMEOUT_MS = Number(process.env.GATEWAY_CONNECT_TIMEOUT_MS ?? 10_000);
 const RESPONSE_TIMEOUT_MS = Number(process.env.GATEWAY_RESPONSE_TIMEOUT_MS ?? 120_000);
-
-/** Paths that stream indefinitely (SSE event bus, copilot NDJSON) — no response timeout. */
-const STREAMING_PATH_PREFIXES = ['/api/stream', '/api/copilot'];
+const COMPRESSION_ENABLED = !['0', 'false'].includes(
+  (process.env.GATEWAY_COMPRESSION_ENABLED ?? '1').trim().toLowerCase(),
+);
+const TRUSTED_PROXY_POLICY = process.env.GATEWAY_TRUST_PROXY ?? '';
+const parsedCompressionThreshold = Number(process.env.GATEWAY_COMPRESSION_THRESHOLD ?? 1024);
+const COMPRESSION_THRESHOLD = Number.isFinite(parsedCompressionThreshold) && parsedCompressionThreshold >= 0
+  ? parsedCompressionThreshold
+  : 1024;
+const ERROR_INSPECTION_LIMIT = 64 * 1024;
 
 // ---------------------------------------------------------------------------
 // Upstream pool with health tracking
@@ -115,14 +132,190 @@ async function runHealthChecks() {
 // HTTP proxying
 // ---------------------------------------------------------------------------
 
-function isStreamingPath(path) {
-  return STREAMING_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+class CompressionThreshold extends Transform {
+  constructor(threshold, forceCompression, decide) {
+    super();
+    this.threshold = threshold;
+    this.forceCompression = forceCompression;
+    this.decide = decide;
+    this.chunks = [];
+    this.size = 0;
+    this.decided = false;
+  }
+
+  decideOnce(compress) {
+    if (this.decided) return;
+    this.decided = true;
+    this.decide(compress);
+    for (const chunk of this.chunks) this.push(chunk);
+    this.chunks = [];
+  }
+
+  _transform(chunk, _encoding, callback) {
+    if (this.decided) {
+      callback(null, chunk);
+      return;
+    }
+    this.chunks.push(chunk);
+    this.size += chunk.length;
+    if (this.size > this.threshold) this.decideOnce(true);
+    callback();
+  }
+
+  _flush(callback) {
+    this.decideOnce(this.forceCompression);
+    callback();
+  }
+}
+
+function forwardResponse(req, res, status, inputHeaders, source, onError) {
+  const headers = stripHopByHopHeaders(inputHeaders);
+  const eligible = isCompressionCandidate(req, status, headers);
+  const candidate = COMPRESSION_ENABLED && eligible;
+  if (eligible) appendVary(headers, 'Accept-Encoding');
+
+  const negotiation = eligible
+    ? negotiateContentEncoding(String(req.headers['accept-encoding'] ?? ''))
+    : { encoding: null, acceptable: true, identityAcceptable: true };
+
+  const canRespond = candidate
+    ? negotiation.acceptable
+    : !eligible || negotiation.identityAcceptable;
+  if (!canRespond) {
+    const body = 'No acceptable content encoding is available';
+    res.writeHead(406, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body),
+      Vary: 'Accept-Encoding',
+    });
+    res.end(body);
+    // Draining permits socket reuse, and the listener owns any late upstream
+    // failure after the final client response has already been selected.
+    source.on('error', () => {});
+    source.resume();
+    return;
+  }
+
+  const startPipeline = (bodySource, encoding) => {
+    if (res.destroyed) {
+      bodySource.destroy();
+      return;
+    }
+    const outputHeaders = { ...headers };
+    const streams = [bodySource];
+    if (encoding) {
+      delete outputHeaders['content-length'];
+      delete outputHeaders['content-md5'];
+      outputHeaders['content-encoding'] = encoding;
+      streams.push(createCompressor(encoding));
+    }
+    streams.push(res);
+    res.writeHead(status, outputHeaders);
+    pipeline(...streams, (error) => {
+      if (!error) return;
+      if (!res.headersSent) onError(error);
+      else if (!res.destroyed) res.destroy(error);
+    });
+  };
+
+  if (!candidate || !negotiation.encoding) {
+    startPipeline(source, null);
+    return;
+  }
+
+  const rawLength = headers['content-length'];
+  const contentLength = typeof rawLength === 'string' && /^\d+$/.test(rawLength)
+    ? Number(rawLength)
+    : null;
+  const forceCompression = !negotiation.identityAcceptable;
+  if (contentLength !== null) {
+    const compress = forceCompression || contentLength > COMPRESSION_THRESHOLD;
+    startPipeline(source, compress ? negotiation.encoding : null);
+    return;
+  }
+
+  let gate;
+  let failed = false;
+  const failBeforeOrDuringPipeline = (error) => {
+    if (failed) return;
+    failed = true;
+    source.unpipe(gate);
+    if (!source.destroyed) source.destroy();
+    if (!gate.destroyed) gate.destroy();
+    if (!res.headersSent) onError(error);
+    else if (!res.destroyed) res.destroy(error);
+  };
+  gate = new CompressionThreshold(COMPRESSION_THRESHOLD, forceCompression, (compress) => {
+    startPipeline(gate, compress ? negotiation.encoding : null);
+  });
+  source.once('error', failBeforeOrDuringPipeline);
+  source.once('aborted', () => {
+    failBeforeOrDuringPipeline(new Error('upstream response aborted'));
+  });
+  source.once('close', () => {
+    if (!source.readableEnded) {
+      failBeforeOrDuringPipeline(new Error('upstream response closed prematurely'));
+    }
+  });
+  gate.once('error', failBeforeOrDuringPipeline);
+  source.pipe(gate);
+}
+
+function inspectWebError(req, res, status, headers, proxyRes, onError) {
+  const chunks = [];
+  let size = 0;
+  let decided = false;
+
+  const onData = (chunk) => {
+    if (decided) return;
+    chunks.push(chunk);
+    size += chunk.length;
+    if (size <= ERROR_INSPECTION_LIMIT) return;
+
+    decided = true;
+    proxyRes.pause();
+    proxyRes.off('data', onData);
+    proxyRes.off('end', onEnd);
+    const pass = new PassThrough();
+    forwardResponse(req, res, status, headers, pass, onError);
+    pass.write(Buffer.concat(chunks), () => {
+      if (!proxyRes.destroyed) proxyRes.pipe(pass);
+    });
+  };
+
+  const onEnd = () => {
+    if (decided) return;
+    decided = true;
+    const body = Buffer.concat(chunks);
+    if (isPlainErrorBody(body.toString('utf8'), status)) {
+      forwardResponse(
+        req,
+        res,
+        status,
+        { 'content-type': 'text/html; charset=utf-8' },
+        Readable.from([Buffer.from(ERROR_FALLBACK_HTML)]),
+        onError,
+      );
+      return;
+    }
+    forwardResponse(req, res, status, headers, Readable.from([body]), onError);
+  };
+
+  proxyRes.on('data', onData);
+  proxyRes.once('end', onEnd);
+  proxyRes.once('error', onError);
 }
 
 function proxyRequest(req, res, upstreams, options = {}) {
   const { replacePlainErrors = false, trackHealth = false } = options;
   const streaming = isStreamingPath(req.url ?? '/');
+  const hasRequestBody =
+    Number(req.headers['content-length'] ?? 0) > 0 ||
+    Boolean(req.headers['transfer-encoding']);
+  const mayRetry = isRetryableMethod(req.method) && !hasRequestBody;
   let attempt = 0;
+  let activeProxyReq;
+  let activeProxyRes;
 
   const respond = (status, headers, body) => {
     if (res.headersSent) {
@@ -132,6 +325,13 @@ function proxyRequest(req, res, upstreams, options = {}) {
     res.writeHead(status, headers);
     if (body !== undefined) res.end(body);
   };
+
+  const stopActiveUpstream = () => {
+    if (activeProxyRes && !activeProxyRes.destroyed) activeProxyRes.destroy();
+    if (activeProxyReq && !activeProxyReq.destroyed) activeProxyReq.destroy();
+  };
+  req.once('aborted', stopActiveUpstream);
+  res.once('close', stopActiveUpstream);
 
   const tryUpstream = () => {
     if (!upstreams.length) {
@@ -166,8 +366,42 @@ function proxyRequest(req, res, upstreams, options = {}) {
       return;
     }
 
-    const headers = { ...req.headers, host: target.host };
-    delete headers.connection;
+    const headers = createUpstreamHeaders(req, target, TRUSTED_PROXY_POLICY);
+    let proxyRes;
+    let responseTimer;
+    let attemptFinished = false;
+
+    const clearResponseTimer = () => {
+      if (responseTimer) clearTimeout(responseTimer);
+      responseTimer = undefined;
+    };
+
+    const armResponseTimer = () => {
+      if (streaming || RESPONSE_TIMEOUT_MS <= 0) return;
+      clearResponseTimer();
+      responseTimer = setTimeout(() => {
+        const error = new Error('upstream response timeout');
+        if (proxyRes && !proxyRes.destroyed) proxyRes.destroy(error);
+        else if (!proxyReq.destroyed) proxyReq.destroy(error);
+        if (res.headersSent && !res.destroyed) res.destroy(error);
+      }, RESPONSE_TIMEOUT_MS);
+    };
+
+    const handleAttemptError = (error) => {
+      if (attemptFinished || res.destroyed) return;
+      attemptFinished = true;
+      clearResponseTimer();
+      if (trackHealth) markUnhealthy(base, error.message);
+      if (mayRetry && attempt < upstreams.length && !res.headersSent) {
+        tryUpstream();
+        return;
+      }
+      if (replacePlainErrors) {
+        respond(502, { 'Content-Type': 'text/html; charset=utf-8' }, ERROR_FALLBACK_HTML);
+        return;
+      }
+      respond(502, { 'Content-Type': 'text/plain' }, 'All upstream servers unavailable');
+    };
 
     const proxyReq = http.request(
       {
@@ -179,78 +413,53 @@ function proxyRequest(req, res, upstreams, options = {}) {
         headers,
         timeout: CONNECT_TIMEOUT_MS,
       },
-      (proxyRes) => {
+      (upstreamResponse) => {
+        proxyRes = upstreamResponse;
+        activeProxyRes = proxyRes;
+        proxyReq.setTimeout(0);
+        armResponseTimer();
+        proxyRes.on('data', armResponseTimer);
+        proxyRes.once('end', clearResponseTimer);
+        proxyRes.once('close', clearResponseTimer);
+
         const status = proxyRes.statusCode ?? 502;
-        const retryable = status >= 502 && attempt < upstreams.length && !res.headersSent;
+        const retryable =
+          status >= 502 &&
+          mayRetry &&
+          attempt < upstreams.length &&
+          !res.headersSent;
+        if (status >= 502 && trackHealth) markUnhealthy(base, `HTTP ${status}`);
         if (retryable) {
-          if (trackHealth) markUnhealthy(base, `HTTP ${status}`);
+          attemptFinished = true;
+          clearResponseTimer();
           proxyRes.resume();
           tryUpstream();
           return;
         }
 
         if (replacePlainErrors && status >= 500) {
-          const chunks = [];
-          proxyRes.on('data', (chunk) => chunks.push(chunk));
-          proxyRes.on('end', () => {
-            if (res.headersSent) return;
-            const body = Buffer.concat(chunks).toString('utf8');
-            if (isPlainErrorBody(body, status)) {
-              respond(status, { 'Content-Type': 'text/html; charset=utf-8' }, ERROR_FALLBACK_HTML);
-              return;
-            }
-            const outHeaders = { ...proxyRes.headers };
-            delete outHeaders['content-length'];
-            respond(status, outHeaders, body);
-          });
+          inspectWebError(req, res, status, proxyRes.headers, proxyRes, handleAttemptError);
           return;
         }
 
-        if (!res.headersSent) {
-          res.writeHead(status, proxyRes.headers);
-          proxyRes.pipe(res);
-        } else {
+        if (res.headersSent) {
           proxyRes.resume();
+          return;
         }
+        forwardResponse(req, res, status, proxyRes.headers, proxyRes, handleAttemptError);
       },
     );
+    activeProxyReq = proxyReq;
+    armResponseTimer();
 
     // Connect timeout: no response within the window → try the next upstream.
     proxyReq.on('timeout', () => {
       proxyReq.destroy(new Error('upstream connect timeout'));
     });
 
-    // First-byte / total-response timeout for non-streaming requests.
-    let responseTimer;
-    if (!streaming && RESPONSE_TIMEOUT_MS > 0) {
-      responseTimer = setTimeout(() => {
-        if (!res.headersSent) {
-          proxyReq.destroy(new Error('upstream response timeout'));
-        }
-      }, RESPONSE_TIMEOUT_MS);
-      proxyReq.on('response', () => clearTimeout(responseTimer));
-      proxyReq.on('close', () => clearTimeout(responseTimer));
-    }
-
-    proxyReq.on('error', (err) => {
-      if (trackHealth) markUnhealthy(base, err.message);
-      if (attempt < upstreams.length && !res.headersSent) {
-        tryUpstream();
-        return;
-      }
-      if (replacePlainErrors) {
-        respond(502, { 'Content-Type': 'text/html; charset=utf-8' }, ERROR_FALLBACK_HTML);
-        return;
-      }
-      respond(502, { 'Content-Type': 'text/plain' }, 'All upstream servers unavailable');
-    });
-
-    // Client went away — stop the upstream request too.
-    res.on('close', () => {
-      if (!proxyReq.destroyed) proxyReq.destroy();
-    });
-
-    req.pipe(proxyReq);
+    proxyReq.once('error', handleAttemptError);
+    if (mayRetry) proxyReq.end();
+    else req.pipe(proxyReq);
   };
 
   tryUpstream();
@@ -259,8 +468,7 @@ function proxyRequest(req, res, upstreams, options = {}) {
 const server = http.createServer((req, res) => {
   const path = req.url ?? '/';
   if (path === '/gateway/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+    const body = Buffer.from(JSON.stringify({
       status: 'ok',
       upstreams: API_UPSTREAMS.map((u) => ({
         url: u,
@@ -268,6 +476,14 @@ const server = http.createServer((req, res) => {
         lastError: upstreamHealth.get(u)?.lastError ?? null,
       })),
     }));
+    forwardResponse(
+      req,
+      res,
+      200,
+      { 'content-type': 'application/json', 'content-length': String(body.length) },
+      Readable.from([body]),
+      (error) => res.destroy(error),
+    );
     return;
   }
   if (path.startsWith('/api')) {
@@ -306,9 +522,12 @@ server.on('upgrade', (req, clientSocket, head) => {
       Number(target.port || 80),
       target.hostname,
       () => {
+        const upgradeHeaders = createUpstreamHeaders(req, target, TRUSTED_PROXY_POLICY);
+        upgradeHeaders.connection = 'Upgrade';
+        upgradeHeaders.upgrade = req.headers.upgrade ?? 'websocket';
         const headerLines = [
           `${req.method} ${path} HTTP/1.1`,
-          ...Object.entries(req.headers).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`),
+          ...Object.entries(upgradeHeaders).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`),
           '',
           '',
         ];
@@ -344,6 +563,7 @@ server.listen(GATEWAY_PORT, GATEWAY_HOST, () => {
   console.log(`  Web upstream:  ${WEB_UPSTREAM}`);
   console.log(`  API upstreams: ${API_UPSTREAMS.join(', ')}`);
   console.log(`  Health checks: every ${HEALTH_CHECK_INTERVAL_MS}ms (/api/health)`);
+  console.log(`  Compression:   ${COMPRESSION_ENABLED ? `br/gzip above ${COMPRESSION_THRESHOLD} bytes` : 'disabled'}`);
 });
 
 void runHealthChecks();

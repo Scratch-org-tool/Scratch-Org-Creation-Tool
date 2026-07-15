@@ -12,8 +12,8 @@ const OWNER_CACHE_MAX = 2000;
 export class StreamService implements OnModuleInit {
   private readonly events$ = new Subject<StreamEvent>();
   private subscriber: IORedis | null = null;
-  /** jobId -> owning app-user id (bounded cache to avoid a DB hit per log line). */
-  private readonly jobOwnerCache = new Map<string, string>();
+  /** Resource key -> owning app-user id (bounded to avoid a DB hit per event). */
+  private readonly ownerCache = new Map<string, string>();
 
   constructor(private readonly queueService: QueueService) {}
 
@@ -83,27 +83,58 @@ export class StreamService implements OnModuleInit {
 
   private async resolveOwner(payload: Record<string, unknown>): Promise<string | undefined> {
     const jobId = typeof payload.jobId === 'string' ? payload.jobId : undefined;
-    if (!jobId) return undefined;
+    const automationRunId =
+      typeof payload.automationRunId === 'string' ? payload.automationRunId : undefined;
 
-    const cached = this.jobOwnerCache.get(jobId);
+    if (jobId) {
+      const cacheKey = `job:${jobId}`;
+      const cached = this.ownerCache.get(cacheKey);
+      if (cached) return cached;
+
+      try {
+        const job = await prisma.job.findUnique({
+          where: { id: jobId },
+          select: {
+            createdBy: true,
+            parentRun: { select: { createdBy: true } },
+          },
+        });
+        const owner =
+          job?.createdBy && job.createdBy !== 'system'
+            ? job.createdBy
+            : job?.parentRun?.createdBy;
+        if (owner && owner !== 'system') {
+          this.cacheOwner(cacheKey, owner);
+          return owner;
+        }
+      } catch {
+        // Fail closed unless another immutable owning resource resolves below.
+      }
+    }
+
+    if (!automationRunId) return undefined;
+    const cacheKey = `run:${automationRunId}`;
+    const cached = this.ownerCache.get(cacheKey);
     if (cached) return cached;
-
     try {
-      const job = await prisma.job.findUnique({
-        where: { id: jobId },
+      const run = await prisma.automationRun.findUnique({
+        where: { id: automationRunId },
         select: { createdBy: true },
       });
-      const owner = job?.createdBy ?? undefined;
-      if (owner) {
-        if (this.jobOwnerCache.size >= OWNER_CACHE_MAX) {
-          const firstKey = this.jobOwnerCache.keys().next().value;
-          if (firstKey) this.jobOwnerCache.delete(firstKey);
-        }
-        this.jobOwnerCache.set(jobId, owner);
-      }
+      const owner = run?.createdBy;
+      if (!owner || owner === 'system') return undefined;
+      this.cacheOwner(cacheKey, owner);
       return owner;
     } catch {
       return undefined;
     }
+  }
+
+  private cacheOwner(key: string, owner: string): void {
+    if (this.ownerCache.size >= OWNER_CACHE_MAX) {
+      const firstKey = this.ownerCache.keys().next().value;
+      if (firstKey) this.ownerCache.delete(firstKey);
+    }
+    this.ownerCache.set(key, owner);
   }
 }

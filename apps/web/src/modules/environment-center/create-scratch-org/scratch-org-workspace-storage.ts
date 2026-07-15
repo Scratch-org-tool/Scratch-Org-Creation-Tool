@@ -1,4 +1,8 @@
-import type { ScratchOrgFormState } from '@/components/scratch-org/types';
+import type {
+  ExistingOrgOptions,
+  ScratchOrgFormState,
+  ScratchOrgLaunchMode,
+} from '@/components/scratch-org/types';
 import type { DesktopStep, MobileView } from './types';
 
 export const SCRATCH_ORG_WORKSPACE_KEY = 'sfcc:scratch-org-workspace';
@@ -7,6 +11,9 @@ export interface ScratchOrgWorkspaceSnapshot {
   automationRunId: string;
   form: ScratchOrgFormState;
   installPackage: boolean;
+  mode?: ScratchOrgLaunchMode;
+  existingOrgConnectionId?: string;
+  existingOrgOptions?: ExistingOrgOptions;
   desktopStep: DesktopStep;
   wizardStep: 0 | 1;
   mobileView: MobileView;

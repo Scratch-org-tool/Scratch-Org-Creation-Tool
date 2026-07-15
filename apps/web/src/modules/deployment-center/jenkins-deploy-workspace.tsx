@@ -16,6 +16,13 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
+import {
+  applyApprovalPending,
+  reconcileApproval,
+  reconcileApprovalFailure,
+  type OptimisticDeployment,
+} from './optimistic-deployments';
+import { EntityRequestGate } from '@/lib/optimistic-list';
 
 interface Org {
   id: string;
@@ -34,12 +41,16 @@ export function JenkinsDeployWorkspace() {
   const { orgs } = useOrgs();
   const [repos, setRepos] = useState<Array<{ id: string; name: string }>>([]);
   const [branches, setBranches] = useState<string[]>([]);
-  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [deployments, setDeployments] = useState<OptimisticDeployment<Deployment>[]>([]);
   const [form, setForm] = useState({ targetOrgId: '', repo: '', branch: '' });
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const branchRequestRef = useRef(0);
+  const [approvalBusy, setApprovalBusy] = useState<Record<string, boolean>>({});
+  const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
+  const [announcement, setAnnouncement] = useState('');
+  const approvalGateRef = useRef(new EntityRequestGate());
 
   useEffect(() => {
     setLoading(true);
@@ -90,14 +101,55 @@ export function JenkinsDeployWorkspace() {
   };
 
   const approve = async (id: string) => {
+    const snapshot = deployments.find((deployment) => deployment.id === id);
+    if (!snapshot) return;
+    const token = approvalGateRef.current.begin(id);
+    if (token == null) return;
+    setApprovalBusy((current) => ({ ...current, [id]: true }));
+    setApprovalErrors((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setDeployments((current) => applyApprovalPending(current, id));
+    setAnnouncement(`Deployment ${id} approval is queued.`);
     try {
-      await api(`/deployments/${id}/approve`, {
+      const updated = await api<Deployment>(`/deployments/${encodeURIComponent(id)}/approve`, {
         method: 'POST',
       });
-      const updated = await api<Deployment[]>('/deployments');
-      setDeployments(updated);
+      if (!approvalGateRef.current.isLatest(id, token)) return;
+      setDeployments((current) => reconcileApproval(current, id, updated));
+      setAnnouncement(`Deployment ${id} approval was accepted.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Approve failed');
+      if (!approvalGateRef.current.isLatest(id, token)) return;
+      const failure = err instanceof Error ? err.message : 'Approve failed';
+      const authoritative = await api<Deployment[]>('/deployments').catch(() => null);
+      const { disposition } = reconcileApprovalFailure([], id, authoritative);
+      setDeployments((current) => {
+        const reconciled = reconcileApprovalFailure(current, id, authoritative);
+        return reconciled.deployments;
+      });
+      setApprovalErrors((current) => ({
+        ...current,
+        [id]: disposition === 'rolled_back'
+          ? `${failure} The authoritative pending state was restored.`
+          : disposition === 'reconciled'
+            ? `${failure} The current server state is shown.`
+            : `${failure} The server state could not be confirmed; queued state is retained.`,
+      }));
+      setAnnouncement(disposition === 'rolled_back'
+        ? `Deployment ${id} approval failed and was rolled back.`
+        : disposition === 'reconciled'
+          ? `Deployment ${id} approval response failed; server state was reconciled.`
+          : `Deployment ${id} approval response failed; server state is unconfirmed.`);
+    } finally {
+      if (approvalGateRef.current.finish(id, token)) {
+        setApprovalBusy((current) => {
+          const next = { ...current };
+          delete next[id];
+          return next;
+        });
+      }
     }
   };
 
@@ -105,6 +157,7 @@ export function JenkinsDeployWorkspace() {
 
   return (
     <div className="p-4 md:p-6 space-y-5">
+      <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
       <DeploymentPageHeader
         title="Jenkins Deployment Center"
         subtitle="Trigger Jenkins builds and deploy metadata to Salesforce orgs."
@@ -188,14 +241,24 @@ export function JenkinsDeployWorkspace() {
         <GlassCard title="Recent Deployments" description="Jenkins-triggered deployment runs.">
           <ListRowGroup emptyMessage="No Jenkins deployments yet.">
             {jenkinsDeployments.map((d) => (
-              <div key={d.id} className="flex items-center gap-2">
+              <div key={d.id} className="flex items-center gap-2" aria-busy={Boolean(approvalBusy[d.id])}>
                 <ListRow
                   className="flex-1 border-0"
                   title={`${d.repo} / ${d.branch}`}
-                  status={d.status}
+                  status={d.approvalPending ? `${d.status} · approval pending` : d.status}
                 />
+                {approvalErrors[d.id] && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {approvalErrors[d.id]}
+                  </p>
+                )}
                 {d.status === 'pending' && (
-                  <Button size="sm" onClick={() => void approve(d.id)}>
+                  <Button
+                    size="sm"
+                    loading={Boolean(approvalBusy[d.id])}
+                    disabled={Boolean(approvalBusy[d.id])}
+                    onClick={() => void approve(d.id)}
+                  >
                     Approve
                   </Button>
                 )}

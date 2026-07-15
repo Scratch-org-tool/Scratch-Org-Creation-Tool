@@ -37,6 +37,39 @@ export interface MetadataDeployEnqueueInput {
   dataDeployConfig?: Array<Record<string, unknown>>;
 }
 
+export class MetadataEnqueueError extends Error {
+  constructor(
+    cause: unknown,
+    readonly sideEffectMayHavePersisted: boolean,
+  ) {
+    super(cause instanceof Error ? cause.message : 'Metadata deployment enqueue failed', {
+      cause,
+    });
+    this.name = 'MetadataEnqueueError';
+  }
+}
+
+const enqueuePersistence = Symbol('metadataEnqueuePersistence');
+
+export function metadataEnqueueSideEffectMayHavePersisted(error: unknown): boolean | null {
+  if (error instanceof MetadataEnqueueError) return error.sideEffectMayHavePersisted;
+  if (error instanceof Error && enqueuePersistence in error) {
+    return (error as Error & { [enqueuePersistence]: boolean })[enqueuePersistence];
+  }
+  return null;
+}
+
+function annotateEnqueueError(error: unknown, sideEffectMayHavePersisted: boolean): Error {
+  if (!(error instanceof Error)) {
+    return new MetadataEnqueueError(error, sideEffectMayHavePersisted);
+  }
+  Object.defineProperty(error, enqueuePersistence, {
+    value: sideEffectMayHavePersisted,
+    configurable: true,
+  });
+  return error;
+}
+
 function manifestHash(content?: string): string | undefined {
   if (!content?.trim()) return undefined;
   return createHash('sha256').update(content).digest('hex');
@@ -55,6 +88,18 @@ export class MetadataDeployQueueService {
   ) {}
 
   async enqueue(input: MetadataDeployEnqueueInput) {
+    const dispatch = { started: false };
+    try {
+      return await this.enqueueInternal(input, dispatch);
+    } catch (error) {
+      throw annotateEnqueueError(error, dispatch.started);
+    }
+  }
+
+  private async enqueueInternal(
+    input: MetadataDeployEnqueueInput,
+    dispatch: { started: boolean },
+  ) {
     const normalized = normalizeGitSourceConfig({
       gitSource: input.gitSource,
       azureDeploy: input.azureDeploy,
@@ -130,6 +175,7 @@ export class MetadataDeployQueueService {
       },
     });
 
+    dispatch.started = true;
     await this.queueService.addJob(
       QUEUE_NAMES.METADATA_DEPLOY,
       job.type,

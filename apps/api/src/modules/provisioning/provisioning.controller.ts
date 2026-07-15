@@ -34,6 +34,11 @@ export class ProvisioningController {
     return this.provisioningService.provisionConaUsers(body, userId);
   }
 
+  @Post('plan/preview')
+  previewTemplatePlan(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.provisioningService.previewTemplatePlan(body, userId);
+  }
+
   @Post('parse-csv')
   parseCsv(@Body('csv') csv: string) {
     return this.provisioningService.parseCsv(csv);

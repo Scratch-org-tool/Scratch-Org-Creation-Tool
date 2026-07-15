@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/services/api';
 import { useAuth } from '@/contexts/auth-context';
@@ -17,6 +17,7 @@ import type {
   UserAccessTab,
   UserStatusFilter,
 } from './types';
+import { applyAccessDraft, reconcileAccessRow } from './optimistic-user-access';
 
 export function useUserAccessWorkspace() {
   const { profile, refreshProfile } = useAuth();
@@ -35,6 +36,10 @@ export function useUserAccessWorkspace() {
   const [manageUser, setManageUser] = useState<UserAccessRow | null>(null);
   const [draft, setDraft] = useState<ManageDraft | null>(null);
   const [pendingRole, setPendingRole] = useState<{ userId: string; nextRole: 'admin' | 'user' } | null>(null);
+  const [optimisticAnnouncement, setOptimisticAnnouncement] = useState('');
+  const accessBusyRef = useRef(new Set<string>());
+  const accessTokensRef = useRef(new Map<string, number>());
+  const overviewRequestRef = useRef(0);
 
   useEffect(() => {
     if (profile && profile.role !== 'admin') {
@@ -51,16 +56,20 @@ export function useUserAccessWorkspace() {
         return;
       }
     }
+    const request = ++overviewRequestRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await api<UserAccessOverview>('/auth/users/overview');
+      if (overviewRequestRef.current !== request) return;
       setOverview(data);
       setSessionCache(cacheKey, data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load users');
+      if (overviewRequestRef.current === request) {
+        setError(err instanceof Error ? err.message : 'Failed to load users');
+      }
     } finally {
-      setLoading(false);
+      if (overviewRequestRef.current === request) setLoading(false);
     }
   }, [cacheKey]);
 
@@ -128,10 +137,19 @@ export function useUserAccessWorkspace() {
   };
 
   const persistAccess = async (userId: string, data: ManageDraft) => {
+    if (accessBusyRef.current.has(userId) || !overview) return;
+    const token = (accessTokensRef.current.get(userId) ?? 0) + 1;
+    accessTokensRef.current.set(userId, token);
+    accessBusyRef.current.add(userId);
+    const snapshot = overview;
+    overviewRequestRef.current += 1;
+    setLoading(false);
     setSaving(true);
     setError(null);
+    setOverview(applyAccessDraft(overview, userId, data));
+    setOptimisticAnnouncement(`Access changes for ${manageUser?.displayName ?? userId} are being saved.`);
     try {
-      const updated = await api<UserAccessRow>(`/auth/users/${userId}/access`, {
+      const updated = await api<UserAccessRow>(`/auth/users/${encodeURIComponent(userId)}/access`, {
         method: 'PATCH',
         body: JSON.stringify({
           role: data.role,
@@ -139,18 +157,33 @@ export function useUserAccessWorkspace() {
           status: data.status,
         }),
       });
-      setOverview((prev) =>
-        prev
-          ? { ...prev, users: prev.users.map((u) => (u.id === userId ? updated : u)) }
-          : prev,
-      );
-      if (userId === profile?.id) await refreshProfile();
+      if (accessTokensRef.current.get(userId) !== token) return;
+      setOverview((current) => {
+        if (!current) return current;
+        const next = reconcileAccessRow(current, updated);
+        setSessionCache(cacheKey, next);
+        return next;
+      });
       closeManage();
       setPendingRole(null);
+      setOptimisticAnnouncement(`Access changes for ${updated.displayName} were saved.`);
+      if (userId === profile?.id) {
+        void refreshProfile().catch(() => {
+          setError('Access was saved, but your session profile could not be refreshed.');
+        });
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save changes');
+      if (accessTokensRef.current.get(userId) !== token) return;
+      setOverview(snapshot);
+      setSessionCache(cacheKey, snapshot);
+      setError(`${err instanceof Error ? err.message : 'Failed to save changes'} Changes were rolled back; your draft is still editable.`);
+      setPendingRole(null);
+      setOptimisticAnnouncement('Access changes failed and were rolled back. The draft remains open.');
     } finally {
-      setSaving(false);
+      if (accessTokensRef.current.get(userId) === token) {
+        accessBusyRef.current.delete(userId);
+        setSaving(false);
+      }
     }
   };
 
@@ -189,6 +222,7 @@ export function useUserAccessWorkspace() {
     pendingRole,
     setPendingRole,
     confirmRoleChange,
+    optimisticAnnouncement,
     refresh: () => loadOverview(true),
   };
 }

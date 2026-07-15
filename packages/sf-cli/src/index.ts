@@ -52,13 +52,26 @@ export class SfCliError extends Error {
 }
 
 export interface SfOrgInfo {
+  id?: string;
   alias?: string;
   username?: string;
   orgId?: string;
   instanceUrl?: string;
+  loginUrl?: string;
   isDevHub?: boolean;
   connectedStatus?: string;
+  status?: string;
   expirationDate?: string;
+  devHubAlias?: string;
+  devHubUsername?: string;
+  devHubOrgId?: string;
+}
+
+export interface SfInstalledPackage {
+  SubscriberPackageId?: string;
+  SubscriberPackageVersionId?: string;
+  Id?: string;
+  Name?: string;
 }
 
 export interface SfMetadataTypeInfo {
@@ -494,14 +507,31 @@ export class SfCliClient extends EventEmitter {
   }
 
   // Package commands
+  async listInstalledPackages(
+    targetOrg: string,
+  ): Promise<SfCommandResult<{ result: SfInstalledPackage[] }>> {
+    return this.run(
+      ['package', 'installed', 'list', '--target-org', targetOrg],
+      { json: true },
+    );
+  }
+
   async installPackage(packageId: string, targetOrg: string, waitMinutes = 30): Promise<SfCommandResult> {
-    return this.runStreaming([
+    return this.installPackageCancellable(packageId, targetOrg, waitMinutes).promise;
+  }
+
+  installPackageCancellable(
+    packageId: string,
+    targetOrg: string,
+    waitMinutes = 30,
+  ): { promise: Promise<SfCommandResult>; kill: () => void } {
+    return this.runStreamingCancellable([
       'package', 'install',
       '--package', packageId,
       '--target-org', targetOrg,
       '--wait', String(waitMinutes),
       '--no-prompt',
-    ]);
+    ], undefined, { timeoutMs: waitMinutesToTimeoutMs(waitMinutes) });
   }
 
   // Deploy commands
@@ -691,6 +721,48 @@ export class SfCliClient extends EventEmitter {
     });
   }
 
+  async updateBulk(
+    sobject: string,
+    file: string,
+    targetOrg: string,
+    waitMinutes = 15,
+    options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
+  ): Promise<SfCommandResult> {
+    return this.runStreaming([
+      'data', 'update', 'bulk',
+      '-f', file,
+      '-s', sobject,
+      '--target-org', targetOrg,
+      '--wait', String(waitMinutes),
+      '--line-ending', 'CRLF',
+    ], undefined, {
+      cwd: options?.cwd,
+      onSpawn: options?.onSpawn,
+      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+    });
+  }
+
+  async deleteBulk(
+    sobject: string,
+    file: string,
+    targetOrg: string,
+    waitMinutes = 15,
+    options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
+  ): Promise<SfCommandResult> {
+    return this.runStreaming([
+      'data', 'delete', 'bulk',
+      '-f', file,
+      '-s', sobject,
+      '--target-org', targetOrg,
+      '--wait', String(waitMinutes),
+      '--line-ending', 'CRLF',
+    ], undefined, {
+      cwd: options?.cwd,
+      onSpawn: options?.onSpawn,
+      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+    });
+  }
+
   async listMetadataTypes(alias: string): Promise<SfCommandResult<{
     result: {
       metadataObjects: SfMetadataTypeInfo[];
@@ -756,7 +828,8 @@ export class SfCliClient extends EventEmitter {
         defaultedOnCreate?: boolean;
         custom?: boolean;
         referenceTo?: string[];
-        picklistValues?: Array<{ value: string; active: boolean }>;
+        controllerName?: string;
+        picklistValues?: Array<{ value: string; active: boolean; validFor?: string }>;
       }>;
     };
   }>> {

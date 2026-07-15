@@ -8,6 +8,7 @@ import { AccountPartnerImportService } from './account-partner-import.service';
 import { OrgToOrgCompareService } from './org-to-org-compare.service';
 import { OrgToOrgBrowseService } from './org-to-org-browse.service';
 import { DataPreflightService } from './data-preflight.service';
+import { QuerySectionRuntimeService } from './query-section-runtime.service';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
@@ -35,6 +36,7 @@ export class DataController {
     private readonly orgToOrgCompareService: OrgToOrgCompareService,
     private readonly orgToOrgBrowseService: OrgToOrgBrowseService,
     private readonly dataPreflightService: DataPreflightService,
+    private readonly querySectionRuntime: QuerySectionRuntimeService,
   ) {}
 
   @Get('custom-settings/template')
@@ -142,6 +144,26 @@ export class DataController {
   @Post('query-set/validate')
   validateQuerySet(@Body() body: unknown) {
     return this.querySetService.validateQuerySet(body);
+  }
+
+  @Post('query-section/validate')
+  validateQuerySection(@Body() body: { section?: unknown }) {
+    return this.querySectionRuntime.validate(body?.section ?? body);
+  }
+
+  @Post('query-section/preview')
+  previewQuerySection(
+    @Body() body: {
+      sourceOrgId: string;
+      targetOrgId?: string;
+      section: unknown;
+      variables?: Record<string, string>;
+      salesOffices?: string[];
+      salesOfficesByBottler?: Record<string, string[]>;
+    },
+    @CurrentUser() userId: string,
+  ) {
+    return this.querySectionRuntime.preview(body, userId);
   }
 
   @Post('query-set/compile')

@@ -24,6 +24,8 @@ interface DefectAttachmentsPanelProps {
   uploadable: boolean;
   deletable: boolean;
   mutating: boolean;
+  deletingIds: Record<string, boolean>;
+  deleteBusy: boolean;
   error?: string;
   contentPath: (attachmentId: string) => string;
   onUpload: (file: File) => Promise<void>;
@@ -51,6 +53,8 @@ export function DefectAttachmentsPanel({
   uploadable,
   deletable,
   mutating,
+  deletingIds,
+  deleteBusy,
   error,
   contentPath,
   onUpload,
@@ -59,6 +63,7 @@ export function DefectAttachmentsPanel({
   const [preview, setPreview] = useState<WorkItemAttachment | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingDeletes, setPendingDeletes] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
   if (loading) {
@@ -97,6 +102,24 @@ export function DefectAttachmentsPanel({
     }
   };
 
+  const remove = async (attachment: WorkItemAttachment) => {
+    if (deleteBusy) return;
+    if (!window.confirm(`Delete attachment "${attachment.name}"?`)) return;
+    setActionError(null);
+    setPendingDeletes((current) => ({ ...current, [attachment.id]: attachment.name }));
+    try {
+      await onDelete(attachment.id);
+    } catch (deleteError) {
+      setActionError(deleteError instanceof Error ? deleteError.message : 'Attachment deletion failed; the item was restored');
+    } finally {
+      setPendingDeletes((current) => {
+        const next = { ...current };
+        delete next[attachment.id];
+        return next;
+      });
+    }
+  };
+
   return (
     <>
       <div className="pt-2 border-t border-border/40 space-y-2">
@@ -124,6 +147,11 @@ export function DefectAttachmentsPanel({
         {(error || actionError) && (
           <InlineAlert variant="warning">{actionError ?? error}</InlineAlert>
         )}
+        {Object.entries(pendingDeletes).map(([id, name]) => (
+          <p key={id} role="status" className="text-xs text-muted-foreground">
+            Deleting {name}…
+          </p>
+        ))}
         {attachments.length === 0 && !error ? (
           <p className="text-sm text-muted-foreground">No attachments.</p>
         ) : (
@@ -169,8 +197,9 @@ export function DefectAttachmentsPanel({
                         variant="outline"
                         size="icon"
                         className="h-8 w-8"
-                        disabled={mutating}
-                        onClick={() => void onDelete(file.id)}
+                        loading={Boolean(deletingIds[file.id])}
+                        disabled={deleteBusy}
+                        onClick={() => void remove(file)}
                         aria-label={`Delete ${file.name}`}
                       >
                         <Trash2 className="w-3.5 h-3.5" />

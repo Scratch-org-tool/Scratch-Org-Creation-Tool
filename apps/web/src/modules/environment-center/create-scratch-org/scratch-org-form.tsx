@@ -1,7 +1,17 @@
 'use client';
 
-import { SCRATCH_ORG_SKIPPABLE_STEPS } from '@sfcc/shared';
-import { Bug, CloudUpload, KeyRound, ShieldCheck } from 'lucide-react';
+import { SCRATCH_ORG_SKIPPABLE_STEPS, type ScratchPipelineTemplateConfig } from '@sfcc/shared';
+import {
+  AlertTriangle,
+  Bug,
+  CheckCircle2,
+  CloudUpload,
+  ExternalLink,
+  KeyRound,
+  Loader2,
+  ShieldCheck,
+  XCircle,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { FormSection } from '@/components/studio/form-section';
@@ -9,6 +19,15 @@ import { GitMetadataSourceFields } from '@/modules/source-control/git-metadata-s
 import type { GitMetadataSourceHook } from '@/modules/source-control/use-git-metadata-source';
 import { cn } from '@/utils/cn';
 import type { ScratchOrgFormState } from '@/components/scratch-org/types';
+import type {
+  ExistingOrgEligibility,
+  ExistingScratchOrgCandidate,
+} from './types';
+import { Button } from '@/components/ui/button';
+import {
+  isActiveRecentRun,
+  isCandidateSelectable,
+} from './existing-scratch-org-utils';
 
 interface ScratchOrgFormProps {
   form: ScratchOrgFormState;
@@ -16,11 +35,30 @@ interface ScratchOrgFormProps {
   devHubs: { alias: string }[];
   sourceOrgs: { id: string; alias: string }[];
   templates: Array<{ id: string; name: string; isSystem: boolean }>;
-  templateMeta?: { name: string; config: Record<string, unknown> } | null;
+  templateMeta?: { name: string; config: ScratchPipelineTemplateConfig } | null;
   metadataSource: GitMetadataSourceHook;
   installPackage: boolean;
   setInstallPackage: (v: boolean) => void;
   isRunning: boolean;
+  mode: 'create_new' | 'configure_existing';
+  onModeChange: (mode: 'create_new' | 'configure_existing') => void;
+  existingCandidates: ExistingScratchOrgCandidate[];
+  existingOrgConnectionId: string;
+  onExistingOrgChange: (id: string) => void;
+  existingOrgOptions: {
+    verifyAuthentication: boolean;
+    ensureRequiredPackage: boolean;
+  };
+  onExistingOrgOptionsChange: (options: {
+    verifyAuthentication: boolean;
+    ensureRequiredPackage: boolean;
+  }) => void;
+  eligibility: ExistingOrgEligibility | null;
+  eligibilityLoading: boolean;
+  eligibilityError: string | null;
+  onOpenRun: (runId: string) => void;
+  onCancelConflict: (runId: string) => void;
+  stoppingConflict: boolean;
 }
 
 function Field({ className, children }: { className?: string; children: React.ReactNode }) {
@@ -82,11 +120,206 @@ export function ScratchOrgForm({
   installPackage,
   setInstallPackage,
   isRunning,
+  mode,
+  onModeChange,
+  existingCandidates,
+  existingOrgConnectionId,
+  onExistingOrgChange,
+  existingOrgOptions,
+  onExistingOrgOptionsChange,
+  eligibility,
+  eligibilityLoading,
+  eligibilityError,
+  onOpenRun,
+  onCancelConflict,
+  stoppingConflict,
 }: ScratchOrgFormProps) {
   const usingTemplate = Boolean(form.templateId && templateMeta);
+  const selectedExisting = existingCandidates.find(
+    (candidate) => candidate.orgConnectionId === existingOrgConnectionId,
+  );
 
   return (
     <div className="space-y-6">
+      <FormSection
+        title="Workspace mode"
+        description="Create a scratch org or deploy configuration to one you already own."
+      >
+        <fieldset disabled={isRunning}>
+          <legend className="sr-only">Scratch org workspace mode</legend>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {([
+              ['create_new', 'Create new', 'Create a new org before deployment'],
+              ['configure_existing', 'Configure existing', 'Reuse an active owned scratch org'],
+            ] as const).map(([value, label, description]) => (
+              <label
+                key={value}
+                className={cn(
+                  'rounded-lg border p-3 cursor-pointer transition-colors',
+                  mode === value
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border/60 hover:border-primary/30',
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="scratch-org-mode"
+                    value={value}
+                    checked={mode === value}
+                    onChange={() => onModeChange(value)}
+                  />
+                  <span className="font-medium text-sm">{label}</span>
+                </span>
+                <span className="block ml-6 mt-1 text-xs text-muted-foreground">
+                  {description}
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      </FormSection>
+
+      {mode === 'configure_existing' && (
+        <FormSection
+          title="Existing scratch org"
+          description="Only active scratch orgs owned by your account can be configured."
+        >
+          <div className="space-y-4">
+            <Field>
+              <Label htmlFor="existing-scratch-org-target">Target scratch org</Label>
+              <Select
+                id="existing-scratch-org-target"
+                value={existingOrgConnectionId}
+                onChange={(event) => onExistingOrgChange(event.target.value)}
+                disabled={isRunning}
+              >
+                <option value="">Select an existing scratch org</option>
+                {existingCandidates.map((candidate) => (
+                  <option
+                    key={candidate.orgConnectionId}
+                    value={candidate.orgConnectionId}
+                    disabled={!isCandidateSelectable(candidate)}
+                  >
+                    {candidate.alias} · {candidate.status}
+                  </option>
+                ))}
+              </Select>
+              {existingCandidates.length === 0 && (
+                <p className="text-xs text-amber-600 mt-1">
+                  No caller-owned scratch org connections are available.
+                </p>
+              )}
+            </Field>
+
+            {selectedExisting && (
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg border border-border/60 bg-card/30 p-3 text-xs">
+                <div><dt className="text-muted-foreground">Alias</dt><dd className="font-medium">{selectedExisting.alias}</dd></div>
+                <div><dt className="text-muted-foreground">Connection ID</dt><dd className="font-mono break-all">{selectedExisting.orgConnectionId}</dd></div>
+                <div><dt className="text-muted-foreground">Status / authentication</dt><dd>{selectedExisting.status} · {selectedExisting.authenticated ? 'Authenticated' : 'Unavailable'}</dd></div>
+                <div><dt className="text-muted-foreground">Expires</dt><dd>{selectedExisting.expirationDate ? new Date(selectedExisting.expirationDate).toLocaleString() : 'Unknown'}</dd></div>
+                <div><dt className="text-muted-foreground">Dev Hub</dt><dd>{selectedExisting.devHubAlias ?? 'Unknown'}</dd></div>
+                <div><dt className="text-muted-foreground">Latest run</dt><dd>{selectedExisting.latestRun ? `${selectedExisting.latestRun.status} · RUN-${selectedExisting.latestRun.id.slice(0, 8).toUpperCase()}` : 'None'}</dd></div>
+              </dl>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <PipelineOptionCard
+                label="Verify authentication"
+                description="Check Salesforce CLI auth before deployment"
+                checked={existingOrgOptions.verifyAuthentication}
+                onChange={(verifyAuthentication) => onExistingOrgOptionsChange({
+                  ...existingOrgOptions,
+                  verifyAuthentication,
+                })}
+                disabled={isRunning}
+                icon={ShieldCheck}
+                iconClass="bg-emerald-500/10 text-emerald-400"
+              />
+              <PipelineOptionCard
+                label="Ensure required package"
+                description="Verify and install the package only when missing"
+                checked={existingOrgOptions.ensureRequiredPackage}
+                onChange={(ensureRequiredPackage) => onExistingOrgOptionsChange({
+                  ...existingOrgOptions,
+                  ensureRequiredPackage,
+                })}
+                disabled={isRunning}
+                icon={Bug}
+                iconClass="bg-blue-500/10 text-blue-400"
+              />
+            </div>
+
+            <div aria-live="polite" className="rounded-lg border border-border/60 p-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                {eligibilityLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                ) : eligibility?.eligible ? (
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                )}
+                Eligibility
+              </div>
+              {eligibilityError && <p className="mt-2 text-xs text-destructive">{eligibilityError}</p>}
+              {!eligibilityLoading && !eligibility && !eligibilityError && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Select a target and complete source settings to run checks.
+                </p>
+              )}
+              {eligibility && (
+                <ul className="mt-2 space-y-2">
+                  {eligibility.steps.map((step) => (
+                    <li key={step.step} className="flex items-start gap-2 text-xs">
+                      {step.status === 'error'
+                        ? <XCircle className="w-3.5 h-3.5 mt-0.5 text-destructive shrink-0" />
+                        : step.status === 'warning' || step.warnings.length > 0
+                          ? <AlertTriangle className="w-3.5 h-3.5 mt-0.5 text-amber-500 shrink-0" />
+                          : <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-green-500 shrink-0" />}
+                      <span><strong className="capitalize">{step.step.replace(/_/g, ' ')}:</strong> {step.messages.join(' ')}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {eligibility?.conflictRunId && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => onOpenRun(eligibility.conflictRunId!)}
+                  >
+                    <ExternalLink className="w-3 h-3 mr-1" />Open active run
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    className="h-7 text-xs"
+                    loading={stoppingConflict}
+                    onClick={() => onCancelConflict(eligibility.conflictRunId!)}
+                  >
+                    Cancel active run
+                  </Button>
+                </div>
+              )}
+              {selectedExisting?.latestRun && isActiveRecentRun(selectedExisting.latestRun) && !eligibility?.conflictRunId && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs mt-3"
+                  onClick={() => onOpenRun(selectedExisting.latestRun!.id)}
+                >
+                  <ExternalLink className="w-3 h-3 mr-1" />Open latest active run
+                </Button>
+              )}
+            </div>
+          </div>
+        </FormSection>
+      )}
+
       <FormSection title="Pipeline template" description="Use a saved template or manage templates in the sidebar.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field className="sm:col-span-2">
@@ -111,31 +344,70 @@ export function ScratchOrgForm({
                 <p className="font-medium">From template: {templateMeta!.name}</p>
                 <p className="text-xs text-muted-foreground">
                   Scratch defaults, permissions, custom settings, data seed, and users come from this template.
-                  Set alias, Dev Hub, and metadata source below for this run.
+                  {mode === 'create_new'
+                    ? 'Set alias, Dev Hub, and metadata source below for this run.'
+                    : 'Select the existing target and metadata source for this run.'}
                 </p>
               </div>
             </Field>
           )}
           <Field>
-            <Label htmlFor="scratch-org-source-org">Source org (data + custom settings)</Label>
+            <Label htmlFor="scratch-org-data-org">Data Deployment Org</Label>
             <Select
-              id="scratch-org-source-org"
-              value={form.sourceOrgId}
-              onChange={(e) => setForm({ ...form, sourceOrgId: e.target.value })}
+              id="scratch-org-data-org"
+              value={form.dataDeploymentOrgId || form.sourceOrgId}
+              onChange={(e) => setForm({
+                ...form,
+                sourceOrgId: e.target.value,
+                dataDeploymentOrgId: e.target.value,
+              })}
               disabled={isRunning}
             >
-              <option value="">Select source org…</option>
+              <option value="">Use template default</option>
               {sourceOrgs.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.alias}
                 </option>
               ))}
             </Select>
+            <p className="text-xs text-muted-foreground mt-1">Runtime override for queries, data seed, and partner joins.</p>
           </Field>
+          <Field>
+            <Label htmlFor="scratch-org-settings-org">Custom Settings Org (optional override)</Label>
+            <Select
+              id="scratch-org-settings-org"
+              value={form.customSettingsOrgId}
+              onChange={(e) => setForm({ ...form, customSettingsOrgId: e.target.value })}
+              disabled={isRunning}
+            >
+              <option value="">Use template default</option>
+              {sourceOrgs.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.alias}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">Only used for the SFDMU custom-settings export.</p>
+          </Field>
+          {usingTemplate && (templateMeta?.config.userProvisioning?.teams?.length ?? 0) > 0 && (
+            <Field className="sm:col-span-2">
+              <Label htmlFor="scratch-org-runtime-email-pool">Replacement team email pool (optional)</Label>
+              <Textarea
+                id="scratch-org-runtime-email-pool"
+                value={form.runtimeEmailPool}
+                onChange={(event) => setForm({ ...form, runtimeEmailPool: event.target.value })}
+                placeholder="person1@example.com&#10;person2@example.com"
+                disabled={isRunning}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Replaces the template pool for this run. Allocation remains deterministic shuffled round-robin.
+              </p>
+            </Field>
+          )}
         </div>
       </FormSection>
 
-      <FormSection title="Salesforce" description="Scratch org identity and lifetime.">
+      {mode === 'create_new' && <FormSection title="Salesforce" description="Scratch org identity and lifetime.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field>
             <Label htmlFor="scratch-org-dev-hub">Dev Hub Org</Label>
@@ -162,7 +434,7 @@ export function ScratchOrgForm({
               disabled={isRunning}
             />
           </Field>
-          {!usingTemplate && (
+          {!usingTemplate && mode === 'create_new' && (
             <>
               <Field>
                 <Label htmlFor="scratch-org-duration">Duration (days)</Label>
@@ -205,7 +477,7 @@ export function ScratchOrgForm({
             <p className="text-xs text-muted-foreground mt-1 text-right">{form.description.length} / 255</p>
           </Field>
         </div>
-      </FormSection>
+      </FormSection>}
 
       <FormSection title="Metadata Source" description="Connected Git provider and repository used for metadata deployment.">
         <GitMetadataSourceFields source={metadataSource} disabled={isRunning} />
@@ -213,7 +485,7 @@ export function ScratchOrgForm({
 
       <FormSection title="Pipeline Options">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {!usingTemplate && (
+          {!usingTemplate && mode === 'create_new' && (
             <PipelineOptionCard
               label="Install Error Logger Package"
               description="Pre-install logging package on scratch org"
@@ -239,14 +511,14 @@ export function ScratchOrgForm({
               }
             />
           ))}
-          <PipelineOptionCard
+          {mode === 'create_new' && <PipelineOptionCard
             label="Generate Password"
             description="Auto-generated on create"
             checked
             disabled
             icon={KeyRound}
             iconClass="bg-orange-500/10 text-orange-400"
-          />
+          />}
         </div>
       </FormSection>
     </div>

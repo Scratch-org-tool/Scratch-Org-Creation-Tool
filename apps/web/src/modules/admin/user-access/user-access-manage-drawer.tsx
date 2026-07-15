@@ -17,6 +17,7 @@ interface UserAccessManageDrawerProps {
   user: UserAccessRow | null;
   draft: ManageDraft | null;
   saving: boolean;
+  error?: string | null;
   onClose: () => void;
   onDraftChange: (draft: ManageDraft) => void;
   onToggleModule: (module: AppModule) => void;
@@ -28,6 +29,7 @@ export function UserAccessManageDrawer({
   user,
   draft,
   saving,
+  error,
   onClose,
   onDraftChange,
   onToggleModule,
@@ -35,7 +37,7 @@ export function UserAccessManageDrawer({
   isSelf,
 }: UserAccessManageDrawerProps) {
   return (
-    <Sheet open={Boolean(user && draft)} onOpenChange={(open) => !open && onClose()}>
+    <Sheet open={Boolean(user && draft)} onOpenChange={(open) => !open && !saving && onClose()}>
       {user && draft && (
       <SheetContent side="right" className="w-full max-w-md sm:max-w-md p-0 gap-0 flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-border">
@@ -46,6 +48,11 @@ export function UserAccessManageDrawer({
         </div>
 
         <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-6">
+          {error && (
+            <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              {error}
+            </p>
+          )}
           <div>
             <p className="text-sm font-medium mb-2">Account status</p>
             <div className="flex items-center justify-between rounded-lg border border-border/60 p-3">
@@ -53,7 +60,7 @@ export function UserAccessManageDrawer({
               <Switch
                 aria-label={`Set ${user.email} account ${draft.status === 'active' ? 'inactive' : 'active'}`}
                 checked={draft.status === 'active'}
-                disabled={isSelf}
+                disabled={isSelf || saving}
                 onChange={(checked) =>
                   onDraftChange({ ...draft, status: checked ? 'active' : 'inactive' })
                 }
@@ -68,7 +75,7 @@ export function UserAccessManageDrawer({
                 <button
                   key={role}
                   type="button"
-                  disabled={isSelf}
+                  disabled={isSelf || saving}
                   onClick={() => onDraftChange({ ...draft, role })}
                   className={cn(
                     'rounded-lg border px-3 py-2 text-sm capitalize transition-colors',
@@ -96,6 +103,7 @@ export function UserAccessManageDrawer({
                     <input
                       type="checkbox"
                       checked={draft.grantedModules.includes(module)}
+                      disabled={saving}
                       onChange={() => onToggleModule(module)}
                       className="h-4 w-4"
                     />
@@ -113,7 +121,7 @@ export function UserAccessManageDrawer({
         </div>
 
         <div className="p-4 border-t border-border flex gap-2">
-          <Button variant="outline" className="flex-1" onClick={onClose}>
+          <Button variant="outline" className="flex-1" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
           <Button className="flex-1" loading={saving} disabled={isSelf} onClick={onSave}>

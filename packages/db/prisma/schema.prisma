@@ -73,25 +73,30 @@ model OrgConnection {
   provisionBatches        ProvisioningBatch[]
   dataDeployBatchesSource DataDeployBatch[]   @relation("BatchSourceOrg")
   dataDeployBatchesTarget DataDeployBatch[]   @relation("BatchTargetOrg")
+  automationRunsTarget     AutomationRun[]    @relation("AutomationRunTarget")
 
   @@index([createdBy])
 }
 
 model AutomationRun {
-  id         String    @id @default(uuid())
-  intent     String
-  persona    Persona   @default(developer)
-  status     JobStatus @default(pending)
-  createdBy  String    @default("system")
-  config     Json?
-  failedStep String?
-  lastError  String?
-  checkpoint Json?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  jobs       Job[]
+  id                    String         @id @default(uuid())
+  intent                String
+  persona               Persona        @default(developer)
+  status                JobStatus      @default(pending)
+  createdBy             String         @default("system")
+  config                Json?
+  failedStep            String?
+  lastError             String?
+  checkpoint            Json?
+  launchMode            String         @default("create_new")
+  targetOrgConnectionId String?
+  targetOrgConnection   OrgConnection? @relation("AutomationRunTarget", fields: [targetOrgConnectionId], references: [id])
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  jobs                  Job[]
 
   @@index([createdBy])
+  @@index([targetOrgConnectionId, status])
 }
 
 model Job {
@@ -315,6 +320,8 @@ model ProvisionedUser {
   error          String?
   sfUserId       String?
   createdAt      DateTime          @default(now())
+
+  @@unique([batchId, username])
 }
 
 model KnowledgeChunk {

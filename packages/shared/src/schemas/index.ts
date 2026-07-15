@@ -12,10 +12,17 @@ const dataRecordLimitSchema = z
   .default(200);
 import {
   customSettingsConfigSchema,
+  dataSeedConfigSchema,
+  hasInsertOperation,
+  partnerImportConfigSchema,
   pipelineStepsConfigSchema,
   sfdmuExportSchema,
   scratchPipelineTemplateConfigSchema,
 } from '../sfdmu-export.js';
+import {
+  unresolvedV2Profiles,
+  userProvisioningConfigSchema,
+} from '../user-provision-template.js';
 
 export * from './auth.js';
 
@@ -36,6 +43,13 @@ export const scratchOrgCreateSchema = z.object({
     .array(z.enum(['installPackages', 'deployMetadata', 'assignPermissions']))
     .optional()
     .default([]),
+});
+
+export const scratchOrgLaunchModeSchema = z.enum(['create_new', 'configure_existing']);
+
+export const existingOrgOptionsSchema = z.object({
+  verifyAuthentication: z.boolean().default(true),
+  ensureRequiredPackage: z.boolean().default(true),
 });
 
 export const scratchOrgSkipStepSchema = z.object({
@@ -137,7 +151,11 @@ export const dataDeployConfigSchema = z.object({
   querySet: querySetSchema,
 });
 
-export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
+const scratchOrgPipelineCommonSchema = scratchOrgCreateSchema.omit({
+  alias: true,
+  devHubAlias: true,
+}).extend({
+  version: z.union([z.literal(1), z.literal(2)]).optional(),
   azureDeploy: azureDeployConfigSchema.optional(),
   gitSource: gitSourceConfigSchema.optional(),
   automationRunId: z.string().uuid().optional(),
@@ -148,6 +166,8 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
     upsertQueueIds: z.boolean().default(true),
     upsertDomainFields: z.boolean().default(true),
     upsertRequestId: z.boolean().default(true),
+    bottler: z.string().min(1).optional(),
+    configKey: z.string().min(1).optional(),
   }).optional(),
   accountSeedRows: z.array(z.object({
     accountGroup: z.enum(['Z001', 'ZFSV', 'Z003']),
@@ -158,58 +178,99 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
     (rows) => !rows.some((r) => r.accountGroup === 'ZFSV' && r.bottler === '5000'),
     { message: 'ZFSV accounts are not available for bottler 5000' },
   ).optional(),
-  userProvisioning: z.object({
-    users: z.array(z.object({
-      role: z.string(),
-      bottler: z.string(),
-      modules: z.array(z.string()).optional(),
-      locations: z.array(z.string()).optional(),
-      email: z.string().email(),
-      firstName: z.string(),
-      lastName: z.string(),
-    })).optional(),
-    templates: z.array(z.object({
-      id: z.string().min(1),
-      label: z.string().min(1),
-      bottler: z.enum(['5000', '4900', '4600']),
-      role: z.string().min(1),
-      modules: z.array(z.string()).default([]),
-      locations: z.array(z.string()).default([]),
-    })).optional(),
-    slots: z.array(z.object({
-      templateId: z.string().min(1),
-      firstName: z.string().min(1),
-      lastName: z.string().min(1),
-      email: z.string().email(),
-      role: z.string().optional(),
-      bottler: z.enum(['5000', '4900', '4600']).optional(),
-      modules: z.array(z.string()).optional(),
-      locations: z.array(z.string()).optional(),
-    })).optional(),
-  }).optional(),
-  dataSeed: z.object({
-    datasets: z.array(z.enum(['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'])).optional(),
-    mode: z.enum(['automatic', 'query_json', 'hybrid']).default('hybrid'),
-    querySet: z.record(z.unknown()).optional(),
-  }).optional(),
-  partnerImport: z.object({
-    mode: z.enum(['excel', 'org_to_org', 'org_to_org_matched']),
-    bottler: z.enum(['5000', '4900', '4600', 'all']),
-    perOffice: z.number().int().positive().default(20),
-    matchOrgDistribution: z.boolean().default(true),
-    salesOfficeConfig: z.record(z.unknown()).optional(),
+  userProvisioning: userProvisioningConfigSchema.optional(),
+  dataSeed: dataSeedConfigSchema.optional(),
+  partnerImport: partnerImportConfigSchema.extend({
     excelPath: z.string().optional(),
-    sheet: z.string().optional(),
-    partnerExcelBase64: z.string().optional(),
   }).optional(),
   customSettings: customSettingsConfigSchema.optional(),
   pipelineSteps: pipelineStepsConfigSchema.optional(),
   permissionSets: z.array(z.string()).optional(),
   templateId: z.string().uuid().optional(),
-}).refine((value) => Boolean(value.gitSource || value.azureDeploy), {
-  message: 'gitSource or azureDeploy is required',
-  path: ['gitSource'],
+});
+
+const scratchOrgPipelineModeSchema = z.discriminatedUnion('mode', [
+  scratchOrgPipelineCommonSchema.extend({
+    mode: z.literal('create_new'),
+    alias: scratchOrgCreateSchema.shape.alias,
+    devHubAlias: scratchOrgCreateSchema.shape.devHubAlias,
+    existingOrgConnectionId: z.undefined().optional(),
+    existingOrgOptions: existingOrgOptionsSchema.optional(),
+  }),
+  scratchOrgPipelineCommonSchema.extend({
+    mode: z.literal('configure_existing'),
+    existingOrgConnectionId: z.string().uuid(),
+    existingOrgOptions: existingOrgOptionsSchema.default({
+      verifyAuthentication: true,
+      ensureRequiredPackage: true,
+    }),
+    // These are populated from the authoritative target, never trusted from
+    // the launch payload.
+    alias: scratchOrgCreateSchema.shape.alias.optional(),
+    devHubAlias: scratchOrgCreateSchema.shape.devHubAlias.optional(),
+  }),
+]);
+
+export const scratchOrgPipelineSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+    const value = input as Record<string, unknown>;
+    return { ...value, mode: value.mode ?? 'create_new' };
+  },
+  scratchOrgPipelineModeSchema,
+).superRefine((value, context) => {
+  if (!value.gitSource && !value.azureDeploy) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'gitSource or azureDeploy is required',
+      path: ['gitSource'],
+    });
+  }
+  if (
+    value.version === 2
+    && value.customSettings?.mode === 'custom'
+    && !value.customSettings.exportConfig
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'V2 custom settings mode requires exportConfig',
+      path: ['customSettings', 'exportConfig'],
+    });
+  }
+  if (value.version === 2 && hasInsertOperation(value.customSettings?.exportConfig)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'V2 resumable custom settings do not support Insert; use Upsert',
+      path: ['customSettings', 'exportConfig'],
+    });
+  }
+  if (value.version === 2 && value.userProvisioning) {
+    const unresolved = unresolvedV2Profiles(value.userProvisioning);
+    if (unresolved.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `V2 provisioning requires a resolvable profile for: ${unresolved.join(', ')}`,
+        path: ['userProvisioning', 'defaultProfile'],
+      });
+    }
+  }
 }).transform(normalizeGitSourceConfig);
+
+export const scratchOrgPipelineEligibilityRequestSchema = z.record(z.unknown());
+
+/** Canonical aliases used by launch and pre-launch preview API clients. */
+export const scratchOrgPipelineLaunchSchema = scratchOrgPipelineSchema;
+export const scratchOrgPipelinePreviewSchema = scratchOrgPipelineSchema;
+
+export const scratchOrgAdoptSchema = z.object({
+  alias: z.string().min(1).max(255),
+});
+
+export const automationRunRecentQuerySchema = z.object({
+  target: z.string().trim().min(1).max(255).optional(),
+  targetOrgConnectionId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 export const customSettingsLoadSchema = z.object({
   sourceOrgId: z.string().uuid(),
@@ -429,6 +490,15 @@ export type DataDeployPreflightInput = z.infer<typeof dataDeployPreflightSchema>
 export type DataReplicationInput = z.infer<typeof dataReplicationSchema>;
 export type QuerySetCompileInput = z.infer<typeof querySetCompileSchema>;
 export type ScratchOrgPipelineInput = z.infer<typeof scratchOrgPipelineSchema>;
+export type ScratchOrgPipelineLaunchInput = z.infer<typeof scratchOrgPipelineLaunchSchema>;
+export type ScratchOrgPipelinePreviewInput = z.infer<typeof scratchOrgPipelinePreviewSchema>;
+export type ScratchOrgLaunchMode = z.infer<typeof scratchOrgLaunchModeSchema>;
+export type ExistingOrgOptions = z.infer<typeof existingOrgOptionsSchema>;
+export type ScratchOrgPipelineEligibilityRequest = z.infer<
+  typeof scratchOrgPipelineEligibilityRequestSchema
+>;
+export type ScratchOrgAdoptInput = z.infer<typeof scratchOrgAdoptSchema>;
+export type AutomationRunRecentQuery = z.infer<typeof automationRunRecentQuerySchema>;
 export type AzureConnectInput = z.infer<typeof azureConnectSchema>;
 export type AzureDeployConfig = z.infer<typeof azureDeployConfigSchema>;
 export type PipelineResumeInput = z.infer<typeof pipelineResumeSchema>;

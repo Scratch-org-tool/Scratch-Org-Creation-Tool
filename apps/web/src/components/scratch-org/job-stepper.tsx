@@ -2,13 +2,20 @@
 
 import { CheckCircle2, Circle, Loader2, SkipForward, XCircle } from 'lucide-react';
 import { cn } from '@/utils/cn';
-import { PIPELINE_STEPS_UI, type PipelineStepLabel, type StepState } from './types';
+import {
+  EXISTING_PIPELINE_STEPS_UI,
+  PIPELINE_STEPS_UI,
+  type PipelineStepLabel,
+  type ScratchOrgLaunchMode,
+  type StepState,
+} from './types';
 
 interface JobStepperProps {
   orientation?: 'horizontal' | 'vertical';
   getState: (label: PipelineStepLabel) => StepState;
   activeSubtext?: string;
   compact?: boolean;
+  launchMode?: ScratchOrgLaunchMode;
 }
 
 function StepIcon({ state, compact }: { state: StepState; compact?: boolean }) {
@@ -20,15 +27,24 @@ function StepIcon({ state, compact }: { state: StepState; compact?: boolean }) {
   return <Circle className={cn(size, 'text-muted-foreground/50 shrink-0')} />;
 }
 
-export function JobStepper({ orientation = 'horizontal', getState, activeSubtext, compact }: JobStepperProps) {
+export function JobStepper({
+  orientation = 'horizontal',
+  getState,
+  activeSubtext,
+  compact,
+  launchMode = 'create_new',
+}: JobStepperProps) {
   const vertical = orientation === 'vertical';
+  const steps = launchMode === 'configure_existing'
+    ? EXISTING_PIPELINE_STEPS_UI
+    : PIPELINE_STEPS_UI;
 
   if (vertical) {
     return (
       <ol className={cn('relative', compact ? 'space-y-0 max-h-24 overflow-y-auto scrollbar-thin pr-1' : 'space-y-0')}>
-        {PIPELINE_STEPS_UI.map((label, i) => {
+        {steps.map((label, i) => {
           const state = getState(label);
-          const isLast = i === PIPELINE_STEPS_UI.length - 1;
+          const isLast = i === steps.length - 1;
           const isActive = state === 'active';
           const isDone = state === 'done' || state === 'skipped';
           if (compact && !isActive && !isDone && state !== 'failed') return null;
@@ -76,7 +92,7 @@ export function JobStepper({ orientation = 'horizontal', getState, activeSubtext
 
   return (
     <div className="flex flex-wrap gap-2">
-      {PIPELINE_STEPS_UI.map((label) => {
+      {steps.map((label) => {
         const state = getState(label);
         return (
           <div

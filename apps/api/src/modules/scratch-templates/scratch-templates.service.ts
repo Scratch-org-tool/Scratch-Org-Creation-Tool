@@ -5,6 +5,8 @@ import {
   normalizeGitSourceConfig,
   type GitSourceConfig,
   migrateTemplateConfig,
+  migrateTemplateConfigToV2,
+  scratchOrgPipelineSchema,
   sanitizeTemplateConfigForStorage,
   scratchTemplateCreateSchema,
   scratchTemplateUpdateSchema,
@@ -198,8 +200,14 @@ export class ScratchTemplatesService implements OnModuleInit {
   mergeTemplateWithLaunch(
     templateConfig: Record<string, unknown>,
     overrides: {
-      alias: string;
-      devHubAlias: string;
+      mode?: 'create_new' | 'configure_existing';
+      alias?: string;
+      devHubAlias?: string;
+      existingOrgConnectionId?: string;
+      existingOrgOptions?: {
+        verifyAuthentication?: boolean;
+        ensureRequiredPackage?: boolean;
+      };
       sourceOrgId?: string;
       dataDeploymentOrgId?: string;
       customSettingsOrgId?: string;
@@ -224,15 +232,30 @@ export class ScratchTemplatesService implements OnModuleInit {
       manifestPath:
         source.manifestPath ?? tmpl.gitSource?.manifestPath ?? tmplAzure?.manifestPath,
     } as GitSourceConfig;
+    const legacyDataOverride = templateConfig.dataDeploymentOrgId == null
+      ? overrides.sourceOrgId
+      : undefined;
+    const legacySettingsOverride = templateConfig.customSettingsOrgId == null
+      ? overrides.sourceOrgId
+      : undefined;
     const dataDeploymentOrgId =
-      overrides.dataDeploymentOrgId ?? overrides.sourceOrgId ?? tmpl.dataDeploymentOrgId ?? tmpl.sourceOrgId;
+      overrides.dataDeploymentOrgId ?? legacyDataOverride ?? tmpl.dataDeploymentOrgId;
     const customSettingsOrgId =
-      overrides.customSettingsOrgId ?? overrides.sourceOrgId ?? tmpl.customSettingsOrgId ?? tmpl.sourceOrgId;
+      overrides.customSettingsOrgId ?? legacySettingsOverride ?? tmpl.customSettingsOrgId;
+    const hasUsers = Boolean(
+      tmpl.userProvisioning?.users?.length
+      || tmpl.userProvisioning?.slots?.length
+      || tmpl.userProvisioning?.userGenerators?.length,
+    );
     return {
       ...tmpl,
+      mode: overrides.mode ?? 'create_new',
       alias: overrides.alias,
       devHubAlias: overrides.devHubAlias,
+      existingOrgConnectionId: overrides.existingOrgConnectionId,
+      existingOrgOptions: overrides.existingOrgOptions,
       duration: overrides.duration ?? tmpl.duration,
+      installPackage: overrides.installPackage ?? tmpl.installPackage,
       description: overrides.description,
       sourceOrgId: dataDeploymentOrgId,
       dataDeploymentOrgId,
@@ -249,6 +272,99 @@ export class ScratchTemplatesService implements OnModuleInit {
           }
         : undefined,
       skipSteps: [],
+      pipelineSteps: {
+        ...tmpl.pipelineSteps,
+        ...(hasUsers ? {} : { autoRunUsers: false }),
+      },
+    };
+  }
+
+  /** Build the immutable run snapshot from the stored template, never client template fields. */
+  async resolveLaunch(body: Record<string, unknown>, userId: string) {
+    const templateId = typeof body.templateId === 'string' ? body.templateId : undefined;
+    if (!templateId) {
+      return scratchOrgPipelineSchema.parse(body);
+    }
+    const template = await this.get(templateId, userId);
+    let authoritativeConfig = migrateTemplateConfigToV2(
+      template.config as Parameters<typeof migrateTemplateConfigToV2>[0],
+    );
+    if (body.runtimeEmailPoolOverride !== undefined) {
+      authoritativeConfig = this.applyRuntimeEmailPool(
+        authoritativeConfig,
+        body.runtimeEmailPoolOverride,
+      );
+    }
+    const merged = this.mergeTemplateWithLaunch(
+      authoritativeConfig as Record<string, unknown>,
+      {
+        mode: body.mode === 'configure_existing' ? 'configure_existing' : 'create_new',
+        alias: typeof body.alias === 'string' ? body.alias : undefined,
+        devHubAlias: typeof body.devHubAlias === 'string' ? body.devHubAlias : undefined,
+        existingOrgConnectionId: body.existingOrgConnectionId as string | undefined,
+        existingOrgOptions: body.existingOrgOptions as {
+          verifyAuthentication?: boolean;
+          ensureRequiredPackage?: boolean;
+        } | undefined,
+        sourceOrgId: body.sourceOrgId as string | undefined,
+        dataDeploymentOrgId: body.dataDeploymentOrgId as string | undefined,
+        customSettingsOrgId: body.customSettingsOrgId as string | undefined,
+        templateId,
+        gitSource: body.gitSource as GitSourceConfig | undefined,
+        azureDeploy: body.azureDeploy as {
+          project?: string;
+          repo: string;
+          branch: string;
+          manifestPath?: string;
+        } | undefined,
+        installPackage: body.installPackage as boolean | undefined,
+        duration: body.duration as number | undefined,
+        description: body.description as string | undefined,
+      },
+    );
+    return scratchOrgPipelineSchema.parse(merged);
+  }
+
+  private applyRuntimeEmailPool(
+    config: Parameters<typeof migrateTemplateConfigToV2>[0],
+    value: unknown,
+  ) {
+    if (!value || typeof value !== 'object' || !Array.isArray((value as { emails?: unknown }).emails)) {
+      throw new BadRequestException('runtimeEmailPoolOverride.emails must be an array');
+    }
+    const rawEmails = (value as { emails: unknown[] }).emails;
+    if (!rawEmails.every((email) => typeof email === 'string')) {
+      throw new BadRequestException('runtimeEmailPoolOverride.emails must contain strings');
+    }
+    const emails = rawEmails.map((email) => (email as string).trim().toLowerCase());
+    if (emails.length === 0 || emails.length > 1000) {
+      throw new BadRequestException(
+        'runtimeEmailPoolOverride.emails must contain between 1 and 1000 emails',
+      );
+    }
+    if (emails.some((email) => !email)) {
+      throw new BadRequestException('runtimeEmailPoolOverride.emails cannot contain blank values');
+    }
+    if (new Set(emails).size !== emails.length) {
+      throw new BadRequestException('runtimeEmailPoolOverride.emails contains duplicate emails');
+    }
+    for (const email of emails) {
+      if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        throw new BadRequestException(`Invalid runtime email: ${email}`);
+      }
+    }
+    if (!config.userProvisioning?.teams?.length) {
+      throw new BadRequestException('Template has no team email pool to override');
+    }
+    return {
+      ...config,
+      userProvisioning: {
+        ...config.userProvisioning,
+        teams: config.userProvisioning.teams.map((team) => ({
+          ...team,
+          emailPool: { ...team.emailPool, emails },
+        })),
+      },
     };
   }
 }

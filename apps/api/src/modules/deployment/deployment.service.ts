@@ -14,7 +14,10 @@ import {
 import { createSfCliClient } from '@sfcc/sf-cli';
 import { AzureService } from '../../integrations/azure/azure.service';
 import { JenkinsService } from '../../integrations/jenkins/jenkins.service';
-import { MetadataDeployQueueService } from './metadata-deploy-queue.service';
+import {
+  MetadataDeployQueueService,
+  metadataEnqueueSideEffectMayHavePersisted,
+} from './metadata-deploy-queue.service';
 import { MetadataDeployJobService } from './metadata-deploy-job.service';
 import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
@@ -313,31 +316,57 @@ export class DeploymentService {
     assertResourceOwner(deployment, userId, 'Deployment');
     const dep = deployment!;
 
+    const storedSource = dep.strategy === 'azure'
+      ? (() => {
+          const metadata = (dep.metadata ?? {}) as Record<string, unknown>;
+          return metadata.gitSource
+            ? gitSourceConfigSchema.parse(metadata.gitSource)
+            : {
+                provider: 'azure_devops' as const,
+                project: typeof metadata.project === 'string' ? metadata.project : undefined,
+                repo: dep.repo,
+                branch: dep.branch,
+                manifestPath:
+                  typeof metadata.manifestPath === 'string' ? metadata.manifestPath : undefined,
+              };
+        })()
+      : null;
+    const approvedAt = new Date();
     await prisma.deployment.update({
       where: { id },
-      data: { approvedBy: userId, approvedAt: new Date(), status: 'queued' },
+      data: { approvedBy: userId, approvedAt, status: 'queued' },
     });
 
-    if (dep.strategy === 'azure') {
-      const metadata = (dep.metadata ?? {}) as Record<string, unknown>;
-      const storedSource = metadata.gitSource
-        ? gitSourceConfigSchema.parse(metadata.gitSource)
-        : {
-            provider: 'azure_devops' as const,
-            project: typeof metadata.project === 'string' ? metadata.project : undefined,
-            repo: dep.repo,
-            branch: dep.branch,
-            manifestPath:
-              typeof metadata.manifestPath === 'string' ? metadata.manifestPath : undefined,
-          };
-      await this.metadataDeployQueue.enqueue({
-        deploymentId: dep.id,
-        orgAlias: dep.targetOrg.username ?? dep.targetOrg.alias,
-        gitSource: storedSource,
-        createdBy: userId,
-      });
-    } else {
-      await this.jenkinsService.triggerBuild(dep.repo, dep.branch);
+    try {
+      if (dep.strategy === 'azure') {
+        await this.metadataDeployQueue.enqueue({
+          deploymentId: dep.id,
+          orgAlias: dep.targetOrg.username ?? dep.targetOrg.alias,
+          gitSource: storedSource!,
+          createdBy: userId,
+        });
+      } else {
+        await this.jenkinsService.triggerBuild(dep.repo, dep.branch);
+      }
+    } catch (error) {
+      const safeToCompensate =
+        metadataEnqueueSideEffectMayHavePersisted(error) === false;
+      if (safeToCompensate) {
+        await prisma.deployment.updateMany({
+          where: {
+            id,
+            status: 'queued',
+            approvedBy: userId,
+            approvedAt,
+          },
+          data: {
+            status: dep.status,
+            approvedBy: dep.approvedBy,
+            approvedAt: dep.approvedAt,
+          },
+        }).catch(() => undefined);
+      }
+      throw error;
     }
 
     return prisma.deployment.findUnique({

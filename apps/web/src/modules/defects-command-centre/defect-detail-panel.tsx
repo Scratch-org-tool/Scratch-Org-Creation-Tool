@@ -183,8 +183,9 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
               <span className="text-muted-foreground/80"> · {item.project.name}</span>
             </p>
             <h3 className="text-base font-semibold leading-snug">{item.title}</h3>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2" aria-busy={w.statusUpdating}>
               <StatusBadge status={item.state.name} className={workItemStatusBadgeClass(item.state.name)} />
+              {w.statusUpdating && <span className="text-xs text-muted-foreground">Updating…</span>}
               {item.severity && (
                 <span className="text-xs px-2 py-0.5 rounded-full border border-border/60 text-muted-foreground">
                   {item.severity}
@@ -284,6 +285,8 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
               uploadable={w.operations.uploadAttachments}
               deletable={w.operations.deleteAttachments}
               mutating={w.mutating}
+              deletingIds={w.deletingAttachmentIds}
+              deleteBusy={w.attachmentDeleteBusy}
               error={w.sectionErrors.attachments}
               contentPath={(attachmentId) =>
                 workItemEndpoint(
@@ -328,10 +331,11 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
 
       {w.operations.readComments && (
         <DefectCommentsThread
+          workItemId={w.selectedWorkItemKey ?? item.id}
           comments={w.comments}
           loading={w.detailLoading}
           writable={w.operations.addComments}
-          mutating={w.mutating}
+          mutating={w.commentPending}
           error={w.sectionErrors.comments}
           onAdd={w.addComment}
         />

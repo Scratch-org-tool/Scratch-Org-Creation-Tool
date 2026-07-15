@@ -8,13 +8,14 @@ import { TEMPLATE_WIZARD_STEPS } from './types';
 
 export const TEMPLATE_STEP_DESCRIPTIONS: Record<number, string> = {
   0: 'Name and describe this pipeline preset.',
-  1: 'Scratch org definition, duration, and Azure deploy defaults.',
+  1: 'Scratch org definition, duration, and provider-neutral Git defaults.',
   2: 'Data deployment org and custom settings load org.',
   3: 'Bundled or custom SFDMU export for custom settings.',
   4: 'Permission sets and org configuration flags.',
   5: 'Seed mode, query JSON, datasets, and account limits.',
-  6: 'Partner import, user templates/slots, and automation toggles.',
-  7: 'Review all settings before saving.',
+  6: 'Named, dependency-ordered SOQL queries and Account Partner join plan.',
+  7: 'Partner import, generated users, role mappings, and automation toggles.',
+  8: 'Review all settings before saving.',
 };
 
 interface TemplateFormPageHeaderProps {

@@ -8,6 +8,7 @@ import { OrgToOrgBrowseService } from './org-to-org-browse.service';
 import { DataDeployOrchestratorService } from './data-deploy-orchestrator.service';
 import { DataPreflightService } from './data-preflight.service';
 import { BulkThrottleService } from './bulk-throttle.service';
+import { QuerySectionRuntimeService } from './query-section-runtime.service';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { OrchestratorModule } from '../orchestrator/orchestrator.module';
     DataDeployOrchestratorService,
     DataPreflightService,
     BulkThrottleService,
+    QuerySectionRuntimeService,
   ],
   exports: [
     RecordTypeMapperService,
@@ -33,6 +35,7 @@ import { OrchestratorModule } from '../orchestrator/orchestrator.module';
     DataDeployOrchestratorService,
     DataPreflightService,
     BulkThrottleService,
+    QuerySectionRuntimeService,
   ],
 })
 export class DataCoreModule {}

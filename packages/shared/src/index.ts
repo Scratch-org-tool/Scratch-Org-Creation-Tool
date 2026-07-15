@@ -6,6 +6,8 @@ export * from './auth.js';
 export * from './sanitize.js';
 export * from './soql.js';
 export * from './query-set.js';
+export * from './query-section.js';
+export * from './query-runtime.js';
 export * from './sfdmu-export.js';
 export * from './azure-utils.js';
 export * from './azure-work-items.js';

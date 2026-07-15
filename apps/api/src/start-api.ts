@@ -16,15 +16,22 @@ function resolveCorsOrigins(): string[] | boolean {
   return true;
 }
 
+function resolveTrustProxy(): boolean | number | string | string[] | undefined {
+  const raw = process.env.TRUST_PROXY?.trim();
+  if (!raw) return undefined;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const values = raw.split(',').map((value) => value.trim()).filter(Boolean);
+  return values.length === 1 ? values[0] : values;
+}
+
 export async function startApi(): Promise<void> {
   initFirebase();
   // Preserve the exact bytes needed for provider webhook HMAC verification.
   const app = await NestFactory.create(AppModule, { rawBody: true });
-  const trustedProxies = (process.env.TRUST_PROXY ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (trustedProxies.length > 0) {
+  const trustedProxies = resolveTrustProxy();
+  if (trustedProxies !== undefined) {
     app.getHttpAdapter().getInstance().set('trust proxy', trustedProxies);
   }
 

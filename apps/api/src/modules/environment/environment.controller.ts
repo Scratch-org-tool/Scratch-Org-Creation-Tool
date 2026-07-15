@@ -37,6 +37,12 @@ export class EnvironmentController {
     return this.environmentService.listScratchOrgs(userId);
   }
 
+  @Post('scratch-orgs/adopt')
+  @RequireRole('admin')
+  adoptScratchOrg(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.environmentService.adoptScratchOrg(body, userId);
+  }
+
   @Get('scratch-orgs/:alias/credentials')
   getScratchOrgCredentials(@Param('alias') alias: string, @CurrentUser() userId: string) {
     return this.environmentService.getScratchOrgCredentials(alias, userId);
@@ -202,6 +208,26 @@ export class EnvironmentController {
   @Post('scratch-org/pipeline')
   createScratchOrgPipeline(@Body() body: unknown, @CurrentUser() userId: string) {
     return this.environmentService.createScratchOrgPipeline(body, userId);
+  }
+
+  @Post('scratch-org/pipeline/eligibility')
+  getScratchOrgPipelineEligibility(
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    return this.environmentService.getScratchOrgPipelineEligibility(body, userId);
+  }
+
+  @Get('automation-runs/recent')
+  getRecentAutomationRuns(
+    @Query() query: {
+      target?: string;
+      targetOrgConnectionId?: string;
+      limit?: string;
+    },
+    @CurrentUser() userId: string,
+  ) {
+    return this.environmentService.getRecentAutomationRuns(query, userId);
   }
 
   @Get('automation-runs/active')

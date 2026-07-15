@@ -26,6 +26,8 @@ interface SalesforceOrgsTableProps {
   orgs: ConnectedOrg[];
   loading?: boolean;
   disconnectingAlias: string | null;
+  defaultDevHubBusy: Record<string, boolean>;
+  defaultDevHubErrors: Record<string, string>;
   onSetDefault: (alias: string) => void;
   onDisconnect: (alias: string) => void;
 }
@@ -34,9 +36,12 @@ export function SalesforceOrgsTable({
   orgs,
   loading,
   disconnectingAlias,
+  defaultDevHubBusy,
+  defaultDevHubErrors,
   onSetDefault,
   onDisconnect,
 }: SalesforceOrgsTableProps) {
+  const changingDefault = Object.keys(defaultDevHubBusy).length > 0;
   if (!loading && orgs.length === 0) {
     return (
       <p className="text-sm text-muted-foreground text-center py-8">
@@ -57,7 +62,7 @@ export function SalesforceOrgsTable({
       </IntegrationsTableHead>
       <tbody>
         {orgs.map((org) => (
-          <IntegrationsTr key={org.id ?? org.alias}>
+          <IntegrationsTr key={org.id ?? org.alias} aria-busy={Boolean(defaultDevHubBusy[org.alias])}>
             <IntegrationsTd>
               <p className="font-medium">{org.alias}</p>
               <p className="text-xs text-muted-foreground truncate max-w-[140px]">{org.username ?? '—'}</p>
@@ -93,7 +98,8 @@ export function SalesforceOrgsTable({
                     variant="ghost"
                     size="sm"
                     className="h-7 px-2 text-xs"
-                    disabled={!!disconnectingAlias || org.isDefaultDevHub}
+                    loading={Boolean(defaultDevHubBusy[org.alias])}
+                    disabled={!!disconnectingAlias || org.isDefaultDevHub || changingDefault}
                     onClick={() => onSetDefault(org.alias)}
                     title={org.isDefaultDevHub ? 'Default Dev Hub' : 'Set as default Dev Hub'}
                     aria-label={org.isDefaultDevHub ? `${org.alias} is the default Dev Hub` : `Set ${org.alias} as default Dev Hub`}
@@ -106,12 +112,17 @@ export function SalesforceOrgsTable({
                   size="sm"
                   className="h-7 px-2 text-xs text-destructive hover:text-destructive"
                   loading={disconnectingAlias === org.alias}
-                  disabled={!!disconnectingAlias}
+                  disabled={!!disconnectingAlias || changingDefault}
                   onClick={() => onDisconnect(org.alias)}
                   aria-label={`Disconnect Salesforce org ${org.alias}`}
                 >
                   <Unplug className="w-3 h-3" />
                 </Button>
+                {defaultDevHubErrors[org.alias] && (
+                  <p role="alert" className="basis-full text-xs text-destructive text-right">
+                    {defaultDevHubErrors[org.alias]} Changes were rolled back.
+                  </p>
+                )}
               </div>
             </IntegrationsTd>
           </IntegrationsTr>

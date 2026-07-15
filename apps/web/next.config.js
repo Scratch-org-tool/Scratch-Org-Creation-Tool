@@ -21,7 +21,9 @@ const API_INTERNAL_URL = (
 const nextConfig = {
   poweredByHeader: false,
   devIndicators: false,
-  compress: true,
+  // The edge gateway owns compression when explicitly wired by stack.sh.
+  // Direct Next.js deployments retain Next's built-in gzip support.
+  compress: process.env.EDGE_COMPRESSION_ENABLED !== '1',
   reactStrictMode: true,
   transpilePackages: ['@sfcc/shared'],
   async redirects() {

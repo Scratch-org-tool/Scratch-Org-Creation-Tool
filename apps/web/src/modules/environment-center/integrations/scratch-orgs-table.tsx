@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ExternalLink, KeyRound, Plus, Trash2 } from 'lucide-react';
+import { ExternalLink, KeyRound, Plus, Settings2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/studio/status-badge';
 import {
@@ -88,6 +88,22 @@ export function ScratchOrgsTable({
               </IntegrationsTd>
               <IntegrationsTd>
                 <div className="flex items-center justify-end gap-1 flex-wrap">
+                  {org.orgConnectionId && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs gap-1"
+                      asChild
+                    >
+                      <Link
+                        href={`/environment-center/create-scratch-org?mode=configure&orgConnectionId=${encodeURIComponent(org.orgConnectionId)}`}
+                        aria-label={`Configure existing scratch org ${org.alias}`}
+                      >
+                        <Settings2 className="w-3 h-3" />
+                        Configure
+                      </Link>
+                    </Button>
+                  )}
                   {loginHref && (
                     <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-primary" asChild>
                       <a href={loginHref} target="_blank" rel="noreferrer" title={`Login to ${org.alias}`}>

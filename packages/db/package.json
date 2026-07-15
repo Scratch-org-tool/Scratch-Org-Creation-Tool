@@ -6,6 +6,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test dist/provisioning-migration.test.js",
     "generate": "prisma generate",
     "push": "prisma db push",
     "migrate": "prisma migrate dev",

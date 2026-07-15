@@ -124,6 +124,7 @@ export function UserAccessUsersTable({
               <tr
                 key={user.id}
                 className="border-b border-border/40 last:border-0 hover:bg-secondary/20 transition-colors"
+                aria-busy={user.optimisticState === 'saving'}
               >
                 <td className="py-3 px-4">
                   <div className="flex items-center gap-3 min-w-0">
@@ -138,6 +139,9 @@ export function UserAccessUsersTable({
                     <div className="min-w-0">
                       <p className="font-medium truncate">{user.displayName}</p>
                       <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                      {user.optimisticState === 'saving' && (
+                        <p className="text-xs text-primary">Saving access…</p>
+                      )}
                     </div>
                   </div>
                 </td>

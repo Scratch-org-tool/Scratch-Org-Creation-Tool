@@ -42,6 +42,7 @@ export function UserAccessWorkspace() {
     pendingRole,
     setPendingRole,
     confirmRoleChange,
+    optimisticAnnouncement,
     refresh,
   } = useUserAccessWorkspace();
 
@@ -53,12 +54,13 @@ export function UserAccessWorkspace() {
 
   return (
     <div className="p-4 md:p-6 space-y-6">
+      <p className="sr-only" role="status" aria-live="polite">{optimisticAnnouncement}</p>
       <PageHeader
         title="User Access"
         subtitle="Manage users, roles, and permissions across the platform"
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
+            <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading} disabled={saving}>
               Refresh
             </Button>
             <Button
@@ -136,6 +138,7 @@ export function UserAccessWorkspace() {
         user={manageUser}
         draft={draft}
         saving={saving}
+        error={error}
         onClose={closeManage}
         onDraftChange={setDraft}
         onToggleModule={toggleDraftModule}

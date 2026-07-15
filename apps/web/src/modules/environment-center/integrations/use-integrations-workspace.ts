@@ -16,6 +16,7 @@ import type {
   OrgConnectType,
 } from './types';
 import { LOGIN_URL_PRODUCTION, LOGIN_URL_SANDBOX } from './types';
+import { restoreDefaultFlags, setExclusiveDefault } from '@/lib/optimistic-domain';
 
 function parseApiError(err: unknown, fallback: string) {
   if (!(err instanceof Error)) return fallback;
@@ -43,7 +44,7 @@ const DEFAULT_SF_FORM: SalesforceConnectForm = {
   orgType: 'production',
 };
 
-const INTEGRATIONS_CACHE_KEY = 'integrations:workspace';
+const INTEGRATIONS_CACHE_KEY = 'integrations:workspace:v2';
 
 type IntegrationsCache = {
   orgs: ConnectedOrg[];
@@ -76,6 +77,9 @@ export function useIntegrationsWorkspace() {
   const [error, setError] = useState<string | null>(null);
 
   const [disconnectingAlias, setDisconnectingAlias] = useState<string | null>(null);
+  const [defaultDevHubBusy, setDefaultDevHubBusy] = useState<Record<string, boolean>>({});
+  const [defaultDevHubErrors, setDefaultDevHubErrors] = useState<Record<string, string>>({});
+  const [optimisticAnnouncement, setOptimisticAnnouncement] = useState('');
   const [pendingDisconnect, setPendingDisconnect] = useState<string | null>(null);
   const [pendingScratchDelete, setPendingScratchDelete] = useState<string | null>(null);
   const [deletingScratchAlias, setDeletingScratchAlias] = useState<string | null>(null);
@@ -86,6 +90,10 @@ export function useIntegrationsWorkspace() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authVariant, setAuthVariant] = useState<'info' | 'success' | 'error'>('info');
   const abortRef = useRef<AbortController | null>(null);
+  const defaultDevHubBusyRef = useRef(new Set<string>());
+  const defaultDevHubSequenceRef = useRef(0);
+  const orgsRequestRef = useRef(0);
+  const orgMutationBusyRef = useRef(false);
 
   const [azureForm, setAzureForm] = useState({ orgSlug: '', pat: '', project: '' });
   const [azureSubmitting, setAzureSubmitting] = useState(false);
@@ -110,21 +118,35 @@ export function useIntegrationsWorkspace() {
   );
 
   const refreshOrgs = useCallback(async () => {
+    const request = ++orgsRequestRef.current;
     try {
       const data = await api<ConnectedOrg[]>('/environment/connected-orgs/refresh', {
         method: 'POST',
       });
-      setOrgs(data);
+      if (orgsRequestRef.current === request) setOrgs(data);
     } catch (err) {
       const fallback = await api<ConnectedOrg[]>('/environment/connected-orgs').catch(() => []);
-      setOrgs(fallback);
-      setError(parseApiError(err, 'Could not sync from Salesforce CLI — showing cached orgs.'));
+      if (orgsRequestRef.current === request) {
+        setOrgs(fallback);
+        setError(parseApiError(err, 'Could not sync from Salesforce CLI — showing cached orgs.'));
+      }
     }
   }, []);
 
   const refreshScratchOrgs = useCallback(async () => {
-    const data = await api<ScratchOrg[]>('/environment/scratch-orgs');
-    setScratchOrgs(data);
+    const [data, connections] = await Promise.all([
+      api<ScratchOrg[]>('/environment/scratch-orgs'),
+      api<Array<{ id: string; alias: string; type?: string }>>('/orgs').catch(() => []),
+    ]);
+    const connectionIds = new Map(
+      connections
+        .filter((connection) => connection.type === 'scratch')
+        .map((connection) => [connection.alias, connection.id]),
+    );
+    setScratchOrgs(data.map((org) => ({
+      ...org,
+      orgConnectionId: connectionIds.get(org.alias),
+    })));
   }, []);
 
   const loadAzureStatus = useCallback(async () => {
@@ -279,13 +301,51 @@ export function useIntegrationsWorkspace() {
   };
 
   const setDefaultDevHub = async (alias: string) => {
-    await api(`/environment/connected-orgs/${encodeURIComponent(alias)}/default-dev-hub`, {
-      method: 'POST',
+    if (orgMutationBusyRef.current) return;
+    orgMutationBusyRef.current = true;
+    const token = ++defaultDevHubSequenceRef.current;
+    orgsRequestRef.current += 1;
+    const snapshot = orgs;
+    defaultDevHubBusyRef.current.add(alias);
+    setDefaultDevHubBusy((current) => ({ ...current, [alias]: true }));
+    setDefaultDevHubErrors((current) => {
+      const next = { ...current };
+      delete next[alias];
+      return next;
     });
-    await refreshOrgs();
+    setOrgs((current) => setExclusiveDefault(current, alias));
+    setOptimisticAnnouncement(`${alias} is being set as the default Dev Hub.`);
+    try {
+      const updated = await api<ConnectedOrg>(
+        `/environment/connected-orgs/${encodeURIComponent(alias)}/default-dev-hub`,
+        { method: 'POST' },
+      );
+      if (defaultDevHubSequenceRef.current !== token) return;
+      setOrgs((current) => current.map((org) => org.alias === alias
+        ? { ...org, ...updated, isDefaultDevHub: true }
+        : { ...org, isDefaultDevHub: false }));
+      setOptimisticAnnouncement(`${alias} is now the default Dev Hub.`);
+    } catch (err) {
+      if (defaultDevHubSequenceRef.current !== token) return;
+      const failure = parseApiError(err, `Failed to set ${alias} as the default Dev Hub`);
+      setOrgs((current) => restoreDefaultFlags(current, snapshot));
+      setDefaultDevHubErrors((current) => ({ ...current, [alias]: failure }));
+      setOptimisticAnnouncement(`Default Dev Hub change failed and was rolled back.`);
+    } finally {
+      defaultDevHubBusyRef.current.delete(alias);
+      orgMutationBusyRef.current = false;
+      setDefaultDevHubBusy((current) => {
+        const next = { ...current };
+        delete next[alias];
+        return next;
+      });
+    }
   };
 
   const disconnectOrg = async (alias: string) => {
+    if (orgMutationBusyRef.current) return;
+    orgMutationBusyRef.current = true;
+    orgsRequestRef.current += 1;
     setDisconnectingAlias(alias);
     setError(null);
     try {
@@ -297,6 +357,7 @@ export function useIntegrationsWorkspace() {
       setError(parseApiError(err, 'Failed to disconnect org'));
     } finally {
       setDisconnectingAlias(null);
+      orgMutationBusyRef.current = false;
     }
   };
 
@@ -448,6 +509,9 @@ export function useIntegrationsWorkspace() {
     authorize,
     stopAuthorize,
     setDefaultDevHub,
+    defaultDevHubBusy,
+    defaultDevHubErrors,
+    optimisticAnnouncement,
     disconnectOrg,
     azureForm,
     setAzureForm,

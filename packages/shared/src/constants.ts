@@ -72,6 +72,7 @@ export const DEFAULT_AZURE_MANIFEST_PATH = 'CoreFlex Onboarding/manifest/package
 
 export const PIPELINE_STEPS = [
   'scratch_org_create',
+  'prepare_existing_org',
   'git_metadata_deploy',
   // Persisted runs created before provider-neutral SCM support.
   'azure_metadata_deploy',
@@ -141,6 +142,7 @@ export const QUERY_TEMPLATES = [
 export const PIPELINE_PROGRESS_LABELS = [
   'Create Scratch Org',
   'Generate Password',
+  'Prepare Existing Org',
   'Install Package',
   'Azure Metadata Deploy',
   'Assign Permission Set',

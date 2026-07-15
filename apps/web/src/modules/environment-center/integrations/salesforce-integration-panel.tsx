@@ -17,6 +17,7 @@ interface SalesforceIntegrationPanelProps {
 export function SalesforceIntegrationPanel({ w }: SalesforceIntegrationPanelProps) {
   return (
     <div className="space-y-6">
+      <p className="sr-only" role="status" aria-live="polite">{w.optimisticAnnouncement}</p>
       <GlassCard
         title="Add Salesforce org"
         description="Authenticate a production org, sandbox, or Dev Hub via web login."
@@ -70,6 +71,8 @@ export function SalesforceIntegrationPanel({ w }: SalesforceIntegrationPanelProp
           orgs={w.orgs}
           loading={w.refreshing}
           disconnectingAlias={w.disconnectingAlias}
+          defaultDevHubBusy={w.defaultDevHubBusy}
+          defaultDevHubErrors={w.defaultDevHubErrors}
           onSetDefault={(alias) => void w.setDefaultDevHub(alias)}
           onDisconnect={w.setPendingDisconnect}
         />

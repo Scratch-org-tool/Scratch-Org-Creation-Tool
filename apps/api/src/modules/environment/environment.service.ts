@@ -3,7 +3,6 @@ import { prisma, Prisma } from '@sfcc/db';
 import {
   QUEUE_NAMES,
   scratchOrgCreateSchema,
-  scratchOrgPipelineSchema,
   scratchOrgSkipStepSchema,
   type GitSourceConfig,
   type ScmProvider,
@@ -28,6 +27,7 @@ import { resolveOrgTypeFromInstance, isLikelyScratchOrg } from '../../common/org
 import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 import { IntegrationAdminService } from '../integrations/integration-admin.service';
+import { ExistingScratchOrgService } from './existing-scratch-org.service';
 
 async function resolveScratchOrgPassword(
   sfCli: ReturnType<typeof createSfCliClient>,
@@ -76,6 +76,7 @@ export class EnvironmentService {
     private readonly orgConfigLoader: OrgConfigLoaderService,
     private readonly processRegistry: JobProcessRegistryService,
     private readonly dataDeployOrchestrator: DataDeployOrchestratorService,
+    private readonly existingScratchOrgs: ExistingScratchOrgService,
   ) {}
 
   deleteScratchOrg(alias: string, userId: string) {
@@ -408,15 +409,27 @@ export class EnvironmentService {
   }
 
   async setDefaultDevHub(alias: string, userId: string) {
-    await this.orgsService.findByAlias(alias, userId);
-    await prisma.orgConnection.updateMany({
-      where: userOwnedWhere(userId),
-      data: { isDefaultDevHub: false },
+    const updated = await prisma.$transaction(async (tx) => {
+      const target = await tx.orgConnection.findFirst({
+        where: {
+          alias,
+          ...userOwnedWhere(userId),
+          type: { not: 'scratch' },
+          status: 'active',
+          isDevHub: true,
+        },
+      });
+      if (!target) throw new NotFoundException('Connected Dev Hub not found');
+      await tx.orgConnection.updateMany({
+        where: userOwnedWhere(userId),
+        data: { isDefaultDevHub: false },
+      });
+      return tx.orgConnection.update({
+        where: { id: target.id },
+        data: { isDefaultDevHub: true },
+      });
     });
-    return prisma.orgConnection.update({
-      where: { alias },
-      data: { isDefaultDevHub: true, isDevHub: true },
-    });
+    return this.mapConnectedOrg(updated);
   }
 
   async verifyOrgAuth(orgId: string, userId: string) {
@@ -526,9 +539,25 @@ export class EnvironmentService {
   }
 
   async createScratchOrgPipeline(body: unknown, userId: string) {
-    const config = scratchOrgPipelineSchema.parse(body);
-    await this.scmSources.requireActive(config.gitSource!);
-    return this.pipelineOrchestrator.startPipeline(config, userId);
+    const eligibility = await this.existingScratchOrgs.requireEligible(
+      (body ?? {}) as Record<string, unknown>,
+      userId,
+    );
+    if (!eligibility.config) {
+      throw new BadRequestException('Resolved launch configuration is unavailable');
+    }
+    return this.pipelineOrchestrator.startPipeline(eligibility.config, userId);
+  }
+
+  getScratchOrgPipelineEligibility(body: unknown, userId: string) {
+    return this.existingScratchOrgs.eligibility(
+      (body ?? {}) as Record<string, unknown>,
+      userId,
+    );
+  }
+
+  adoptScratchOrg(body: unknown, userId: string) {
+    return this.existingScratchOrgs.adopt(body, userId);
   }
 
   async getAutomationRun(id: string, userId: string) {
@@ -537,6 +566,13 @@ export class EnvironmentService {
 
   async getActiveAutomationRun(intent: string, userId: string) {
     return this.pipelineOrchestrator.getActiveRun(intent, userId);
+  }
+
+  async getRecentAutomationRuns(
+    query: { target?: string; targetOrgConnectionId?: string; limit?: string },
+    userId: string,
+  ) {
+    return this.pipelineOrchestrator.getRecentRuns(query, userId);
   }
 
   async resumeAutomationRun(id: string, body: unknown, userId: string) {
@@ -555,7 +591,13 @@ export class EnvironmentService {
     const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
     assertResourceOwner(org, userId, 'Org');
     const { orgConfig } = (body ?? {}) as {
-      orgConfig?: { upsertQueueIds?: boolean; upsertDomainFields?: boolean; upsertRequestId?: boolean };
+      orgConfig?: {
+        upsertQueueIds?: boolean;
+        upsertDomainFields?: boolean;
+        upsertRequestId?: boolean;
+        bottler?: string;
+        configKey?: string;
+      };
     };
     try {
       return await this.orgConfigLoader.loadForOrg(orgId, orgConfig ?? {});

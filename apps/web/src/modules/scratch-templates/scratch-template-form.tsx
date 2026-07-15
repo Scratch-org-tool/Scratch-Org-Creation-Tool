@@ -7,7 +7,11 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { FormSection, GlassCard, InlineAlert, PageSkeleton } from '@/components/studio';
 import { api } from '@/services/api';
 import { fetchOrgsList } from '@/hooks/use-orgs';
-import { DEFAULT_AZURE_MANIFEST_PATH } from '@sfcc/shared';
+import {
+  DEFAULT_AZURE_MANIFEST_PATH,
+  migrateTemplateConfigToV2,
+  querySectionSchema,
+} from '@sfcc/shared';
 import { DataSeedSection } from './components/data-seed-section';
 import { fileToBase64 } from './components/file-dropzone';
 import { OrgConfigSection } from './components/org-config-section';
@@ -25,23 +29,17 @@ import { TemplateFormTips } from './components/template-form-tips';
 import { TemplateStepIndicator } from './components/template-step-indicator';
 import { TemplateStepSidebar } from './components/template-step-sidebar';
 import { TemplateFormPageHeader } from './template-form-page-header';
-import {
-  apiSlotsToRows,
-  apiUsersToRows,
-  slotsToApiFormat,
-  usersToApiFormat,
-  UsersTableSection,
-} from './components/users-table-section';
-import type { UserProvisionSlot, UserProvisionTemplate } from '@sfcc/shared';
+import { QuerySectionEditor } from './components/query-section-editor';
+import { UserProvisioningV2Section } from './components/user-provisioning-v2-section';
 import type { ScmProvider } from '@sfcc/shared';
 import type { PublicIntegrationConnection } from '@/modules/environment-center/integrations/types';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import {
   DEFAULT_TEMPLATE_CONFIG,
   TEMPLATE_WIZARD_STEPS,
-  type ConaUserRow,
   type TemplateConfigState,
 } from './types';
+import { hasValidCustomJson, setCustomSettingsEnabled } from './template-form-utils';
 
 const DRAFT_KEY = 'scratch-template-draft';
 
@@ -62,6 +60,13 @@ function withCanonicalGitSource(config: TemplateConfigState): TemplateConfigStat
   };
 }
 
+function migrateForEditor(config: TemplateConfigState): TemplateConfigState {
+  return withCanonicalGitSource({
+    ...DEFAULT_TEMPLATE_CONFIG,
+    ...migrateTemplateConfigToV2(config),
+  });
+}
+
 export function ScratchTemplateForm({
   templateId,
   onClose,
@@ -72,11 +77,8 @@ export function ScratchTemplateForm({
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [config, setConfig] = useState<TemplateConfigState>({ ...DEFAULT_TEMPLATE_CONFIG });
+  const [config, setConfig] = useState<TemplateConfigState>(() => migrateForEditor(DEFAULT_TEMPLATE_CONFIG));
   const [permissionSetsText, setPermissionSetsText] = useState('');
-  const [users, setUsers] = useState<ConaUserRow[]>([]);
-  const [userTemplates, setUserTemplates] = useState<UserProvisionTemplate[]>([]);
-  const [userSlots, setUserSlots] = useState<UserProvisionSlot[]>([]);
   const [customJson, setCustomJson] = useState('');
   const [queryJsonFile, setQueryJsonFile] = useState<File | null>(null);
   const [partnerFile, setPartnerFile] = useState<File | null>(null);
@@ -86,6 +88,12 @@ export function ScratchTemplateForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!templateId);
+  const [draftHydrated, setDraftHydrated] = useState(!!templateId);
+  const [userPlanState, setUserPlanState] = useState({ valid: false, checking: true });
+  const handleUserPlanValidation = useCallback(
+    (state: { valid: boolean; checking: boolean }) => setUserPlanState(state),
+    [],
+  );
 
   const orgAliases = useMemo(
     () => Object.fromEntries(orgs.map((o) => [o.id, o.alias])),
@@ -93,16 +101,16 @@ export function ScratchTemplateForm({
   );
 
   const persistDraft = useCallback(() => {
-    if (templateId) return;
+    if (templateId || !draftHydrated) return;
     try {
       sessionStorage.setItem(
         DRAFT_KEY,
-        JSON.stringify({ name, description, config, permissionSetsText, users, userSlots, userTemplates, customJson }),
+        JSON.stringify({ name, description, config, permissionSetsText, customJson }),
       );
     } catch {
       /* ignore */
     }
-  }, [templateId, name, description, config, permissionSetsText, users, userSlots, userTemplates, customJson]);
+  }, [templateId, draftHydrated, name, description, config, permissionSetsText, customJson]);
 
   const dataDeploymentOrgId = config.dataDeploymentOrgId ?? config.sourceOrgId;
 
@@ -126,11 +134,13 @@ export function ScratchTemplateForm({
         .then((t) => {
           setName(t.name);
           setDescription(t.description ?? '');
-          setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...t.config }));
+          try {
+            setConfig(migrateForEditor(t.config));
+          } catch (migrationError) {
+            setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...t.config, version: 2 }));
+            setError(migrationError instanceof Error ? migrationError.message : 'Legacy migration needs attention');
+          }
           setPermissionSetsText(formatPermissionSets(t.config.permissionSets));
-          setUsers(apiUsersToRows(t.config.userProvisioning?.users));
-          setUserTemplates(t.config.userProvisioning?.templates ?? []);
-          setUserSlots(apiSlotsToRows(t.config.userProvisioning?.slots));
           const exportConfig = (t.config.customSettings as { exportConfig?: unknown } | undefined)
             ?.exportConfig;
           if (t.config.customSettings?.mode === 'custom' && exportConfig) {
@@ -152,21 +162,24 @@ export function ScratchTemplateForm({
           description?: string;
           config?: TemplateConfigState;
           permissionSetsText?: string;
-          users?: ConaUserRow[];
           customJson?: string;
         };
-        if (draft.name) setName(draft.name);
-        if (draft.description) setDescription(draft.description);
+        if (draft.name !== undefined) setName(draft.name);
+        if (draft.description !== undefined) setDescription(draft.description);
         if (draft.config) {
-          setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...draft.config }));
+          try {
+            setConfig(migrateForEditor(draft.config));
+          } catch {
+            setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...draft.config, version: 2 }));
+          }
         }
-        if (draft.permissionSetsText) setPermissionSetsText(draft.permissionSetsText);
-        if (draft.users) setUsers(draft.users);
-        if (draft.customJson) setCustomJson(draft.customJson);
+        if (draft.permissionSetsText !== undefined) setPermissionSetsText(draft.permissionSetsText);
+        if (draft.customJson !== undefined) setCustomJson(draft.customJson);
       }
     } catch {
       /* ignore */
     }
+    setDraftHydrated(true);
     setLoading(false);
   }, [templateId]);
 
@@ -199,8 +212,17 @@ export function ScratchTemplateForm({
     setSaving(true);
     setError(null);
     try {
+      if (!hasValidCustomJson(config, customJson)) {
+        throw new Error('Custom settings mode requires valid JSON before this V2 template can be saved.');
+      }
+      if (userPlanState.checking || !userPlanState.valid) {
+        throw new Error('Resolve provisioning profile, mapping, permission-set, and metadata errors before saving.');
+      }
       let exportConfig: unknown;
-      if (config.customSettings?.enabled !== false && config.customSettings?.mode === 'custom' && customJson.trim()) {
+      if (config.customSettings?.enabled !== false && config.customSettings?.mode === 'custom') {
+        if (!customJson.trim()) {
+          throw new Error('Custom settings mode requires valid JSON before this V2 template can be saved.');
+        }
         const validated = await api<{ normalized: unknown }>('/data/custom-settings/validate', {
           method: 'POST',
           body: JSON.stringify(JSON.parse(customJson)),
@@ -217,6 +239,7 @@ export function ScratchTemplateForm({
         name,
         description: description || undefined,
         config: {
+          version: 2,
           template: config.template,
           duration: config.duration,
           installPackage: config.installPackage,
@@ -235,17 +258,24 @@ export function ScratchTemplateForm({
           orgConfig: config.orgConfig,
           customSettings: {
             enabled: config.customSettings?.enabled !== false,
-            mode: config.customSettings?.mode ?? 'bundled',
+            mode: config.customSettings?.enabled === false
+              ? 'bundled'
+              : (config.customSettings?.mode ?? 'bundled'),
             ...(exportConfig ? { exportConfig } : {}),
           },
           sourceOrgId: config.dataDeploymentOrgId || config.sourceOrgId || undefined,
           dataDeploymentOrgId: config.dataDeploymentOrgId || config.sourceOrgId || undefined,
-          customSettingsOrgId: config.customSettingsOrgId || config.sourceOrgId || undefined,
+          customSettingsOrgId: config.customSettings?.enabled === false
+            ? undefined
+            : (config.customSettingsOrgId || config.sourceOrgId || undefined),
           dataSeed: {
             ...config.dataSeed,
             datasets: config.dataSeed?.datasets ?? DEFAULT_TEMPLATE_CONFIG.dataSeed?.datasets,
             mode: config.dataSeed?.mode ?? 'hybrid',
             querySet: config.dataSeed?.querySet,
+            querySection: config.dataSeed?.querySection
+              ? querySectionSchema.parse(config.dataSeed.querySection)
+              : undefined,
           },
           accountSeedRows: config.accountSeedRows,
           partnerImport:
@@ -255,14 +285,7 @@ export function ScratchTemplateForm({
                   partnerExcelBase64,
                 }
               : undefined,
-          userProvisioning:
-            userSlots.length || userTemplates.length || users.length
-              ? {
-                  ...(userTemplates.length ? { templates: userTemplates } : {}),
-                  ...(userSlots.length ? { slots: slotsToApiFormat(userSlots) } : {}),
-                  ...(users.length ? { users: usersToApiFormat(users) } : {}),
-                }
-              : undefined,
+          userProvisioning: config.userProvisioning,
           pipelineSteps: config.pipelineSteps,
         },
       };
@@ -292,8 +315,17 @@ export function ScratchTemplateForm({
       ? name.trim().length > 0
       : step === 2
         ? Boolean(config.dataDeploymentOrgId ?? config.sourceOrgId) &&
-          Boolean(config.customSettingsOrgId ?? config.sourceOrgId)
-        : true;
+          (
+            config.customSettings?.enabled === false
+            || Boolean(config.customSettingsOrgId ?? config.sourceOrgId)
+          )
+        : step === 3
+          ? hasValidCustomJson(config, customJson)
+          : step === 6 && config.dataSeed?.querySection
+            ? querySectionSchema.safeParse(config.dataSeed.querySection).success
+            : step === 7
+              ? userPlanState.valid && !userPlanState.checking
+            : true;
 
   if (loading) {
     return <PageSkeleton variant="form" />;
@@ -326,7 +358,12 @@ export function ScratchTemplateForm({
           className="ml-auto gap-2 rounded-lg border-violet-500/40 bg-violet-500/10 shadow-none hover:bg-violet-500/20 hover:border-violet-500/55"
           onClick={() => void save()}
           loading={saving}
-          disabled={!name.trim()}
+          disabled={
+            !name.trim()
+            || !hasValidCustomJson(config, customJson)
+            || userPlanState.checking
+            || !userPlanState.valid
+          }
         >
           <Check className="w-4 h-4 text-violet-400" />
           Save template
@@ -536,16 +573,7 @@ export function ScratchTemplateForm({
                     enabled={config.customSettings?.enabled !== false}
                     mode={config.customSettings?.mode ?? 'bundled'}
                     json={customJson}
-                    onEnabledChange={(enabled) =>
-                      setConfig({
-                        ...config,
-                        customSettings: {
-                          ...config.customSettings,
-                          enabled,
-                          mode: config.customSettings?.mode ?? 'bundled',
-                        },
-                      })
-                    }
+                    onEnabledChange={(enabled) => setConfig(setCustomSettingsEnabled(config, enabled))}
                     onModeChange={(mode) =>
                       setConfig({
                         ...config,
@@ -629,6 +657,37 @@ export function ScratchTemplateForm({
               )}
 
               {step === 6 && (
+                <FormSection title="Named query section">
+                  <QuerySectionEditor
+                    value={config.dataSeed?.querySection}
+                    sourceOrgId={dataDeploymentOrgId}
+                    salesOfficesByBottler={config.partnerImport?.salesOfficeConfig
+                      ? {
+                          [config.partnerImport.salesOfficeConfig.bottler]:
+                            config.partnerImport.salesOfficeConfig.offices,
+                        }
+                      : undefined}
+                    legacySummary={
+                      config.dataSeed?.querySet || config.accountSeedRows?.length
+                        ? `${config.dataSeed?.querySet?.queries.length ?? 0} query JSON entries and ${config.accountSeedRows?.length ?? 0} account rows were migrated into named V2 queries.`
+                        : undefined
+                    }
+                    onChange={(querySection) =>
+                      setConfig({
+                        ...config,
+                        dataSeed: {
+                          ...config.dataSeed,
+                          datasets: config.dataSeed?.datasets ?? [],
+                          mode: querySection ? 'query_section' : (config.dataSeed?.mode ?? 'hybrid'),
+                          querySection,
+                        },
+                      })
+                    }
+                  />
+                </FormSection>
+              )}
+
+              {step === 7 && (
                 <div className="space-y-6">
                   <FormSection title="Partner import">
                     <PartnerImportSection
@@ -640,14 +699,11 @@ export function ScratchTemplateForm({
                     />
                   </FormSection>
                   <FormSection title="User provisioning">
-                    <UsersTableSection
+                    <UserProvisioningV2Section
                       sourceOrgId={dataDeploymentOrgId}
-                      templates={userTemplates}
-                      slots={userSlots}
-                      legacyUsers={users}
-                      onTemplatesChange={setUserTemplates}
-                      onSlotsChange={setUserSlots}
-                      onLegacyUsersChange={setUsers}
+                      value={config.userProvisioning ?? DEFAULT_TEMPLATE_CONFIG.userProvisioning!}
+                      onChange={(userProvisioning) => setConfig({ ...config, userProvisioning })}
+                      onValidationChange={handleUserPlanValidation}
                     />
                   </FormSection>
                   <FormSection title="Automation">
@@ -659,22 +715,25 @@ export function ScratchTemplateForm({
                 </div>
               )}
 
-              {step === 7 && (
-                <TemplateReview
-                  name={name}
-                  description={description}
-                  config={{
-                    ...config,
-                    permissionSets: parsePermissionSets(permissionSetsText),
-                    userProvisioning: {
-                      users: usersToApiFormat(users),
-                      templates: userTemplates,
-                      slots: slotsToApiFormat(userSlots),
-                    },
-                  }}
-                  orgAliases={orgAliases}
-                  onEditStep={setStep}
-                />
+              {step === 8 && (
+                <>
+                  {(userPlanState.checking || !userPlanState.valid) && (
+                    <InlineAlert variant="error" title="Provisioning plan not validated">
+                      Return to Partners &amp; users and resolve all profile, mapping,
+                      permission-set, and metadata validation errors before saving.
+                    </InlineAlert>
+                  )}
+                  <TemplateReview
+                    name={name}
+                    description={description}
+                    config={{
+                      ...config,
+                      permissionSets: parsePermissionSets(permissionSetsText),
+                    }}
+                    orgAliases={orgAliases}
+                    onEditStep={setStep}
+                  />
+                </>
               )}
 
               {error && <InlineAlert variant="error">{error}</InlineAlert>}

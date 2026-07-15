@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
+import { buildPicklistDependencies } from './picklist-dependency.util';
 
 const DISCOVER_FIELDS = [
   'cfs_ob__Onboarding_Role__c',
@@ -13,11 +14,27 @@ const DISCOVER_FIELDS = [
 export interface PicklistFieldInfo {
   name: string;
   values: string[];
+  controllerName?: string;
+  dependencies?: Array<{ value: string; validFor: string[] }>;
 }
 
 @Injectable()
 export class OrgUserMetadataService {
   private readonly sfCli = createSfCliClient();
+
+  async discoverProfiles(orgId: string, userId: string) {
+    const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
+    assertResourceOwner(org, userId, 'Org');
+    const alias = org.username ?? org.alias;
+    const result = await this.sfCli.query(
+      alias,
+      'SELECT Id, Name FROM Profile ORDER BY Name LIMIT 500',
+    );
+    if (!result.success) {
+      throw new BadRequestException(result.error ?? 'Failed to discover profiles');
+    }
+    return (result.data?.result?.records ?? []) as Array<{ Id: string; Name: string }>;
+  }
 
   async discover(orgId: string, userId: string) {
     const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
@@ -41,16 +58,48 @@ export class OrgUserMetadataService {
     for (const fieldName of DISCOVER_FIELDS) {
       const field = fields.find((f) => f.name === fieldName);
       if (!field) continue;
-      const values = (field.picklistValues ?? [])
+      const activeValues = (field.picklistValues ?? [])
         .filter((p) => p.active)
-        .map((p) => p.value);
-      picklists.push({ name: fieldName, values });
+      const values = activeValues.map((p) => p.value);
+      const controller = field.controllerName
+        ? fields.find((candidate) => candidate.name === field.controllerName)
+        : undefined;
+      picklists.push({
+        name: fieldName,
+        values,
+        controllerName: field.controllerName,
+        dependencies: field.controllerName
+          ? buildPicklistDependencies(activeValues, controller?.picklistValues ?? [])
+          : undefined,
+      });
     }
+
+    const [profilesResult, permissionSetsResult] = await Promise.all([
+      this.sfCli.query(alias, 'SELECT Id, Name FROM Profile ORDER BY Name LIMIT 500'),
+      this.sfCli.query(
+        alias,
+        'SELECT Id, Name, Label FROM PermissionSet WHERE IsOwnedByProfile = false ORDER BY Name LIMIT 2000',
+      ),
+    ]);
+    if (!profilesResult.success || !permissionSetsResult.success) {
+      throw new BadRequestException(
+        profilesResult.error ?? permissionSetsResult.error ?? 'Failed to discover profiles or permission sets',
+      );
+    }
+    const profiles = (profilesResult.data?.result?.records ?? []) as Array<{ Id: string; Name: string }>;
+    const permissionSets = (permissionSetsResult.data?.result?.records ?? []) as Array<{
+      Id: string;
+      Name: string;
+      Label: string;
+    }>;
 
     return {
       orgId,
       alias: org.alias,
       picklists,
+      missingFields: DISCOVER_FIELDS.filter((name) => !fields.some((field) => field.name === name)),
+      profiles,
+      permissionSets,
     };
   }
 }

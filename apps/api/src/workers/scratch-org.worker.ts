@@ -4,7 +4,6 @@ import { join } from 'path';
 import { createSfCliClient, extractPasswordFromCliResult, type SfCommandResult } from '@sfcc/sf-cli';
 import { prisma, type Prisma } from '@sfcc/db';
 import {
-  ERROR_LOGGER_PACKAGE_ID,
   SCRATCH_ORG_SKIP_STEP_KEYS,
   SCRATCH_PERMISSION_SET,
   type ScratchOrgCreateConfig,
@@ -16,6 +15,7 @@ import { StreamService } from '../modules/stream/stream.service';
 import { JobCancelledError, ScratchOrgJobService } from '../modules/environment/scratch-org-job.service';
 import { encrypt } from '../common/crypto.util';
 import type { PipelineCheckpoint } from '../modules/orchestrator/pipeline-orchestrator.service';
+import { ScratchOrgPreparationService } from '../modules/environment/scratch-org-preparation.service';
 
 const WORKFLOW_STEPS = [
   'Create Scratch Org',
@@ -47,6 +47,7 @@ export class ScratchOrgWorker {
     private readonly streamService: StreamService,
     private readonly scratchOrgJobService: ScratchOrgJobService,
     private readonly processRegistry: JobProcessRegistryService,
+    private readonly preparationService: ScratchOrgPreparationService,
   ) {
     this.projectRoot = process.env.SF_PROJECT_ROOT ?? join(process.cwd(), '../..');
     this.sfCli = createSfCliClient({ cwd: this.projectRoot });
@@ -159,28 +160,29 @@ export class ScratchOrgWorker {
         ], { json: true });
         await this.logCliResult(pwdResult, log, dbJobId);
         generatedPassword = extractPasswordFromCliResult(pwdResult);
-        if (generatedPassword) {
-          await prisma.scratchOrg.upsert({
-            where: { alias: config.alias },
-            create: {
-              alias: config.alias,
-              username,
-              password: encrypt(generatedPassword),
-              devHubAlias: config.devHubAlias,
-              status: 'Active',
-              jobId: dbJobId,
-              createdBy: ownerUserId,
-            },
-            update: {
-              password: encrypt(generatedPassword),
-              jobId: dbJobId,
-              createdBy: ownerUserId,
-            },
-          });
-          await log('Password captured for credentials view');
-        } else {
-          await log('Warning: Password generated but could not be stored — use Regenerate Password in Credentials view', 'stderr');
+        if (!generatedPassword) {
+          throw new Error(
+            'Salesforce CLI did not return the generated password; resume the run to retry password recovery',
+          );
         }
+        await prisma.scratchOrg.upsert({
+          where: { alias: config.alias },
+          create: {
+            alias: config.alias,
+            username,
+            password: encrypt(generatedPassword),
+            devHubAlias: config.devHubAlias,
+            status: 'Active',
+            jobId: dbJobId,
+            createdBy: ownerUserId,
+          },
+          update: {
+            password: encrypt(generatedPassword),
+            jobId: dbJobId,
+            createdBy: ownerUserId,
+          },
+        });
+        await log('Password captured for credentials view');
         await log('Password Generated');
         await markStepDone(WORKFLOW_STEPS[1]);
       } else {
@@ -284,16 +286,12 @@ export class ScratchOrgWorker {
         setStep,
         markStepDone,
         async () => {
-          await log('Installing Error Logger...');
-          const pkgResult = await this.runCli(dbJobId, [
-            'package', 'install',
-            '--package', ERROR_LOGGER_PACKAGE_ID,
-            '--target-org', username,
-            '--wait', '30',
-            '--no-prompt',
-          ], { streaming: true });
-          await this.logCliResult(pkgResult, log, dbJobId, SCRATCH_ORG_SKIP_STEP_KEYS.INSTALL_PACKAGES);
-          await log('Installed Successfully');
+          await this.preparationService.prepare(
+            { alias: config.alias, username },
+            { verifyAuthentication: false, ensureRequiredPackage: true },
+            log,
+            { dbJobId, processRegistry: this.processRegistry },
+          );
         },
       );
 

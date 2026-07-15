@@ -451,6 +451,11 @@ function BindingsManager({
       title="Workspace, project, and repository bindings"
       description="Bind app contexts to provider identifiers so workflows resolve the intended repository."
     >
+      {state.optimisticAnnouncement && (
+        <p className="text-xs text-muted-foreground" role="status" aria-live="polite">
+          {state.optimisticAnnouncement}
+        </p>
+      )}
       {!state.isAdmin ? (
         <p className="text-sm text-muted-foreground">Bindings are managed by administrators.</p>
       ) : workManagement && !workItemConnection ? (
@@ -491,7 +496,12 @@ function BindingsManager({
           </div>
           <Button
             onClick={save}
-            disabled={(!selected && !workItemConnection) || !project.trim() || state.mutating}
+            disabled={
+              (!selected && !workItemConnection)
+              || !project.trim()
+              || state.mutating
+              || state.bindingCollectionBusy
+            }
           >
             <Link2 className="w-4 h-4 mr-2" />
             Save binding
@@ -504,28 +514,58 @@ function BindingsManager({
 }
 
 function BindingsList({ bindings, state }: { bindings: ProjectBinding[]; state: ProviderIntegrationsState }) {
+  const [pendingDelete, setPendingDelete] = useState<ProjectBinding | null>(null);
   if (!bindings.length) return <p className="text-sm text-muted-foreground">No bindings configured.</p>;
   return (
-    <ul className="divide-y divide-border/50 rounded-lg border border-border/60" aria-label="Configured provider bindings">
-      {bindings.map((binding) => (
-        <li key={binding.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">
-              {binding.externalProjectId}
-              {binding.repositoryName ? ` / ${binding.repositoryName}` : ''}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {binding.scmConnection
-                ? `${PROVIDER_NAMES[binding.scmConnection.provider]} · ${binding.scmConnection.displayName}`
-                : `${PROVIDER_NAMES[binding.workItemConnection?.provider ?? 'jira']} · ${binding.workItemConnection?.displayName ?? 'Work management'}`}
-            </p>
-          </div>
-          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => void state.deleteBinding(binding.id)} disabled={state.mutating}>
-            Remove
-          </Button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="divide-y divide-border/50 rounded-lg border border-border/60" aria-label="Configured provider bindings">
+        {bindings.map((binding) => (
+          <li key={binding.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">
+                {binding.externalProjectId}
+                {binding.repositoryName ? ` / ${binding.repositoryName}` : ''}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {binding.scmConnection
+                  ? `${PROVIDER_NAMES[binding.scmConnection.provider]} · ${binding.scmConnection.displayName}`
+                  : `${PROVIDER_NAMES[binding.workItemConnection?.provider ?? 'jira']} · ${binding.workItemConnection?.displayName ?? 'Work management'}`}
+              </p>
+              {state.bindingErrors[binding.id] && (
+                <p role="alert" className="mt-1 text-xs text-destructive">
+                  {state.bindingErrors[binding.id]} The binding was restored.
+                </p>
+              )}
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-destructive"
+              loading={Boolean(state.bindingBusyIds[binding.id])}
+              onClick={() => setPendingDelete(binding)}
+              disabled={state.mutating || state.bindingCollectionBusy}
+            >
+              Remove
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={`Remove ${pendingDelete?.externalProjectId ?? 'binding'}?`}
+        message="Deployments and work-item routing will no longer resolve through this binding."
+        confirmLabel="Remove binding"
+        destructive
+        onConfirm={() => {
+          const id = pendingDelete?.id;
+          setPendingDelete(null);
+          if (id) void state.deleteBinding(id);
+        }}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      />
+    </>
   );
 }
 

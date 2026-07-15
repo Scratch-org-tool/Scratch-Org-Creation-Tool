@@ -1,30 +1,68 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({
+  $transaction: vi.fn(),
   automationRun: {
+    create: vi.fn(),
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
     findUnique: vi.fn(),
     updateMany: vi.fn(),
     update: vi.fn(),
   },
-  job: { findFirst: vi.fn() },
+  job: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
+  orgConnection: { findUnique: vi.fn(), findMany: vi.fn() },
+  provisioningBatch: {
+    create: vi.fn(),
+    findUnique: vi.fn(),
+    update: vi.fn(),
+  },
+  provisionedUser: { updateMany: vi.fn() },
+  deployment: { update: vi.fn() },
 }));
 
 vi.mock('@sfcc/db', () => ({ prisma: db, Prisma: {} }));
 
 import { PipelineOrchestratorService } from './pipeline-orchestrator.service';
 
-function createService(): PipelineOrchestratorService {
+function createService(overrides?: {
+  queueService?: Record<string, unknown>;
+  jobsService?: Record<string, unknown>;
+  processRegistry?: Record<string, unknown>;
+  streamService?: Record<string, unknown>;
+  preparation?: Record<string, unknown>;
+}): PipelineOrchestratorService {
+  const queueService = {
+    removeJob: vi.fn().mockResolvedValue(false),
+    ...overrides?.queueService,
+  };
+  const jobsService = {
+    updateStatus: vi.fn().mockResolvedValue({}),
+    addLog: vi.fn().mockResolvedValue({}),
+    ...overrides?.jobsService,
+  };
   return new PipelineOrchestratorService(
+    queueService as never,
+    jobsService as never,
+    ({
+      cancel: vi.fn().mockResolvedValue(undefined),
+      ...overrides?.processRegistry,
+    }) as never,
+    ({
+      publish: vi.fn().mockResolvedValue(undefined),
+      ...overrides?.streamService,
+    }) as never,
     {} as never,
     {} as never,
     {} as never,
     {} as never,
     {} as never,
     {} as never,
-    {} as never,
-    {} as never,
-    {} as never,
-    {} as never,
+    (overrides?.preparation ?? {
+      requireOwnedActiveScratchTarget: vi.fn().mockImplementation(async (id: string) => ({
+        target: await db.orgConnection.findUnique({ where: { id } }),
+      })),
+    }) as never,
   );
 }
 
@@ -58,6 +96,7 @@ describe('PipelineOrchestratorService provider-neutral resume', () => {
     db.automationRun.findUnique.mockResolvedValue(legacyRun());
     db.automationRun.updateMany.mockResolvedValue({ count: 1 });
     db.automationRun.update.mockResolvedValue({});
+    db.job.update.mockResolvedValue({});
     db.job.findFirst.mockResolvedValue(null);
   });
 
@@ -100,10 +139,739 @@ describe('PipelineOrchestratorService provider-neutral resume', () => {
     );
   });
 
+  it('does not overwrite persisted SCM source with resume-time defaults', async () => {
+    const service = createService();
+    const enqueueMetadataDeploy = vi.fn().mockResolvedValue({ id: 'job-2' });
+    (service as unknown as { enqueueMetadataDeploy: typeof enqueueMetadataDeploy })
+      .enqueueMetadataDeploy = enqueueMetadataDeploy;
+
+    await service.resumeRun('run-1', {
+      gitSource: {
+        provider: 'github',
+        repo: 'current-default',
+        branch: 'develop',
+      },
+    }, 'owner-1');
+
+    const resumedConfig = enqueueMetadataDeploy.mock.calls[0][1];
+    expect(resumedConfig.gitSource).toEqual(expect.objectContaining({
+      provider: 'azure_devops',
+      repo: 'metadata',
+      branch: 'main',
+    }));
+    expect(resumedConfig.gitSource).not.toEqual(expect.objectContaining({
+      repo: 'current-default',
+    }));
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        config: expect.objectContaining({
+          gitSource: expect.objectContaining({ repo: 'metadata' }),
+        }),
+      }),
+    }));
+  });
+
   it('does not disclose or resume another user’s run', async () => {
     const service = createService();
     await expect(service.getRun('run-1', 'other-user')).rejects.toThrow('not found');
     await expect(service.resumeRun('run-1', {}, 'other-user')).rejects.toThrow('not found');
     expect(db.automationRun.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('PipelineOrchestratorService existing scratch target mode', () => {
+  const existingConfig = {
+    mode: 'configure_existing',
+    existingOrgConnectionId: '11111111-1111-4111-8111-111111111111',
+    existingOrgOptions: {
+      verifyAuthentication: true,
+      ensureRequiredPackage: true,
+    },
+    alias: 'existing',
+    duration: 30,
+    template: 'config/project-scratch-def.json',
+    definitionFile: 'config/project-scratch-def.json',
+    skipSteps: [],
+    gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+  } as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.orgConnection.findUnique.mockResolvedValue({
+      id: existingConfig.existingOrgConnectionId,
+      alias: 'existing',
+      username: 'existing@scratch.example',
+      orgId: '00Dscratch',
+      createdBy: 'owner-1',
+      type: 'scratch',
+      status: 'active',
+      expiresAt: new Date('2099-08-01T00:00:00Z'),
+    });
+    db.automationRun.create.mockResolvedValue({ id: 'run-existing' });
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      createdBy: 'owner-1',
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      config: existingConfig,
+      checkpoint: {
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+        resumeFrom: 'prepare_existing_org',
+      },
+    });
+    db.automationRun.update.mockResolvedValue({});
+    db.job.findFirst.mockResolvedValue(null);
+    db.orgConnection.findMany.mockResolvedValue([{
+      id: existingConfig.existingOrgConnectionId,
+    }]);
+  });
+
+  it('primes creation checkpoints and queues preparation, never scratch creation', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'prepare-job' });
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob },
+    });
+
+    await expect(service.startPipeline(existingConfig, 'owner-1')).resolves.toEqual({
+      automationRunId: 'run-existing',
+      jobId: 'prepare-job',
+      status: 'running',
+    });
+    expect(db.automationRun.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        launchMode: 'configure_existing',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+        checkpoint: expect.objectContaining({
+          completedSteps: ['scratch_org_create'],
+          skippedSteps: ['create_scratch_org', 'generate_password', 'retrieve_org_details'],
+          scratchOrgCreated: true,
+          resumeFrom: 'prepare_existing_org',
+        }),
+      }),
+    }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      queue: 'org-setup',
+      type: 'prepare_existing_org',
+      createdBy: 'owner-1',
+    }));
+    expect(addJob).toHaveBeenCalledWith(
+      'org-setup',
+      'prepare_existing_org',
+      expect.any(Object),
+      'prepare-job',
+      { attempts: 1 },
+    );
+    expect(addJob.mock.calls.some((call) => call[0] === 'scratch-org-create')).toBe(false);
+  });
+
+  it('hands successful preparation to the shared metadata deploy stage', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      status: 'running',
+      createdBy: 'owner-1',
+      config: existingConfig,
+      checkpoint: {
+        completedSteps: ['scratch_org_create'],
+        resumeFrom: 'prepare_existing_org',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    const service = createService();
+    const enqueueMetadataDeploy = vi.fn().mockResolvedValue({ id: 'metadata-job' });
+    (service as unknown as { enqueueMetadataDeploy: typeof enqueueMetadataDeploy })
+      .enqueueMetadataDeploy = enqueueMetadataDeploy;
+
+    await service.handleJobSucceeded('run-existing', 'prepare_existing_org');
+    expect(enqueueMetadataDeploy).toHaveBeenCalledWith(
+      'run-existing',
+      existingConfig,
+      expect.objectContaining({
+        completedSteps: ['scratch_org_create', 'prepare_existing_org'],
+        resumeFrom: 'git_metadata_deploy',
+      }),
+    );
+  });
+
+  it('resumes an existing target at preparation without entering scratch creation', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      intent: 'scratch_org_pipeline',
+      status: 'paused',
+      createdBy: 'owner-1',
+      config: existingConfig,
+      checkpoint: {
+        completedSteps: ['scratch_org_create'],
+        resumeFrom: 'prepare_existing_org',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    db.automationRun.updateMany.mockResolvedValue({ count: 1 });
+    const service = createService();
+    const enqueueExistingPreparation = vi.fn().mockResolvedValue({ id: 'prepare-retry' });
+    const enqueueScratchOrgResume = vi.fn();
+    Object.assign(service as object, { enqueueExistingPreparation, enqueueScratchOrgResume });
+
+    await service.resumeRun('run-existing', {}, 'owner-1');
+    expect(enqueueExistingPreparation).toHaveBeenCalled();
+    expect(enqueueScratchOrgResume).not.toHaveBeenCalled();
+  });
+
+  it('returns the active target run id on a uniqueness race', async () => {
+    db.automationRun.create.mockRejectedValue({ code: 'P2002' });
+    db.automationRun.findFirst.mockResolvedValue({ id: 'run-conflict' });
+    const service = createService();
+    await expect(service.startPipeline(existingConfig, 'owner-1')).rejects.toMatchObject({
+      response: expect.objectContaining({ conflictRunId: 'run-conflict' }),
+    });
+    expect(db.automationRun.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        intent: 'scratch_org_pipeline',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      }),
+    }));
+    expect(db.automationRun.findFirst.mock.calls[0][0].where).not.toHaveProperty('launchMode');
+  });
+
+  it('does not turn a terminal uniqueness-race failure back into an active paused run', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      status: 'failed',
+      createdBy: 'owner-1',
+      checkpoint: {
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    await createService().handleJobFailed(
+      'run-existing',
+      'scratch_org_create',
+      'Another active pipeline claimed the scratch target',
+    );
+    expect(db.automationRun.update).not.toHaveBeenCalled();
+  });
+
+  it('cancels the preparation job and fails the run when queueing is ambiguous', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'prepare-job' });
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockResolvedValue(true);
+    const service = createService({
+      jobsService: { create },
+      processRegistry: { cancel },
+      queueService: {
+        addJob: vi.fn().mockRejectedValue(new Error('Redis unavailable')),
+        removeJob,
+      },
+    });
+
+    await expect(service.startPipeline(existingConfig, 'owner-1'))
+      .rejects.toThrow('Preparation queueing failed');
+    expect(cancel).toHaveBeenCalledWith('prepare-job');
+    expect(removeJob).toHaveBeenCalledWith('org-setup', 'prepare-job');
+    expect(db.job.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'prepare-job' },
+      data: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-existing' },
+      data: expect.objectContaining({
+        status: 'failed',
+        failedStep: 'prepare_existing_org',
+      }),
+    }));
+  });
+
+  it('compensates an accepted preparation when checkpoint persistence fails', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'prepare-job' });
+    const addJob = vi.fn().mockResolvedValue('prepare-job');
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockResolvedValue(true);
+    db.automationRun.update
+      .mockRejectedValueOnce(new Error('Checkpoint persistence failed'))
+      .mockResolvedValueOnce({});
+    const service = createService({
+      jobsService: { create },
+      processRegistry: { cancel },
+      queueService: { addJob, removeJob },
+    });
+
+    await expect(service.startPipeline(existingConfig, 'owner-1'))
+      .rejects.toThrow('Preparation queueing failed');
+
+    expect(addJob).toHaveBeenCalledWith(
+      'org-setup',
+      'prepare_existing_org',
+      expect.objectContaining({ dbJobId: 'prepare-job' }),
+      'prepare-job',
+      { attempts: 1 },
+    );
+    expect(cancel).toHaveBeenCalledWith('prepare-job');
+    expect(removeJob).toHaveBeenCalledWith('org-setup', 'prepare-job');
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(
+      removeJob.mock.invocationCallOrder[0],
+    );
+    expect(db.job.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'prepare-job' },
+      data: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(db.automationRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: 'run-existing' },
+      data: expect.objectContaining({
+        status: 'failed',
+        failedStep: 'prepare_existing_org',
+      }),
+    }));
+  });
+
+  it('releases target uniqueness when preparation job creation fails', async () => {
+    const service = createService({
+      jobsService: {
+        create: vi.fn().mockRejectedValue(new Error('Postgres unavailable')),
+      },
+      queueService: { addJob: vi.fn() },
+    });
+
+    await expect(service.startPipeline(existingConfig, 'owner-1'))
+      .rejects.toThrow('Preparation queueing failed');
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-existing' },
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+    expect(db.job.update).not.toHaveBeenCalled();
+  });
+
+  it('reruns authoritative target validation before claiming a paused existing run', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      intent: 'scratch_org_pipeline',
+      status: 'paused',
+      createdBy: 'owner-1',
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      config: existingConfig,
+      checkpoint: {
+        completedSteps: ['scratch_org_create'],
+        resumeFrom: 'prepare_existing_org',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    const requireOwnedActiveScratchTarget = vi.fn()
+      .mockRejectedValue(new Error('Selected scratch org expiration is missing or has passed'));
+    const service = createService({
+      preparation: { requireOwnedActiveScratchTarget },
+    });
+
+    await expect(service.resumeRun('run-existing', {}, 'owner-1'))
+      .rejects.toThrow('expiration');
+    expect(requireOwnedActiveScratchTarget).toHaveBeenCalledWith(
+      existingConfig.existingOrgConnectionId,
+      'owner-1',
+    );
+    expect(db.automationRun.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('scopes recent target filters to the caller and target alias/org fields', async () => {
+    db.automationRun.findMany.mockResolvedValue([]);
+    await createService().getRecentRuns({ target: 'existing', limit: '5' }, 'owner-1');
+    expect(db.automationRun.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        intent: 'scratch_org_pipeline',
+        createdBy: 'owner-1',
+        AND: [expect.objectContaining({
+          OR: expect.arrayContaining([
+            expect.objectContaining({
+              targetOrgConnection: {
+                OR: expect.arrayContaining([
+                  { alias: { contains: 'existing', mode: 'insensitive' } },
+                  { orgId: { contains: 'existing', mode: 'insensitive' } },
+                ]),
+              },
+            }),
+            expect.objectContaining({
+              targetOrgConnectionId: null,
+              checkpoint: {
+                path: ['targetOrgConnectionId'],
+                equals: existingConfig.existingOrgConnectionId,
+              },
+            }),
+          ]),
+        })],
+      }),
+      take: 5,
+    }));
+  });
+
+  it('filters target-id history through both relational and legacy checkpoint targets', async () => {
+    db.automationRun.findMany.mockResolvedValue([]);
+    await createService().getRecentRuns({
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+    }, 'owner-1');
+    expect(db.automationRun.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: [{
+          OR: [
+            { targetOrgConnectionId: existingConfig.existingOrgConnectionId },
+            {
+              targetOrgConnectionId: null,
+              checkpoint: {
+                path: ['targetOrgConnectionId'],
+                equals: existingConfig.existingOrgConnectionId,
+              },
+            },
+          ],
+        }],
+      }),
+    }));
+  });
+
+  it('normalizes a legacy checkpoint target into the recent-run DTO', async () => {
+    db.automationRun.findMany.mockResolvedValue([{
+      id: 'legacy-run',
+      status: 'completed',
+      targetOrgConnectionId: null,
+      targetOrgConnection: null,
+      checkpoint: {
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+        internalState: 'not part of the recent-run DTO',
+      },
+    }]);
+
+    const result = await createService().getRecentRuns({}, 'owner-1');
+
+    expect(result).toEqual([expect.objectContaining({
+      id: 'legacy-run',
+      targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+    })]);
+    expect(result[0]).not.toHaveProperty('checkpoint');
+  });
+});
+
+describe('PipelineOrchestratorService cancellation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.automationRun.update.mockResolvedValue({});
+  });
+
+  it('persists and broadcasts active cancellation despite locked BullMQ removal', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-active',
+      status: 'running',
+      createdBy: 'owner-1',
+      checkpoint: {},
+      jobs: [{
+        id: 'prepare-active',
+        queue: 'org-setup',
+        status: 'running',
+      }],
+    });
+    const updateStatus = vi.fn().mockResolvedValue({});
+    const addLog = vi.fn().mockResolvedValue({});
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockRejectedValue(
+      new Error('Job could not be removed because it is locked by another worker'),
+    );
+    const publish = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { updateStatus, addLog },
+      processRegistry: { cancel },
+      queueService: { removeJob },
+      streamService: { publish },
+    });
+
+    await expect(service.cancelRun('run-active', 'owner-1')).resolves.toEqual({
+      cancelled: true,
+    });
+
+    expect(db.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'run-active' },
+      data: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(updateStatus).toHaveBeenCalledWith('prepare-active', 'cancelled');
+    expect(cancel).toHaveBeenCalledWith('prepare-active');
+    expect(removeJob).toHaveBeenCalledWith('org-setup', 'prepare-active');
+    expect(updateStatus.mock.invocationCallOrder[0]).toBeLessThan(
+      cancel.mock.invocationCallOrder[0],
+    );
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(
+      removeJob.mock.invocationCallOrder[0],
+    );
+    expect(publish).toHaveBeenCalledWith('job_status', {
+      automationRunId: 'run-active',
+      status: 'cancelled',
+    });
+  });
+});
+
+describe('PipelineOrchestratorService legacy create mode', () => {
+  it('keeps the scratch creation queue for default create payloads', async () => {
+    vi.clearAllMocks();
+    db.automationRun.create.mockResolvedValue({ id: 'run-create' });
+    db.automationRun.update.mockResolvedValue({});
+    db.job.create.mockResolvedValue({ id: 'scratch-job' });
+    db.job.update.mockResolvedValue({});
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({ queueService: { addJob } });
+
+    await service.startPipeline({
+      mode: 'create_new',
+      alias: 'new-scratch',
+      devHubAlias: 'dev-hub',
+      duration: 30,
+      definitionFile: 'config/project-scratch-def.json',
+      template: 'config/project-scratch-def.json',
+      skipSteps: [],
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+    }, 'owner-1');
+
+    expect(addJob).toHaveBeenCalledWith(
+      'scratch-org-create',
+      'scratch_org_workflow',
+      expect.any(Object),
+      'scratch-job',
+      { attempts: 1 },
+    );
+  });
+});
+
+describe('PipelineOrchestratorService custom-settings transition', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.automationRun.update.mockResolvedValue({});
+  });
+
+  it('always queues target-only org config after successful SFDMU', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'running',
+      config: {
+        alias: 'scratch',
+        devHubAlias: 'devhub',
+        gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+        customSettings: { enabled: true, mode: 'bundled' },
+      },
+      checkpoint: {
+        completedSteps: ['scratch_org_create', 'git_metadata_deploy'],
+        resumeFrom: 'load_custom_settings',
+        targetOrgConnectionId: 'scratch-target',
+      },
+    });
+    const service = createService();
+    const enqueueLoadOrgConfig = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { enqueueLoadOrgConfig: typeof enqueueLoadOrgConfig })
+      .enqueueLoadOrgConfig = enqueueLoadOrgConfig;
+
+    await service.handleJobSucceeded('run-1', 'custom_settings_load');
+
+    expect(enqueueLoadOrgConfig).toHaveBeenCalledWith(
+      'run-1',
+      expect.any(Object),
+      expect.objectContaining({
+        targetOrgConnectionId: 'scratch-target',
+        completedSteps: expect.arrayContaining(['load_custom_settings']),
+      }),
+    );
+  });
+});
+
+describe('PipelineOrchestratorService V2 job ownership', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sets the automation owner on query-section seed jobs', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'completed',
+      config: {
+        version: 2,
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: {
+          mode: 'query_section',
+          querySection: {
+            name: 'Seed',
+            queries: [{
+              id: 'account',
+              name: 'Account',
+              enabled: true,
+              order: 0,
+              stage: 0,
+              category: 'account',
+              object: 'Account',
+              soql: 'SELECT Name FROM Account',
+              limit: 10,
+              operation: 'upsert',
+              externalIdField: 'Name',
+              variables: {},
+              dependsOn: [],
+            }],
+          },
+        },
+      },
+      checkpoint: {
+        completedSteps: [],
+        resumeFrom: 'load_org_config',
+        targetOrgConnectionId: 'target-1',
+      },
+    });
+    const create = vi.fn().mockResolvedValue({ id: 'seed-job' });
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob },
+    });
+
+    await service.runUserActions('run-1', { actions: ['load_data_seed'] }, 'owner-1');
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'cona_seed',
+      parentRunId: 'run-1',
+      createdBy: 'owner-1',
+    }));
+  });
+});
+
+describe('PipelineOrchestratorService provisioning retry checkpoints', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.$transaction.mockImplementation(async (callback) => callback(db));
+    db.provisionedUser.updateMany.mockResolvedValue({ count: 1 });
+    db.provisioningBatch.update.mockResolvedValue({});
+  });
+
+  it('reuses the original batch and queues only failed immutable users', async () => {
+    const resolvedUsers = [{
+      firstName: 'Done',
+      lastName: 'User',
+      email: 'done@example.com',
+      username: 'done+run@example.com',
+      role: 'Rep',
+      bottler: '5000',
+      modules: [],
+      locations: [],
+      profile: 'Standard User',
+      permissionSets: [],
+    }, {
+      firstName: 'Retry',
+      lastName: 'User',
+      email: 'retry@example.com',
+      username: 'retry+run@example.com',
+      role: 'Rep',
+      bottler: '5000',
+      modules: [],
+      locations: [],
+      profile: 'Standard User',
+      permissionSets: [],
+    }];
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-1',
+      status: 'paused',
+      createdBy: 'owner-1',
+      config: {
+        version: 2,
+        userProvisioning: {
+          defaultProfile: 'Standard User',
+          execution: {
+            mode: 'sequential',
+            concurrency: 1,
+            failurePolicy: 'fail_fast',
+            discoveryFailurePolicy: 'fail',
+          },
+        },
+      },
+      checkpoint: {
+        targetOrgConnectionId: 'target-1',
+        provisioningBatchId: 'batch-original',
+        resolvedProvisioningUsers: resolvedUsers,
+      },
+    });
+    db.provisioningBatch.findUnique.mockResolvedValue({
+      id: 'batch-original',
+      orgId: 'target-1',
+      createdBy: 'owner-1',
+      users: [
+        { username: 'done+run@example.com', status: 'completed' },
+        { username: 'retry+run@example.com', status: 'failed' },
+      ],
+    });
+    const create = vi.fn().mockResolvedValue({ id: 'retry-job' });
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob },
+    });
+
+    await service.runUserActions('run-1', { actions: ['provision_users'] }, 'owner-1');
+
+    expect(db.provisioningBatch.create).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        batchId: 'batch-original',
+        users: [resolvedUsers[1]],
+      }),
+    }));
+    expect(addJob).toHaveBeenCalledWith(
+      expect.any(String),
+      'cona_user_provision',
+      expect.objectContaining({
+        batchId: 'batch-original',
+        users: [resolvedUsers[1]],
+      }),
+      'retry-job',
+    );
+  });
+
+  it('checkpoints the resolved plan and batch atomically before queueing the same usernames', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-new',
+      status: 'running',
+      createdBy: 'owner-1',
+      config: {
+        version: 2,
+        userProvisioning: {
+          defaultProfile: 'Standard User',
+          users: [{
+            firstName: 'Generated',
+            lastName: 'Username',
+            email: 'generated@example.com',
+            role: 'Rep',
+            bottler: '5000',
+          }],
+        },
+      },
+      checkpoint: { targetOrgConnectionId: 'target-1' },
+    });
+    db.provisioningBatch.create.mockResolvedValue({ id: 'batch-new' });
+    db.automationRun.update.mockResolvedValue({});
+    const create = vi.fn().mockResolvedValue({ id: 'new-job' });
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob },
+    });
+
+    await service.runUserActions('run-new', { actions: ['provision_users'] }, 'owner-1');
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    const checkpoint = db.automationRun.update.mock.calls[0][0].data.checkpoint;
+    expect(checkpoint.provisioningBatchId).toBe('batch-new');
+    const username = checkpoint.resolvedProvisioningUsers[0].username;
+    expect(db.provisioningBatch.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        users: { create: [expect.objectContaining({ username })] },
+      }),
+    }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        batchId: 'batch-new',
+        users: [expect.objectContaining({ username })],
+      }),
+    }));
+    expect(addJob).toHaveBeenCalledWith(
+      expect.any(String),
+      'cona_user_provision',
+      expect.objectContaining({
+        batchId: 'batch-new',
+        users: [expect.objectContaining({ username })],
+      }),
+      'new-job',
+    );
   });
 });

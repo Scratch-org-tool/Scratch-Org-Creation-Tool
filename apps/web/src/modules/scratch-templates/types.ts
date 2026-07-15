@@ -11,6 +11,7 @@ export const TEMPLATE_WIZARD_STEPS = [
   'Custom settings',
   'Permissions',
   'Data seed',
+  'Query section',
   'Partners & users',
   'Review',
 ] as const;
@@ -29,6 +30,7 @@ export type ConaUserRow = {
 };
 
 export const DEFAULT_TEMPLATE_CONFIG: TemplateConfigState = {
+  version: 2,
   template: 'config/project-scratch-def.json',
   duration: 7,
   installPackage: true,
@@ -63,7 +65,23 @@ export const DEFAULT_TEMPLATE_CONFIG: TemplateConfigState = {
     autoRunPartners: false,
     autoRunUsers: true,
   },
-  userProvisioning: { users: [], templates: [], slots: [] },
+  userProvisioning: {
+    discoveryPolicy: 'best_effort',
+    emailPolicy: { strategy: 'provided', seed: 'automation_run' },
+    usernamePolicy: { strategy: 'email_style', seed: 'automation_run' },
+    roleBottlerMappings: [],
+    userGenerators: [],
+    teams: [],
+    users: [],
+    templates: [],
+    slots: [],
+    execution: {
+      mode: 'sequential',
+      concurrency: 1,
+      failurePolicy: 'fail_fast',
+      discoveryFailurePolicy: 'fail',
+    },
+  },
 };
 
 export function configToSummaryChips(config: ScratchPipelineTemplateConfig): string[] {
@@ -74,9 +92,15 @@ export function configToSummaryChips(config: ScratchPipelineTemplateConfig): str
   const ds = config.dataSeed?.datasets?.length ?? 0;
   if (ds > 0) chips.push(`${ds} dataset${ds === 1 ? '' : 's'}`);
   if (config.dataSeed?.querySet) chips.push('Query JSON');
-  const users =
-    (config.userProvisioning?.slots?.length ?? 0) ||
-    (config.userProvisioning?.users?.length ?? 0);
+  const queries = config.dataSeed?.querySection?.queries.filter((query) => query.enabled).length ?? 0;
+  if (queries) chips.push(`${queries} V2 quer${queries === 1 ? 'y' : 'ies'}`);
+  const generated = config.userProvisioning?.userGenerators?.reduce(
+    (sum, generator) => sum + generator.count,
+    0,
+  ) ?? 0;
+  const users = generated
+    ? generated + (config.userProvisioning?.users?.length ?? 0)
+    : (config.userProvisioning?.slots?.length || config.userProvisioning?.users?.length || 0);
   if (users > 0) chips.push(`${users} user${users === 1 ? '' : 's'}`);
   if (config.pipelineSteps?.autoRunDataSeed) chips.push('Auto seed');
   if (config.pipelineSteps?.autoRunPartners) chips.push('Auto partners');

@@ -44,4 +44,17 @@ export class ScratchTemplatesController {
   duplicate(@Param('id') id: string, @CurrentUser() userId: string) {
     return this.templatesService.duplicate(id, userId);
   }
+
+  @Post(':id/launch-plan')
+  async launchPlan(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() userId: string,
+  ) {
+    const config = await this.templatesService.resolveLaunch(
+      { ...body, templateId: id },
+      userId,
+    );
+    return { config };
+  }
 }
