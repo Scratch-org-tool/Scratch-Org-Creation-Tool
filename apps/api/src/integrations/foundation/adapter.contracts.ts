@@ -51,9 +51,55 @@ export interface ScmAdapter {
 export interface WorkItemQuery extends AdapterContext {
   project?: string;
   assigneeEmail?: string;
+  /** Canonical provider identity. Prefer this over email-based matching. */
+  assigneeId?: string;
+  assigneeLogin?: string;
   types?: readonly string[];
   state?: string;
   text?: string;
+}
+
+export interface WorkItemCreateInput extends AdapterContext {
+  project: string;
+  title: string;
+  description?: string;
+  type?: string;
+  assigneeLogins?: readonly string[];
+  priority?: string | number | null;
+  severity?: string | null;
+  area?: string | null;
+  iteration?: string | null;
+  labels?: readonly string[];
+  state?: string;
+  customFields?: Record<string, string | number | null>;
+}
+
+export interface WorkItemUpdateInput extends AdapterContext {
+  project?: string;
+  title?: string;
+  description?: string | null;
+  type?: string | null;
+  assigneeLogins?: readonly string[];
+  priority?: string | number | null;
+  severity?: string | null;
+  area?: string | null;
+  iteration?: string | null;
+  labels?: readonly string[];
+  state?: string;
+  customFields?: Record<string, string | number | null>;
+}
+
+export interface WorkItemMutationResult {
+  id: string;
+  updated: boolean;
+}
+
+export interface WorkItemOverview {
+  project: WorkItemProject;
+  total: number;
+  byState: Record<string, number>;
+  byType: Record<string, number>;
+  byPriority: Record<string, number>;
 }
 
 export interface AttachmentContent {
@@ -67,6 +113,7 @@ export interface WorkItemAdapter {
   readonly capabilities: IntegrationCapabilities;
   getConnectionStatus(context?: AdapterContext): Promise<WorkItemConnectionStatus>;
   listProjects(context?: AdapterContext): Promise<WorkItemProject[]>;
+  getOverview?(project: string): Promise<WorkItemOverview>;
   queryWorkItems(query: WorkItemQuery): Promise<WorkItemSummary[]>;
   getWorkItem(id: string, project?: string): Promise<WorkItemDetail>;
   getComments(id: string, project?: string): Promise<WorkItemComment[]>;
@@ -78,6 +125,14 @@ export interface WorkItemAdapter {
     attachmentId: string,
     project?: string,
   ): Promise<AttachmentContent>;
+  createWorkItem?(input: WorkItemCreateInput): Promise<WorkItemDetail>;
+  updateWorkItem?(id: string, input: WorkItemUpdateInput): Promise<WorkItemDetail>;
+  addComment?(id: string, body: string, project?: string): Promise<WorkItemComment>;
+  listIssueTypes?(project: string): Promise<string[]>;
+  listAssignees?(project: string): Promise<import('@sfcc/shared').WorkItemUser[]>;
+  listLabels?(project: string): Promise<string[]>;
+  listSubIssues?(id: string, project?: string): Promise<WorkItemSummary[]>;
+  addSubIssue?(id: string, subIssueId: string, project?: string): Promise<WorkItemMutationResult>;
   updateState?(id: string, state: string, project?: string): Promise<WorkItemDetail>;
 }
 

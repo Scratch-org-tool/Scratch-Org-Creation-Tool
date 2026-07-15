@@ -18,7 +18,8 @@ function resolveCorsOrigins(): string[] | boolean {
 
 export async function startApi(): Promise<void> {
   initFirebase();
-  const app = await NestFactory.create(AppModule);
+  // Preserve the exact bytes needed for provider webhook HMAC verification.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   const trustedProxies = (process.env.TRUST_PROXY ?? '')
     .split(',')
     .map((value) => value.trim())
