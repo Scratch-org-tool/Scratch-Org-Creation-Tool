@@ -44,11 +44,13 @@ import {
 import { InlineAlert } from '@/components/studio/inline-alert';
 import { useAuth } from '@/contexts/auth-context';
 import { avatarColor, userInitials } from '@/lib/app-nav';
-import { ApiError, api } from '@/services/api';
+import { api } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { PasswordStrengthMeter } from '@/modules/auth/password-strength-meter';
 import {
+  executeLogoutAll,
   executePasswordChange,
+  revalidatePasswordErrors,
   type AccountActionErrors,
   type PasswordChangeFields,
 } from './account-actions';
@@ -163,6 +165,7 @@ export function AccountWorkspace() {
   const [nameSaving, setNameSaving] = useState(false);
   const [nameError, setNameError] = useState('');
   const [nameNotice, setNameNotice] = useState('');
+  const [nameWarning, setNameWarning] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
   const nameAlertRef = useRef<HTMLDivElement>(null);
 
@@ -204,6 +207,12 @@ export function AccountWorkspace() {
     });
   };
 
+  const changePasswordField = (field: PasswordFieldName, value: string) => {
+    const next = { ...passwords, [field]: value };
+    setPasswords(next);
+    setPasswordErrors((current) => revalidatePasswordErrors(current, next, field));
+  };
+
   const redirectToLogin = (notice?: string) => {
     window.location.assign(notice ? `/login?notice=${notice}` : '/login');
   };
@@ -212,6 +221,7 @@ export function AccountWorkspace() {
     event.preventDefault();
     setNameError('');
     setNameNotice('');
+    setNameWarning('');
 
     const parsed = updateMeSchema.safeParse({ displayName });
     if (!parsed.success) {
@@ -229,9 +239,13 @@ export function AccountWorkspace() {
     try {
       const updated = await updateDisplayName(parsed.data.displayName);
       if (updated) {
-        setDisplayName(updated.displayName);
+        setDisplayName(updated.profile.displayName);
         setNameDirty(false);
-        setNameNotice('Display name updated.');
+        if (updated.syncWarning) {
+          setNameWarning(updated.syncWarning);
+        } else {
+          setNameNotice('Display name updated.');
+        }
       }
     } catch (error) {
       setNameError(error instanceof Error ? error.message : AUTH_GENERIC_INVALID);
@@ -289,19 +303,16 @@ export function AccountWorkspace() {
   const handleLogoutAll = async () => {
     setSessionError('');
     setLogoutAllLoading(true);
-    try {
-      await api('/auth/logout-all', {
+    const result = await executeLogoutAll({
+      request: () => api('/auth/logout-all', {
         method: 'POST',
         body: JSON.stringify({}),
-      });
-      await signOut();
-      redirectToLogin('sessions-ended');
-    } catch (error) {
-      setSessionError(
-        error instanceof ApiError && error.status === 429
-          ? 'Too many session requests. Wait a few minutes and try again.'
-          : 'Could not sign out all sessions. Please try again.',
-      );
+      }),
+      signOut,
+      redirect: (href) => window.location.assign(href),
+    });
+    if (!result.ok) {
+      setSessionError(result.error);
       setLogoutAllLoading(false);
     }
   };
@@ -368,6 +379,7 @@ export function AccountWorkspace() {
                       setNameDirty(true);
                       setNameError('');
                       setNameNotice('');
+                      setNameWarning('');
                     }}
                     autoComplete="name"
                     maxLength={80}
@@ -387,6 +399,7 @@ export function AccountWorkspace() {
                       <span id="display-name-error">{nameError}</span>
                     </InlineAlert>
                   )}
+                  {nameWarning && <InlineAlert variant="warning">{nameWarning}</InlineAlert>}
                   {nameNotice && <InlineAlert variant="success">{nameNotice}</InlineAlert>}
                 </div>
                 <Button
@@ -462,13 +475,7 @@ export function AccountWorkspace() {
                   error={passwordErrors.fields.currentPassword}
                   disabled={passwordSaving}
                   inputRef={passwordRefs.currentPassword}
-                  onChange={(value) => {
-                    setPasswords((current) => ({ ...current, currentPassword: value }));
-                    setPasswordErrors((current) => ({
-                      ...current,
-                      fields: { ...current.fields, currentPassword: undefined },
-                    }));
-                  }}
+                  onChange={(value) => changePasswordField('currentPassword', value)}
                   onToggle={() => setPasswordVisible((current) => ({
                     ...current,
                     currentPassword: !current.currentPassword,
@@ -483,13 +490,7 @@ export function AccountWorkspace() {
                   error={passwordErrors.fields.newPassword}
                   disabled={passwordSaving}
                   inputRef={passwordRefs.newPassword}
-                  onChange={(value) => {
-                    setPasswords((current) => ({ ...current, newPassword: value }));
-                    setPasswordErrors((current) => ({
-                      ...current,
-                      fields: { ...current.fields, newPassword: undefined },
-                    }));
-                  }}
+                  onChange={(value) => changePasswordField('newPassword', value)}
                   onToggle={() => setPasswordVisible((current) => ({
                     ...current,
                     newPassword: !current.newPassword,
@@ -505,13 +506,7 @@ export function AccountWorkspace() {
                   error={passwordErrors.fields.confirmPassword}
                   disabled={passwordSaving}
                   inputRef={passwordRefs.confirmPassword}
-                  onChange={(value) => {
-                    setPasswords((current) => ({ ...current, confirmPassword: value }));
-                    setPasswordErrors((current) => ({
-                      ...current,
-                      fields: { ...current.fields, confirmPassword: undefined },
-                    }));
-                  }}
+                  onChange={(value) => changePasswordField('confirmPassword', value)}
                   onToggle={() => setPasswordVisible((current) => ({
                     ...current,
                     confirmPassword: !current.confirmPassword,

@@ -2,9 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/services/api';
 import {
   buildDisplayNameRequest,
+  executeLogoutAll,
   executePasswordChange,
+  mapLogoutAllError,
   mapPasswordChangeError,
+  revalidatePasswordErrors,
+  runFirebaseSignOutWithCleanup,
   runOptimisticDisplayNameUpdate,
+  synchronizeFirebaseDisplayName,
   validatePasswordChange,
   type LatestRequestGate,
 } from './account-actions';
@@ -46,6 +51,48 @@ describe('optimistic display-name updates', () => {
     ]);
     expect(syncFirebase).toHaveBeenCalledWith('Ada L.');
     expect(result.status).toBe('success');
+  });
+
+  it('updates and reloads Firebase before refreshing AuthContext state', async () => {
+    const calls: string[] = [];
+
+    await synchronizeFirebaseDisplayName({
+      updateProfile: async () => {
+        calls.push('updateProfile');
+      },
+      reload: async () => {
+        calls.push('reload');
+      },
+      refreshContext: () => calls.push('refreshContext'),
+    });
+
+    expect(calls).toEqual(['updateProfile', 'reload', 'refreshContext']);
+  });
+
+  it('keeps the authoritative name and warns when Firebase sync fails', async () => {
+    const gate: LatestRequestGate = { current: 0 };
+    const states: Array<{ displayName: string }> = [];
+    const reconcile = vi.fn(async () => undefined);
+
+    const result = await runOptimisticDisplayNameUpdate({
+      gate,
+      snapshot: { displayName: 'Ada' },
+      displayName: 'Ada Lovelace',
+      setProfile: (profile) => states.push(profile),
+      request: async () => ({ displayName: 'Server Name' }),
+      syncFirebase: async () => {
+        throw new Error('firebase unavailable');
+      },
+      reconcile,
+    });
+
+    expect(states.at(-1)).toEqual({ displayName: 'Server Name' });
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: 'success',
+      profile: { displayName: 'Server Name' },
+      syncWarning: expect.stringMatching(/saved.*refresh/i),
+    });
   });
 
   it('rolls back its snapshot when the latest request fails', async () => {
@@ -163,7 +210,105 @@ describe('password changes', () => {
       new ApiError('generic', 429),
     ).page).toMatch(/too many/i);
     expect(mapPasswordChangeError(
+      new ApiError('generic', 400, 'AUTH_RATE_LIMITED'),
+    ).page).toMatch(/too many/i);
+    expect(mapPasswordChangeError(
       new Error('offline'),
     ).page).toMatch(/connection/i);
+  });
+
+  it('revalidates mismatch and reuse errors when any dependent field changes', () => {
+    const bothErrors = validatePasswordChange({
+      currentPassword: 'SamePassword1!',
+      newPassword: 'SamePassword1!',
+      confirmPassword: 'DifferentPassword2!',
+    });
+    expect(bothErrors?.fields.newPassword).toMatch(/different/i);
+    expect(bothErrors?.fields.confirmPassword).toMatch(/do not match/i);
+
+    const newPasswordResolved = revalidatePasswordErrors(
+      bothErrors!,
+      {
+        currentPassword: 'SamePassword1!',
+        newPassword: 'DifferentPassword2!',
+        confirmPassword: 'DifferentPassword2!',
+      },
+      'newPassword',
+    );
+    expect(newPasswordResolved.fields.newPassword).toBeUndefined();
+    expect(newPasswordResolved.fields.confirmPassword).toBeUndefined();
+
+    const reuseError = validatePasswordChange({
+      currentPassword: 'SamePassword1!',
+      newPassword: 'SamePassword1!',
+      confirmPassword: 'SamePassword1!',
+    });
+    const currentResolved = revalidatePasswordErrors(
+      { ...reuseError!, page: 'Previous request failed.' },
+      {
+        currentPassword: 'OldPassword2!',
+        newPassword: 'SamePassword1!',
+        confirmPassword: 'SamePassword1!',
+      },
+      'currentPassword',
+    );
+    expect(currentResolved.fields.newPassword).toBeUndefined();
+    expect(currentResolved.page).toBeUndefined();
+
+    const mismatchError = validatePasswordChange({
+      ...validPasswords,
+      confirmPassword: 'DifferentPassword3!',
+    });
+    const confirmResolved = revalidatePasswordErrors(
+      mismatchError!,
+      validPasswords,
+      'confirmPassword',
+    );
+    expect(confirmResolved.fields.confirmPassword).toBeUndefined();
+  });
+});
+
+describe('logout-all', () => {
+  it('clears client auth and redirects after server success when Firebase sign-out fails', async () => {
+    const clearClientAuth = vi.fn();
+    const redirect = vi.fn();
+
+    const result = await executeLogoutAll({
+      request: vi.fn(async () => ({ reauthenticationRequired: true })),
+      signOut: () => runFirebaseSignOutWithCleanup(
+        async () => {
+          throw new Error('local Firebase failure');
+        },
+        clearClientAuth,
+      ),
+      redirect,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(clearClientAuth).toHaveBeenCalledOnce();
+    expect(redirect).toHaveBeenCalledWith('/login?notice=sessions-ended');
+  });
+
+  it('keeps the client session on server failure and maps status or stable rate codes', async () => {
+    const signOut = vi.fn();
+    const redirect = vi.fn();
+
+    const result = await executeLogoutAll({
+      request: async () => {
+        throw new ApiError('generic', 429);
+      },
+      signOut,
+      redirect,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringMatching(/too many session/i),
+    });
+    expect(signOut).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
+    expect(mapLogoutAllError(
+      new ApiError('generic', 400, 'AUTH_RATE_LIMITED'),
+    )).toMatch(/too many session/i);
   });
 });

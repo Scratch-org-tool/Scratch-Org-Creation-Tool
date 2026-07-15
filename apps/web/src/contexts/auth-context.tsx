@@ -12,8 +12,10 @@ import {
 } from 'react';
 import {
   onAuthStateChanged,
+  reload as reloadFirebaseUser,
   signInWithCustomToken,
   signOut as firebaseSignOut,
+  updateProfile as updateFirebaseProfile,
   type User,
 } from 'firebase/auth';
 import {
@@ -30,7 +32,9 @@ import type { AppModule, UserAccessProfile } from '@sfcc/shared';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import {
   buildDisplayNameRequest,
+  runFirebaseSignOutWithCleanup,
   runOptimisticDisplayNameUpdate,
+  synchronizeFirebaseDisplayName,
   type LatestRequestGate,
 } from '@/modules/account/account-actions';
 
@@ -44,6 +48,11 @@ interface AuthLoginResponse {
   customToken?: string;
   profile: MeResponse;
   usePasswordSignIn?: boolean;
+}
+
+interface DisplayNameUpdateResult {
+  profile: MeResponse;
+  syncWarning?: string;
 }
 
 interface AuthContextValue {
@@ -62,7 +71,7 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<string>;
   refreshProfile: () => Promise<void>;
-  updateDisplayName: (displayName: string) => Promise<MeResponse | null>;
+  updateDisplayName: (displayName: string) => Promise<DisplayNameUpdateResult | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -144,6 +153,7 @@ async function loadProfile(firebaseUser: User, adminBootstrapToken?: string): Pr
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<MeResponse | null>(null);
+  const [userRevision, setUserRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [profileError, setProfileError] = useState<string | null>(null);
   const profileUserIdRef = useRef<string | null>(null);
@@ -153,6 +163,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const replaceProfile = useCallback((next: MeResponse | null) => {
     profileRef.current = next;
     setProfile(next);
+  }, []);
+
+  const refreshUserContext = useCallback((next: User | null) => {
+    setUser(next);
+    setUserRevision((current) => current + 1);
   }, []);
 
   const refreshProfile = useCallback(async (firebaseUser?: User | null) => {
@@ -225,6 +240,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     profileUserIdRef.current = credential.user.uid;
     setProfileError(null);
     setUser(credential.user);
+    setAuthTokenGetter(async (forceRefresh?: boolean) => {
+      const current = auth.currentUser;
+      return current ? current.getIdToken(forceRefresh ?? false) : null;
+    });
   }, [replaceProfile]);
 
   const signUp = useCallback(async (
@@ -250,17 +269,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     profileUserIdRef.current = credential.user.uid;
     setProfileError(null);
     setUser(credential.user);
+    setAuthTokenGetter(async (forceRefresh?: boolean) => {
+      const current = auth.currentUser;
+      return current ? current.getIdToken(forceRefresh ?? false) : null;
+    });
   }, [replaceProfile]);
 
-  const signOut = useCallback(async () => {
-    const auth = getFirebaseAuth();
-    if (auth) await firebaseSignOut(auth);
+  const clearClientAuth = useCallback(() => {
+    setAuthTokenGetter(async () => null);
     setUser(null);
     profileUserIdRef.current = null;
     displayNameGateRef.current.current += 1;
     replaceProfile(null);
     setProfileError(null);
   }, [replaceProfile]);
+
+  const signOut = useCallback(async () => {
+    const auth = getFirebaseAuth();
+    await runFirebaseSignOutWithCleanup(
+      () => auth ? firebaseSignOut(auth) : Promise.resolve(),
+      clearClientAuth,
+    );
+  }, [clearClientAuth]);
 
   const resetPassword = useCallback(async (email: string) => {
     const result = await fetchAuthPublic<{ message: string }>(
@@ -290,11 +320,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: 'PATCH',
         body: JSON.stringify(requestBody),
       }),
+      syncFirebase: (nextDisplayName) => synchronizeFirebaseDisplayName({
+        updateProfile: () => updateFirebaseProfile(firebaseUser, {
+          displayName: nextDisplayName,
+        }),
+        reload: () => reloadFirebaseUser(firebaseUser),
+        refreshContext: () => refreshUserContext(auth.currentUser),
+      }),
+      reconcile: async () => {
+        try {
+          await reloadFirebaseUser(firebaseUser);
+        } finally {
+          refreshUserContext(auth.currentUser);
+          await refreshProfile(firebaseUser);
+        }
+      },
     });
     if (result.status === 'stale') return null;
     setProfileError(null);
-    return result.profile;
-  }, [replaceProfile]);
+    return {
+      profile: result.profile,
+      ...(result.syncWarning ? { syncWarning: result.syncWarning } : {}),
+    };
+  }, [refreshProfile, refreshUserContext, replaceProfile]);
 
   const value = useMemo(
     () => ({
@@ -320,6 +368,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetPassword,
       updateDisplayName,
       refreshProfile,
+      userRevision,
     ],
   );
 
