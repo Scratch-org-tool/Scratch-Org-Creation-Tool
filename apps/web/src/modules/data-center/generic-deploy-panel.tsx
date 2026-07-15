@@ -29,6 +29,7 @@ import {
   buildGenericDeployPayload,
   defaultOperationForMeta,
   externalIdOptions,
+  isCurrentConfigurationRequest,
   DATA_CENTER_ADD_QUERY_EVENT,
   preflightKey,
   type DataPreflightReport,
@@ -114,6 +115,7 @@ export function GenericDeployPanel() {
   });
   const runtimeKey = preflightKey(runtimePayload);
   const runtimeKeyRef = useRef(runtimeKey);
+  const previousRuntimeKeyRef = useRef(runtimeKey);
   runtimeKeyRef.current = runtimeKey;
   const hasCurrentPreflight = Boolean(preflight && preflightConfigKey === runtimeKey);
   const externalIds = externalIdOptions(objectMeta);
@@ -293,14 +295,14 @@ export function GenericDeployPanel() {
   }, [form.sourceOrgId, form.objectName]);
 
   useEffect(() => {
-    if (preflightConfigKey && preflightConfigKey !== runtimeKey) {
-      preflightRequestRef.current += 1;
-      setPreflight(null);
-      setPreflightConfigKey(null);
-      setPreflightLoading(false);
-      setConfirmingDeploy(false);
-    }
-  }, [preflightConfigKey, runtimeKey]);
+    if (previousRuntimeKeyRef.current === runtimeKey) return;
+    previousRuntimeKeyRef.current = runtimeKey;
+    preflightRequestRef.current += 1;
+    setPreflight(null);
+    setPreflightConfigKey(null);
+    setPreflightLoading(false);
+    setConfirmingDeploy(false);
+  }, [runtimeKey]);
 
   const runPreflight = async (openConfirmation: boolean) => {
     if (preflightLoading || loading) return;
@@ -313,21 +315,36 @@ export function GenericDeployPanel() {
         method: 'POST',
         body: JSON.stringify({ ...runtimePayload, dryRun: true }),
       });
-      if (request !== preflightRequestRef.current || requestedKey !== runtimeKeyRef.current) return;
+      if (!isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        runtimeKeyRef.current,
+      )) return;
       setPreflight(report);
-      setPreflightConfigKey(runtimeKey);
+      setPreflightConfigKey(requestedKey);
       if (openConfirmation && report.ok) setConfirmingDeploy(true);
       if (openConfirmation && !report.ok) {
         setDeployError('Preflight failed. Resolve every blocking issue before deployment.');
       }
     } catch (err) {
-      if (request === preflightRequestRef.current) {
+      if (isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        runtimeKeyRef.current,
+      )) {
         setPreflight(null);
         setPreflightConfigKey(null);
         setDeployError(err instanceof Error ? err.message : 'Preflight failed');
       }
     } finally {
-      if (request === preflightRequestRef.current) setPreflightLoading(false);
+      if (isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        runtimeKeyRef.current,
+      )) setPreflightLoading(false);
     }
   };
 

@@ -42,6 +42,9 @@ import { randomUUID } from 'crypto';
 import { DataPreflightService, type DataDeployPreflightResult } from './data-preflight.service';
 import { DataRollbackService } from './data-rollback.service';
 
+const ACTIVE_MOVEMENT_STATUSES = ['pending', 'queued', 'planning', 'running', 'paused'];
+const ROLLBACK_SOURCE_TERMINAL_STATUSES = ['completed', 'failed', 'partial'];
+
 @Injectable()
 export class DataService {
   private readonly sfCli = createSfCliClient();
@@ -107,7 +110,15 @@ export class DataService {
   }
 
   async getDeployBatch(id: string, userId: string) {
-    return this.dataDeployOrchestrator.getBatch(id, userId);
+    const batch = await this.dataDeployOrchestrator.getBatch(id, userId);
+    return {
+      ...batch,
+      canCancel: ACTIVE_MOVEMENT_STATUSES.includes(batch.status),
+      canRollback: ROLLBACK_SOURCE_TERMINAL_STATUSES.includes(batch.status)
+        && batch.operation === 'upsert'
+        && batch.idempotent
+        && batch.rollbackPolicy === 'capture',
+    };
   }
 
   async retryChunk(batchId: string, chunkId: string, userId: string) {
@@ -713,7 +724,7 @@ export class DataService {
       },
     });
     assertResourceOwner(movement, userId, 'Data movement');
-    return movement!;
+    return this.withMovementActions(movement!);
   }
 
   async replicateData(body: unknown, userId: string) {
@@ -895,7 +906,7 @@ export class DataService {
   }
 
   async listMovements(userId: string, movementType?: string) {
-    return prisma.dataMovement.findMany({
+    const movements = await prisma.dataMovement.findMany({
       where: {
         ...userOwnedWhere(userId),
         ...(movementType ? { movementType } : {}),
@@ -904,6 +915,26 @@ export class DataService {
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
+    return movements.map((movement) => this.withMovementActions(movement));
+  }
+
+  private withMovementActions<T extends {
+    status: string;
+    batchId?: string | null;
+    operation: string;
+    idempotent: boolean;
+    rollbackArtifact: Prisma.JsonValue;
+    rollbackStatus: string | null;
+  }>(movement: T): T & { canCancel: boolean; canRollback: boolean } {
+    return {
+      ...movement,
+      canCancel: !movement.batchId && ACTIVE_MOVEMENT_STATUSES.includes(movement.status),
+      canRollback: ROLLBACK_SOURCE_TERMINAL_STATUSES.includes(movement.status)
+        && movement.operation === 'upsert'
+        && movement.idempotent
+        && Boolean(movement.rollbackArtifact)
+        && movement.rollbackStatus !== 'running',
+    };
   }
 
   async enqueueConaSeed(input: ConaSeedRunInput, userId?: string) {

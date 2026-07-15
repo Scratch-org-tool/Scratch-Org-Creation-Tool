@@ -30,6 +30,7 @@ import {
   buildReplicationPayload,
   DATA_CENTER_ADD_QUERY_EVENT,
   dependencyError,
+  isCurrentConfigurationRequest,
   moveByIndex,
   preflightKey,
   type DataPreflightReport,
@@ -117,6 +118,7 @@ export function ReplicationPanel() {
   });
   const currentKey = preflightKey(replicationPayload);
   const currentKeyRef = useRef(currentKey);
+  const previousCurrentKeyRef = useRef(currentKey);
   currentKeyRef.current = currentKey;
   const graphError = dependencyError(queries.map((query, order) => ({
     id: query.id,
@@ -157,14 +159,14 @@ export function ReplicationPanel() {
   }, []);
 
   useEffect(() => {
-    if (preflightKeyValue && preflightKeyValue !== currentKey) {
-      preflightRequestRef.current += 1;
-      setPreflight(null);
-      setPreflightKeyValue(null);
-      setPreflightLoading(false);
-      setConfirming(false);
-    }
-  }, [currentKey, preflightKeyValue]);
+    if (previousCurrentKeyRef.current === currentKey) return;
+    previousCurrentKeyRef.current = currentKey;
+    preflightRequestRef.current += 1;
+    setPreflight(null);
+    setPreflightKeyValue(null);
+    setPreflightLoading(false);
+    setConfirming(false);
+  }, [currentKey]);
 
   useEffect(() => {
     previewRequestRef.current += 1;
@@ -286,25 +288,37 @@ export function ReplicationPanel() {
         method: 'POST',
         body: JSON.stringify({ ...replicationPayload, dryRun: true }),
       });
-      if (
-        request !== preflightRequestRef.current
-        || requestedKey !== currentKeyRef.current
-      ) return;
+      if (!isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        currentKeyRef.current,
+      )) return;
       setPreflight(result);
-      setPreflightKeyValue(currentKey);
+      setPreflightKeyValue(requestedKey);
       const safe = result.preflight.every((item) => item.report.ok) && result.quotaSummary.sufficient;
       if (openConfirmation && safe) setConfirming(true);
       if (openConfirmation && !safe) {
         setReplicateError('Preflight failed. Resolve every query and quota issue before replication.');
       }
     } catch (error) {
-      if (request === preflightRequestRef.current) {
+      if (isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        currentKeyRef.current,
+      )) {
         setReplicateError(error instanceof Error ? error.message : 'Preflight failed');
         setPreflight(null);
         setPreflightKeyValue(null);
       }
     } finally {
-      if (request === preflightRequestRef.current) setPreflightLoading(false);
+      if (isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        currentKeyRef.current,
+      )) setPreflightLoading(false);
     }
   };
 

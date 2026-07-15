@@ -8,13 +8,19 @@ const db = vi.hoisted(() => ({
     update: vi.fn(),
   },
   dataDeployChunk: {
+    findMany: vi.fn(),
     updateMany: vi.fn(),
     update: vi.fn(),
     findUnique: vi.fn(),
     groupBy: vi.fn(),
   },
   dataMovement: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() },
-  job: { findMany: vi.fn(), updateMany: vi.fn() },
+  job: {
+    create: vi.fn(),
+    findUnique: vi.fn(),
+    findMany: vi.fn(),
+    updateMany: vi.fn(),
+  },
   $transaction: vi.fn(),
 }));
 
@@ -27,6 +33,7 @@ describe('DataDeployOrchestratorService cancellation', () => {
   const cancelProcess = vi.fn();
   const withSchedulerLock = vi.fn();
   const enqueueJob = vi.fn();
+  const addJob = vi.fn();
   let service: DataDeployOrchestratorService;
 
   beforeEach(() => {
@@ -37,6 +44,7 @@ describe('DataDeployOrchestratorService cancellation', () => {
     db.dataDeployChunk.updateMany.mockResolvedValue({ count: 2 });
     db.dataDeployChunk.update.mockResolvedValue({});
     db.dataMovement.updateMany.mockResolvedValue({ count: 2 });
+    db.job.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => data);
     db.job.updateMany.mockResolvedValue({ count: 2 });
     db.dataDeployChunk.groupBy.mockResolvedValue([
       { status: 'cancelled', _count: { _all: 2 } },
@@ -44,13 +52,14 @@ describe('DataDeployOrchestratorService cancellation', () => {
     removeJob.mockResolvedValue(true);
     cancelProcess.mockResolvedValue(undefined);
     enqueueJob.mockResolvedValue({ id: 'planner-job' });
+    addJob.mockResolvedValue('chunk-job');
     withSchedulerLock.mockImplementation(
       async (_id: string, callback: () => Promise<unknown>) => callback(),
     );
     service = new DataDeployOrchestratorService(
       { enqueueJob } as never,
       { withSchedulerLock } as never,
-      { removeJob } as never,
+      { removeJob, addJob } as never,
       { cancel: cancelProcess, isCancellationRequested: vi.fn() } as never,
     );
   });
@@ -223,6 +232,232 @@ describe('DataDeployOrchestratorService cancellation', () => {
     }));
     expect(db.dataDeployChunk.update.mock.invocationCallOrder[1])
       .toBeLessThan(db.dataDeployBatch.update.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps a chunk pending behind a durable job claim until queue publication succeeds', async () => {
+    const batch = {
+      id: 'batch-1',
+      status: 'running',
+      strategy: 'generic',
+      operation: 'upsert',
+      objectName: 'Account',
+      matchField: 'External__c',
+      externalIdField: 'External__c',
+      recordTypeMappings: null,
+      createdBy: 'owner',
+      sourceOrgId: 'source-id',
+      targetOrgId: 'target-id',
+      movementType: 'deploy',
+      rollbackPolicy: 'capture',
+      sourceOrg: { alias: 'source', username: null },
+      targetOrg: { alias: 'target', username: null },
+      maxParallelChunks: 1,
+      quotaConfidence: 'unknown',
+      quotaRemaining: null,
+      chunkSize: 25_000,
+      chunks: [{
+        id: 'chunk-1',
+        batchId: 'batch-1',
+        chunkIndex: 0,
+        movementId: 'movement-1',
+        status: 'pending',
+        jobId: null,
+        soql: 'SELECT External__c FROM Account',
+        recordCount: 10,
+        attempts: 0,
+      }],
+    };
+    db.dataDeployBatch.findUnique.mockResolvedValue(batch);
+    db.job.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      queue: 'data-deploy',
+      type: 'data_deploy_chunk',
+      payload: { chunkId: 'chunk-1', batchId: 'batch-1' },
+    }));
+
+    await expect(service.releaseReadyChunks('batch-1')).resolves.toBe(1);
+
+    const claimCall = db.dataDeployChunk.updateMany.mock.calls.find(
+      ([arg]) => arg.where?.jobId === null,
+    )?.[0];
+    expect(claimCall.data).toEqual(expect.objectContaining({
+      jobId: expect.any(String),
+    }));
+    expect(claimCall.data.status).toBeUndefined();
+    const queuedCall = db.dataDeployChunk.updateMany.mock.calls.find(
+      ([arg]) => arg.data?.status === 'queued',
+    )?.[0];
+    expect(db.job.create.mock.invocationCallOrder[0]).toBeLessThan(addJob.mock.invocationCallOrder[0]);
+    expect(addJob.mock.invocationCallOrder[0])
+      .toBeLessThan(db.dataDeployChunk.updateMany.mock.invocationCallOrder.at(-1)!);
+    expect(queuedCall).toBeDefined();
+  });
+
+  it('republishes a stranded durable chunk claim with the original job id', async () => {
+    const claimedBatch = {
+      id: 'batch-1',
+      status: 'running',
+      maxParallelChunks: 1,
+      quotaConfidence: 'unknown',
+      quotaRemaining: null,
+      chunks: [{
+        id: 'chunk-1',
+        batchId: 'batch-1',
+        chunkIndex: 0,
+        movementId: 'movement-1',
+        status: 'pending',
+        jobId: 'durable-job',
+        attempts: 0,
+      }],
+      sourceOrg: { alias: 'source', username: null },
+      targetOrg: { alias: 'target', username: null },
+    };
+    db.dataDeployChunk.findMany.mockResolvedValue([{ batchId: 'batch-1' }]);
+    db.dataDeployBatch.findUnique
+      .mockResolvedValueOnce(claimedBatch)
+      .mockResolvedValueOnce({
+        ...claimedBatch,
+        chunks: [{ ...claimedBatch.chunks[0], status: 'queued' }],
+      });
+    db.job.findUnique.mockResolvedValue({
+      id: 'durable-job',
+      queue: 'data-deploy',
+      type: 'data_deploy_chunk',
+      payload: { chunkId: 'chunk-1', batchId: 'batch-1' },
+    });
+
+    await expect(service.recoverStrandedChunkPublications()).resolves.toBe(1);
+
+    expect(addJob).toHaveBeenCalledWith(
+      'data-deploy',
+      'data_deploy_chunk',
+      expect.objectContaining({ dbJobId: 'durable-job' }),
+      'durable-job',
+    );
+    expect(db.job.create).not.toHaveBeenCalled();
+  });
+
+  it('leaves the durable claim recoverable when finalization fails after enqueue', async () => {
+    const batch = {
+      id: 'batch-1',
+      status: 'running',
+      strategy: 'generic',
+      operation: 'upsert',
+      objectName: 'Account',
+      matchField: 'External__c',
+      externalIdField: 'External__c',
+      recordTypeMappings: null,
+      createdBy: 'owner',
+      sourceOrgId: 'source-id',
+      targetOrgId: 'target-id',
+      movementType: 'deploy',
+      rollbackPolicy: 'capture',
+      sourceOrg: { alias: 'source', username: null },
+      targetOrg: { alias: 'target', username: null },
+      maxParallelChunks: 1,
+      quotaConfidence: 'unknown',
+      quotaRemaining: null,
+      chunkSize: 25_000,
+      chunks: [{
+        id: 'chunk-1',
+        batchId: 'batch-1',
+        chunkIndex: 0,
+        movementId: 'movement-1',
+        status: 'pending',
+        jobId: null,
+        soql: 'SELECT External__c FROM Account',
+        recordCount: 10,
+        attempts: 0,
+      }],
+    };
+    db.dataDeployBatch.findUnique.mockResolvedValue(batch);
+    db.job.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      queue: 'data-deploy',
+      type: 'data_deploy_chunk',
+      payload: { chunkId: 'chunk-1', batchId: 'batch-1' },
+    }));
+    db.$transaction
+      .mockImplementationOnce((callback: (tx: typeof db) => unknown) => callback(db))
+      .mockRejectedValueOnce(new Error('database unavailable after enqueue'));
+
+    await expect(service.releaseReadyChunks('batch-1')).rejects.toThrow(
+      'database unavailable after enqueue',
+    );
+
+    expect(addJob).toHaveBeenCalledTimes(1);
+    expect(db.dataDeployChunk.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+    expect(db.job.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+  });
+
+  it('terminalizes and refreshes a chunk when queue publication fails', async () => {
+    const batch = {
+      id: 'batch-1',
+      status: 'running',
+      strategy: 'generic',
+      operation: 'upsert',
+      objectName: 'Account',
+      matchField: 'External__c',
+      externalIdField: 'External__c',
+      recordTypeMappings: null,
+      createdBy: 'owner',
+      sourceOrgId: 'source-id',
+      targetOrgId: 'target-id',
+      movementType: 'deploy',
+      rollbackPolicy: 'capture',
+      sourceOrg: { alias: 'source', username: null },
+      targetOrg: { alias: 'target', username: null },
+      maxParallelChunks: 1,
+      quotaConfidence: 'unknown',
+      quotaRemaining: null,
+      chunkSize: 25_000,
+      chunks: [{
+        id: 'chunk-1',
+        batchId: 'batch-1',
+        chunkIndex: 0,
+        movementId: 'movement-1',
+        status: 'pending',
+        jobId: null,
+        soql: 'SELECT External__c FROM Account',
+        recordCount: 10,
+        attempts: 0,
+      }],
+    };
+    db.dataDeployBatch.findUnique
+      .mockResolvedValueOnce(batch)
+      .mockResolvedValueOnce(null);
+    db.dataDeployChunk.groupBy.mockResolvedValue([
+      { status: 'failed', _count: { _all: 1 } },
+    ]);
+    db.job.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      queue: 'data-deploy',
+      type: 'data_deploy_chunk',
+      payload: { chunkId: 'chunk-1', batchId: 'batch-1' },
+    }));
+    addJob.mockRejectedValue(new Error('redis unavailable'));
+
+    await expect(service.releaseReadyChunks('batch-1')).resolves.toBe(0);
+
+    expect(db.dataDeployChunk.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        errorDetails: expect.objectContaining({ phase: 'enqueue' }),
+      }),
+    }));
+    expect(db.dataMovement.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: 'failed' },
+    }));
+    expect(db.job.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'failed', finishedAt: expect.any(Date) }),
+    }));
+    expect(db.dataDeployBatch.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'failed', failedChunks: 1 }),
+    }));
   });
 
   it('terminally blocks every descendant of a failed DAG prerequisite', async () => {

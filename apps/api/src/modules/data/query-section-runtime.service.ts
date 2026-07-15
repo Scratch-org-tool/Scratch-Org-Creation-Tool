@@ -200,8 +200,8 @@ export class QuerySectionRuntimeService {
           errors.push(`${query.id}: query must select external ID ${query.externalIdField}`);
         }
         if (!externalId) errors.push(`${query.id}: target external ID ${query.externalIdField} is missing`);
-        else if (!externalId.externalId && !['name', 'developername'].includes(query.externalIdField!.toLowerCase())) {
-          errors.push(`${query.id}: ${query.externalIdField} is not marked as an external ID`);
+        else if (!externalId.externalId && !externalId.idLookup) {
+          errors.push(`${query.id}: ${query.externalIdField} is not marked as an external ID or idLookup`);
         } else if (
           query.operation === 'upsert'
           && (externalId.createable === false || externalId.updateable === false)

@@ -112,6 +112,7 @@ describe('DataRollbackService artifacts', () => {
       createdBy: 'owner',
       operation: 'upsert',
       idempotent: true,
+      status: 'completed',
       rollbackArtifact: artifact,
       rollbackStatus: 'captured',
       rollbackReport: null,
@@ -142,6 +143,7 @@ describe('DataRollbackService artifacts', () => {
       createdBy: 'owner',
       operation: 'insert',
       idempotent: false,
+      status: 'failed',
       rollbackArtifact: null,
       targetOrg: { alias: 'target', username: null },
     });
@@ -158,4 +160,148 @@ describe('DataRollbackService artifacts', () => {
       }),
     }));
   });
+
+  it.each(['pending', 'queued', 'running'])(
+    'blocks movement rollback while the source deployment is %s',
+    async (status) => {
+      db.dataMovement.findUnique.mockResolvedValue({
+        id: 'movement',
+        createdBy: 'owner',
+        status,
+        operation: 'upsert',
+        idempotent: true,
+        rollbackArtifact: { artifactId: 'artifact' },
+        targetOrg: { alias: 'target', username: null },
+      });
+      const service = new DataRollbackService({ acquire: vi.fn() } as never);
+
+      await expect(service.rollbackMovement(
+        'movement',
+        'owner',
+        { deleteInserted: false },
+      )).rejects.toThrow(`source movement is ${status}`);
+      expect(db.dataMovement.updateMany).not.toHaveBeenCalled();
+    },
+  );
+
+  it('ignores cancelled unused placeholders but rolls back every executed movement', async () => {
+    const service = new DataRollbackService({ acquire: vi.fn() } as never);
+    db.dataDeployBatch.findUnique.mockResolvedValue({
+      id: 'batch',
+      createdBy: 'owner',
+      status: 'partial',
+      movements: [{
+        id: 'executed',
+        status: 'completed',
+        operation: 'upsert',
+        idempotent: true,
+        rollbackArtifact: { artifactId: 'artifact' },
+        rollbackStatus: 'captured',
+        recordCount: 10,
+      }, {
+        id: 'placeholder',
+        status: 'cancelled',
+        operation: 'upsert',
+        idempotent: true,
+        rollbackArtifact: null,
+        rollbackStatus: null,
+        recordCount: null,
+      }],
+      chunks: [{
+        movementId: 'executed',
+        status: 'completed',
+        jobId: 'job',
+        recordCount: 10,
+        afterId: null,
+        endId: '001',
+      }, {
+        movementId: 'placeholder',
+        status: 'cancelled',
+        jobId: null,
+        recordCount: null,
+        afterId: null,
+        endId: null,
+      }],
+    });
+    db.dataDeployBatch.update.mockResolvedValue({});
+    vi.spyOn(service, 'rollbackMovement').mockResolvedValue({
+      safe: true,
+      status: 'completed',
+      restored: 1,
+      deleted: 0,
+    });
+
+    const result = await service.rollbackBatch(
+      'batch',
+      'owner',
+      { deleteInserted: false },
+    );
+
+    expect(service.rollbackMovement).toHaveBeenCalledTimes(1);
+    expect(service.rollbackMovement).toHaveBeenCalledWith(
+      'executed',
+      'owner',
+      { deleteInserted: false },
+    );
+    expect(result.results).toHaveLength(1);
+  });
+
+  it('requires a rollback artifact for every movement that reached execution', async () => {
+    db.dataDeployBatch.findUnique.mockResolvedValue({
+      id: 'batch',
+      createdBy: 'owner',
+      status: 'failed',
+      movements: [{
+        id: 'attempted',
+        status: 'failed',
+        operation: 'upsert',
+        idempotent: true,
+        rollbackArtifact: null,
+        rollbackStatus: null,
+        recordCount: null,
+      }],
+      chunks: [{
+        movementId: 'attempted',
+        status: 'failed',
+        jobId: 'job',
+        recordCount: 10,
+        afterId: null,
+        endId: '001',
+      }],
+    });
+    db.dataDeployBatch.update.mockResolvedValue({});
+    const service = new DataRollbackService({ acquire: vi.fn() } as never);
+
+    await expect(service.rollbackBatch(
+      'batch',
+      'owner',
+      { deleteInserted: false },
+    )).rejects.toThrow(/lack a complete idempotent rollback artifact/);
+    expect(db.dataDeployBatch.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        rollbackReport: expect.objectContaining({ unsafeMovementIds: ['attempted'] }),
+      }),
+    }));
+  });
+
+  it.each(['pending', 'queued', 'running'])(
+    'blocks batch rollback while the source deployment is %s',
+    async (status) => {
+      db.dataDeployBatch.findUnique.mockResolvedValue({
+        id: 'batch',
+        createdBy: 'owner',
+        status,
+        movements: [],
+        chunks: [],
+      });
+      const service = new DataRollbackService({ acquire: vi.fn() } as never);
+
+      await expect(service.rollbackBatch(
+        'batch',
+        'owner',
+        { deleteInserted: false },
+      )).rejects.toThrow(`source batch is ${status}`);
+      expect(db.dataDeployBatch.update).not.toHaveBeenCalled();
+    },
+  );
 });

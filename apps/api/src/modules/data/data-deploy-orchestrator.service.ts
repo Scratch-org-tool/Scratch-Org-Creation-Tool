@@ -1,12 +1,15 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 import { mkdir, rm } from 'fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { prisma, Prisma } from '@sfcc/db';
@@ -80,8 +83,9 @@ function resolveOrgTarget(org: { alias: string; username?: string | null }): str
  * queue job bounded by `Id > afterId AND Id <= endId`.
  */
 @Injectable()
-export class DataDeployOrchestratorService {
+export class DataDeployOrchestratorService implements OnModuleInit {
   private readonly sfCli = createSfCliClient();
+  private readonly logger = new Logger(DataDeployOrchestratorService.name);
 
   constructor(
     private readonly orchestrator: OrchestratorService,
@@ -89,6 +93,18 @@ export class DataDeployOrchestratorService {
     private readonly queue: QueueService,
     private readonly processRegistry: JobProcessRegistryService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.recoverStrandedChunkPublications();
+    } catch (error) {
+      this.logger.error(
+        `Could not recover stranded data chunk publications: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
 
   chunkSize(): number {
     const parsed = parseInt(process.env.DATA_DEPLOY_CHUNK_SIZE ?? '', 10);
@@ -644,7 +660,7 @@ export class DataDeployOrchestratorService {
     });
   }
 
-  private async enqueueChunkJob(
+  private buildChunkPublication(
     batch: {
       id: string;
       strategy: string;
@@ -675,7 +691,10 @@ export class DataDeployOrchestratorService {
       | Record<string, string>
       | undefined;
 
-    let job;
+    let queue: string;
+    let type: string;
+    let payload: Record<string, unknown>;
+    let movementConfig: Prisma.InputJsonValue | undefined;
     if (batch.strategy === 'upsert' || batch.strategy === 'replicate') {
       const externalIdField = batch.externalIdField ?? batch.matchField ?? undefined;
       if (batch.operation === 'upsert' && !externalIdField) {
@@ -692,65 +711,156 @@ export class DataDeployOrchestratorService {
         recordTypeMappings,
       });
 
-      if (chunk.movementId) {
-        await prisma.dataMovement.update({
-          where: { id: chunk.movementId },
-          data: {
-            sfdmuConfig: {
-              configPath: generated.configPath,
-              strategy: batch.operation,
-              matchField: externalIdField,
-              batchId: batch.id,
-              chunkIndex: chunk.chunkIndex,
-            } as Prisma.InputJsonValue,
-          },
-        });
-      }
-
-      job = await this.orchestrator.enqueueJob(
-        QUEUE_NAMES.SFDMU_RUN,
-        batch.strategy === 'replicate' ? 'data_replication_chunk' : 'org_to_org_data_deploy_chunk',
-        {
-          sourceOrgAlias: sourceAlias,
-          targetOrgAlias: targetAlias,
-          configPath: generated.configPath,
-          movementId: chunk.movementId,
-          chunkId: chunk.chunkId,
-          batchId: batch.id,
-          chunkIndex: chunk.chunkIndex,
-          chunkRecordCount: chunk.recordCount,
-          operation: batch.operation,
-          externalIdField,
-        },
-        { createdBy: batch.createdBy },
-      );
+      movementConfig = {
+        configPath: generated.configPath,
+        strategy: batch.operation,
+        matchField: externalIdField,
+        batchId: batch.id,
+        chunkIndex: chunk.chunkIndex,
+      } as Prisma.InputJsonValue;
+      queue = QUEUE_NAMES.SFDMU_RUN;
+      type = batch.strategy === 'replicate'
+        ? 'data_replication_chunk'
+        : 'org_to_org_data_deploy_chunk';
+      payload = {
+        sourceOrgAlias: sourceAlias,
+        targetOrgAlias: targetAlias,
+        configPath: generated.configPath,
+        movementId: chunk.movementId,
+        chunkId: chunk.chunkId,
+        batchId: batch.id,
+        chunkIndex: chunk.chunkIndex,
+        chunkRecordCount: chunk.recordCount,
+        operation: batch.operation,
+        externalIdField,
+      };
     } else {
-      job = await this.orchestrator.enqueueJob(
-        QUEUE_NAMES.DATA_DEPLOY,
-        'data_deploy_chunk',
-        {
-          sourceOrgId: batch.sourceOrgId,
-          targetOrgId: batch.targetOrgId,
-          objectName: batch.objectName,
-          soql: chunk.soql,
-          recordLimit: chunk.recordCount,
-          movementId: chunk.movementId,
-          chunkId: chunk.chunkId,
-          batchId: batch.id,
-          chunkIndex: chunk.chunkIndex,
-          operation: batch.operation,
-          externalIdField: batch.externalIdField ?? batch.matchField ?? undefined,
-          rollbackEnabled: batch.rollbackPolicy === 'capture',
-        },
-        { createdBy: batch.createdBy },
-      );
+      queue = QUEUE_NAMES.DATA_DEPLOY;
+      type = 'data_deploy_chunk';
+      payload = {
+        sourceOrgId: batch.sourceOrgId,
+        targetOrgId: batch.targetOrgId,
+        objectName: batch.objectName,
+        soql: chunk.soql,
+        recordLimit: chunk.recordCount,
+        movementId: chunk.movementId,
+        chunkId: chunk.chunkId,
+        batchId: batch.id,
+        chunkIndex: chunk.chunkIndex,
+        operation: batch.operation,
+        externalIdField: batch.externalIdField ?? batch.matchField ?? undefined,
+        rollbackEnabled: batch.rollbackPolicy === 'capture',
+      };
     }
 
-    await prisma.dataDeployChunk.update({
-      where: { id: chunk.chunkId },
-      data: { jobId: job.id },
+    return { queue, type, payload, movementConfig };
+  }
+
+  /**
+   * Atomically creates the durable DB job and records its id on the still-pending
+   * chunk. The pending chunk + jobId pair is the publication outbox claim.
+   */
+  private async claimChunkPublication(
+    batch: Parameters<DataDeployOrchestratorService['buildChunkPublication']>[0],
+    chunk: Parameters<DataDeployOrchestratorService['buildChunkPublication']>[1],
+  ): Promise<string | null> {
+    const publication = this.buildChunkPublication(batch, chunk);
+    return prisma.$transaction(async (tx) => {
+      const jobId = randomUUID();
+      const claimed = await tx.dataDeployChunk.updateMany({
+        where: { id: chunk.chunkId, status: 'pending', jobId: null },
+        data: { jobId, error: null, errorDetails: Prisma.DbNull },
+      });
+      if (!claimed.count) return null;
+      await tx.job.create({
+        data: {
+          id: jobId,
+          queue: publication.queue,
+          type: publication.type,
+          payload: publication.payload as Prisma.InputJsonValue,
+          status: 'pending',
+          currentStep: 'Awaiting queue publication',
+          createdBy: batch.createdBy,
+        },
+      });
+      if (chunk.movementId && publication.movementConfig) {
+        await tx.dataMovement.update({
+          where: { id: chunk.movementId },
+          data: { sfdmuConfig: publication.movementConfig },
+        });
+      }
+      return jobId;
     });
-    return job;
+  }
+
+  /**
+   * BullMQ de-duplicates by the durable DB job id. A crash after addJob but
+   * before the final transaction therefore leaves a safely republishable claim.
+   */
+  private async publishClaimedChunk(
+    chunk: { id: string; batchId: string; movementId: string | null; jobId: string | null },
+  ): Promise<boolean> {
+    if (!chunk.jobId) return false;
+    const job = await prisma.job.findUnique({ where: { id: chunk.jobId } });
+    if (!job) throw new Error(`Chunk ${chunk.id} publication job ${chunk.jobId} is missing`);
+    const payload = job.payload as Record<string, unknown>;
+    try {
+      await this.queue.addJob(
+        job.queue,
+        job.type,
+        { ...payload, dbJobId: job.id },
+        job.id,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.$transaction(async (tx) => {
+        await tx.dataDeployChunk.updateMany({
+          where: { id: chunk.id, status: 'pending', jobId: job.id },
+          data: {
+            status: 'failed',
+            error: message,
+            errorDetails: { phase: 'enqueue', message } as Prisma.InputJsonValue,
+          },
+        });
+        if (chunk.movementId) {
+          await tx.dataMovement.updateMany({
+            where: { id: chunk.movementId, status: 'pending' },
+            data: { status: 'failed' },
+          });
+        }
+        await tx.job.updateMany({
+          where: { id: job.id, status: 'pending' },
+          data: {
+            status: 'failed',
+            currentStep: 'Queue publication failed',
+            error: message,
+            finishedAt: new Date(),
+          },
+        });
+      });
+      await this.refreshBatchProgress(chunk.batchId);
+      return false;
+    }
+    // Keep finalization outside the enqueue catch. If this transaction fails
+    // after BullMQ accepted the job, the pending claim must remain recoverable
+    // rather than being misclassified as an enqueue failure.
+    await prisma.$transaction(async (tx) => {
+      await tx.dataDeployChunk.updateMany({
+        where: { id: chunk.id, status: 'pending', jobId: job.id },
+        data: { status: 'queued', error: null, errorDetails: Prisma.DbNull },
+      });
+      if (chunk.movementId) {
+        await tx.dataMovement.updateMany({
+          where: { id: chunk.movementId, status: 'pending' },
+          data: { status: 'queued' },
+        });
+      }
+      await tx.job.updateMany({
+        where: { id: job.id, status: 'pending' },
+        data: { status: 'queued', currentStep: 'Pending', error: null },
+      });
+    });
+    return true;
   }
 
   private async readIdColumn(csvPath: string, maxIds: number): Promise<string[]> {
@@ -776,7 +886,7 @@ export class DataDeployOrchestratorService {
 
   async releaseReadyChunks(batchId: string): Promise<number> {
     const released = await this.bulkThrottle.withSchedulerLock(batchId, async (lease) => {
-      const batch = await prisma.dataDeployBatch.findUnique({
+      let batch = await prisma.dataDeployBatch.findUnique({
         where: { id: batchId },
         include: {
           chunks: { orderBy: { chunkIndex: 'asc' } },
@@ -785,7 +895,28 @@ export class DataDeployOrchestratorService {
         },
       });
       if (!batch || !['running', 'partial'].includes(batch.status)) return 0;
-      const pending = batch.chunks.filter((chunk) => chunk.status === 'pending');
+      let queued = 0;
+      const strandedClaims = batch.chunks.filter(
+        (chunk) => chunk.status === 'pending' && Boolean(chunk.jobId),
+      );
+      for (const chunk of strandedClaims) {
+        await lease?.assertOwned();
+        if (await this.publishClaimedChunk(chunk)) queued += 1;
+      }
+      if (strandedClaims.length) {
+        batch = await prisma.dataDeployBatch.findUnique({
+          where: { id: batchId },
+          include: {
+            chunks: { orderBy: { chunkIndex: 'asc' } },
+            sourceOrg: true,
+            targetOrg: true,
+          },
+        });
+        if (!batch || !['running', 'partial'].includes(batch.status)) return queued;
+      }
+      const pending = batch.chunks.filter(
+        (chunk) => chunk.status === 'pending' && !chunk.jobId,
+      );
       const active = batch.chunks.filter((chunk) => ['queued', 'running'].includes(chunk.status)).length;
       const quotaReserved = batch.chunks.reduce(
         (total, chunk) =>
@@ -805,45 +936,46 @@ export class DataDeployOrchestratorService {
         maxParallel: batch.maxParallelChunks,
         quotaRemaining,
       });
-      let queued = 0;
+      let newlyQueued = 0;
       for (const chunk of pending) {
-        if (queued >= count) break;
+        if (newlyQueued >= count) break;
         await lease?.assertOwned();
-        const claimed = await prisma.dataDeployChunk.updateMany({
-          where: { id: chunk.id, status: 'pending' },
-          data: { status: 'queued', error: null, errorDetails: Prisma.DbNull },
+        const jobId = await this.claimChunkPublication(batch, {
+          chunkId: chunk.id,
+          chunkIndex: chunk.chunkIndex,
+          movementId: chunk.movementId,
+          soql: chunk.soql,
+          recordCount: chunk.recordCount ?? batch.chunkSize,
         });
-        if (claimed.count === 0) continue;
-        if (chunk.movementId) {
-          await prisma.dataMovement.update({
-            where: { id: chunk.movementId },
-            data: { status: 'queued' },
-          }).catch(() => undefined);
-        }
-        try {
-          await this.enqueueChunkJob(batch, {
-            chunkId: chunk.id,
-            chunkIndex: chunk.chunkIndex,
-            movementId: chunk.movementId,
-            soql: chunk.soql,
-            recordCount: chunk.recordCount ?? batch.chunkSize,
-          });
+        if (!jobId) continue;
+        if (await this.publishClaimedChunk({
+          id: chunk.id,
+          batchId,
+          movementId: chunk.movementId,
+          jobId,
+        })) {
           queued += 1;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          await prisma.dataDeployChunk.update({
-            where: { id: chunk.id },
-            data: {
-              status: 'failed',
-              error: message,
-              errorDetails: { phase: 'enqueue', message } as Prisma.InputJsonValue,
-            },
-          });
+          newlyQueued += 1;
         }
       }
       return queued;
     });
     return released ?? 0;
+  }
+
+  async recoverStrandedChunkPublications(): Promise<number> {
+    const claims = await prisma.dataDeployChunk.findMany({
+      where: {
+        status: 'pending',
+        jobId: { not: null },
+        batch: { status: { in: ['running', 'partial'] } },
+      },
+      select: { batchId: true },
+      distinct: ['batchId'],
+    });
+    let recovered = 0;
+    for (const claim of claims) recovered += await this.releaseReadyChunks(claim.batchId);
+    return recovered;
   }
 
   /** Idempotent: only transitions chunks that are not already terminal. */
@@ -972,7 +1104,12 @@ export class DataDeployOrchestratorService {
             status: 'failed',
             error: { startsWith: BLOCKED_BY_PREREQUISITE_PREFIX },
           },
-          data: { status: 'pending', error: null, errorDetails: Prisma.DbNull },
+          data: {
+            status: 'pending',
+            jobId: null,
+            error: null,
+            errorDetails: Prisma.DbNull,
+          },
         });
         await tx.dataMovement.updateMany({
           where: { batchId: batch.id, status: 'failed' },
@@ -1080,6 +1217,7 @@ export class DataDeployOrchestratorService {
       where: { id: chunkId },
       data: {
         status: 'pending',
+        jobId: null,
         error: null,
         errorDetails: Prisma.DbNull,
         attempts: { increment: 1 },

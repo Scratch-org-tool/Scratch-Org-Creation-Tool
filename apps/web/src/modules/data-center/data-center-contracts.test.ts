@@ -6,6 +6,7 @@ import {
   dependencyError,
   externalIdOptions,
   isBatchCancellable,
+  isCurrentConfigurationRequest,
   isRetrySafe,
   moveByIndex,
   normalizeTemplates,
@@ -95,6 +96,12 @@ describe('Data Center payload contracts', () => {
     });
     expect(preflightKey(first)).not.toBe(preflightKey({ ...first, recordLimit: 21 }));
     expect(preflightKey(first)).toBe(preflightKey({ ...first }));
+  });
+
+  it('rejects stale preflight successes, errors, and finalizers after configuration changes', () => {
+    expect(isCurrentConfigurationRequest(4, 4, 'config-a', 'config-a')).toBe(true);
+    expect(isCurrentConfigurationRequest(3, 4, 'config-a', 'config-a')).toBe(false);
+    expect(isCurrentConfigurationRequest(4, 4, 'config-a', 'config-b')).toBe(false);
   });
 
   it('selects metadata external IDs and defaults to upsert only when available', () => {

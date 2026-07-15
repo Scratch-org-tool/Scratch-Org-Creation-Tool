@@ -121,6 +121,15 @@ export function preflightKey(payload: Record<string, unknown>): string {
   return JSON.stringify(normalized);
 }
 
+export function isCurrentConfigurationRequest(
+  request: number,
+  currentRequest: number,
+  requestedKey: string,
+  currentKey: string,
+): boolean {
+  return request === currentRequest && requestedKey === currentKey;
+}
+
 export function isRetrySafe(batch: {
   operation?: string;
   idempotent?: boolean;

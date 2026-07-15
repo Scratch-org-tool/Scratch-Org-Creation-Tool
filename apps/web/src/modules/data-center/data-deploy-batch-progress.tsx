@@ -42,6 +42,8 @@ export interface DataDeployBatch {
   rollbackPolicy?: string;
   rollbackStatus?: string | null;
   rollbackReport?: unknown;
+  canCancel?: boolean;
+  canRollback?: boolean;
   error?: string | null;
   chunks: DataDeployBatchChunk[];
 }
@@ -107,10 +109,12 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
   const retrySafe = isRetrySafe(batch);
   const failedChunks = batch.chunks.filter((chunk) => chunk.status === 'failed');
   const activeChunks = batch.chunks.filter((chunk) => ['queued', 'running'].includes(chunk.status)).length;
-  const rollbackAvailable = retrySafe
+  const rollbackAvailable = batch.canRollback ?? (
+    retrySafe
     && batch.rollbackPolicy === 'capture'
-    && ['completed', 'partial', 'failed'].includes(batch.status);
-  const cancelAvailable = isBatchCancellable(batch.status);
+    && ['completed', 'partial', 'failed'].includes(batch.status)
+  );
+  const cancelAvailable = batch.canCancel ?? isBatchCancellable(batch.status);
 
   const runAction = async (key: string, path: string, body?: unknown) => {
     setActionLoading(key);

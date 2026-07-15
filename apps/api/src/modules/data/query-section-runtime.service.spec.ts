@@ -265,9 +265,107 @@ describe('QuerySectionRuntimeService review fixes', () => {
       },
     }, 'source', 'target', 'owner');
 
-    expect(result.errors).toContain('partner: GeneratedExternal__c is not marked as an external ID');
+    expect(result.errors).toContain(
+      'partner: GeneratedExternal__c is not marked as an external ID or idLookup',
+    );
     expect(result.errors.some((error) => error.includes('source external ID'))).toBe(false);
     expect(result.errors.some((error) => error.includes('query must select external ID'))).toBe(false);
+  });
+
+  it.each(['Name', 'DeveloperName'])(
+    'does not bypass target external-ID metadata for %s',
+    async (field) => {
+      db.orgConnection.findUnique
+        .mockResolvedValueOnce({ alias: 'source', username: null, createdBy: 'owner' })
+        .mockResolvedValueOnce({ alias: 'target', username: null, createdBy: 'owner' });
+      sfCli.describeSObject
+        .mockResolvedValueOnce({
+          data: { result: { fields: [{ name: field }] } },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            result: {
+              fields: [{
+                name: field,
+                externalId: false,
+                idLookup: false,
+                createable: true,
+                updateable: true,
+              }],
+            },
+          },
+        });
+
+      const result = await service().preflightPlan({
+        name: 'metadata gate',
+        queries: [{
+          id: 'query',
+          sourceQueryId: 'query',
+          name: 'Query',
+          enabled: true,
+          order: 0,
+          stage: 0,
+          category: 'arbitrary',
+          object: 'Thing__c',
+          soql: `SELECT ${field} FROM Thing__c LIMIT 10`,
+          limit: 10,
+          operation: 'upsert',
+          externalIdField: field,
+          variables: {},
+          dependsOn: [],
+        }],
+      }, 'source', 'target', 'owner');
+
+      expect(result.ok).toBe(false);
+      expect(result.errors).toContain(
+        `query: ${field} is not marked as an external ID or idLookup`,
+      );
+    },
+  );
+
+  it('accepts a target idLookup field as a Template V2 reconciliation key', async () => {
+    db.orgConnection.findUnique
+      .mockResolvedValueOnce({ alias: 'source', username: null, createdBy: 'owner' })
+      .mockResolvedValueOnce({ alias: 'target', username: null, createdBy: 'owner' });
+    sfCli.describeSObject
+      .mockResolvedValueOnce({
+        data: { result: { fields: [{ name: 'LookupKey__c' }] } },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          result: {
+            fields: [{
+              name: 'LookupKey__c',
+              externalId: false,
+              idLookup: true,
+              createable: true,
+              updateable: true,
+            }],
+          },
+        },
+      });
+
+    const result = await service().preflightPlan({
+      name: 'id lookup',
+      queries: [{
+        id: 'query',
+        sourceQueryId: 'query',
+        name: 'Query',
+        enabled: true,
+        order: 0,
+        stage: 0,
+        category: 'arbitrary',
+        object: 'Thing__c',
+        soql: 'SELECT LookupKey__c FROM Thing__c LIMIT 10',
+        limit: 10,
+        operation: 'upsert',
+        externalIdField: 'LookupKey__c',
+        variables: {},
+        dependsOn: [],
+      }],
+    }, 'source', 'target', 'owner');
+
+    expect(result.ok).toBe(true);
   });
 
   it('publishes query progress with the run owner explicitly', async () => {

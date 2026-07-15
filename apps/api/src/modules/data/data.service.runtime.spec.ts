@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({
   orgConnection: { findUnique: vi.fn() },
-  dataMovement: { create: vi.fn() },
+  dataMovement: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
 }));
 vi.mock('@sfcc/db', () => ({ prisma: db, Prisma: {} }));
 vi.mock('@sfcc/sf-cli', () => ({
@@ -68,5 +68,68 @@ describe('DataService runtime gate', () => {
     expect(db.dataMovement.create).not.toHaveBeenCalled();
     expect(createBatch).not.toHaveBeenCalled();
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('returns rollback action flags only for terminal source movements', async () => {
+    const service = new DataService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const movement = {
+      id: 'movement',
+      createdBy: 'owner',
+      batchId: null,
+      operation: 'upsert',
+      idempotent: true,
+      rollbackArtifact: { artifactId: 'artifact' },
+      rollbackStatus: 'captured',
+      sourceOrg: { alias: 'source' },
+      targetOrg: { alias: 'target' },
+    };
+    db.dataMovement.findUnique
+      .mockResolvedValueOnce({ ...movement, status: 'running' })
+      .mockResolvedValueOnce({ ...movement, status: 'failed' });
+
+    await expect(service.getMovement('movement', 'owner')).resolves.toEqual(
+      expect.objectContaining({ canCancel: true, canRollback: false }),
+    );
+    await expect(service.getMovement('movement', 'owner')).resolves.toEqual(
+      expect.objectContaining({ canCancel: false, canRollback: true }),
+    );
+  });
+
+  it('returns rollback action flags only for terminal source batches', async () => {
+    const getBatch = vi.fn()
+      .mockResolvedValueOnce({
+        status: 'queued',
+        operation: 'upsert',
+        idempotent: true,
+        rollbackPolicy: 'capture',
+      })
+      .mockResolvedValueOnce({
+        status: 'partial',
+        operation: 'upsert',
+        idempotent: true,
+        rollbackPolicy: 'capture',
+      });
+    const service = new DataService(
+      {} as never,
+      {} as never,
+      {} as never,
+      { getBatch } as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.getDeployBatch('batch', 'owner')).resolves.toEqual(
+      expect.objectContaining({ canCancel: true, canRollback: false }),
+    );
+    await expect(service.getDeployBatch('batch', 'owner')).resolves.toEqual(
+      expect.objectContaining({ canCancel: false, canRollback: true }),
+    );
   });
 });

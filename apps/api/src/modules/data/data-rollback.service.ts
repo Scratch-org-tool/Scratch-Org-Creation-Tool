@@ -20,6 +20,7 @@ const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 const DEFAULT_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024;
 const QUERY_KEY_CHUNK = 200;
+const ROLLBACK_SOURCE_TERMINAL_STATUSES = ['completed', 'failed', 'partial'];
 
 export interface DataRollbackPayload {
   version: 1;
@@ -312,6 +313,11 @@ export class DataRollbackService {
     });
     if (!movement) throw new NotFoundException('Data movement not found');
     assertResourceOwner(movement, userId, 'Data movement');
+    if (!ROLLBACK_SOURCE_TERMINAL_STATUSES.includes(movement.status)) {
+      throw new ConflictException(
+        `Rollback is unavailable while the source movement is ${movement.status}`,
+      );
+    }
     if (movement.rollbackStatus === 'completed' && movement.rollbackReport) {
       return {
         ...(movement.rollbackReport as Record<string, unknown>),
@@ -435,11 +441,58 @@ export class DataRollbackService {
   async rollbackBatch(batchId: string, userId: string, policy: { deleteInserted: boolean }) {
     const batch = await prisma.dataDeployBatch.findUnique({
       where: { id: batchId },
-      include: { movements: { orderBy: { chunkIndex: 'desc' } } },
+      include: {
+        movements: { orderBy: { chunkIndex: 'desc' } },
+        chunks: {
+          select: {
+            movementId: true,
+            status: true,
+            jobId: true,
+            recordCount: true,
+            afterId: true,
+            endId: true,
+          },
+        },
+      },
     });
     if (!batch) throw new NotFoundException('Data deploy batch not found');
     assertResourceOwner(batch, userId, 'Data deploy batch');
-    const unsafe = batch.movements.filter((movement) =>
+    if (!ROLLBACK_SOURCE_TERMINAL_STATUSES.includes(batch.status)) {
+      throw new ConflictException(
+        `Rollback is unavailable while the source batch is ${batch.status}`,
+      );
+    }
+    const chunksByMovement = new Map(
+      batch.chunks
+        .filter((chunk) => chunk.movementId)
+        .map((chunk) => [chunk.movementId!, chunk]),
+    );
+    const executed = batch.movements.filter((movement) => {
+      const chunk = chunksByMovement.get(movement.id);
+      const unusedPlaceholder = movement.status === 'cancelled'
+        && !movement.rollbackArtifact
+        && !movement.rollbackStatus
+        && (movement.recordCount == null || movement.recordCount === 0)
+        && Boolean(chunk && (
+          chunk.status === 'cancelled'
+          && !chunk.jobId
+          && chunk.recordCount == null
+          && !chunk.afterId
+          && !chunk.endId
+        ));
+      return !unusedPlaceholder;
+    });
+    const nonTerminal = executed.filter(
+      (movement) => !ROLLBACK_SOURCE_TERMINAL_STATUSES.includes(movement.status),
+    );
+    if (nonTerminal.length) {
+      throw new ConflictException(
+        `Rollback is unavailable while source movement(s) are active: ${
+          nonTerminal.map((movement) => movement.id).join(', ')
+        }`,
+      );
+    }
+    const unsafe = executed.filter((movement) =>
       movement.operation !== 'upsert' || !movement.idempotent || !movement.rollbackArtifact);
     if (unsafe.length) {
       const report = {
@@ -454,7 +507,7 @@ export class DataRollbackService {
       throw new BadRequestException(report.reason);
     }
     const results = [];
-    for (const movement of batch.movements) {
+    for (const movement of executed) {
       results.push(await this.rollbackMovement(movement.id, userId, policy));
     }
     const awaitingConfirmation = results.some(

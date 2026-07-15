@@ -45,7 +45,8 @@ export function DataMovementControls({
     && ['pending', 'queued', 'planning', 'running', 'paused'].includes(movement.status)
   );
   const rollbackAllowed = movement.canRollback ?? Boolean(
-    movement.rollbackStatus
+    ['completed', 'failed', 'partial'].includes(movement.status)
+    && movement.rollbackStatus
     && !['not_available', 'blocked'].includes(movement.rollbackStatus),
   );
   if (!cancelAllowed && !rollbackAllowed && !report) return null;

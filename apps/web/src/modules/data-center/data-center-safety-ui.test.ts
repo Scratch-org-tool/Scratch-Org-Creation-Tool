@@ -22,11 +22,23 @@ describe('Data Center async and recovery controls', () => {
     expect(batch).toContain('loadAbort.current?.abort()');
   });
 
+  it('guards preflight success, error, and finalization by request generation and configuration key', () => {
+    for (const value of [
+      source('./generic-deploy-panel.tsx'),
+      source('./replication-panel.tsx'),
+    ]) {
+      expect(value.match(/isCurrentConfigurationRequest\(/g)).toHaveLength(3);
+      expect(value).toContain('previous');
+      expect(value).toContain('preflightRequestRef.current += 1');
+    }
+  });
+
   it('offers server-authorized movement controls and explicit inserted-record deletion', () => {
     const controls = source('./data-movement-controls.tsx');
     const batch = source('./data-deploy-batch-progress.tsx');
     expect(controls).toContain('movement.canCancel');
     expect(controls).toContain('movement.canRollback');
+    expect(controls).toContain("['completed', 'failed', 'partial'].includes(movement.status)");
     expect(controls).toContain("confirm === 'delete-inserted'");
     expect(controls).toContain("void run('rollback', true)");
     expect(batch).toContain('rollback-delete-inserted');
