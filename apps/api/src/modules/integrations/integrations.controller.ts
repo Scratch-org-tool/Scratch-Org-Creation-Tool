@@ -30,6 +30,11 @@ export class IntegrationsController {
     return this.service.scmStatus(provider, connectionId);
   }
 
+  @Get('scm/:provider/defaults')
+  scmDefaults(@Param('provider') provider: string, @Query('connectionId') connectionId?: string) {
+    return this.service.scmDefaults(provider, connectionId);
+  }
+
   @Get('scm/:provider/namespaces')
   namespaces(@Param('provider') provider: string, @Query('connectionId') connectionId?: string) {
     return this.service.namespaces(provider, connectionId);
@@ -54,6 +59,7 @@ export class IntegrationsController {
     @Query('namespace') namespace?: string,
     @Query('project') project?: string,
     @Query('repositoryId') repositoryId?: string,
+    @Query('bindingId') bindingId?: string,
   ) {
     if (!repo) throw new BadRequestException('repo is required');
     return this.service.branches(provider, {
@@ -63,6 +69,7 @@ export class IntegrationsController {
       namespace,
       project,
       repositoryId,
+      bindingId,
     });
   }
 

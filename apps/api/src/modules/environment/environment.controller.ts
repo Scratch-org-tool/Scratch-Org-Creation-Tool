@@ -4,6 +4,7 @@ import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { RequireRole, RoleGuard } from '../../common/role.guard';
+import type { ScmProvider } from '@sfcc/shared';
 
 @Controller('environment')
 @UseGuards(AuthGuard, ModuleGuard, RoleGuard)
@@ -91,6 +92,111 @@ export class EnvironmentController {
   @RequireRole('admin')
   disconnectAzureDevOps() {
     return this.environmentService.disconnectAzureDevOps();
+  }
+
+  @Get('scm/:provider/status')
+  getScmConnection(
+    @Param('provider') provider: ScmProvider,
+    @Query('connectionId') connectionId?: string,
+  ) {
+    return this.environmentService.getScmConnection(provider, connectionId);
+  }
+
+  @Get('scm/:provider/defaults')
+  getScmDefaults(
+    @Param('provider') provider: ScmProvider,
+    @Query('connectionId') connectionId?: string,
+  ) {
+    return this.environmentService.getScmDefaults(provider, connectionId);
+  }
+
+  @Get('scm/:provider/namespaces')
+  listScmNamespaces(
+    @Param('provider') provider: ScmProvider,
+    @Query('connectionId') connectionId?: string,
+  ) {
+    return this.environmentService.listScmNamespaces(provider, connectionId);
+  }
+
+  @Get('scm/:provider/repos')
+  listScmRepos(
+    @Param('provider') provider: ScmProvider,
+    @Query('connectionId') connectionId?: string,
+    @Query('namespace') namespace?: string,
+    @Query('project') project?: string,
+  ) {
+    return this.environmentService.listScmRepos(provider, {
+      connectionId,
+      namespace,
+      project,
+    });
+  }
+
+  @Get('scm/:provider/branches')
+  listScmBranches(
+    @Param('provider') provider: ScmProvider,
+    @Query('repo') repo: string,
+    @Query('branch') branch = 'main',
+    @Query('connectionId') connectionId?: string,
+    @Query('namespace') namespace?: string,
+    @Query('project') project?: string,
+    @Query('repositoryId') repositoryId?: string,
+    @Query('bindingId') bindingId?: string,
+  ) {
+    return this.environmentService.listScmBranches(provider, {
+      repo,
+      branch,
+      connectionId,
+      namespace,
+      project,
+      repositoryId,
+      bindingId,
+    });
+  }
+
+  @Post('scm/:provider/connect')
+  @RequireRole('admin')
+  connectScm(
+    @Param('provider') provider: ScmProvider,
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    return this.environmentService.connectScm(provider, body, userId);
+  }
+
+  @Post('scm/:provider/verify')
+  verifyScm(
+    @Param('provider') provider: ScmProvider,
+    @Body() body: { connectionId?: string },
+  ) {
+    return this.environmentService.verifyScm(provider, body?.connectionId);
+  }
+
+  @Delete('scm/:provider')
+  @RequireRole('admin')
+  disconnectScm(
+    @Param('provider') provider: ScmProvider,
+    @Query('connectionId') connectionId?: string,
+  ) {
+    return this.environmentService.disconnectScm(provider, connectionId);
+  }
+
+  @Get('scm-bindings')
+  @RequireRole('admin')
+  listScmBindings(@Query('connectionId') connectionId?: string) {
+    return this.environmentService.listProjectBindings(connectionId);
+  }
+
+  @Post('scm-bindings')
+  @RequireRole('admin')
+  saveScmBinding(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.environmentService.saveProjectBinding(body, userId);
+  }
+
+  @Delete('scm-bindings/:id')
+  @RequireRole('admin')
+  deleteScmBinding(@Param('id') id: string) {
+    return this.environmentService.deleteProjectBinding(id);
   }
 
   @Post('scratch-org/pipeline')

@@ -34,6 +34,7 @@ function mapRecentJob(job: {
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
+  payload: unknown;
   parentRun: { id: string; intent: string; createdBy: string } | null;
 }) {
   const durationMs =
@@ -41,6 +42,8 @@ function mapRecentJob(job: {
       ? job.finishedAt.getTime() - job.startedAt.getTime()
       : null;
 
+  const payload = (job.payload ?? {}) as Record<string, unknown>;
+  const source = payload.gitSource as Record<string, unknown> | undefined;
   return {
     id: job.id,
     type: job.type,
@@ -54,6 +57,7 @@ function mapRecentJob(job: {
     triggeredBy: job.parentRun?.createdBy ?? 'system',
     automationRunId: job.parentRun?.id ?? null,
     runIntent: job.parentRun?.intent ?? null,
+    provider: typeof source?.provider === 'string' ? source.provider : null,
   };
 }
 
@@ -132,6 +136,7 @@ export class MonitoringService {
           createdAt: true,
           startedAt: true,
           finishedAt: true,
+          payload: true,
           parentRun: { select: { id: true, intent: true, createdBy: true } },
         },
       }),
@@ -271,6 +276,12 @@ export class MonitoringService {
       statusDistribution,
       durationSeries,
       recentDeployments: recentDeployments.map((d) => ({
+        provider:
+          typeof (d.metadata as Record<string, unknown> | null)?.provider === 'string'
+            ? ((d.metadata as Record<string, unknown>).provider as string)
+            : d.strategy === 'azure'
+              ? 'azure_devops'
+              : d.strategy,
         id: d.id,
         status: d.status,
         repo: d.repo,

@@ -11,11 +11,13 @@ import {
 } from '../../integrations/foundation/adapter.registry';
 import { AtlassianConnectionStore } from '../../integrations/atlassian/atlassian-connection.store';
 import { JiraWorkItemAdapter } from '../../integrations/jira/jira.adapter';
+import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 
 @Injectable()
 export class IntegrationsService {
   constructor(
     private readonly scm: ScmAdapterRegistry,
+    private readonly scmSources: ScmSourceService,
     private readonly workItems: WorkItemAdapterRegistry,
     private readonly store: AtlassianConnectionStore,
     private readonly jira: JiraWorkItemAdapter,
@@ -23,6 +25,16 @@ export class IntegrationsService {
 
   scmStatus(provider: string, connectionId?: string) {
     return this.scm.get(provider as ScmProvider).getConnectionStatus({ connectionId });
+  }
+
+  async scmDefaults(provider: string, connectionId?: string) {
+    const status = await this.scmStatus(provider, connectionId);
+    return {
+      provider: status.provider,
+      connectionId: status.id ?? connectionId ?? null,
+      namespace: status.namespace,
+      connected: status.connected,
+    };
   }
 
   namespaces(provider: string, connectionId?: string) {
@@ -36,11 +48,12 @@ export class IntegrationsService {
     return this.scm.get(provider as ScmProvider).listRepositories(query);
   }
 
-  branches(provider: string, source: Omit<GitSourceConfig, 'provider'>) {
-    return this.scm.get(provider as ScmProvider).listBranches({
+  async branches(provider: string, source: Omit<GitSourceConfig, 'provider'>) {
+    const resolved = await this.scmSources.resolve({
       ...source,
       provider: provider as ScmProvider,
     });
+    return this.scm.get(provider as ScmProvider).listBranches(resolved);
   }
 
   workItemStatus(provider: string, connectionId?: string) {

@@ -44,6 +44,7 @@ import {
   type WorkItemAdapter,
 } from './adapter.contracts';
 import { ScmAdapterRegistry, WorkItemAdapterRegistry } from './adapter.registry';
+import { ScmSourceService } from './scm-source.service';
 import { IntegrationErrorFilter } from './integration-error.filter';
 
 @Global()
@@ -108,12 +109,14 @@ import { IntegrationErrorFilter } from './integration-error.filter';
       ): WorkItemAdapter[] => [azure, github, jira],
     },
     ScmAdapterRegistry,
+    ScmSourceService,
     WorkItemAdapterRegistry,
   ],
   exports: [
     SCM_ADAPTERS,
     WORK_ITEM_ADAPTERS,
     ScmAdapterRegistry,
+    ScmSourceService,
     WorkItemAdapterRegistry,
     AzureScmAdapter,
     AzureWorkItemAdapter,
@@ -123,6 +126,7 @@ import { IntegrationErrorFilter } from './integration-error.filter';
     BitbucketScmAdapter,
     JiraWorkItemAdapter,
     AtlassianConnectionStore,
+    IntegrationAdminService,
   ],
 })
 export class IntegrationAdaptersModule {}

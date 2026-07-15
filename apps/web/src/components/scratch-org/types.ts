@@ -17,6 +17,7 @@ export type StepState = 'done' | 'active' | 'pending' | 'skipped' | 'failed';
 
 export const PIPELINE_STEP_LABEL_BY_ID: Record<string, PipelineStepLabel> = {
   scratch_org_create: 'Create Scratch Org',
+  git_metadata_deploy: 'Azure Metadata Deploy',
   azure_metadata_deploy: 'Azure Metadata Deploy',
   assign_permission_set: 'Assign Permission Set',
   load_org_config: 'Load Org Config',
@@ -31,6 +32,7 @@ export function formatPipelineStepId(stepId?: string | null): string {
 export function isPipelineResumable(failedStep?: string | null): boolean {
   return (
     failedStep === 'scratch_org_create' ||
+    failedStep === 'git_metadata_deploy' ||
     failedStep === 'azure_metadata_deploy' ||
     failedStep === 'assign_permission_set' ||
     failedStep === 'load_org_config' ||
@@ -118,7 +120,9 @@ export function getStepStates(
   const idx = PIPELINE_STEPS_UI.indexOf(label);
   const completed = run?.checkpoint?.completedSteps ?? [];
   const scratchDone = completed.includes('scratch_org_create');
-  const azureDone = completed.includes('azure_metadata_deploy');
+  const azureDone =
+    completed.includes('git_metadata_deploy') ||
+    completed.includes('azure_metadata_deploy');
   const permDone = completed.includes('assign_permission_set');
   const orgConfigDone = completed.includes('load_org_config');
   const customSettingsDone = completed.includes('load_custom_settings');
@@ -154,7 +158,10 @@ export function getStepStates(
 
   if (label === 'Azure Metadata Deploy') {
     if (azureDone || permDone) return 'done';
-    if (metaRunning && metaJob?.currentStep?.includes('Azure')) return 'active';
+    if (
+      metaRunning &&
+      (metaJob?.currentStep?.includes('Connecting') || metaJob?.currentStep?.includes('Azure'))
+    ) return 'active';
     if (scratchDone && !azureDone) return metaRunning ? 'active' : 'pending';
     return 'pending';
   }

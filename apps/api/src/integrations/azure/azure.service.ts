@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import { azureGitBranchesUrl, azureGitReposUrl, DEFAULT_AZURE_MANIFEST_PATH, normalizeAzureOrgSlug, normalizeAzureProject } from '@sfcc/shared';
 import { AzureIntegrationService } from '../../modules/integrations/azure-integration.service';
 import { removeTempDir } from '../../common/temp-cleanup.util';
-import { resolveSfdxWorkspace } from './sfdx-workspace.util';
+import { resolveSfdxWorkspace } from '../../common/sfdx-workspace.util';
 
 const execFileAsync = promisify(execFile);
 

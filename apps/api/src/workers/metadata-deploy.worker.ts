@@ -6,7 +6,14 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
-import { SCRATCH_PERMISSION_SET, DEFAULT_AZURE_MANIFEST_PATH, type AzureDeployConfig, type PipelineStepId } from '@sfcc/shared';
+import {
+  SCRATCH_PERMISSION_SET,
+  DEFAULT_AZURE_MANIFEST_PATH,
+  normalizeGitSourceConfig,
+  type AzureDeployConfig,
+  type GitSourceConfig,
+  type PipelineStepId,
+} from '@sfcc/shared';
 import type { DeployCheckpoint } from '@sfcc/metadata-orchestrator';
 import { JobsService } from '../modules/jobs/jobs.service';
 import { JobProcessRegistryService } from '../modules/jobs/job-process-registry.service';
@@ -46,6 +53,7 @@ export class MetadataDeployWorker {
       orgAlias,
       manifestPath,
       manifestContent,
+      gitSource: rawGitSource,
       azureDeploy,
       testLevel,
       dbJobId,
@@ -69,6 +77,7 @@ export class MetadataDeployWorker {
       orgAlias: string;
       manifestPath?: string;
       manifestContent?: string;
+      gitSource?: GitSourceConfig;
       azureDeploy?: AzureDeployConfig;
       testLevel?: string;
       dbJobId: string;
@@ -78,7 +87,7 @@ export class MetadataDeployWorker {
       assignPermissionSetOnly?: boolean;
       sourceOrgId?: string;
       sourceOrgAlias?: string;
-      deployMode?: 'azure' | 'org_to_org' | 'local_workspace';
+      deployMode?: 'git' | 'azure' | 'org_to_org' | 'local_workspace';
       intelligentDeployRunId?: string;
       intelligentDeployEnabled?: boolean;
       chainDataDeploy?: boolean;
@@ -89,6 +98,10 @@ export class MetadataDeployWorker {
       quickDeployValidationId?: string;
       localProjectRoot?: string;
     };
+    const gitSource = normalizeGitSourceConfig({
+      gitSource: rawGitSource,
+      azureDeploy,
+    }).gitSource;
 
     const log = async (stream: 'stdout' | 'stderr', line: string) => {
       await this.jobsService.addLog(dbJobId, stream, line);
@@ -130,7 +143,7 @@ export class MetadataDeployWorker {
       if (quickResult.stdout) await log('stdout', quickResult.stdout);
       if (quickResult.stderr) await log('stderr', quickResult.stderr);
       if (!quickResult.success) {
-        throw new PipelineStepError(quickResult.error ?? 'Quick deploy failed', 'azure_metadata_deploy');
+        throw new PipelineStepError(quickResult.error ?? 'Quick deploy failed', 'git_metadata_deploy');
       }
       await setStep('Deployment Completed');
       return { quickDeployed: true, validationId: quickDeployValidationId };
@@ -148,7 +161,8 @@ export class MetadataDeployWorker {
 
       const manifest =
         manifestPath ??
-        azureDeploy?.manifestPath ??
+        gitSource?.manifestPath ??
+        process.env.SCM_DEFAULT_MANIFEST_PATH ??
         process.env.AZURE_DEFAULT_MANIFEST_PATH ??
         DEFAULT_AZURE_MANIFEST_PATH;
 
@@ -158,15 +172,17 @@ export class MetadataDeployWorker {
         resolvedSourceOrgAlias = sourceOrg?.username ?? sourceOrg?.alias;
       }
 
-      await setStep('Connecting to Azure DevOps');
+      const provider = gitSource?.provider ?? 'local';
+      await setStep(gitSource ? `Connecting to ${provider}` : 'Preparing Metadata Source');
       await log('stdout', useIntelligent
-        ? `Preparing intelligent metadata deploy (${deployMode ?? 'azure'})...`
+        ? `Preparing intelligent metadata deploy (${deployMode ?? 'git'})...`
         : deployMode === 'org_to_org'
           ? 'Preparing org-to-org metadata retrieve and deploy...'
-          : `Cloning ${azureDeploy?.repo}@${azureDeploy?.branch} from Azure DevOps...`);
+          : `Cloning ${gitSource?.repo}@${gitSource?.branch} from ${provider}...`);
 
       const workspace = await this.deploySourceResolver.resolve({
         orgAlias,
+        gitSource,
         azureDeploy,
         manifestPath: manifest,
         manifestContent,
@@ -229,7 +245,7 @@ export class MetadataDeployWorker {
           if (!report.success) {
             throw new PipelineStepError(
               `Intelligent deploy failed: ${report.failedCount} component(s) failed`,
-              'azure_metadata_deploy',
+              'git_metadata_deploy',
             );
           }
           await setStep('Deployment Completed');
@@ -315,7 +331,7 @@ export class MetadataDeployWorker {
           if (!result.success) {
             throw new PipelineStepError(
               result.error ?? (validateOnly ? 'Metadata validation failed' : 'Metadata deploy failed'),
-              'azure_metadata_deploy',
+              'git_metadata_deploy',
             );
           }
 

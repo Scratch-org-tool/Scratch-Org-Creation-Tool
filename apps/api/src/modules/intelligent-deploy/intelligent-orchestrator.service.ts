@@ -16,9 +16,15 @@ import {
   type ExecutionCallbacks,
   type TargetOrgProfile,
 } from '@sfcc/metadata-orchestrator';
-import type { AzureDeployConfig } from '@sfcc/shared';
+import {
+  normalizeGitSourceConfig,
+  type AzureDeployConfig,
+  type GitSourceConfig,
+} from '@sfcc/shared';
 import { bootstrapOrgToOrgWorkspace } from '../../integrations/azure/org-to-org-workspace.util';
 import { removeTempDir } from '../../common/temp-cleanup.util';
+import { resolveSfdxWorkspace } from '../../common/sfdx-workspace.util';
+import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 
 export interface ResolvedDeployWorkspace {
   mode: DeploySourceMode;
@@ -31,7 +37,8 @@ export interface ResolvedDeployWorkspace {
 export interface DeploySourceResolveInput {
   orgAlias: string;
   sourceOrgAlias?: string;
-  deployMode?: 'azure' | 'org_to_org' | 'local_workspace';
+  deployMode?: 'git' | 'azure' | 'org_to_org' | 'local_workspace';
+  gitSource?: GitSourceConfig;
   azureDeploy?: AzureDeployConfig;
   manifestPath?: string;
   manifestContent?: string;
@@ -41,26 +48,21 @@ export interface DeploySourceResolveInput {
 
 @Injectable()
 export class DeploySourceResolver {
-  constructor(private readonly azureCheckout: {
-    checkoutRepo: (project: string, repo: string, branch: string) => Promise<{
-      workspaceDir: string;
-      cleanup: () => Promise<void>;
-    }>;
-    prepareManifestDeploy: (workspaceDir: string, manifest: string) => {
-      projectRoot: string;
-      manifestRelative: string;
-    };
-  }) {}
+  constructor(private readonly scmSources: ScmSourceService) {}
 
   async resolve(input: DeploySourceResolveInput): Promise<ResolvedDeployWorkspace> {
     const mode = this.resolveMode(input);
+    const gitSource = normalizeGitSourceConfig({
+      gitSource: input.gitSource,
+      azureDeploy: input.azureDeploy,
+    }).gitSource;
 
     if (mode === 'local_workspace') {
       if (!input.localProjectRoot) {
         throw new Error('localProjectRoot is required for local_workspace mode');
       }
       const manifest = input.manifestPath ?? 'manifest/package.xml';
-      const { projectRoot, manifestRelative } = this.azureCheckout.prepareManifestDeploy(
+      const { projectRoot, manifestRelative } = resolveSfdxWorkspace(
         input.localProjectRoot,
         manifest,
       );
@@ -81,12 +83,8 @@ export class DeploySourceResolver {
       let cleanup: (() => Promise<void>) | undefined;
       const manifest = input.manifestPath ?? 'manifest/package.xml';
 
-      if (input.azureDeploy?.repo && input.azureDeploy.branch) {
-        const checkout = await this.azureCheckout.checkoutRepo(
-          input.azureDeploy.project ?? '',
-          input.azureDeploy.repo,
-          input.azureDeploy.branch,
-        );
+      if (gitSource) {
+        const checkout = await this.scmSources.checkout(gitSource);
         workDir = checkout.workspaceDir;
         cleanup = checkout.cleanup;
       } else {
@@ -114,7 +112,7 @@ export class DeploySourceResolver {
           };
         }
 
-        const { manifestRelative } = this.azureCheckout.prepareManifestDeploy(workDir, manifest);
+        const { manifestRelative } = resolveSfdxWorkspace(workDir, manifest);
         const sfCli = createSfCliClient({ cwd: workDir });
         const retrieve = await sfCli.retrieveManifest(
           input.sourceOrgAlias,
@@ -137,26 +135,24 @@ export class DeploySourceResolver {
       }
     }
 
-    if (!input.azureDeploy?.repo || !input.azureDeploy.branch) {
-      throw new Error('azureDeploy repo and branch are required');
+    if (!gitSource) {
+      throw new Error('gitSource repo and branch are required');
     }
     const manifest =
       input.manifestPath ??
-      input.azureDeploy.manifestPath ??
+      gitSource.manifestPath ??
       process.env.AZURE_DEFAULT_MANIFEST_PATH ??
       'manifest/package.xml';
 
-    const checkout = await this.azureCheckout.checkoutRepo(
-      input.azureDeploy.project ?? '',
-      input.azureDeploy.repo,
-      input.azureDeploy.branch,
-    );
+    const checkout = await this.scmSources.checkout(gitSource);
     try {
-      const { projectRoot, manifestRelative } = this.azureCheckout.prepareManifestDeploy(
+      const { projectRoot, manifestRelative } = resolveSfdxWorkspace(
         checkout.workspaceDir,
         manifest,
       );
       return {
+        // DeploySourceMode predates provider-neutral SCM; this value describes
+        // manifest-from-git semantics and is retained for persisted run compatibility.
         mode: 'azure_manifest',
         projectRoot,
         manifestRelative,

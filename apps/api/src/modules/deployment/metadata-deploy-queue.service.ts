@@ -1,13 +1,20 @@
 import { createHash } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { prisma, Prisma } from '@sfcc/db';
-import { QUEUE_NAMES, DEFAULT_AZURE_MANIFEST_PATH, type AzureDeployConfig } from '@sfcc/shared';
+import {
+  QUEUE_NAMES,
+  DEFAULT_AZURE_MANIFEST_PATH,
+  normalizeGitSourceConfig,
+  type AzureDeployConfig,
+  type GitSourceConfig,
+} from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
-import { AzureService } from '../../integrations/azure/azure.service';
 import { isIntelligentDeployEnabled } from '../intelligent-deploy/intelligent-orchestrator.service';
+import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 
 export interface MetadataDeployEnqueueInput {
   orgAlias: string;
+  gitSource?: GitSourceConfig;
   azureDeploy?: AzureDeployConfig;
   deploymentId?: string;
   automationRunId?: string;
@@ -21,7 +28,7 @@ export interface MetadataDeployEnqueueInput {
   localProjectRoot?: string;
   sourceOrgId?: string;
   sourceOrgAlias?: string;
-  deployMode?: 'azure' | 'org_to_org' | 'local_workspace';
+  deployMode?: 'git' | 'azure' | 'org_to_org' | 'local_workspace';
   manifestContent?: string;
   intelligentDeployEnabled?: boolean;
   intelligentDeployRunId?: string;
@@ -44,33 +51,33 @@ function countManifestMembers(content?: string): number | undefined {
 export class MetadataDeployQueueService {
   constructor(
     private readonly queueService: QueueService,
-    private readonly azureService: AzureService,
+    private readonly scmSources: ScmSourceService,
   ) {}
 
-  async resolveAzureProject(repo: string, projectHint?: string): Promise<string> {
-    if (projectHint?.trim()) return projectHint.trim();
-    const repos = await this.azureService.listRepos();
-    const match = repos.find((r) => r.name === repo);
-    if (match?.project) return match.project;
-    const defaults = this.azureService.getDefaults();
-    return defaults.project;
-  }
-
   async enqueue(input: MetadataDeployEnqueueInput) {
+    const normalized = normalizeGitSourceConfig({
+      gitSource: input.gitSource,
+      azureDeploy: input.azureDeploy,
+    });
+    const gitSource = normalized.gitSource
+      ? await this.scmSources.requireActive(normalized.gitSource)
+      : undefined;
     const manifestPath =
+      gitSource?.manifestPath ??
       input.azureDeploy?.manifestPath ??
+      process.env.SCM_DEFAULT_MANIFEST_PATH ??
       process.env.AZURE_DEFAULT_MANIFEST_PATH ??
       DEFAULT_AZURE_MANIFEST_PATH;
 
-    let azureDeploy: AzureDeployConfig | undefined = input.azureDeploy;
-    if (azureDeploy?.repo) {
-      const project = await this.resolveAzureProject(azureDeploy.repo, azureDeploy.project);
-      azureDeploy = {
-        ...azureDeploy,
-        project: project || azureDeploy.project,
-        manifestPath,
-      };
-    }
+    const azureDeploy: AzureDeployConfig | undefined =
+      gitSource?.provider === 'azure_devops'
+        ? {
+            project: gitSource.project ?? gitSource.namespace,
+            repo: gitSource.repo,
+            branch: gitSource.branch,
+            manifestPath,
+          }
+        : undefined;
 
     const intelligentDeployEnabled =
       input.intelligentDeployEnabled ?? isIntelligentDeployEnabled();
@@ -79,6 +86,8 @@ export class MetadataDeployQueueService {
       orgAlias: input.orgAlias,
       manifestPath,
       manifestContent: input.manifestContent,
+      gitSource: gitSource ? { ...gitSource, manifestPath } : undefined,
+      // Keep the Azure alias for old workers while canonical gitSource is authoritative.
       azureDeploy,
       testLevel: input.testLevel,
       tests: input.tests,
@@ -113,7 +122,9 @@ export class MetadataDeployQueueService {
               ? 'Validate-only deploy'
               : input.deployMode === 'org_to_org'
                 ? 'Preparing org-to-org metadata deploy'
-                : 'Connecting to Azure DevOps',
+                : gitSource
+                  ? `Connecting to ${gitSource.provider}`
+                  : 'Preparing metadata deployment',
         createdBy: input.createdBy ?? 'system',
         payload: jobPayload as Prisma.InputJsonValue,
       },
@@ -137,8 +148,8 @@ export class MetadataDeployQueueService {
             : 'deploy_enqueued',
         sourceOrgId: input.sourceOrgId,
         targetOrgId: undefined,
-        repo: azureDeploy?.repo,
-        branch: azureDeploy?.branch,
+        repo: gitSource?.repo,
+        branch: gitSource?.branch,
         manifestHash: manifestHash(input.manifestContent),
         componentCount: countManifestMembers(input.manifestContent),
         testLevel: input.testLevel,
@@ -162,7 +173,11 @@ export class MetadataDeployQueueService {
           metadata: {
             ...meta,
             intelligentDeployEnabled,
-            deployMode: input.deployMode ?? 'azure',
+            deployMode: input.deployMode ?? (gitSource ? 'git' : 'azure'),
+            provider: gitSource?.provider,
+            connectionId: gitSource?.connectionId,
+            bindingId: gitSource?.bindingId,
+            gitSource,
             intelligentDeployRunId: input.intelligentDeployRunId,
           } as Prisma.InputJsonValue,
         },

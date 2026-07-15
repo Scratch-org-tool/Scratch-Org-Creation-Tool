@@ -7,7 +7,7 @@ import {
   scmConnectionStatusSchema,
   workItemDetailSchema,
 } from './integrations.js';
-import { scratchOrgPipelineSchema } from './schemas/index.js';
+import { deployNowSchema, scratchOrgPipelineSchema } from './schemas/index.js';
 
 test('canonical provider schemas accept all supported providers', () => {
   for (const provider of ['azure_devops', 'github', 'bitbucket'] as const) {
@@ -96,7 +96,7 @@ test('legacy scratch pipeline payloads are persisted with canonical gitSource', 
       branch: 'main',
     },
   });
-  assert.equal(parsed.azureDeploy.repo, 'metadata');
+  assert.equal(parsed.azureDeploy?.repo, 'metadata');
   assert.deepEqual(parsed.gitSource, {
     provider: 'azure_devops',
     project: 'Core',
@@ -105,4 +105,44 @@ test('legacy scratch pipeline payloads are persisted with canonical gitSource', 
     branch: 'main',
     manifestPath: undefined,
   });
+});
+
+test('canonical deploy payloads support every SCM provider and binding context', () => {
+  for (const provider of ['azure_devops', 'github', 'bitbucket'] as const) {
+    const parsed = deployNowSchema.parse({
+      targetOrgId: 'f93ef78c-6881-490f-91a5-2e66ab64d740',
+      gitSource: {
+        provider,
+        connectionId: `${provider}-connection`,
+        bindingId: `${provider}-binding`,
+        namespace: 'acme',
+        repo: 'metadata',
+        branch: 'main',
+        manifestPath: 'manifest/package.xml',
+      },
+    });
+    assert.equal(parsed.gitSource?.provider, provider);
+    assert.equal(parsed.gitSource?.bindingId, `${provider}-binding`);
+    assert.equal(parsed.repo, 'metadata');
+  }
+});
+
+test('canonical source wins safely when a dual legacy payload is submitted', () => {
+  const parsed = deployNowSchema.parse({
+    targetOrgId: 'f93ef78c-6881-490f-91a5-2e66ab64d740',
+    gitSource: {
+      provider: 'github',
+      namespace: 'acme',
+      repo: 'canonical',
+      branch: 'main',
+    },
+    azureDeploy: {
+      project: 'Legacy',
+      repo: 'legacy',
+      branch: 'old',
+    },
+  });
+  assert.equal(parsed.gitSource?.provider, 'github');
+  assert.equal(parsed.repo, 'canonical');
+  assert.equal(parsed.branch, 'main');
 });

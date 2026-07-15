@@ -63,8 +63,8 @@ export class IntegrationAdminController {
   }
 
   @Get('bindings')
-  listBindings() {
-    return this.service.listBindings();
+  listBindings(@Query('connectionId') connectionId?: string) {
+    return this.service.listBindings(connectionId);
   }
 
   @Post('bindings')

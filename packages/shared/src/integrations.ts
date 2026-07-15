@@ -80,6 +80,7 @@ export const repositorySchema = z.object({
 export const gitSourceConfigSchema = z.object({
   provider: scmProviderSchema,
   connectionId: z.string().optional(),
+  bindingId: z.string().optional(),
   namespace: z.string().optional(),
   project: z.string().optional(),
   repositoryId: z.string().optional(),
@@ -213,7 +214,13 @@ export function normalizeGitSourceConfig<T extends {
   gitSource?: GitSourceConfig;
   azureDeploy?: LegacyAzureDeployConfig;
 }>(value: T): T & { gitSource?: GitSourceConfig } {
-  if (value.gitSource || !value.azureDeploy) return value;
+  if (value.gitSource) {
+    return {
+      ...value,
+      gitSource: gitSourceConfigSchema.parse(value.gitSource),
+    };
+  }
+  if (!value.azureDeploy) return value;
   return {
     ...value,
     gitSource: {
@@ -231,6 +238,10 @@ export const PIPELINE_CHECKPOINT_ALIASES = {
   azure_metadata_deploy: 'git_metadata_deploy',
 } as const;
 
+export function canonicalPipelineStep(step: string): string {
+  return PIPELINE_CHECKPOINT_ALIASES[step as LegacyPipelineStep] ?? step;
+}
+
 type LegacyPipelineStep = keyof typeof PIPELINE_CHECKPOINT_ALIASES;
 export type CanonicalPipelineStep =
   | (typeof PIPELINE_CHECKPOINT_ALIASES)[LegacyPipelineStep]
@@ -245,17 +256,15 @@ export function normalizePipelineCheckpointAliases<T extends {
   resumeFrom?: string;
   legacyResumeFrom?: string;
 } {
-  const canonical = (step: string): string =>
-    PIPELINE_CHECKPOINT_ALIASES[step as LegacyPipelineStep] ?? step;
   return {
     ...checkpoint,
     ...(checkpoint.completedSteps
-      ? { completedSteps: [...new Set(checkpoint.completedSteps.map(canonical))] }
+      ? { completedSteps: [...new Set(checkpoint.completedSteps.map(canonicalPipelineStep))] }
       : {}),
     ...(checkpoint.resumeFrom
       ? {
-          resumeFrom: canonical(checkpoint.resumeFrom),
-          ...(canonical(checkpoint.resumeFrom) !== checkpoint.resumeFrom
+          resumeFrom: canonicalPipelineStep(checkpoint.resumeFrom),
+          ...(canonicalPipelineStep(checkpoint.resumeFrom) !== checkpoint.resumeFrom
             ? { legacyResumeFrom: checkpoint.resumeFrom }
             : {}),
         }

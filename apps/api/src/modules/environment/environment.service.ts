@@ -1,7 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { prisma, Prisma } from '@sfcc/db';
-import { QUEUE_NAMES, scratchOrgCreateSchema, scratchOrgPipelineSchema, scratchOrgSkipStepSchema } from '@sfcc/shared';
-import type { ScratchOrgCreateConfig, ScratchOrgSkipStepKey } from '@sfcc/shared';
+import {
+  QUEUE_NAMES,
+  scratchOrgCreateSchema,
+  scratchOrgPipelineSchema,
+  scratchOrgSkipStepSchema,
+  type GitSourceConfig,
+  type ScmProvider,
+  type ScratchOrgCreateConfig,
+  type ScratchOrgSkipStepKey,
+} from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JobProcessRegistryService } from '../jobs/job-process-registry.service';
@@ -17,6 +25,9 @@ import { createSfCliClient, extractPasswordFromCliResult, type SfOrgInfo } from 
 import { decrypt, encrypt } from '../../common/crypto.util';
 import { assertResourceOwner, connectedOrgWhere, userOwnedWhere } from '../../common/user-tenancy.util';
 import { resolveOrgTypeFromInstance, isLikelyScratchOrg } from '../../common/org-type.util';
+import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
+import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
+import { IntegrationAdminService } from '../integrations/integration-admin.service';
 
 async function resolveScratchOrgPassword(
   sfCli: ReturnType<typeof createSfCliClient>,
@@ -58,6 +69,9 @@ export class EnvironmentService {
     private readonly pipelineOrchestrator: PipelineOrchestratorService,
     private readonly azureService: AzureService,
     private readonly azureIntegration: AzureIntegrationService,
+    private readonly scmAdapters: ScmAdapterRegistry,
+    private readonly scmSources: ScmSourceService,
+    private readonly integrationAdmin: IntegrationAdminService,
     private readonly orgsService: OrgsService,
     private readonly orgConfigLoader: OrgConfigLoaderService,
     private readonly processRegistry: JobProcessRegistryService,
@@ -450,8 +464,70 @@ export class EnvironmentService {
     return this.azureIntegration.disconnect();
   }
 
+  getScmConnection(provider: ScmProvider, connectionId?: string) {
+    return this.scmAdapters.get(provider).getConnectionStatus({ connectionId });
+  }
+
+  async getScmDefaults(provider: ScmProvider, connectionId?: string) {
+    const status = await this.getScmConnection(provider, connectionId);
+    return {
+      provider,
+      connectionId: status.id ?? connectionId ?? null,
+      namespace: status.namespace,
+      connected: status.connected,
+    };
+  }
+
+  listScmNamespaces(provider: ScmProvider, connectionId?: string) {
+    return this.scmAdapters.get(provider).listNamespaces({ connectionId });
+  }
+
+  listScmRepos(
+    provider: ScmProvider,
+    query: { connectionId?: string; namespace?: string; project?: string },
+  ) {
+    return this.scmAdapters.get(provider).listRepositories(query);
+  }
+
+  async listScmBranches(provider: ScmProvider, source: Omit<GitSourceConfig, 'provider'>) {
+    const resolved = await this.scmSources.resolve({ ...source, provider });
+    return this.scmAdapters.get(provider).listBranches(resolved);
+  }
+
+  connectScm(provider: ScmProvider, body: unknown, connectedBy: string) {
+    if (provider === 'azure_devops') {
+      return this.connectAzureDevOps(body, connectedBy);
+    }
+    return this.integrationAdmin.connectScm(provider, body, connectedBy);
+  }
+
+  verifyScm(provider: ScmProvider, connectionId?: string) {
+    if (provider === 'azure_devops') return this.verifyAzureConnection();
+    if (!connectionId) throw new BadRequestException('connectionId is required');
+    return this.integrationAdmin.verifyScm(provider, connectionId);
+  }
+
+  disconnectScm(provider: ScmProvider, connectionId?: string) {
+    if (provider === 'azure_devops') return this.disconnectAzureDevOps();
+    if (!connectionId) throw new BadRequestException('connectionId is required');
+    return this.integrationAdmin.disconnectScm(provider, connectionId);
+  }
+
+  listProjectBindings(connectionId?: string) {
+    return this.integrationAdmin.listBindings(connectionId);
+  }
+
+  saveProjectBinding(body: unknown, createdBy: string) {
+    return this.integrationAdmin.saveBinding(body, createdBy);
+  }
+
+  deleteProjectBinding(id: string) {
+    return this.integrationAdmin.deleteBinding(id);
+  }
+
   async createScratchOrgPipeline(body: unknown, userId: string) {
     const config = scratchOrgPipelineSchema.parse(body);
+    await this.scmSources.requireActive(config.gitSource!);
     return this.pipelineOrchestrator.startPipeline(config, userId);
   }
 

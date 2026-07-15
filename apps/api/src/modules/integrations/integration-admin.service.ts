@@ -15,6 +15,7 @@ import {
 import { BitbucketScmAdapter } from '../../integrations/bitbucket/bitbucket.adapter';
 import { JiraWorkItemAdapter } from '../../integrations/jira/jira.adapter';
 import { GitHubIntegrationService } from '../../integrations/github/github-integration.service';
+import { AzureIntegrationService } from './azure-integration.service';
 
 const BITBUCKET_API = 'https://api.bitbucket.org/2.0';
 const BITBUCKET_GIT = 'https://bitbucket.org';
@@ -27,6 +28,7 @@ export class IntegrationAdminService {
     private readonly store: AtlassianConnectionStore,
     private readonly bitbucket: BitbucketScmAdapter,
     private readonly jira: JiraWorkItemAdapter,
+    private readonly azure: AzureIntegrationService,
     @Optional() private readonly github?: GitHubIntegrationService,
   ) {}
 
@@ -35,6 +37,9 @@ export class IntegrationAdminService {
   }
 
   async connectScm(provider: string, body: unknown, connectedBy?: string) {
+    if (provider === 'azure_devops') {
+      return this.azure.connect(body, connectedBy);
+    }
     if (provider === 'github') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.connect(body, connectedBy);
@@ -149,6 +154,7 @@ export class IntegrationAdminService {
   }
 
   async verifyScm(provider: string, connectionId: string) {
+    if (provider === 'azure_devops') return this.azure.verify();
     if (provider === 'github') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.verify(connectionId);
@@ -187,6 +193,7 @@ export class IntegrationAdminService {
   }
 
   async disconnectScm(provider: string, connectionId: string) {
+    if (provider === 'azure_devops') return this.azure.disconnect();
     if (provider === 'github') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.disconnect(connectionId);
