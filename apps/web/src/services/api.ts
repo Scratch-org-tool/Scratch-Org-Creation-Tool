@@ -2,6 +2,43 @@ import { buildApiUrl } from '@/lib/api-base-url';
 
 let getIdToken: ((forceRefresh?: boolean) => Promise<string | null>) | null = null;
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null = null,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+function parseErrorResponse(text: string, status: number): ApiError {
+  let message = text || `API error: ${status}`;
+  let code: string | null = null;
+  let details: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    details = parsed;
+    const nested = parsed.message;
+    if (typeof nested === 'string') message = nested;
+    else if (Array.isArray(nested)) message = nested.join(', ');
+    else if (nested && typeof nested === 'object') {
+      details = { ...parsed, ...(nested as Record<string, unknown>) };
+      const nestedMessage = (nested as Record<string, unknown>).message;
+      if (typeof nestedMessage === 'string') message = nestedMessage;
+      const nestedCode = (nested as Record<string, unknown>).code;
+      if (typeof nestedCode === 'string') code = nestedCode;
+    }
+    if (typeof parsed.error === 'string') code ??= parsed.error;
+    if (typeof parsed.code === 'string') code = parsed.code;
+  } catch {
+    /* use response text */
+  }
+  return new ApiError(message, status, code, details);
+}
+
 export function setAuthTokenGetter(getter: (forceRefresh?: boolean) => Promise<string | null>) {
   getIdToken = getter;
 }
@@ -53,14 +90,7 @@ export async function api<T>(path: string, options?: RequestInit, retried = fals
 
   if (!res.ok) {
     const text = await res.text();
-    let message = text || `API error: ${res.status}`;
-    try {
-      const parsed = JSON.parse(text) as { message?: string | string[] };
-      if (parsed.message) {
-        message = Array.isArray(parsed.message) ? parsed.message.join(', ') : parsed.message;
-      }
-    } catch { /* use raw text */ }
-    throw new Error(message);
+    throw parseErrorResponse(text, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -96,14 +126,7 @@ export async function apiBlob(path: string, options?: RequestInit, retried = fal
 
   if (!res.ok) {
     const text = await res.text();
-    let message = text || `API error: ${res.status}`;
-    try {
-      const parsed = JSON.parse(text) as { message?: string | string[] };
-      if (parsed.message) {
-        message = Array.isArray(parsed.message) ? parsed.message.join(', ') : parsed.message;
-      }
-    } catch { /* use raw text */ }
-    throw new Error(message);
+    throw parseErrorResponse(text, res.status);
   }
 
   return res.blob();

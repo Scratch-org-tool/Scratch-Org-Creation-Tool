@@ -10,26 +10,27 @@ import {
   IntegrationsTh,
 } from '@/modules/environment-center/integrations/integrations-data-table';
 import { cn } from '@/utils/cn';
-import type { AzureWorkItemSummary, DefectStatusFilter } from './types';
+import type { DefectStatusFilter, WorkItemSummary } from './types';
 
 interface DefectsWorkItemsTableProps {
-  items: AzureWorkItemSummary[];
+  items: WorkItemSummary[];
   total: number;
   page: number;
   pageSize: number;
   totalPages: number;
   statusFilter: DefectStatusFilter;
   typeFilter: string;
+  issueTypes: string[];
   search: string;
-  selectedId: number | null;
-  assigneeEmail: string | null;
+  selectedId: string | null;
+  assigneeId: string | null;
   projectName: string | null;
   isAdminView: boolean;
   onStatusFilterChange: (f: DefectStatusFilter) => void;
   onTypeFilterChange: (t: string) => void;
   onSearchChange: (q: string) => void;
   onPageChange: (p: number) => void;
-  onSelect: (id: number) => void;
+  onSelect: (id: string) => void;
 }
 
 const STATUS_PILLS: Array<{ value: DefectStatusFilter; label: string }> = [
@@ -47,9 +48,10 @@ export function DefectsWorkItemsTable({
   totalPages,
   statusFilter,
   typeFilter,
+  issueTypes,
   search,
   selectedId,
-  assigneeEmail,
+  assigneeId,
   projectName,
   isAdminView,
   onStatusFilterChange,
@@ -67,7 +69,7 @@ export function DefectsWorkItemsTable({
       description={
         isAdminView
           ? `All defects and user stories in ${projectName ?? 'selected project'}`
-          : `Assigned to ${assigneeEmail ?? 'your account'} · ${projectName ?? 'project'}`
+          : `Assigned to ${assigneeId ?? 'your bound identity'} · ${projectName ?? 'project'}`
       }
       headerAction={
         <Select
@@ -77,11 +79,7 @@ export function DefectsWorkItemsTable({
           className="h-8 text-xs w-[130px]"
         >
           <option value="">All types</option>
-          <option value="Issue">Issue</option>
-          <option value="Bug">Bug</option>
-          <option value="Defect">Defect</option>
-          <option value="User Story">User Story</option>
-          <option value="Product Backlog Item">Product Backlog Item</option>
+          {issueTypes.map((type) => <option key={type} value={type}>{type}</option>)}
         </Select>
       }
     >
@@ -127,7 +125,7 @@ export function DefectsWorkItemsTable({
               <td colSpan={6} className="py-10 text-center text-muted-foreground text-sm">
                 {isAdminView
                   ? 'No work items found in this project.'
-                  : `No items assigned to ${assigneeEmail ?? 'your email'}.`}
+                  : `No items assigned to ${assigneeId ?? 'your bound provider identity'}.`}
               </td>
             </tr>
           )}
@@ -155,13 +153,13 @@ export function DefectsWorkItemsTable({
                 </IntegrationsTd>
                 <IntegrationsTd className="text-muted-foreground text-xs">{item.type}</IntegrationsTd>
                 <IntegrationsTd>
-                  <StatusBadge status={item.state} />
+                  <StatusBadge status={item.state.name} />
                 </IntegrationsTd>
                 <IntegrationsTd className="hidden md:table-cell text-muted-foreground tabular-nums">
                   {item.priority ?? '—'}
                 </IntegrationsTd>
                 <IntegrationsTd className="hidden lg:table-cell text-muted-foreground text-xs">
-                  {item.changedDate ? new Date(item.changedDate).toLocaleDateString() : '—'}
+                  {item.updatedAt ? new Date(item.updatedAt).toLocaleDateString() : '—'}
                 </IntegrationsTd>
               </tr>
             );

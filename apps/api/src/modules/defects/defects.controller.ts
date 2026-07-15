@@ -24,6 +24,14 @@ type QueryParams = Record<string, string | undefined>;
 export class DefectsController {
   constructor(private readonly defectsService: DefectsService) {}
 
+  @Get('contexts')
+  listContexts(
+    @Req() req: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.defectsService.listContexts(userId, this.isAdmin(req));
+  }
+
   @Get(['projects', 'providers/:provider/projects'])
   listProjects(
     @Req() req: AuthenticatedRequest,

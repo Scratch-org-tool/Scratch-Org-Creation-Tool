@@ -4,6 +4,20 @@ import { DefectsController } from './defects.controller';
 import type { DefectsService } from './defects.service';
 
 describe('DefectsController', () => {
+  it('discovers selectable contexts using the current authorization role', async () => {
+    const service = {
+      listContexts: vi.fn().mockResolvedValue({ connections: [], bindings: [] }),
+    } as unknown as DefectsService;
+    const controller = new DefectsController(service);
+
+    await controller.listContexts(
+      { userProfile: { role: 'user' } } as AuthenticatedRequest,
+      'app-user',
+    );
+
+    expect(service.listContexts).toHaveBeenCalledWith('app-user', false);
+  });
+
   it('forwards opaque external ids and provider/binding selection unchanged', async () => {
     const service = {
       getWorkItem: vi.fn().mockResolvedValue({ id: 'CORE-123' }),

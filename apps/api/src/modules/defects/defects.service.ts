@@ -59,6 +59,81 @@ export class DefectsService {
     private readonly defectInvestigationAgent: DefectInvestigationAgent,
   ) {}
 
+  async listContexts(userId: string, isAdmin: boolean) {
+    const user = await this.requireUser(userId);
+    const [connections, bindings, identities] = await Promise.all([
+      prisma.workItemConnection.findMany({
+        select: {
+          id: true,
+          provider: true,
+          displayName: true,
+          namespace: true,
+          baseUrl: true,
+          status: true,
+        },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      prisma.projectBinding.findMany({
+        where: { workItemConnectionId: { not: null } },
+        select: {
+          id: true,
+          workItemConnectionId: true,
+          externalProjectId: true,
+          projectKey: true,
+          repositoryName: true,
+          workItemConnection: { select: { provider: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      isAdmin
+        ? Promise.resolve([])
+        : prisma.externalIdentityBinding.findMany({
+            where: { appUserId: user.id },
+            select: { workItemConnectionId: true },
+          }),
+    ]);
+    const identityConnections = new Set(
+      identities.map((identity) => identity.workItemConnectionId),
+    );
+    const options = await Promise.all(connections.map(async (connection) => {
+      const adapter = this.adapters.get(connection.provider);
+      const status = await adapter.getConnectionStatus({ connectionId: connection.id })
+        .catch(() => null);
+      return {
+        id: connection.id,
+        provider: connection.provider,
+        displayName: connection.displayName,
+        namespace: connection.namespace,
+        baseUrl: connection.baseUrl,
+        status: status?.state ?? connection.status,
+        capabilities: status?.capabilities ?? adapter.capabilities,
+        identityBound:
+          isAdmin ||
+          connection.provider === 'azure_boards' ||
+          identityConnections.has(connection.id),
+      };
+    }));
+    return {
+      connections: options,
+      bindings: bindings.flatMap((binding) =>
+        binding.workItemConnectionId &&
+        binding.workItemConnection &&
+        (isAdmin ||
+          binding.workItemConnection.provider === 'azure_boards' ||
+          identityConnections.has(binding.workItemConnectionId))
+          ? [{
+              id: binding.id,
+              connectionId: binding.workItemConnectionId,
+              provider: binding.workItemConnection.provider,
+              externalProjectId: binding.externalProjectId,
+              projectKey: binding.projectKey,
+              repositoryName: binding.repositoryName,
+            }]
+          : []),
+      isAdmin,
+    };
+  }
+
   async listProjects(userId: string, isAdmin: boolean, query: Query = {}) {
     const user = await this.requireUser(userId);
     const resolved = await this.resolveProvider(query);
@@ -127,8 +202,16 @@ export class DefectsService {
 
     const state = query.state?.trim().toLowerCase();
     if (state && state !== 'all') {
+      const categories =
+        state === 'open'
+          ? ['new', 'unknown']
+          : state === 'active'
+            ? ['in_progress']
+            : state === 'resolved'
+              ? ['resolved', 'closed']
+              : [state];
       items = items.filter((item) =>
-        item.state.name.toLowerCase() === state || item.state.category === state);
+        item.state.name.toLowerCase() === state || categories.includes(item.state.category));
     }
     const text = (query.q ?? query.text)?.trim().toLowerCase();
     if (text) {

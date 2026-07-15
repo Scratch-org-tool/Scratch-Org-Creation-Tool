@@ -14,14 +14,13 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { apiBlob } from '@/services/api';
-import type { AzureWorkItemAttachment } from './types';
+import type { WorkItemAttachment } from './types';
 
 type PreviewMode = 'pdf' | 'image' | 'excel' | 'word' | 'text' | 'unsupported';
 
 interface DefectAttachmentPreviewProps {
-  workItemId: number;
-  attachment: AzureWorkItemAttachment | null;
-  projectQuery: string;
+  attachment: WorkItemAttachment | null;
+  contentPath: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -55,9 +54,8 @@ function detectMode(name: string, contentType: string | null): PreviewMode {
 }
 
 export function DefectAttachmentPreview({
-  workItemId,
   attachment,
-  projectQuery,
+  contentPath,
   open,
   onOpenChange,
 }: DefectAttachmentPreviewProps) {
@@ -87,10 +85,7 @@ export function DefectAttachmentPreview({
       setMode(previewMode);
 
       try {
-        const pq = projectQuery ? `?${projectQuery}` : '';
-        const blob = await apiBlob(
-          `/defects/work-items/${workItemId}/attachments/${attachment.id}/content${pq}`,
-        );
+        const blob = await apiBlob(contentPath);
         objectUrl = URL.createObjectURL(blob);
         if (revoked) {
           URL.revokeObjectURL(objectUrl);
@@ -137,7 +132,7 @@ export function DefectAttachmentPreview({
       revoked = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [open, attachment, workItemId, projectQuery]);
+  }, [open, attachment, contentPath]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

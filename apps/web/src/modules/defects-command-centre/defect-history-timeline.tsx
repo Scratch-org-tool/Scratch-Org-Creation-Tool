@@ -17,11 +17,11 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/cn';
-import type { AzureWorkItemHistoryEvent } from './types';
+import type { WorkItemHistoryEvent } from './types';
 import { DefectHistoryDetailDialog } from './defect-history-detail-dialog';
 
 interface DefectHistoryTimelineProps {
-  events: AzureWorkItemHistoryEvent[];
+  events: WorkItemHistoryEvent[];
   loading?: boolean;
 }
 
@@ -38,7 +38,7 @@ function formatShortDate(iso: string): { date: string; time: string } {
   }
 }
 
-function eventIcon(event: AzureWorkItemHistoryEvent): LucideIcon {
+function eventIcon(event: WorkItemHistoryEvent): LucideIcon {
   switch (event.kind) {
     case 'created':
       return Plus;
@@ -51,16 +51,10 @@ function eventIcon(event: AzureWorkItemHistoryEvent): LucideIcon {
     case 'updated': {
       const primary = event.changes[0];
       if (!primary) return History;
-      if (primary.fieldRef === 'System.State') return CircleDot;
-      if (primary.fieldRef === 'System.AssignedTo') return User;
-      if (
-        primary.fieldRef === 'System.Title' ||
-        primary.fieldRef === 'System.Description' ||
-        primary.fieldRef === 'Microsoft.VSTS.TCM.ReproSteps' ||
-        primary.fieldRef === 'Microsoft.VSTS.Common.AcceptanceCriteria'
-      ) {
-        return FileText;
-      }
+      const field = `${primary.field} ${primary.fieldRef ?? ''}`.toLowerCase();
+      if (field.includes('state') || field.includes('status')) return CircleDot;
+      if (field.includes('assign')) return User;
+      if (['title', 'description', 'repro', 'acceptance'].some((name) => field.includes(name))) return FileText;
       return History;
     }
     default:
@@ -70,14 +64,14 @@ function eventIcon(event: AzureWorkItemHistoryEvent): LucideIcon {
 
 export function DefectHistoryTimeline({ events, loading }: DefectHistoryTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [selectedEvent, setSelectedEvent] = useState<AzureWorkItemHistoryEvent | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<WorkItemHistoryEvent | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const scrollBy = (delta: number) => {
     scrollRef.current?.scrollBy({ left: delta, behavior: 'smooth' });
   };
 
-  const openEvent = (event: AzureWorkItemHistoryEvent) => {
+  const openEvent = (event: WorkItemHistoryEvent) => {
     setSelectedEvent(event);
     setDialogOpen(true);
   };
@@ -143,7 +137,7 @@ export function DefectHistoryTimeline({ events, loading }: DefectHistoryTimeline
         >
           {events.map((event, index) => {
             const Icon = eventIcon(event);
-            const { date, time } = formatShortDate(event.revisedDate);
+            const { date, time } = formatShortDate(event.occurredAt);
             const isLatest = index === events.length - 1;
 
             return (

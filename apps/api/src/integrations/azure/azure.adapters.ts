@@ -165,13 +165,18 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
   }
 
   async listProjects(_context?: AdapterContext): Promise<WorkItemProject[]> {
-    const projects = await this.azure.listProjects();
+    const [projects, info] = await Promise.all([
+      this.azure.listProjects(),
+      this.azure.getConnectionInfo(),
+    ]);
     return projects.map((project) => ({
       id: project.id,
       key: project.name,
       name: project.name,
       description: project.description,
-      url: null,
+      url: info
+        ? `https://dev.azure.com/${encodeURIComponent(info.orgSlug)}/${encodeURIComponent(project.name)}/_boards`
+        : null,
     }));
   }
 
