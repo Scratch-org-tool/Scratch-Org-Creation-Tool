@@ -15,6 +15,7 @@ export * from './org-to-org-data.js';
 export * from './org-to-org-metadata.js';
 export * from './data-deploy-chunks.js';
 export * from './deployment-plan.js';
+export * from './deployment-workbench.js';
 export * from './copilot-stream.js';
 export * from './copilot-actions.js';
 export * from './copilot-app-guide.js';

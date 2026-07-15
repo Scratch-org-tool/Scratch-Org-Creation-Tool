@@ -122,3 +122,40 @@ describe('authentication audit migration', () => {
     );
   });
 });
+
+describe('deployment workbench foundation migration', () => {
+  const migrationPath =
+    'migrations/20260715180000_deployment_workbench_foundation/migration.sql';
+
+  it('is additive and leaves existing deployment rows untouched', () => {
+    const migration = prismaFile(migrationPath);
+
+    assert.doesNotMatch(
+      migration,
+      /\b(?:DROP TABLE|DELETE FROM|TRUNCATE TABLE|UPDATE "Deployment")\b/i,
+    );
+    assert.match(migration, /CREATE TABLE "DeploymentQualityRun"/);
+    assert.match(migration, /REFERENCES "Deployment"\("id"\)\s+ON DELETE SET NULL/);
+  });
+
+  it('persists stages, normalized findings, tests, and append-only audit links', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+
+    for (const model of [
+      'DeploymentQualityRun',
+      'DeploymentQualityStage',
+      'DeploymentQualityIssue',
+      'DeploymentQualityTestResult',
+      'DeploymentQualityAudit',
+    ]) {
+      assert.match(schema, new RegExp(`model ${model}`));
+      assert.match(migration, new RegExp(`CREATE TABLE "${model}"`));
+    }
+    assert.match(schema, /policySnapshot\s+Json/);
+    assert.match(schema, /validationId\s+String\?/);
+    assert.match(schema, /startedAt\s+DateTime\?/);
+    assert.match(schema, /artifacts\s+Json\?/);
+    assert.match(migration, /ON DELETE CASCADE/);
+  });
+});

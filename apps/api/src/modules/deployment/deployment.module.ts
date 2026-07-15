@@ -10,12 +10,15 @@ import { JobsModule } from '../jobs/jobs.module';
 import { StreamModule } from '../stream/stream.module';
 import { IntelligentDeployModule } from '../intelligent-deploy/intelligent-deploy.module';
 import { MetadataDataChainService } from '../metadata/metadata-data-chain.service';
+import { DeploymentWorkbenchController } from './deployment-workbench.controller';
+import { DeploymentWorkbenchService } from './deployment-workbench.service';
 
 @Module({
   imports: [JobsModule, StreamModule, IntelligentDeployModule],
-  controllers: [DeploymentController],
+  controllers: [DeploymentController, DeploymentWorkbenchController],
   providers: [
     DeploymentService,
+    DeploymentWorkbenchService,
     MetadataDeployQueueService,
     MetadataDeployJobService,
     MetadataDataChainService,
@@ -23,6 +26,12 @@ import { MetadataDataChainService } from '../metadata/metadata-data-chain.servic
     AzureService,
     JenkinsService,
   ],
-  exports: [MetadataDeployQueueService, MetadataDeployJobService, DeploymentService, MetadataDataChainService],
+  exports: [
+    MetadataDeployQueueService,
+    MetadataDeployJobService,
+    DeploymentService,
+    DeploymentWorkbenchService,
+    MetadataDataChainService,
+  ],
 })
 export class DeploymentModule {}
