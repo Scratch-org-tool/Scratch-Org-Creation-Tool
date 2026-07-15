@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { normalizeAzureOrgSlug, normalizeAzureProject } from '../azure-utils.js';
 import { querySetSchema } from '../query-set.js';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX } from '../org-to-org-data.js';
+import { resolveDataWriteOperation } from '../data-runtime.js';
 import { gitSourceConfigSchema, normalizeGitSourceConfig } from '../integrations.js';
 
 const dataRecordLimitSchema = z
@@ -58,18 +59,47 @@ export const scratchOrgSkipStepSchema = z.object({
 
 export const scratchOrgWizardSchema = scratchOrgCreateSchema;
 
+const dataRuntimeOptionsSchema = z.object({
+  operation: z.enum(['insert', 'upsert']).optional(),
+  externalIdField: z.string().trim().min(1).optional(),
+  dryRun: z.boolean().default(false),
+  unknownQuotaPolicy: z.enum(['block', 'warn']).default('block'),
+  maxParallelChunks: z.number().int().min(1).max(32).optional(),
+  rollback: z.object({
+    enabled: z.boolean().default(false),
+    maxBytes: z.number().int().positive().max(100 * 1024 * 1024).optional(),
+  }).optional(),
+});
+
+function addDataOperationIssue(
+  data: { operation?: 'insert' | 'upsert'; externalIdField?: string },
+  context: z.RefinementCtx,
+): void {
+  try {
+    resolveDataWriteOperation(data.operation, data.externalIdField);
+  } catch (error) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : String(error),
+      path: ['externalIdField'],
+    });
+  }
+}
+
 export const dataDeploySchema = z.object({
   sourceOrgId: z.string().uuid(),
   targetOrgId: z.string().uuid(),
   objectName: z.string().min(1),
   soql: z.string().optional(),
   recordLimit: dataRecordLimitSchema.optional(),
-  /** When set, records are upserted by this external-Id field so re-runs are idempotent. */
-  externalIdField: z.string().optional(),
+  ...dataRuntimeOptionsSchema.shape,
 }).refine((data) => data.sourceOrgId !== data.targetOrgId, {
   message: 'Source and target org must differ',
   path: ['targetOrgId'],
-});
+}).superRefine(addDataOperationIssue).transform((data) => ({
+  ...data,
+  ...resolveDataWriteOperation(data.operation, data.externalIdField),
+}));
 
 export const dataDeployPreflightSchema = z.object({
   sourceOrgId: z.string().uuid(),
@@ -77,11 +107,19 @@ export const dataDeployPreflightSchema = z.object({
   objectName: z.string().min(1),
   soql: z.string().optional(),
   recordLimit: dataRecordLimitSchema.optional(),
-  externalIdField: z.string().optional(),
+  ...dataRuntimeOptionsSchema.pick({
+    operation: true,
+    externalIdField: true,
+    dryRun: true,
+    unknownQuotaPolicy: true,
+  }).shape,
 }).refine((data) => data.sourceOrgId !== data.targetOrgId, {
   message: 'Source and target org must differ',
   path: ['targetOrgId'],
-});
+}).superRefine(addDataOperationIssue).transform((data) => ({
+  ...data,
+  ...resolveDataWriteOperation(data.operation, data.externalIdField),
+}));
 
 export const dataReplicationSchema = z.object({
   sourceOrgId: z.string().uuid(),
@@ -90,10 +128,29 @@ export const dataReplicationSchema = z.object({
   querySet: querySetSchema.optional(),
   recordTypeMappings: z.record(z.string(), z.string()).optional(),
   recordLimit: dataRecordLimitSchema.optional(),
+  ...dataRuntimeOptionsSchema.pick({
+    operation: true,
+    externalIdField: true,
+    dryRun: true,
+    unknownQuotaPolicy: true,
+    maxParallelChunks: true,
+  }).shape,
 }).refine((data) => data.sourceOrgId !== data.targetOrgId, {
   message: 'Source and target org must differ',
   path: ['targetOrgId'],
-});
+}).superRefine((data, context) => {
+  if (!data.querySet && !data.soql) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'querySet or soql is required',
+      path: ['querySet'],
+    });
+  }
+  addDataOperationIssue(data, context);
+}).transform((data) => ({
+  ...data,
+  ...resolveDataWriteOperation(data.operation, data.externalIdField),
+}));
 
 export const querySetCompileSchema = z.object({
   enabledTemplateIds: z.array(z.string()).min(1),

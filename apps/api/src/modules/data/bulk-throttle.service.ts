@@ -74,4 +74,23 @@ export class BulkThrottleService {
       },
     };
   }
+
+  /** Serialize scheduler release decisions across API replicas. */
+  async withSchedulerLock<T>(batchId: string, callback: () => Promise<T>): Promise<T | null> {
+    const redis = this.queueService.getConnection();
+    const key = `sfcc:data-scheduler:${batchId}`;
+    const token = randomUUID();
+    const acquired = await redis.set(key, token, 'PX', 30_000, 'NX');
+    if (acquired !== 'OK') return null;
+    try {
+      return await callback();
+    } finally {
+      await redis.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end',
+        1,
+        key,
+        token,
+      ).catch(() => undefined);
+    }
+  }
 }

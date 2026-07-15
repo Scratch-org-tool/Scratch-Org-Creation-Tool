@@ -9,6 +9,7 @@ import { DataDeployOrchestratorService } from './data-deploy-orchestrator.servic
 import { DataPreflightService } from './data-preflight.service';
 import { BulkThrottleService } from './bulk-throttle.service';
 import { QuerySectionRuntimeService } from './query-section-runtime.service';
+import { DataRollbackService } from './data-rollback.service';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
 
 @Module({
@@ -24,6 +25,7 @@ import { OrchestratorModule } from '../orchestrator/orchestrator.module';
     DataPreflightService,
     BulkThrottleService,
     QuerySectionRuntimeService,
+    DataRollbackService,
   ],
   exports: [
     RecordTypeMapperService,
@@ -36,6 +38,7 @@ import { OrchestratorModule } from '../orchestrator/orchestrator.module';
     DataPreflightService,
     BulkThrottleService,
     QuerySectionRuntimeService,
+    DataRollbackService,
   ],
 })
 export class DataCoreModule {}

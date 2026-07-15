@@ -14,6 +14,7 @@ export * from './azure-work-items.js';
 export * from './org-to-org-data.js';
 export * from './org-to-org-metadata.js';
 export * from './data-deploy-chunks.js';
+export * from './data-runtime.js';
 export * from './deployment-plan.js';
 export * from './deployment-workbench.js';
 export * from './copilot-stream.js';

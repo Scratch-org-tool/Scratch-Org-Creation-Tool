@@ -23,6 +23,7 @@ import {
 import { assertOrgOwned, assertResourceOwner } from '../../common/user-tenancy.util';
 import { JobsService } from '../jobs/jobs.service';
 import { StreamService } from '../stream/stream.service';
+import { BulkThrottleService } from './bulk-throttle.service';
 
 const PREVIEW_LIMIT = 5;
 const BULK_CHUNK_SIZE = 25_000;
@@ -68,7 +69,17 @@ export class QuerySectionRuntimeService {
   constructor(
     private readonly jobsService: JobsService,
     private readonly streamService: StreamService,
+    private readonly bulkThrottle?: BulkThrottleService,
   ) {}
+
+  private async withBulkSlot<T>(alias: string, work: () => Promise<T>): Promise<T> {
+    const slot = this.bulkThrottle ? await this.bulkThrottle.acquire(alias) : undefined;
+    try {
+      return await work();
+    } finally {
+      await slot?.release();
+    }
+  }
 
   compile(section: unknown, options: Parameters<typeof compileQuerySectionPlan>[1] = {}) {
     return compileQuerySectionPlan(section, options);
@@ -267,7 +278,10 @@ export class QuerySectionRuntimeService {
         try {
           const sourceQuery = stripIdFromSelect(query.soql);
           const exportPath = join(workDir, `${query.id.replace(/[^A-Za-z0-9_.-]/g, '_')}.csv`);
-          const exported = await this.sfCli.exportBulk(sourceQuery, sourceAlias, exportPath, 30, { cwd: workDir });
+          const exported = await this.withBulkSlot(
+            sourceAlias,
+            () => this.sfCli.exportBulk(sourceQuery, sourceAlias, exportPath, 30, { cwd: workDir }),
+          );
           if (!exported.success) throw new Error(exported.error ?? `Bulk export failed for ${query.id}`);
           let rows = parseCsv(await readFile(exportPath, 'utf8'));
           sourceRows.set(query.id, rows);
@@ -418,12 +432,15 @@ export class QuerySectionRuntimeService {
       if (!variantRows) {
         const safeId = query.id.replace(/[^A-Za-z0-9_.-]/g, '_');
         const path = join(workDir, `support-${safeId}.csv`);
-        const result = await this.sfCli.exportBulk(
-          stripIdFromSelect(query.soql),
+        const result = await this.withBulkSlot(
           alias,
-          path,
-          30,
-          { cwd: workDir },
+          () => this.sfCli.exportBulk(
+            stripIdFromSelect(query.soql),
+            alias,
+            path,
+            30,
+            { cwd: workDir },
+          ),
         );
         if (!result.success) throw new Error(result.error ?? `Partner support export failed: ${query.id}`);
         variantRows = parseCsv(await readFile(path, 'utf8'));
@@ -545,13 +562,14 @@ export class QuerySectionRuntimeService {
       const path = join(workDir, `${queryId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${offset}.csv`);
       await writeFile(path, serializeBulkCsv(records), 'utf8');
       await checkpointChunk(chunkIndex, true, fingerprint);
-      const result = operation === 'upsert'
-        ? await this.sfCli.upsertBulk(objectName, path, externalIdField!, targetAlias, 30, { cwd: workDir })
-        : operation === 'insert'
-          ? await this.sfCli.importBulk(objectName, path, targetAlias, 30, { cwd: workDir })
-          : operation === 'update'
-            ? await this.sfCli.updateBulk(objectName, path, targetAlias, 30, { cwd: workDir })
-            : await this.sfCli.deleteBulk(objectName, path, targetAlias, 30, { cwd: workDir });
+      const result = await this.withBulkSlot(targetAlias, () =>
+        operation === 'upsert'
+          ? this.sfCli.upsertBulk(objectName, path, externalIdField!, targetAlias, 30, { cwd: workDir })
+          : operation === 'insert'
+            ? this.sfCli.importBulk(objectName, path, targetAlias, 30, { cwd: workDir })
+            : operation === 'update'
+              ? this.sfCli.updateBulk(objectName, path, targetAlias, 30, { cwd: workDir })
+              : this.sfCli.deleteBulk(objectName, path, targetAlias, 30, { cwd: workDir }));
       if (!result.success) throw new Error(result.error ?? `${operation} failed for ${queryId}`);
       await checkpointChunk(chunkIndex, false, fingerprint);
       loaded += sourceChunk.length;

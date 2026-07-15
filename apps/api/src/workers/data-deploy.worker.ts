@@ -13,6 +13,7 @@ import { JobProcessRegistryService } from '../modules/jobs/job-process-registry.
 import { StreamService } from '../modules/stream/stream.service';
 import { BulkThrottleService } from '../modules/data/bulk-throttle.service';
 import { DataDeployOrchestratorService } from '../modules/data/data-deploy-orchestrator.service';
+import { DataRollbackService } from '../modules/data/data-rollback.service';
 
 function resolveOrgTarget(org: { alias: string; username?: string | null }): string {
   return org.username ?? org.alias;
@@ -78,6 +79,7 @@ export class DataDeployWorker {
     private readonly bulkThrottle: BulkThrottleService,
     private readonly dataDeployOrchestrator: DataDeployOrchestratorService,
     private readonly processRegistry: JobProcessRegistryService,
+    private readonly dataRollback: DataRollbackService,
   ) {}
 
   async process(job: Job) {
@@ -108,7 +110,10 @@ export class DataDeployWorker {
       chunkId,
       batchId,
       chunkIndex,
+      operation,
       externalIdField,
+      rollback,
+      rollbackEnabled,
     } = job.data as {
       sourceOrgId: string;
       targetOrgId: string;
@@ -120,7 +125,10 @@ export class DataDeployWorker {
       chunkId?: string;
       batchId?: string;
       chunkIndex?: number;
+      operation?: 'insert' | 'upsert';
       externalIdField?: string;
+      rollback?: { enabled?: boolean; maxBytes?: number };
+      rollbackEnabled?: boolean;
     };
 
     const log = async (stream: 'stdout' | 'stderr', line: string) => {
@@ -224,8 +232,26 @@ export class DataDeployWorker {
         throw new Error('Job cancelled by user');
       }
 
-      const importVerb = externalIdField ? `Upserting (by ${externalIdField}) into` : 'Importing into';
+      const writeOperation = operation ?? (externalIdField ? 'upsert' : 'insert');
+      if (writeOperation === 'upsert' && !externalIdField) {
+        throw new Error('Upsert job is missing externalIdField');
+      }
+      const importVerb = writeOperation === 'upsert'
+        ? `Upserting (by ${externalIdField}) into`
+        : 'Inserting into';
       await log('stdout', `${importVerb} ${target.alias} (${targetOrg})...`);
+
+      if (writeOperation === 'upsert' && (rollbackEnabled || rollback?.enabled)) {
+        await log('stdout', 'Capturing encrypted target rollback snapshot...');
+        await this.dataRollback.captureUpsertSnapshot({
+          movementId,
+          targetAlias: targetOrg,
+          objectName,
+          externalIdField: externalIdField!,
+          csvPath,
+          maxBytes: rollback?.maxBytes,
+        });
+      }
 
       const importSlot = await this.bulkThrottle.acquire(targetOrg);
       let importResult;
@@ -238,8 +264,8 @@ export class DataDeployWorker {
             );
           },
         };
-        importResult = externalIdField
-          ? await this.sfCli.upsertBulk(objectName, csvPath, externalIdField, targetOrg, waitMinutes, cliOptions)
+        importResult = writeOperation === 'upsert'
+          ? await this.sfCli.upsertBulk(objectName, csvPath, externalIdField!, targetOrg, waitMinutes, cliOptions)
           : await this.sfCli.importBulk(objectName, csvPath, targetOrg, waitMinutes, cliOptions);
       } finally {
         await importSlot.release();
@@ -290,7 +316,13 @@ export class DataDeployWorker {
         data: { status: cancelled ? 'cancelled' : 'failed' },
       }).catch(() => undefined);
       if (chunkId && !cancelled) {
-        await this.dataDeployOrchestrator.onChunkFailed(chunkId, message);
+        await this.dataDeployOrchestrator.onChunkFailed(chunkId, message, {
+          phase: 'bulk_write',
+          message,
+          objectName,
+          operation: operation ?? (externalIdField ? 'upsert' : 'insert'),
+          externalIdField,
+        });
       }
       if (chunkId && cancelled) {
         await prisma.dataDeployChunk.updateMany({

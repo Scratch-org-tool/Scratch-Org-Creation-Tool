@@ -15,6 +15,8 @@ import {
   stripLimitOffset,
   buildGenericDeployQuery,
   extractLimitFromSoql,
+  dataChunkReleaseCount,
+  resolveMaxParallelDataChunks,
 } from '@sfcc/shared';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
@@ -22,7 +24,7 @@ import { generateSfdmuConfigFromSoql } from './sfdmu-config.generator';
 import { BulkThrottleService } from './bulk-throttle.service';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 import { ACTIVE_CHUNK_STATUSES, aggregateBatchStatus, countChunkStatuses } from './batch-status.util';
-import { isUnsafeInsertChunkRetry } from './retry-safety.util';
+import { isSafeIdempotentUpsertRetry } from './retry-safety.util';
 
 export type DataDeployStrategy = 'generic' | 'insert' | 'upsert' | 'replicate';
 
@@ -33,12 +35,20 @@ export interface CreateDataDeployBatchInput {
   baseSoql: string;
   recordLimit: number;
   strategy: DataDeployStrategy;
+  operation: 'insert' | 'upsert';
   movementType: string;
   userId: string;
   matchField?: string;
   recordTypeMappings?: Record<string, string>;
   externalId?: string;
   groupId?: string;
+  objectKey?: string;
+  dependsOn?: string[];
+  deferStart?: boolean;
+  maxParallelChunks?: number;
+  quotaRemaining?: number | null;
+  quotaConfidence?: 'known' | 'unknown';
+  rollbackPolicy?: 'none' | 'capture';
 }
 
 function resolveOrgTarget(org: { alias: string; username?: string | null }): string {
@@ -84,6 +94,11 @@ export class DataDeployOrchestratorService {
   async createBatch(input: CreateDataDeployBatchInput) {
     const chunkSize = this.chunkSize();
     const plans = planDataDeployChunks(input.baseSoql, input.recordLimit, chunkSize);
+    const externalIdField = input.matchField ?? input.externalId;
+    const maxParallelChunks = resolveMaxParallelDataChunks(
+      input.maxParallelChunks
+      ?? Number.parseInt(process.env.DATA_DEPLOY_MAX_PARALLEL_CHUNKS ?? '', 10),
+    );
 
     const [source, target] = await Promise.all([
       prisma.orgConnection.findUnique({ where: { id: input.sourceOrgId } }),
@@ -98,15 +113,24 @@ export class DataDeployOrchestratorService {
           sourceOrgId: input.sourceOrgId,
           targetOrgId: input.targetOrgId,
           objectName: input.objectName,
+          objectKey: input.objectKey ?? input.objectName,
+          dependsOn: input.dependsOn ?? [],
           strategy: input.strategy,
+          operation: input.operation,
+          externalIdField,
+          idempotent: input.operation === 'upsert',
           movementType: input.movementType,
-          status: 'planning',
+          status: input.deferStart ? 'pending' : 'planning',
           baseSoql: input.baseSoql,
-          matchField: input.matchField ?? input.externalId,
+          matchField: externalIdField,
           recordTypeMappings: input.recordTypeMappings as Prisma.InputJsonValue | undefined,
           totalRecords: input.recordLimit,
           chunkSize,
           totalChunks: plans.length,
+          maxParallelChunks,
+          quotaRemaining: input.quotaRemaining,
+          quotaConfidence: input.quotaConfidence ?? 'unknown',
+          rollbackPolicy: input.rollbackPolicy ?? 'none',
           createdBy: input.userId,
         },
       });
@@ -120,6 +144,9 @@ export class DataDeployOrchestratorService {
             objectName: input.objectName,
             soql: plan.soql,
             movementType: input.movementType,
+            operation: input.operation,
+            externalIdField,
+            idempotent: input.operation === 'upsert',
             status: 'pending',
             batchId: createdBatch.id,
             chunkIndex: plan.chunkIndex,
@@ -141,27 +168,51 @@ export class DataDeployOrchestratorService {
       return { batch: createdBatch, deployments: created };
     });
 
-    const plannerJob = await this.orchestrator.enqueueJob(
-      QUEUE_NAMES.DATA_DEPLOY,
-      'data_deploy_plan',
-      {
-        batchId: batch.id,
-        sourceOrgId: input.sourceOrgId,
-        targetOrgId: input.targetOrgId,
-        objectName: input.objectName,
-      },
-      { createdBy: input.userId },
-    );
+    const plannerJob = input.deferStart ? null : await this.enqueuePlanner(batch.id, input.userId);
 
     return {
       batchId: batch.id,
       totalChunks: plans.length,
       chunkSize,
-      deployments: deployments.map((d) => ({ ...d, jobId: plannerJob.id })),
-      plannerJobId: plannerJob.id,
-      status: 'queued' as const,
+      operation: input.operation,
+      externalIdField,
+      idempotent: input.operation === 'upsert',
+      deployments: deployments.map((d) => ({ ...d, jobId: plannerJob?.id })),
+      plannerJobId: plannerJob?.id,
+      status: input.deferStart ? 'pending' as const : 'queued' as const,
       message: `Load-balanced deploy queued as ${plans.length} chunk(s) of up to ${chunkSize.toLocaleString()} records`,
     };
+  }
+
+  private async enqueuePlanner(batchId: string, createdBy: string) {
+    return this.orchestrator.enqueueJob(
+      QUEUE_NAMES.DATA_DEPLOY,
+      'data_deploy_plan',
+      { batchId },
+      { createdBy },
+    );
+  }
+
+  async startBatch(batchId: string) {
+    const batch = await prisma.dataDeployBatch.findUnique({ where: { id: batchId } });
+    if (!batch) throw new NotFoundException('Data deploy batch not found');
+    const claimed = await prisma.dataDeployBatch.updateMany({
+      where: { id: batchId, status: 'pending' },
+      data: { status: 'planning' },
+    });
+    if (claimed.count === 0) return null;
+    try {
+      return await this.enqueuePlanner(batchId, batch.createdBy);
+    } catch (error) {
+      await prisma.dataDeployBatch.update({
+        where: { id: batchId },
+        data: {
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
   }
 
   /**
@@ -241,7 +292,17 @@ export class DataDeployOrchestratorService {
 
       await prisma.dataDeployBatch.update({
         where: { id: batchId },
-        data: { status: 'running', totalChunks: boundaries.length, totalRecords: ids.length },
+        data: {
+          status: 'running',
+          totalChunks: boundaries.length,
+          totalRecords: ids.length,
+          boundaryArtifact: {
+            kind: 'id-ranges',
+            plannerQuery: idSoql,
+            totalRecords: ids.length,
+            boundaries,
+          } as unknown as Prisma.InputJsonValue,
+        },
       });
 
       for (const boundary of boundaries) {
@@ -257,24 +318,21 @@ export class DataDeployOrchestratorService {
             soql: chunkSoql,
             afterId: boundary.afterId,
             endId: boundary.endId,
-            status: 'queued',
+            status: 'pending',
+            recordCount: boundary.recordCount,
           },
         });
         if (chunk.movementId) {
           await prisma.dataMovement.update({
             where: { id: chunk.movementId },
-            data: { soql: chunkSoql, status: 'queued' },
+            data: { soql: chunkSoql, status: 'pending' },
           });
         }
-        await this.enqueueChunkJob(batch, {
-          chunkId: chunk.id,
-          chunkIndex: boundary.chunkIndex,
-          movementId: chunk.movementId,
-          soql: chunkSoql,
-          recordCount: boundary.recordCount,
-        });
-        await log('stdout', `Chunk ${boundary.chunkIndex + 1}/${boundaries.length} queued (${boundary.recordCount} records)`);
+        await log('stdout', `Chunk ${boundary.chunkIndex + 1}/${boundaries.length} planned (${boundary.recordCount} records)`);
       }
+
+      const released = await this.releaseReadyChunks(batchId);
+      await log('stdout', `Released ${released} chunk(s); remaining chunks wait for scheduler capacity`);
 
       return { batchId, totalChunks: boundaries.length, totalRecords: ids.length };
     } catch (error) {
@@ -302,13 +360,16 @@ export class DataDeployOrchestratorService {
     batch: {
       id: string;
       strategy: string;
+      operation: string;
       objectName: string | null;
       matchField: string | null;
+      externalIdField: string | null;
       recordTypeMappings: Prisma.JsonValue;
       createdBy: string;
       sourceOrgId: string;
       targetOrgId: string;
       movementType: string;
+      rollbackPolicy: string;
       sourceOrg: { alias: string; username: string | null };
       targetOrg: { alias: string; username: string | null };
     },
@@ -328,13 +389,18 @@ export class DataDeployOrchestratorService {
 
     let job;
     if (batch.strategy === 'upsert' || batch.strategy === 'replicate') {
+      const externalIdField = batch.externalIdField ?? batch.matchField ?? undefined;
+      if (batch.operation === 'upsert' && !externalIdField) {
+        throw new Error('Upsert chunk is missing externalIdField');
+      }
       const generated = generateSfdmuConfigFromSoql({
         runId: chunk.movementId ?? chunk.chunkId,
         sourceOrgAlias: sourceAlias,
         targetOrgAlias: targetAlias,
         objectName: batch.objectName ?? 'Unknown',
         soql: chunk.soql,
-        externalId: batch.matchField ?? 'Name',
+        operation: batch.operation as 'insert' | 'upsert',
+        externalId: externalIdField,
         recordTypeMappings,
       });
 
@@ -344,8 +410,8 @@ export class DataDeployOrchestratorService {
           data: {
             sfdmuConfig: {
               configPath: generated.configPath,
-              strategy: batch.strategy,
-              matchField: batch.matchField ?? 'Name',
+              strategy: batch.operation,
+              matchField: externalIdField,
               batchId: batch.id,
               chunkIndex: chunk.chunkIndex,
             } as Prisma.InputJsonValue,
@@ -365,6 +431,8 @@ export class DataDeployOrchestratorService {
           batchId: batch.id,
           chunkIndex: chunk.chunkIndex,
           chunkRecordCount: chunk.recordCount,
+          operation: batch.operation,
+          externalIdField,
         },
         { createdBy: batch.createdBy },
       );
@@ -382,8 +450,9 @@ export class DataDeployOrchestratorService {
           chunkId: chunk.chunkId,
           batchId: batch.id,
           chunkIndex: chunk.chunkIndex,
-          // Upsert-by-external-Id when configured so chunk retries are idempotent.
-          externalIdField: batch.matchField ?? undefined,
+          operation: batch.operation,
+          externalIdField: batch.externalIdField ?? batch.matchField ?? undefined,
+          rollbackEnabled: batch.rollbackPolicy === 'capture',
         },
         { createdBy: batch.createdBy },
       );
@@ -417,6 +486,77 @@ export class DataDeployOrchestratorService {
     });
   }
 
+  async releaseReadyChunks(batchId: string): Promise<number> {
+    const released = await this.bulkThrottle.withSchedulerLock(batchId, async () => {
+      const batch = await prisma.dataDeployBatch.findUnique({
+        where: { id: batchId },
+        include: {
+          chunks: { orderBy: { chunkIndex: 'asc' } },
+          sourceOrg: true,
+          targetOrg: true,
+        },
+      });
+      if (!batch || !['running', 'partial'].includes(batch.status)) return 0;
+      const pending = batch.chunks.filter((chunk) => chunk.status === 'pending');
+      const active = batch.chunks.filter((chunk) => ['queued', 'running'].includes(chunk.status)).length;
+      const quotaReserved = batch.chunks.reduce(
+        (total, chunk) =>
+          total
+          + chunk.attempts
+          + (chunk.jobId && ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(chunk.status)
+            ? 1
+            : 0),
+        0,
+      );
+      const quotaRemaining = batch.quotaConfidence === 'known' && batch.quotaRemaining != null
+        ? Math.max(0, batch.quotaRemaining - quotaReserved)
+        : null;
+      const count = dataChunkReleaseCount({
+        pending: pending.length,
+        active,
+        maxParallel: batch.maxParallelChunks,
+        quotaRemaining,
+      });
+      let queued = 0;
+      for (const chunk of pending) {
+        if (queued >= count) break;
+        const claimed = await prisma.dataDeployChunk.updateMany({
+          where: { id: chunk.id, status: 'pending' },
+          data: { status: 'queued', error: null, errorDetails: Prisma.DbNull },
+        });
+        if (claimed.count === 0) continue;
+        if (chunk.movementId) {
+          await prisma.dataMovement.update({
+            where: { id: chunk.movementId },
+            data: { status: 'queued' },
+          }).catch(() => undefined);
+        }
+        try {
+          await this.enqueueChunkJob(batch, {
+            chunkId: chunk.id,
+            chunkIndex: chunk.chunkIndex,
+            movementId: chunk.movementId,
+            soql: chunk.soql,
+            recordCount: chunk.recordCount ?? batch.chunkSize,
+          });
+          queued += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await prisma.dataDeployChunk.update({
+            where: { id: chunk.id },
+            data: {
+              status: 'failed',
+              error: message,
+              errorDetails: { phase: 'enqueue', message } as Prisma.InputJsonValue,
+            },
+          });
+        }
+      }
+      return queued;
+    });
+    return released ?? 0;
+  }
+
   /** Idempotent: only transitions chunks that are not already terminal. */
   async onChunkCompleted(chunkId: string, recordCount?: number) {
     const transitioned = await prisma.dataDeployChunk.updateMany({
@@ -439,14 +579,19 @@ export class DataDeployOrchestratorService {
       }).catch(() => undefined);
     }
 
+    await this.releaseReadyChunks(chunk.batchId);
     await this.refreshBatchProgress(chunk.batchId);
   }
 
   /** Idempotent: only transitions chunks that are not already terminal. */
-  async onChunkFailed(chunkId: string, error: string) {
+  async onChunkFailed(chunkId: string, error: string, details?: Record<string, unknown>) {
     const transitioned = await prisma.dataDeployChunk.updateMany({
       where: { id: chunkId, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
-      data: { status: 'failed', error },
+      data: {
+        status: 'failed',
+        error,
+        errorDetails: (details ?? { message: error }) as Prisma.InputJsonValue,
+      },
     });
     if (transitioned.count === 0) return;
 
@@ -460,6 +605,7 @@ export class DataDeployOrchestratorService {
       }).catch(() => undefined);
     }
 
+    await this.releaseReadyChunks(chunk.batchId);
     await this.refreshBatchProgress(chunk.batchId);
   }
 
@@ -487,6 +633,34 @@ export class DataDeployOrchestratorService {
           : {}),
       },
     }).catch(() => undefined);
+    if (status === 'completed') {
+      const batch = await prisma.dataDeployBatch.findUnique({
+        where: { id: batchId },
+        select: { groupId: true },
+      });
+      if (batch?.groupId) await this.releaseReadyObjectBatches(batch.groupId);
+    }
+  }
+
+  async releaseReadyObjectBatches(groupId: string): Promise<number> {
+    const batches = await prisma.dataDeployBatch.findMany({
+      where: { groupId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const completed = new Set(
+      batches
+        .filter((batch) => batch.status === 'completed')
+        .map((batch) => batch.objectKey ?? batch.objectName)
+        .filter((key): key is string => Boolean(key)),
+    );
+    const ready = batches.filter((batch) =>
+      batch.status === 'pending'
+      && batch.dependsOn.every((dependency) => completed.has(dependency)));
+    let started = 0;
+    for (const batch of ready) {
+      if (await this.startBatch(batch.id)) started += 1;
+    }
+    return started;
   }
 
   /** Re-enqueue a single failed/cancelled chunk (resumable deploys). */
@@ -503,7 +677,7 @@ export class DataDeployOrchestratorService {
     if (!['failed', 'cancelled'].includes(chunk.status)) {
       throw new BadRequestException(`Chunk is ${chunk.status} — only failed or cancelled chunks can be retried`);
     }
-    if (isUnsafeInsertChunkRetry(batch.strategy, Boolean(batch.matchField))) {
+    if (!isSafeIdempotentUpsertRetry(batch.operation, batch.externalIdField ?? batch.matchField)) {
       throw new BadRequestException(
         'Insert chunks cannot be retried safely because Salesforce may have committed some records; use an upsert strategy or retry only verified failed records',
       );
@@ -514,29 +688,33 @@ export class DataDeployOrchestratorService {
 
     await prisma.dataDeployChunk.update({
       where: { id: chunkId },
-      data: { status: 'queued', error: null, attempts: { increment: 1 } },
+      data: {
+        status: 'pending',
+        error: null,
+        errorDetails: Prisma.DbNull,
+        attempts: { increment: 1 },
+      },
     });
     if (chunk.movementId) {
       await prisma.dataMovement.update({
         where: { id: chunk.movementId },
-        data: { status: 'queued' },
+        data: { status: 'pending' },
       }).catch(() => undefined);
     }
-
-    const job = await this.enqueueChunkJob(batch, {
-      chunkId: chunk.id,
-      chunkIndex: chunk.chunkIndex,
-      movementId: chunk.movementId,
-      soql: chunk.soql,
-      recordCount: chunk.recordCount ?? batch.chunkSize,
-    });
 
     await prisma.dataDeployBatch.update({
       where: { id: batchId },
       data: { status: 'running' },
     });
 
-    return { batchId, chunkId, jobId: job.id, status: 'queued' as const };
+    await this.releaseReadyChunks(batchId);
+    const scheduled = await prisma.dataDeployChunk.findUnique({ where: { id: chunkId } });
+    return {
+      batchId,
+      chunkId,
+      jobId: scheduled?.jobId ?? undefined,
+      status: scheduled?.status ?? 'pending',
+    };
   }
 
   /** Re-enqueue all failed chunks in a batch. */
@@ -546,10 +724,10 @@ export class DataDeployOrchestratorService {
     if (failed.length === 0) {
       throw new BadRequestException('No failed chunks to retry');
     }
-    const retried: Array<{ chunkId: string; jobId: string }> = [];
+    const retried: Array<{ chunkId: string; jobId?: string; status: string }> = [];
     for (const chunk of failed) {
       const result = await this.retryChunk(batchId, chunk.id, userId);
-      retried.push({ chunkId: chunk.id, jobId: result.jobId });
+      retried.push({ chunkId: chunk.id, jobId: result.jobId, status: result.status });
     }
     return { batchId, retried, count: retried.length };
   }

@@ -15,7 +15,6 @@ import {
   OrgToOrgSoqlParseError,
   sfdmuExportSchema,
   type ConaSeedRunInput,
-  type OrgToOrgDeployResult,
   type OrgToOrgDeployBatchResult,
   type OrgToOrgObjectDeployConfig,
   validateSfdmuExportSummary,
@@ -25,6 +24,7 @@ import {
   DATA_PREVIEW_MAX_ROWS,
   replaceOrApplyLimit,
   buildCountSoql,
+  extractObjectFromSoql,
 } from '@sfcc/shared';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
@@ -39,6 +39,8 @@ import { RecordTypeMapperService } from './record-type-mapper.service';
 import { OrgToOrgBrowseService } from './org-to-org-browse.service';
 import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
 import { randomUUID } from 'crypto';
+import { DataPreflightService, type DataDeployPreflightResult } from './data-preflight.service';
+import { DataRollbackService } from './data-rollback.service';
 
 @Injectable()
 export class DataService {
@@ -49,6 +51,8 @@ export class DataService {
     private readonly recordTypeMapper: RecordTypeMapperService,
     private readonly orgToOrgBrowse: OrgToOrgBrowseService,
     private readonly dataDeployOrchestrator: DataDeployOrchestratorService,
+    private readonly dataPreflight: DataPreflightService,
+    private readonly dataRollback: DataRollbackService,
   ) {}
 
   private async requireOwnedOrg(orgId: string, userId: string) {
@@ -63,6 +67,15 @@ export class DataService {
         err instanceof Error ? err.message : 'SFDMU plugin not installed. Run: sf plugins install sfdmu',
       );
     }
+  }
+
+  private assertPreflight(report: DataDeployPreflightResult): void {
+    if (report.ok) return;
+    const details = [
+      ...report.errors,
+      ...report.fieldIssues.map((issue) => issue.detail),
+    ];
+    throw new BadRequestException(`Data preflight blocked deployment: ${details.join('; ')}`);
   }
 
   async getCustomSettingsPreflight() {
@@ -177,6 +190,10 @@ export class DataService {
     const input = dataDeploySchema.parse(body);
     await this.requireOwnedOrg(input.sourceOrgId, userId);
     await this.requireOwnedOrg(input.targetOrgId, userId);
+    if (input.rollback?.enabled) this.dataRollback.ensureConfigured();
+    const preflight = await this.dataPreflight.runPreflight(input, userId);
+    if (input.dryRun) return { dryRun: true as const, preflight };
+    this.assertPreflight(preflight);
 
     const recordLimit = this.dataDeployOrchestrator.resolveRecordLimit(input.soql, input.recordLimit);
 
@@ -188,11 +205,16 @@ export class DataService {
         objectName: input.objectName,
         baseSoql,
         recordLimit,
-        strategy: movementType === 'org_to_org' ? 'insert' : 'generic',
+        strategy: input.operation === 'upsert' ? 'generic' : 'insert',
+        operation: input.operation,
         movementType,
         userId,
         groupId,
         matchField: input.externalIdField,
+        quotaRemaining: preflight.bulkApi.dailyBatchesRemaining,
+        quotaConfidence: preflight.bulkApi.confidence,
+        maxParallelChunks: input.maxParallelChunks,
+        rollbackPolicy: input.rollback?.enabled ? 'capture' : 'none',
       });
       const first = batch.deployments[0];
       return {
@@ -200,6 +222,8 @@ export class DataService {
         movementId: first.movementId,
         jobId: first.jobId,
         totalChunks: batch.totalChunks,
+        operation: input.operation,
+        idempotent: input.idempotent,
         status: batch.status,
         message: batch.message,
       };
@@ -218,6 +242,9 @@ export class DataService {
         objectName: input.objectName,
         soql: resolvedSoql,
         movementType,
+        operation: input.operation,
+        externalIdField: input.externalIdField,
+        idempotent: input.idempotent,
         status: 'queued',
         createdBy: userId,
       },
@@ -239,11 +266,13 @@ export class DataService {
       movementId: movement.id,
       jobId: job.id,
       status: 'queued',
+      operation: input.operation,
+      idempotent: input.idempotent,
       message: 'Data deployment job queued',
     };
   }
 
-  async deployOrgToOrg(body: unknown, userId: string): Promise<OrgToOrgDeployResult> {
+  async deployOrgToOrg(body: unknown, userId: string) {
     const input = orgToOrgDeploySchema.parse(body);
 
     if (input.sourceOrgId === input.targetOrgId) {
@@ -253,7 +282,7 @@ export class DataService {
     await this.requireOwnedOrg(input.sourceOrgId, userId);
     await this.requireOwnedOrg(input.targetOrgId, userId);
 
-    const soql = resolveSoql({
+    const requestedSoql = resolveSoql({
       soql: input.soql,
       objectName: input.objectName,
       displayFields: input.displayFields,
@@ -262,9 +291,28 @@ export class DataService {
 
     // Explicit record selections must never be truncated by the default limit.
     const selectionCount = input.selectedRecordIds?.length;
+    const requestedLimit = extractLimitFromSoql(requestedSoql) ?? selectionCount ?? 200;
+    const soql = buildGenericDeployQuery({
+      soql: requestedSoql,
+      objectName: input.objectName,
+      recordLimit: requestedLimit,
+    });
+    const preflight = await this.dataPreflight.runPreflight({
+      sourceOrgId: input.sourceOrgId,
+      targetOrgId: input.targetOrgId,
+      objectName: input.objectName,
+      soql,
+      recordLimit: selectionCount,
+      operation: input.operation,
+      externalIdField: input.matchField,
+      dryRun: input.dryRun,
+      unknownQuotaPolicy: input.unknownQuotaPolicy,
+    }, userId);
+    if (input.dryRun) return { dryRun: true as const, preflight };
+    this.assertPreflight(preflight);
 
-    if (input.strategy === 'insert') {
-      const recordLimit = extractLimitFromSoql(soql) ?? selectionCount ?? undefined;
+    if (input.operation === 'insert') {
+      const recordLimit = requestedLimit;
       const result = await this.deployData(
         {
           sourceOrgId: input.sourceOrgId,
@@ -272,6 +320,8 @@ export class DataService {
           objectName: input.objectName,
           soql,
           recordLimit,
+          operation: 'insert',
+          unknownQuotaPolicy: input.unknownQuotaPolicy,
         },
         userId,
         'org_to_org',
@@ -283,6 +333,8 @@ export class DataService {
         totalChunks: 'totalChunks' in result ? result.totalChunks : undefined,
         status: result.status,
         strategy: 'insert',
+        operation: 'insert',
+        idempotent: false,
         message: result.message,
       };
     }
@@ -315,11 +367,15 @@ export class DataService {
         baseSoql: this.dataDeployOrchestrator.resolveBaseSoql(soql, input.objectName),
         recordLimit,
         strategy: 'upsert',
+        operation: 'upsert',
         movementType: 'org_to_org',
         userId,
-        matchField: input.matchField ?? 'Name',
+        matchField: input.matchField,
         recordTypeMappings,
-        externalId: input.matchField ?? 'Name',
+        externalId: input.matchField,
+        quotaRemaining: preflight.bulkApi.dailyBatchesRemaining,
+        quotaConfidence: preflight.bulkApi.confidence,
+        maxParallelChunks: input.maxParallelChunks,
       });
       const first = batch.deployments[0];
       return {
@@ -329,6 +385,8 @@ export class DataService {
         totalChunks: batch.totalChunks,
         status: batch.status,
         strategy: 'upsert',
+        operation: 'upsert',
+        idempotent: true,
         message: batch.message,
       };
     }
@@ -357,6 +415,9 @@ export class DataService {
         objectName: input.objectName,
         soql,
         movementType: 'org_to_org',
+        operation: 'upsert',
+        externalIdField: input.matchField,
+        idempotent: true,
         status: 'queued',
         recordTypeMappings: recordTypeMappings as Prisma.InputJsonValue | undefined,
         createdBy: userId,
@@ -369,7 +430,8 @@ export class DataService {
       targetOrgAlias: target.username ?? target.alias,
       objectName: input.objectName,
       soql,
-      externalId: input.matchField ?? 'Name',
+      operation: 'upsert',
+      externalId: input.matchField,
       recordTypeMappings,
     });
 
@@ -379,7 +441,7 @@ export class DataService {
         sfdmuConfig: {
           configPath: generated.configPath,
           strategy: 'upsert',
-          matchField: input.matchField ?? 'Name',
+          matchField: input.matchField,
         } as Prisma.InputJsonValue,
       },
     });
@@ -401,6 +463,8 @@ export class DataService {
       jobId: job.id,
       status: 'queued',
       strategy: 'upsert',
+      operation: 'upsert',
+      idempotent: true,
       message: 'Org-to-org upsert job queued',
     };
   }
@@ -417,53 +481,108 @@ export class DataService {
 
     const batchId = randomUUID();
     const deployments: OrgToOrgDeployBatchResult['deployments'] = [];
-
+    const prepared = [];
     for (const obj of input.objects) {
+      const resolved = await this.prepareOrgToOrgObject(input.sourceOrgId, obj, userId);
+      const externalIdField = input.operation === 'upsert'
+        ? obj.matchField ?? (
+            resolved.meta.matchField.toLowerCase() === 'name'
+              ? undefined
+              : resolved.meta.matchField
+          )
+        : undefined;
+      if (input.operation === 'upsert' && !externalIdField) {
+        throw new BadRequestException(
+          `Upsert for ${obj.objectName} requires matchField; Name is not used as a silent fallback`,
+        );
+      }
+      const preflight = await this.dataPreflight.runPreflight({
+        sourceOrgId: input.sourceOrgId,
+        targetOrgId: input.targetOrgId,
+        objectName: resolved.meta.objectName,
+        soql: resolved.soql,
+        recordLimit: resolved.effectiveRecordLimit,
+        operation: input.operation,
+        externalIdField,
+        dryRun: input.dryRun,
+        unknownQuotaPolicy: input.unknownQuotaPolicy,
+      }, userId);
+      prepared.push({
+        obj,
+        ...resolved,
+        externalIdField,
+        preflight,
+        maxParallelChunks: input.maxParallelChunks,
+      });
+    }
+    const estimatedBulkBatches = prepared.reduce(
+      (total, item) => total + (item.preflight.estimatedBulkBatches ?? 0),
+      0,
+    );
+    const knownQuotaRemaining = prepared.find(
+      (item) => item.preflight.bulkApi.confidence === 'known',
+    )?.preflight.bulkApi.dailyBatchesRemaining;
+    const aggregateQuotaSufficient =
+      knownQuotaRemaining == null || knownQuotaRemaining >= estimatedBulkBatches;
+    if (input.dryRun) {
+      return {
+        batchId,
+        deployments: [],
+        dryRun: true,
+        quotaSummary: {
+          estimatedBulkBatches,
+          remaining: knownQuotaRemaining ?? null,
+          sufficient: aggregateQuotaSufficient,
+        },
+        preflight: prepared.map(({ obj, preflight }) => ({
+          id: obj.id ?? obj.objectName,
+          objectName: obj.objectName,
+          report: preflight,
+        })),
+      } as unknown as OrgToOrgDeployBatchResult;
+    }
+    for (const item of prepared) this.assertPreflight(item.preflight);
+    if (!aggregateQuotaSufficient) {
+      throw new BadRequestException(
+        `Data preflight blocked multi-object deploy: ${estimatedBulkBatches} total Bulk batches estimated, `
+        + `${knownQuotaRemaining} remaining`,
+      );
+    }
+    if (input.operation === 'upsert') await this.requireSfdmuPlugin();
+
+    for (const item of prepared) {
       const result = await this.deployOrgToOrgForObject(
         input.sourceOrgId,
         input.targetOrgId,
-        input.strategy,
-        obj,
+        input.operation,
+        item.obj,
         userId,
         batchId,
+        item,
       );
       deployments.push(result);
     }
+    await this.dataDeployOrchestrator.releaseReadyObjectBatches(batchId);
 
     return { batchId, deployments };
   }
 
-  private async deployOrgToOrgForObject(
+  private async prepareOrgToOrgObject(
     sourceOrgId: string,
-    targetOrgId: string,
-    strategy: 'insert' | 'upsert',
     obj: OrgToOrgObjectDeployConfig,
     userId: string,
-    batchId?: string,
-  ): Promise<{
-    objectName: string;
-    movementId: string;
-    jobId: string;
-    status: string;
-    batchId?: string;
-    totalChunks?: number;
-  }> {
+  ) {
     const meta = await this.orgToOrgBrowse.getObjectMeta(sourceOrgId, obj.objectName, userId);
-
-    // Explicit record selections must never be truncated by the default limit.
     const effectiveRecordLimit = obj.selectedRecordIds?.length
       ? Math.max(obj.recordLimit, obj.selectedRecordIds.length)
       : obj.recordLimit;
-
     let soql: string;
     if (obj.soql?.trim()) {
       try {
         validateSoqlForObject(obj.soql, meta.objectName);
-      } catch (err) {
-        if (err instanceof OrgToOrgSoqlParseError) {
-          throw new BadRequestException(err.message);
-        }
-        throw err;
+      } catch (error) {
+        if (error instanceof OrgToOrgSoqlParseError) throw new BadRequestException(error.message);
+        throw error;
       }
       soql = resolveOrgToOrgDeploySoql({ soql: obj.soql, recordLimit: effectiveRecordLimit });
     } else {
@@ -482,76 +601,43 @@ export class DataService {
         selectedRecordIds: obj.selectedRecordIds,
       });
     }
+    return { meta, effectiveRecordLimit, soql };
+  }
 
-    if (strategy === 'insert') {
-      const result = await this.deployData(
-        {
-          sourceOrgId,
-          targetOrgId,
-          objectName: meta.objectName,
-          soql,
-          recordLimit: effectiveRecordLimit,
-        },
-        userId,
-        'org_to_org',
-        batchId,
-      );
-      return {
-        objectName: meta.objectName,
-        movementId: result.movementId,
-        jobId: result.jobId,
-        batchId: 'batchId' in result ? result.batchId : undefined,
-        totalChunks: 'totalChunks' in result ? result.totalChunks : undefined,
-        status: result.status,
-      };
-    }
-
-    await this.requireSfdmuPlugin();
-
-    const recordLimit = this.dataDeployOrchestrator.resolveRecordLimit(soql, effectiveRecordLimit);
-    if (this.dataDeployOrchestrator.shouldChunk(recordLimit)) {
-      let recordTypeMappings: Record<string, string> | undefined;
-      if (soql.includes('RecordTypeId')) {
-        try {
-          recordTypeMappings = await this.recordTypeMapper.buildMappings(
-            sourceOrgId,
-            targetOrgId,
-            meta.objectName,
-          );
-        } catch {
-          /* optional */
-        }
-      }
-
-      const batch = await this.dataDeployOrchestrator.createBatch({
+  private async deployOrgToOrgForObject(
+    sourceOrgId: string,
+    targetOrgId: string,
+    strategy: 'insert' | 'upsert',
+    obj: OrgToOrgObjectDeployConfig,
+    userId: string,
+    batchId?: string,
+    prepared?: Awaited<ReturnType<DataService['prepareOrgToOrgObject']>> & {
+      externalIdField?: string;
+      preflight: DataDeployPreflightResult;
+      maxParallelChunks?: number;
+    },
+  ): Promise<{
+    objectName: string;
+    movementId: string;
+    jobId?: string;
+    status: string;
+    batchId?: string;
+    totalChunks?: number;
+  }> {
+    const resolved = prepared ?? {
+      ...(await this.prepareOrgToOrgObject(sourceOrgId, obj, userId)),
+      externalIdField: strategy === 'upsert' ? obj.matchField : undefined,
+      preflight: await this.dataPreflight.runPreflight({
         sourceOrgId,
         targetOrgId,
-        objectName: meta.objectName,
-        baseSoql: this.dataDeployOrchestrator.resolveBaseSoql(soql, meta.objectName),
-        recordLimit,
-        strategy: 'upsert',
-        movementType: 'org_to_org',
-        userId,
-        matchField: obj.matchField ?? meta.matchField,
-        recordTypeMappings,
-        externalId: obj.matchField ?? meta.matchField,
-        groupId: batchId,
-      });
-      const first = batch.deployments[0];
-      return {
-        objectName: meta.objectName,
-        movementId: first.movementId,
-        jobId: first.jobId,
-        batchId: batch.batchId,
-        totalChunks: batch.totalChunks,
-        status: batch.status,
-      };
-    }
-
-    const source = await prisma.orgConnection.findUnique({ where: { id: sourceOrgId } });
-    const target = await prisma.orgConnection.findUnique({ where: { id: targetOrgId } });
-    if (!source || !target) throw new NotFoundException('Source or target org not found');
-
+        objectName: obj.objectName,
+        soql: obj.soql,
+        recordLimit: obj.recordLimit,
+        operation: strategy,
+        externalIdField: strategy === 'upsert' ? obj.matchField : undefined,
+      }, userId),
+    };
+    const { meta, soql, effectiveRecordLimit, preflight } = resolved;
     let recordTypeMappings: Record<string, string> | undefined;
     if (soql.includes('RecordTypeId')) {
       try {
@@ -564,59 +650,45 @@ export class DataService {
         /* optional */
       }
     }
-
-    const movement = await prisma.dataMovement.create({
-      data: {
-        sourceOrgId,
-        targetOrgId,
-        objectName: meta.objectName,
-        soql,
-        movementType: 'org_to_org',
-        status: 'queued',
-        recordTypeMappings: recordTypeMappings as Prisma.InputJsonValue | undefined,
-        createdBy: userId,
-      },
-    });
-
-    const generated = generateSfdmuConfigFromSoql({
-      runId: movement.id,
-      sourceOrgAlias: source.username ?? source.alias,
-      targetOrgAlias: target.username ?? target.alias,
+    const externalIdField = strategy === 'upsert'
+      ? resolved.externalIdField
+        ?? obj.matchField
+        ?? (meta.matchField.toLowerCase() === 'name' ? undefined : meta.matchField)
+      : undefined;
+    if (strategy === 'upsert' && !externalIdField) {
+      throw new BadRequestException(
+        `Upsert for ${obj.objectName} requires matchField; Name is not used as a silent fallback`,
+      );
+    }
+    const batch = await this.dataDeployOrchestrator.createBatch({
+      sourceOrgId,
+      targetOrgId,
       objectName: meta.objectName,
-      soql,
-      externalId: obj.matchField ?? meta.matchField,
+      objectKey: obj.id ?? obj.objectName,
+      dependsOn: obj.dependsOn ?? [],
+      baseSoql: this.dataDeployOrchestrator.resolveBaseSoql(soql, meta.objectName),
+      recordLimit: this.dataDeployOrchestrator.resolveRecordLimit(soql, effectiveRecordLimit),
+      strategy,
+      operation: strategy,
+      movementType: 'org_to_org',
+      userId,
+      matchField: externalIdField,
+      externalId: externalIdField,
       recordTypeMappings,
+      groupId: batchId,
+      deferStart: Boolean(batchId),
+      quotaRemaining: preflight.bulkApi.dailyBatchesRemaining,
+      quotaConfidence: preflight.bulkApi.confidence,
+      maxParallelChunks: resolved.maxParallelChunks,
     });
-
-    await prisma.dataMovement.update({
-      where: { id: movement.id },
-      data: {
-        sfdmuConfig: {
-          configPath: generated.configPath,
-          strategy: 'upsert',
-          matchField: obj.matchField ?? meta.matchField,
-          batchId,
-        } as Prisma.InputJsonValue,
-      },
-    });
-
-    const job = await this.orchestrator.enqueueJob(
-      QUEUE_NAMES.SFDMU_RUN,
-      'org_to_org_data_deploy',
-      {
-        sourceOrgAlias: source.username ?? source.alias,
-        targetOrgAlias: target.username ?? target.alias,
-        configPath: generated.configPath,
-        movementId: movement.id,
-      },
-      { createdBy: userId },
-    );
-
+    const first = batch.deployments[0]!;
     return {
       objectName: meta.objectName,
-      movementId: movement.id,
-      jobId: job.id,
-      status: 'queued',
+      movementId: first.movementId,
+      jobId: first.jobId,
+      batchId: batch.batchId,
+      totalChunks: batch.totalChunks,
+      status: batch.status,
     };
   }
 
@@ -638,7 +710,14 @@ export class DataService {
     await this.requireOwnedOrg(input.targetOrgId, userId);
 
     const querySet = input.querySet
-      ? normalizeQuerySet(input.querySet, input.recordLimit ?? 200)
+      ? normalizeQuerySet({
+          ...input.querySet,
+          queries: input.querySet.queries.map((query) => ({
+            ...query,
+            operation: query.operation ?? input.operation,
+            externalIdField: query.externalIdField ?? input.externalIdField,
+          })),
+        }, input.recordLimit ?? 200)
       : input.soql
         ? normalizeQuerySet({
             version: 1,
@@ -647,13 +726,47 @@ export class DataService {
             queries: [{
               id: 'single',
               label: 'Replication query',
-              object: 'cfs_ob__Onboarding_Config__c',
+              object: extractObjectFromSoql(input.soql) ?? 'Unknown',
               soql: input.soql,
+              operation: input.operation,
+              externalIdField: input.externalIdField,
             }],
           }, input.recordLimit ?? 200)
         : null;
 
     if (!querySet) throw new Error('querySet or soql is required');
+    const preflight = [];
+    for (const query of querySet.queries) {
+      const report = await this.dataPreflight.runPreflight({
+        sourceOrgId: input.sourceOrgId,
+        targetOrgId: input.targetOrgId,
+        objectName: query.object,
+        soql: query.soql,
+        recordLimit: query.limit ?? input.recordLimit,
+        operation: query.operation,
+        externalIdField: query.externalIdField,
+        dryRun: input.dryRun,
+        unknownQuotaPolicy: input.unknownQuotaPolicy,
+      }, userId);
+      preflight.push({ queryId: query.id, objectName: query.object, report });
+    }
+    const estimatedBulkBatches = preflight.reduce(
+      (total, item) => total + (item.report.estimatedBulkBatches ?? 0),
+      0,
+    );
+    const knownRemaining = preflight.find(
+      (item) => item.report.bulkApi.confidence === 'known',
+    )?.report.bulkApi.dailyBatchesRemaining;
+    const aggregateQuotaSufficient = knownRemaining == null || knownRemaining >= estimatedBulkBatches;
+    const quotaSummary = { estimatedBulkBatches, remaining: knownRemaining ?? null, sufficient: aggregateQuotaSufficient };
+    if (input.dryRun) return { dryRun: true as const, querySet, preflight, quotaSummary };
+    for (const item of preflight) this.assertPreflight(item.report);
+    if (!aggregateQuotaSufficient) {
+      throw new BadRequestException(
+        `Data preflight blocked replication: ${estimatedBulkBatches} total Bulk batches estimated, `
+        + `${knownRemaining} remaining`,
+      );
+    }
 
     await this.requireSfdmuPlugin();
 
@@ -661,13 +774,7 @@ export class DataService {
     const target = await prisma.orgConnection.findUnique({ where: { id: input.targetOrgId } });
     if (!source || !target) throw new NotFoundException('Source or target org not found');
 
-    const recordTypeMappings =
-      input.recordTypeMappings ??
-      await this.recordTypeMapper.buildMappings(
-        input.sourceOrgId,
-        input.targetOrgId,
-        'cfs_ob__Onboarding_Config__c',
-      );
+    const recordTypeMappings = input.recordTypeMappings ?? {};
 
     const recordLimit = input.recordLimit ?? querySet.defaultLimit ?? 200;
     const mainQuery = querySet.queries[0];
@@ -684,9 +791,14 @@ export class DataService {
         baseSoql: this.dataDeployOrchestrator.resolveBaseSoql(mainQuery.soql, mainQuery.object),
         recordLimit,
         strategy: 'replicate',
+        operation: mainQuery.operation!,
         movementType: 'replication',
         userId,
+        externalId: mainQuery.externalIdField,
         recordTypeMappings,
+        quotaRemaining: preflight[0]?.report.bulkApi.dailyBatchesRemaining,
+        quotaConfidence: preflight[0]?.report.bulkApi.confidence,
+        maxParallelChunks: input.maxParallelChunks,
       });
       const first = batch.deployments[0];
       const preview = await this.previewData(
@@ -700,6 +812,8 @@ export class DataService {
         jobId: first.jobId,
         batchId: batch.batchId,
         totalChunks: batch.totalChunks,
+        operation: mainQuery.operation,
+        idempotent: mainQuery.operation === 'upsert',
         preview,
         configPath: undefined,
         message: batch.message,
@@ -712,8 +826,11 @@ export class DataService {
         targetOrgId: input.targetOrgId,
         soql: querySet.queries.map((q) => q.soql).join('\n---\n'),
         recordTypeMappings: recordTypeMappings as Prisma.InputJsonValue,
-        objectName: 'cfs_ob__Onboarding_Config__c',
+        objectName: querySet.queries.length === 1 ? querySet.queries[0]?.object : 'multi_object',
         movementType: 'replication',
+        operation: querySet.queries.every((query) => query.operation === 'upsert') ? 'upsert' : 'insert',
+        externalIdField: querySet.queries.length === 1 ? querySet.queries[0]?.externalIdField : undefined,
+        idempotent: querySet.queries.every((query) => query.operation === 'upsert'),
         status: 'queued',
         createdBy: userId,
       },
@@ -751,7 +868,14 @@ export class DataService {
       { createdBy: userId },
     );
 
-    return { movementId: movement.id, jobId: job.id, preview, configPath: generated.configPath };
+    return {
+      movementId: movement.id,
+      jobId: job.id,
+      operation: querySet.queries.every((query) => query.operation === 'upsert') ? 'upsert' : 'insert',
+      idempotent: querySet.queries.every((query) => query.operation === 'upsert'),
+      preview,
+      configPath: generated.configPath,
+    };
   }
 
   async listMovements(userId: string, movementType?: string) {

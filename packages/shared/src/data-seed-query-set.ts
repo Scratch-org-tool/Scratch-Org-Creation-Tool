@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { applyLimit, querySetEntrySchema, querySetSchema } from './query-set.js';
+import { applyLimit, querySetBaseSchema, querySetEntrySchema } from './query-set.js';
 import { escapeSoqlLiteral } from './soql.js';
 
 export const accountSeedRuleSchema = z.object({
@@ -12,7 +12,7 @@ export const accountSeedRuleSchema = z.object({
   soql: z.string().optional(),
 });
 
-export const dataSeedQuerySetSchema = querySetSchema.extend({
+export const dataSeedQuerySetSchema = querySetBaseSchema.extend({
   accountRules: z.array(accountSeedRuleSchema).optional(),
 });
 

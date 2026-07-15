@@ -223,6 +223,11 @@ model DataMovement {
   recordTypeMappings Json?
   status             JobStatus        @default(pending)
   movementType       String           @default("deploy")
+  operation          String           @default("insert")
+  externalIdField    String?
+  idempotent         Boolean          @default(false)
+  rollbackArtifact   Json?
+  rollbackReport     Json?
   batchId            String?
   batch              DataDeployBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   chunkIndex         Int?
@@ -243,7 +248,12 @@ model DataDeployBatch {
   targetOrgId        String
   targetOrg          OrgConnection     @relation("BatchTargetOrg", fields: [targetOrgId], references: [id])
   objectName         String?
+  objectKey          String?
+  dependsOn          String[]          @default([])
   strategy           String            @default("generic")
+  operation          String            @default("insert")
+  externalIdField    String?
+  idempotent         Boolean           @default(false)
   movementType       String            @default("deploy")
   status             JobStatus         @default(queued)
   baseSoql           String?
@@ -254,6 +264,14 @@ model DataDeployBatch {
   totalChunks        Int               @default(1)
   completedChunks    Int               @default(0)
   failedChunks       Int               @default(0)
+  maxParallelChunks  Int               @default(4)
+  quotaRemaining     Int?
+  quotaConfidence    String            @default("unknown")
+  boundaryArtifact   Json?
+  rollbackPolicy     String            @default("none")
+  rollbackArtifact   Json?
+  rollbackReport     Json?
+  rollbackStatus     String?
   error              String?
   createdBy          String            @default("system")
   createdAt          DateTime          @default(now())
@@ -281,6 +299,7 @@ model DataDeployChunk {
   status      JobStatus       @default(queued)
   recordCount Int?
   error       String?
+  errorDetails Json?
   attempts    Int             @default(0)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
