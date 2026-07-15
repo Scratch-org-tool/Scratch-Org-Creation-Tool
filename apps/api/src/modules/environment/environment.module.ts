@@ -12,6 +12,7 @@ import { ScratchTemplatesModule } from '../scratch-templates/scratch-templates.m
 import { DataCoreModule } from '../data/data-core.module';
 import { AzureService } from '../../integrations/azure/azure.service';
 import { AzureIntegrationService } from '../integrations/azure-integration.service';
+import { ExistingScratchOrgService } from './existing-scratch-org.service';
 
 @Module({
   imports: [
@@ -26,7 +27,12 @@ import { AzureIntegrationService } from '../integrations/azure-integration.servi
     DataCoreModule,
   ],
   controllers: [EnvironmentController],
-  providers: [EnvironmentService, AzureIntegrationService, AzureService],
+  providers: [
+    EnvironmentService,
+    ExistingScratchOrgService,
+    AzureIntegrationService,
+    AzureService,
+  ],
   exports: [AzureIntegrationService, AzureService, OrgConfigModule, ScratchTemplatesModule],
 })
 export class EnvironmentModule {}

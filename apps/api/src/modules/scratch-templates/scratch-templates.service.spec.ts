@@ -137,4 +137,30 @@ describe('ScratchTemplatesService authoritative launch merge', () => {
       gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
     }, 'owner')).rejects.toThrow('must be an array');
   });
+
+  it('preserves authoritative existing-target mode without requiring create fields', async () => {
+    const service = new ScratchTemplatesService();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      id: templateId,
+      name: 'Existing',
+      config: {
+        gitSource: { provider: 'github', repo: 'template-repo', branch: 'main' },
+        pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+      },
+    } as never);
+    const result = await service.resolveLaunch({
+      templateId,
+      mode: 'configure_existing',
+      existingOrgConnectionId: runtimeDataSource,
+      gitSource: { provider: 'github', repo: 'runtime-repo', branch: 'main' },
+    }, 'owner');
+    expect(result).toEqual(expect.objectContaining({
+      mode: 'configure_existing',
+      existingOrgConnectionId: runtimeDataSource,
+      existingOrgOptions: {
+        verifyAuthentication: true,
+        ensureRequiredPackage: true,
+      },
+    }));
+  });
 });

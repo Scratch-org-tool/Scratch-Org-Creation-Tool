@@ -27,7 +27,7 @@ import { resolveOrgTypeFromInstance, isLikelyScratchOrg } from '../../common/org
 import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 import { IntegrationAdminService } from '../integrations/integration-admin.service';
-import { ScratchTemplatesService } from '../scratch-templates/scratch-templates.service';
+import { ExistingScratchOrgService } from './existing-scratch-org.service';
 
 async function resolveScratchOrgPassword(
   sfCli: ReturnType<typeof createSfCliClient>,
@@ -76,7 +76,7 @@ export class EnvironmentService {
     private readonly orgConfigLoader: OrgConfigLoaderService,
     private readonly processRegistry: JobProcessRegistryService,
     private readonly dataDeployOrchestrator: DataDeployOrchestratorService,
-    private readonly scratchTemplates: ScratchTemplatesService,
+    private readonly existingScratchOrgs: ExistingScratchOrgService,
   ) {}
 
   deleteScratchOrg(alias: string, userId: string) {
@@ -527,20 +527,25 @@ export class EnvironmentService {
   }
 
   async createScratchOrgPipeline(body: unknown, userId: string) {
-    const config = await this.scratchTemplates.resolveLaunch(
+    const eligibility = await this.existingScratchOrgs.requireEligible(
       (body ?? {}) as Record<string, unknown>,
       userId,
     );
-    for (const orgId of new Set(
-      [config.dataDeploymentOrgId, config.customSettingsOrgId].filter(
-        (value): value is string => Boolean(value),
-      ),
-    )) {
-      const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
-      assertResourceOwner(org, userId, 'Source org');
+    if (!eligibility.config) {
+      throw new BadRequestException('Resolved launch configuration is unavailable');
     }
-    await this.scmSources.requireActive(config.gitSource!);
-    return this.pipelineOrchestrator.startPipeline(config, userId);
+    return this.pipelineOrchestrator.startPipeline(eligibility.config, userId);
+  }
+
+  getScratchOrgPipelineEligibility(body: unknown, userId: string) {
+    return this.existingScratchOrgs.eligibility(
+      (body ?? {}) as Record<string, unknown>,
+      userId,
+    );
+  }
+
+  adoptScratchOrg(body: unknown, userId: string) {
+    return this.existingScratchOrgs.adopt(body, userId);
   }
 
   async getAutomationRun(id: string, userId: string) {
@@ -549,6 +554,13 @@ export class EnvironmentService {
 
   async getActiveAutomationRun(intent: string, userId: string) {
     return this.pipelineOrchestrator.getActiveRun(intent, userId);
+  }
+
+  async getRecentAutomationRuns(
+    query: { target?: string; targetOrgConnectionId?: string; limit?: string },
+    userId: string,
+  ) {
+    return this.pipelineOrchestrator.getRecentRuns(query, userId);
   }
 
   async resumeAutomationRun(id: string, body: unknown, userId: string) {

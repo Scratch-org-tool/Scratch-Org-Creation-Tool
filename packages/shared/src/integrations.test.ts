@@ -97,6 +97,9 @@ test('legacy scratch pipeline payloads are persisted with canonical gitSource', 
     },
   });
   assert.equal(parsed.azureDeploy?.repo, 'metadata');
+  assert.equal(parsed.mode, 'create_new');
+  assert.equal(parsed.duration, 30);
+  assert.deepEqual(parsed.skipSteps, []);
   assert.deepEqual(parsed.gitSource, {
     provider: 'azure_devops',
     project: 'Core',
@@ -105,6 +108,25 @@ test('legacy scratch pipeline payloads are persisted with canonical gitSource', 
     branch: 'main',
     manifestPath: undefined,
   });
+});
+
+test('existing scratch pipeline payloads default safe preparation options', () => {
+  const parsed = scratchOrgPipelineSchema.parse({
+    mode: 'configure_existing',
+    existingOrgConnectionId: 'f93ef78c-6881-490f-91a5-2e66ab64d740',
+    gitSource: {
+      provider: 'github',
+      repo: 'metadata',
+      branch: 'main',
+    },
+  });
+  assert.equal(parsed.mode, 'configure_existing');
+  assert.equal(parsed.existingOrgConnectionId, 'f93ef78c-6881-490f-91a5-2e66ab64d740');
+  assert.deepEqual(parsed.existingOrgOptions, {
+    verifyAuthentication: true,
+    ensureRequiredPackage: true,
+  });
+  assert.equal(parsed.alias, undefined);
 });
 
 test('canonical deploy payloads support every SCM provider and binding context', () => {

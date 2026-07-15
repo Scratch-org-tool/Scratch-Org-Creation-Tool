@@ -52,13 +52,22 @@ export class SfCliError extends Error {
 }
 
 export interface SfOrgInfo {
+  id?: string;
   alias?: string;
   username?: string;
   orgId?: string;
   instanceUrl?: string;
+  loginUrl?: string;
   isDevHub?: boolean;
   connectedStatus?: string;
   expirationDate?: string;
+}
+
+export interface SfInstalledPackage {
+  SubscriberPackageId?: string;
+  SubscriberPackageVersionId?: string;
+  Id?: string;
+  Name?: string;
 }
 
 export interface SfMetadataTypeInfo {
@@ -494,6 +503,15 @@ export class SfCliClient extends EventEmitter {
   }
 
   // Package commands
+  async listInstalledPackages(
+    targetOrg: string,
+  ): Promise<SfCommandResult<{ result: SfInstalledPackage[] }>> {
+    return this.run(
+      ['package', 'installed', 'list', '--target-org', targetOrg],
+      { json: true },
+    );
+  }
+
   async installPackage(packageId: string, targetOrg: string, waitMinutes = 30): Promise<SfCommandResult> {
     return this.runStreaming([
       'package', 'install',

@@ -3,9 +3,11 @@ import type { Job } from 'bullmq';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import type { OrgSetupAssignScope } from '@sfcc/shared';
+import type { ExistingOrgOptions } from '@sfcc/shared';
 import { OrgConfigLoaderService } from '../modules/environment/org-config-loader.service';
 import { JobsService } from '../modules/jobs/jobs.service';
 import { StreamService } from '../modules/stream/stream.service';
+import { ScratchOrgPreparationService } from '../modules/environment/scratch-org-preparation.service';
 
 @Injectable()
 export class OrgSetupWorker {
@@ -15,6 +17,7 @@ export class OrgSetupWorker {
     private readonly jobsService: JobsService,
     private readonly streamService: StreamService,
     private readonly orgConfigLoader: OrgConfigLoaderService,
+    private readonly preparationService: ScratchOrgPreparationService,
   ) {}
 
   async process(job: Job) {
@@ -30,9 +33,27 @@ export class OrgSetupWorker {
         configKey?: string;
       };
       runId?: string;
+      automationRunId?: string;
+      existingOrgOptions?: ExistingOrgOptions;
       dbJobId: string;
     };
     const org = await this.assertPayloadBinding(data);
+
+    if (job.name === 'prepare_existing_org') {
+      const log = async (line: string, stream: 'stdout' | 'stderr' = 'stdout') => {
+        await this.jobsService.addLog(data.dbJobId, stream, line);
+        await this.streamService.publishJobLog(data.dbJobId, stream, line);
+      };
+      const result = await this.preparationService.prepare(
+        org,
+        data.existingOrgOptions ?? {
+          verifyAuthentication: true,
+          ensureRequiredPackage: true,
+        },
+        log,
+      );
+      return { prepareExistingOrgCompleted: true, ...result };
+    }
 
     if (job.name === 'pipeline_load_org_config') {
       const log = async (stream: 'stdout' | 'stderr', line: string) => {

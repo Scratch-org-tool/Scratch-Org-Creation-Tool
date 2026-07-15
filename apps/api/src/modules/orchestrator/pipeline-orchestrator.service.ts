@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { prisma, Prisma } from '@sfcc/db';
 import {
   QUEUE_NAMES,
@@ -12,6 +17,7 @@ import {
   getCustomSettingsOrgId,
   getDataDeploymentOrgId,
   pipelineResumeSchema,
+  automationRunRecentQuerySchema,
   pipelineRunActionsSchema,
   hasInsertOperation,
   resolveUserProvisioningPlan,
@@ -39,9 +45,12 @@ export interface PipelineCheckpoint {
   completedSteps: PipelineStepId[];
   resumeFrom: PipelineStepId;
   scratchOrgJobId?: string;
+  preparationJobId?: string;
   scratchSubStep?: string;
   scratchOrgCreated?: boolean;
   targetOrgConnectionId?: string;
+  launchMode?: 'create_new' | 'configure_existing';
+  skippedSteps?: string[];
   deploymentId?: string;
   intelligentDeployRunId?: string;
   awaitingUserActions?: boolean;
@@ -108,10 +117,48 @@ export class PipelineOrchestratorService {
     return run ? { automationRunId: run.id } : { automationRunId: null };
   }
 
+  async getRecentRuns(
+    rawQuery: { target?: string; targetOrgConnectionId?: string; limit?: string },
+    userId: string,
+  ) {
+    const query = automationRunRecentQuerySchema.parse(rawQuery);
+    return prisma.automationRun.findMany({
+      where: {
+        intent: 'scratch_org_pipeline',
+        createdBy: userId,
+        ...(query.targetOrgConnectionId
+          ? { targetOrgConnectionId: query.targetOrgConnectionId }
+          : {}),
+        ...(query.target
+          ? {
+              targetOrgConnection: {
+                OR: [
+                  { alias: { contains: query.target, mode: 'insensitive' } },
+                  { username: { contains: query.target, mode: 'insensitive' } },
+                  { orgId: { contains: query.target, mode: 'insensitive' } },
+                ],
+              },
+            }
+          : {}),
+      },
+      include: {
+        targetOrgConnection: {
+          select: { id: true, alias: true, username: true, orgId: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: query.limit,
+    });
+  }
+
   async startPipeline(config: ScratchOrgPipelineInput, userId: string) {
+    if (config.mode === 'configure_existing') {
+      return this.startExistingOrgPipeline(config, userId);
+    }
     const checkpoint: PipelineCheckpoint = {
       completedSteps: [],
       resumeFrom: 'scratch_org_create',
+      launchMode: 'create_new',
     };
 
     const run = await prisma.automationRun.create({
@@ -119,6 +166,7 @@ export class PipelineOrchestratorService {
         intent: 'scratch_org_pipeline',
         status: 'running',
         createdBy: userId,
+        launchMode: 'create_new',
         config: config as unknown as Prisma.InputJsonValue,
         checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
       },
@@ -168,6 +216,71 @@ export class PipelineOrchestratorService {
     return { automationRunId: run.id, jobId: job.id, status: 'running' };
   }
 
+  private async startExistingOrgPipeline(
+    config: Extract<ScratchOrgPipelineInput, { mode: 'configure_existing' }>,
+    userId: string,
+  ) {
+    const target = await prisma.orgConnection.findUnique({
+      where: { id: config.existingOrgConnectionId },
+    });
+    if (!target || target.createdBy !== userId) {
+      throw new NotFoundException('Existing scratch org target not found');
+    }
+    if (
+      target.type !== 'scratch'
+      || target.status !== 'active'
+      || (target.expiresAt && target.expiresAt <= new Date())
+    ) {
+      throw new BadRequestException('Existing scratch org target is not active and unexpired');
+    }
+    const checkpoint: PipelineCheckpoint = {
+      completedSteps: ['scratch_org_create'],
+      skippedSteps: ['create_scratch_org', 'generate_password', 'retrieve_org_details'],
+      resumeFrom: 'prepare_existing_org',
+      scratchOrgCreated: true,
+      targetOrgConnectionId: target.id,
+      launchMode: 'configure_existing',
+    };
+
+    let run;
+    try {
+      run = await prisma.automationRun.create({
+        data: {
+          intent: 'scratch_org_pipeline',
+          status: 'running',
+          createdBy: userId,
+          launchMode: 'configure_existing',
+          targetOrgConnectionId: target.id,
+          config: { ...config, alias: target.alias } as unknown as Prisma.InputJsonValue,
+          checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') {
+        const conflict = await prisma.automationRun.findFirst({
+          where: {
+            targetOrgConnectionId: target.id,
+            launchMode: 'configure_existing',
+            status: { in: ['pending', 'queued', 'planning', 'running', 'paused'] },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        });
+        throw new ConflictException({
+          message: 'An active pipeline already targets this scratch org',
+          conflictRunId: conflict?.id ?? null,
+        });
+      }
+      throw error;
+    }
+
+    const job = await this.enqueueExistingPreparation(run.id, {
+      ...config,
+      alias: target.alias,
+    }, checkpoint, userId);
+    return { automationRunId: run.id, jobId: job.id, status: 'running' };
+  }
+
   async handleJobSucceeded(
     automationRunId: string,
     jobType: string,
@@ -190,6 +303,21 @@ export class PipelineOrchestratorService {
       });
       checkpoint.completedSteps.push('scratch_org_create');
       checkpoint.targetOrgConnectionId = conn?.id;
+      checkpoint.resumeFrom = 'git_metadata_deploy';
+      if (conn?.id) {
+        await prisma.automationRun.update({
+          where: { id: automationRunId },
+          data: { targetOrgConnectionId: conn.id },
+        });
+      }
+      await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
+      return;
+    }
+
+    if (jobType === 'prepare_existing_org') {
+      if (!checkpoint.completedSteps.includes('prepare_existing_org')) {
+        checkpoint.completedSteps.push('prepare_existing_org');
+      }
       checkpoint.resumeFrom = 'git_metadata_deploy';
       await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
       return;
@@ -321,11 +449,21 @@ export class PipelineOrchestratorService {
       message: error,
       recoverable: true,
     });
-    await this.jobsService.addLog(
-      checkpoint.scratchOrgJobId ?? automationRunId,
-      'stderr',
-      `[PIPELINE PAUSED] ${canonicalFailedStep}: ${error}`,
-    );
+    const failureLogJobId =
+      checkpoint.scratchOrgJobId
+      ?? checkpoint.preparationJobId
+      ?? (await prisma.job.findFirst({
+        where: { parentRunId: automationRunId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      }))?.id;
+    if (failureLogJobId) {
+      await this.jobsService.addLog(
+        failureLogJobId,
+        'stderr',
+        `[PIPELINE PAUSED] ${canonicalFailedStep}: ${error}`,
+      );
+    }
   }
 
   async handleUserActionFailed(
@@ -470,6 +608,21 @@ export class PipelineOrchestratorService {
         await this.enqueueCustomSettingsLoad(automationRunId, config, checkpoint, run.createdBy);
       } else if (resumeFrom === 'load_org_config') {
         await this.enqueueLoadOrgConfig(automationRunId, config, checkpoint);
+      } else if (resumeFrom === 'prepare_existing_org') {
+        await this.enqueueExistingPreparation(
+          automationRunId,
+          config as Extract<ScratchOrgPipelineInput, { mode: 'configure_existing' }>,
+          checkpoint,
+          run.createdBy,
+        );
+      } else if (resumeFrom === 'scratch_org_create' && config.mode === 'configure_existing') {
+        checkpoint.resumeFrom = 'prepare_existing_org';
+        await this.enqueueExistingPreparation(
+          automationRunId,
+          config,
+          checkpoint,
+          run.createdBy,
+        );
       } else if (resumeFrom === 'scratch_org_create') {
         await this.enqueueScratchOrgResume(automationRunId, config, checkpoint);
       } else {
@@ -786,6 +939,10 @@ export class PipelineOrchestratorService {
     config: ScratchOrgPipelineInput,
     checkpoint: PipelineCheckpoint,
   ) {
+    const owner = await prisma.automationRun.findUnique({
+      where: { id: automationRunId },
+      select: { createdBy: true },
+    });
     const scratchConfig = {
       ...config,
       skipSteps: [
@@ -802,6 +959,7 @@ export class PipelineOrchestratorService {
         alias: config.alias,
         currentStep: checkpoint.scratchSubStep ?? 'Pending',
         status: 'pending',
+        createdBy: owner?.createdBy ?? 'system',
         parentRunId: automationRunId,
         payload: {
           config: scratchConfig,
@@ -836,15 +994,59 @@ export class PipelineOrchestratorService {
     });
   }
 
+  private async enqueueExistingPreparation(
+    automationRunId: string,
+    config: Extract<ScratchOrgPipelineInput, { mode: 'configure_existing' }>,
+    checkpoint: PipelineCheckpoint,
+    createdBy: string,
+  ) {
+    const targetOrgConnectionId =
+      checkpoint.targetOrgConnectionId ?? config.existingOrgConnectionId;
+    const payload = {
+      orgId: targetOrgConnectionId,
+      automationRunId,
+      existingOrgOptions: config.existingOrgOptions,
+    };
+    const job = await this.jobsService.create({
+      queue: QUEUE_NAMES.ORG_SETUP,
+      type: 'prepare_existing_org',
+      parentRunId: automationRunId,
+      createdBy,
+      payload,
+    });
+    await this.queueService.addJob(
+      QUEUE_NAMES.ORG_SETUP,
+      'prepare_existing_org',
+      { ...payload, dbJobId: job.id },
+      job.id,
+      { attempts: 1 },
+    );
+    checkpoint.preparationJobId = job.id;
+    checkpoint.resumeFrom = 'prepare_existing_org';
+    await prisma.automationRun.update({
+      where: { id: automationRunId },
+      data: { checkpoint: checkpoint as unknown as Prisma.InputJsonValue },
+    });
+    return job;
+  }
+
   private async enqueueMetadataDeploy(
     automationRunId: string,
     config: ScratchOrgPipelineInput,
     checkpoint: PipelineCheckpoint,
   ) {
+    const ownerRun = await prisma.automationRun.findUnique({
+      where: { id: automationRunId },
+      select: { createdBy: true },
+    });
+    if (!ownerRun) throw new Error('Automation run not found');
     const target = await prisma.orgConnection.findUnique({
       where: { id: checkpoint.targetOrgConnectionId ?? '' },
     });
     if (!target) throw new Error('Target org connection not found');
+    if (target.createdBy !== ownerRun.createdBy) {
+      throw new Error('Target org ownership validation failed');
+    }
     const normalized = normalizeGitSourceConfig(config);
     if (!normalized.gitSource) throw new Error('gitSource is required for metadata deployment');
     const gitSource = await this.scmSources.requireActive(normalized.gitSource);
@@ -883,7 +1085,7 @@ export class PipelineOrchestratorService {
               manifestPath: gitSource.manifestPath,
               gitSource,
             } as Prisma.InputJsonValue,
-            createdBy: (await prisma.automationRun.findUnique({ where: { id: automationRunId } }))?.createdBy ?? 'system',
+            createdBy: ownerRun.createdBy,
           },
         });
     checkpoint.deploymentId = deployment.id;
@@ -905,6 +1107,7 @@ export class PipelineOrchestratorService {
       gitSource,
       assignPermissionSet: true,
       intelligentDeployRunId: checkpoint.intelligentDeployRunId,
+      createdBy: ownerRun.createdBy,
     });
 
     await prisma.automationRun.update({
@@ -919,6 +1122,10 @@ export class PipelineOrchestratorService {
     automationRunId: string,
     checkpoint: PipelineCheckpoint,
   ) {
+    const owner = await prisma.automationRun.findUnique({
+      where: { id: automationRunId },
+      select: { createdBy: true },
+    });
     const target = await prisma.orgConnection.findUnique({
       where: { id: checkpoint.targetOrgConnectionId ?? '' },
     });
@@ -931,6 +1138,7 @@ export class PipelineOrchestratorService {
         type: 'pipeline_metadata_deploy',
         parentRunId: automationRunId,
         status: 'pending',
+        createdBy: owner?.createdBy ?? 'system',
         currentStep: 'Assign Permission Set',
         payload: {
           orgAlias,
@@ -964,6 +1172,10 @@ export class PipelineOrchestratorService {
     config: ScratchOrgPipelineInput,
     checkpoint: PipelineCheckpoint,
   ) {
+    const owner = await prisma.automationRun.findUnique({
+      where: { id: automationRunId },
+      select: { createdBy: true },
+    });
     const target = await prisma.orgConnection.findUnique({
       where: { id: checkpoint.targetOrgConnectionId ?? '' },
     });
@@ -975,6 +1187,7 @@ export class PipelineOrchestratorService {
         type: 'pipeline_load_org_config',
         parentRunId: automationRunId,
         status: 'pending',
+        createdBy: owner?.createdBy ?? 'system',
         currentStep: 'Load Org Config',
         payload: {
           orgId: target.id,

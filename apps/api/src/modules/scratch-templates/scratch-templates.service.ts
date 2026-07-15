@@ -200,8 +200,14 @@ export class ScratchTemplatesService implements OnModuleInit {
   mergeTemplateWithLaunch(
     templateConfig: Record<string, unknown>,
     overrides: {
-      alias: string;
-      devHubAlias: string;
+      mode?: 'create_new' | 'configure_existing';
+      alias?: string;
+      devHubAlias?: string;
+      existingOrgConnectionId?: string;
+      existingOrgOptions?: {
+        verifyAuthentication?: boolean;
+        ensureRequiredPackage?: boolean;
+      };
       sourceOrgId?: string;
       dataDeploymentOrgId?: string;
       customSettingsOrgId?: string;
@@ -243,8 +249,11 @@ export class ScratchTemplatesService implements OnModuleInit {
     );
     return {
       ...tmpl,
+      mode: overrides.mode ?? 'create_new',
       alias: overrides.alias,
       devHubAlias: overrides.devHubAlias,
+      existingOrgConnectionId: overrides.existingOrgConnectionId,
+      existingOrgOptions: overrides.existingOrgOptions,
       duration: overrides.duration ?? tmpl.duration,
       installPackage: overrides.installPackage ?? tmpl.installPackage,
       description: overrides.description,
@@ -289,8 +298,14 @@ export class ScratchTemplatesService implements OnModuleInit {
     const merged = this.mergeTemplateWithLaunch(
       authoritativeConfig as Record<string, unknown>,
       {
-        alias: String(body.alias ?? ''),
-        devHubAlias: String(body.devHubAlias ?? ''),
+        mode: body.mode === 'configure_existing' ? 'configure_existing' : 'create_new',
+        alias: typeof body.alias === 'string' ? body.alias : undefined,
+        devHubAlias: typeof body.devHubAlias === 'string' ? body.devHubAlias : undefined,
+        existingOrgConnectionId: body.existingOrgConnectionId as string | undefined,
+        existingOrgOptions: body.existingOrgOptions as {
+          verifyAuthentication?: boolean;
+          ensureRequiredPackage?: boolean;
+        } | undefined,
         sourceOrgId: body.sourceOrgId as string | undefined,
         dataDeploymentOrgId: body.dataDeploymentOrgId as string | undefined,
         customSettingsOrgId: body.customSettingsOrgId as string | undefined,

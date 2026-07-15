@@ -45,6 +45,13 @@ export const scratchOrgCreateSchema = z.object({
     .default([]),
 });
 
+export const scratchOrgLaunchModeSchema = z.enum(['create_new', 'configure_existing']);
+
+export const existingOrgOptionsSchema = z.object({
+  verifyAuthentication: z.boolean().default(true),
+  ensureRequiredPackage: z.boolean().default(true),
+});
+
 export const scratchOrgSkipStepSchema = z.object({
   step: z.enum(['installPackages', 'deployMetadata', 'assignPermissions']),
 });
@@ -144,7 +151,10 @@ export const dataDeployConfigSchema = z.object({
   querySet: querySetSchema,
 });
 
-export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
+const scratchOrgPipelineCommonSchema = scratchOrgCreateSchema.omit({
+  alias: true,
+  devHubAlias: true,
+}).extend({
   version: z.union([z.literal(1), z.literal(2)]).optional(),
   azureDeploy: azureDeployConfigSchema.optional(),
   gitSource: gitSourceConfigSchema.optional(),
@@ -177,7 +187,38 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
   pipelineSteps: pipelineStepsConfigSchema.optional(),
   permissionSets: z.array(z.string()).optional(),
   templateId: z.string().uuid().optional(),
-}).superRefine((value, context) => {
+});
+
+const scratchOrgPipelineModeSchema = z.discriminatedUnion('mode', [
+  scratchOrgPipelineCommonSchema.extend({
+    mode: z.literal('create_new'),
+    alias: scratchOrgCreateSchema.shape.alias,
+    devHubAlias: scratchOrgCreateSchema.shape.devHubAlias,
+    existingOrgConnectionId: z.undefined().optional(),
+    existingOrgOptions: existingOrgOptionsSchema.optional(),
+  }),
+  scratchOrgPipelineCommonSchema.extend({
+    mode: z.literal('configure_existing'),
+    existingOrgConnectionId: z.string().uuid(),
+    existingOrgOptions: existingOrgOptionsSchema.default({
+      verifyAuthentication: true,
+      ensureRequiredPackage: true,
+    }),
+    // These are populated from the authoritative target, never trusted from
+    // the launch payload.
+    alias: scratchOrgCreateSchema.shape.alias.optional(),
+    devHubAlias: scratchOrgCreateSchema.shape.devHubAlias.optional(),
+  }),
+]);
+
+export const scratchOrgPipelineSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+    const value = input as Record<string, unknown>;
+    return { ...value, mode: value.mode ?? 'create_new' };
+  },
+  scratchOrgPipelineModeSchema,
+).superRefine((value, context) => {
   if (!value.gitSource && !value.azureDeploy) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -214,6 +255,22 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
     }
   }
 }).transform(normalizeGitSourceConfig);
+
+export const scratchOrgPipelineEligibilityRequestSchema = z.record(z.unknown());
+
+/** Canonical aliases used by launch and pre-launch preview API clients. */
+export const scratchOrgPipelineLaunchSchema = scratchOrgPipelineSchema;
+export const scratchOrgPipelinePreviewSchema = scratchOrgPipelineSchema;
+
+export const scratchOrgAdoptSchema = z.object({
+  alias: z.string().min(1).max(255),
+});
+
+export const automationRunRecentQuerySchema = z.object({
+  target: z.string().trim().min(1).max(255).optional(),
+  targetOrgConnectionId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 export const customSettingsLoadSchema = z.object({
   sourceOrgId: z.string().uuid(),
@@ -433,6 +490,15 @@ export type DataDeployPreflightInput = z.infer<typeof dataDeployPreflightSchema>
 export type DataReplicationInput = z.infer<typeof dataReplicationSchema>;
 export type QuerySetCompileInput = z.infer<typeof querySetCompileSchema>;
 export type ScratchOrgPipelineInput = z.infer<typeof scratchOrgPipelineSchema>;
+export type ScratchOrgPipelineLaunchInput = z.infer<typeof scratchOrgPipelineLaunchSchema>;
+export type ScratchOrgPipelinePreviewInput = z.infer<typeof scratchOrgPipelinePreviewSchema>;
+export type ScratchOrgLaunchMode = z.infer<typeof scratchOrgLaunchModeSchema>;
+export type ExistingOrgOptions = z.infer<typeof existingOrgOptionsSchema>;
+export type ScratchOrgPipelineEligibilityRequest = z.infer<
+  typeof scratchOrgPipelineEligibilityRequestSchema
+>;
+export type ScratchOrgAdoptInput = z.infer<typeof scratchOrgAdoptSchema>;
+export type AutomationRunRecentQuery = z.infer<typeof automationRunRecentQuerySchema>;
 export type AzureConnectInput = z.infer<typeof azureConnectSchema>;
 export type AzureDeployConfig = z.infer<typeof azureDeployConfigSchema>;
 export type PipelineResumeInput = z.infer<typeof pipelineResumeSchema>;

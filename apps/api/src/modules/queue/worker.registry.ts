@@ -275,7 +275,12 @@ export class WorkerRegistry implements OnModuleInit {
       async (job) => {
         const pipelineOpts = job.name === 'pipeline_load_org_config'
           ? { pipelineJobType: 'pipeline_load_org_config', failedStep: 'load_org_config' as PipelineStepId }
-          : undefined;
+          : job.name === 'prepare_existing_org'
+            ? {
+                pipelineJobType: 'prepare_existing_org',
+                failedStep: 'prepare_existing_org' as PipelineStepId,
+              }
+            : undefined;
         return wrap((j) => this.orgSetupWorker.process(j), pipelineOpts)(job);
       },
     );
