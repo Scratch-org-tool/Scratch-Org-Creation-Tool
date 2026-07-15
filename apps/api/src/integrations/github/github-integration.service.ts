@@ -48,8 +48,7 @@ const WORK_ITEM_CAPABILITIES = {
   read: true,
   write: true,
   webhooks: true,
-  // GitHub issue-body links are not treated as secure attachments.
-  attachments: false,
+  attachments: true,
   history: true,
   stateTransitions: true,
 } as const;

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GitHubApiClient } from './github-api.client';
-import { DisabledGitHubAttachmentStore } from './github-attachment.store';
+import {
+  DisabledGitHubAttachmentStore,
+  type GitHubAttachmentStore,
+} from './github-attachment.store';
 import type { GitHubIntegrationService } from './github-integration.service';
 import type { GitHubCredentials } from './github.types';
 import { GitHubWorkItemAdapter } from './github-work-item.adapter';
@@ -158,5 +161,53 @@ describe('GitHubWorkItemAdapter', () => {
       capabilities: { attachments: false },
     });
     await expect(adapter.listAttachments('acme/repo#1')).resolves.toEqual([]);
+  });
+
+  it('stores an authorized attachment and inserts only a safe app download link', async () => {
+    const integration = {
+      getWorkItemCredentials: vi.fn().mockResolvedValue(credentials),
+      getWorkItemConnection: vi.fn().mockResolvedValue({ id: 'w1' }),
+    } as unknown as GitHubIntegrationService;
+    const api = {
+      request: vi.fn()
+        .mockResolvedValueOnce(issue(7, 42, 'octocat'))
+        .mockResolvedValueOnce({ id: 10 }),
+    } as unknown as GitHubApiClient;
+    const attachments = {
+      available: true,
+      list: vi.fn(),
+      get: vi.fn(),
+      put: vi.fn().mockResolvedValue({
+        id: 'attachment-1',
+        name: 'proof\\[1].txt',
+        sizeBytes: 5,
+        contentType: 'text/plain',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        author: null,
+        url: '',
+      }),
+    } as unknown as GitHubAttachmentStore;
+    const adapter = new GitHubWorkItemAdapter(integration, api, attachments);
+
+    const result = await adapter.uploadAttachment!(
+      'acme/repo#7',
+      { fileName: 'proof[1].txt', contentType: 'text/plain', buffer: Buffer.from('proof') },
+      undefined,
+      { connectionId: 'w1', actorId: 'user-1' },
+    );
+
+    expect(attachments.put).toHaveBeenCalledWith(expect.objectContaining({
+      authorId: 'user-1',
+      scope: expect.objectContaining({
+        workItemConnectionId: 'w1',
+        workItemId: 'acme/repo#7',
+      }),
+    }));
+    const commentCall = (api.request as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(commentCall[1]).toContain('/issues/7/comments');
+    const body = JSON.parse(commentCall[2].body);
+    expect(body.body).toContain('/api/defects/providers/github_issues/');
+    expect(body.body).not.toContain('server-private-key');
+    expect(result.url).toContain('attachment-1');
   });
 });

@@ -12,6 +12,15 @@ import { IntegrationAdminController } from '../../modules/integrations/integrati
 import { IntegrationAdminService } from '../../modules/integrations/integration-admin.service';
 import { IntegrationWebhookController } from '../../modules/integrations/integration-webhook.controller';
 import { IntegrationWebhookService } from '../../modules/integrations/integration-webhook.service';
+import {
+  IntegrationOAuthCallbackController,
+  IntegrationOAuthController,
+} from '../../modules/integrations/integration-oauth.controller';
+import {
+  INTEGRATION_OAUTH_FETCH,
+  IntegrationOAuthService,
+} from '../../modules/integrations/integration-oauth.service';
+import { OAuthStateService } from '../../modules/integrations/oauth-state.service';
 import { IntegrationsController } from '../../modules/integrations/integrations.controller';
 import { IntegrationsService } from '../../modules/integrations/integrations.service';
 import {
@@ -23,7 +32,10 @@ import {
   GITHUB_AUTH_FETCH,
   GitHubAuthService,
 } from '../github/github-auth.service';
-import { DisabledGitHubAttachmentStore } from '../github/github-attachment.store';
+import {
+  GITHUB_ATTACHMENT_STORE,
+  PrismaGitHubAttachmentStore,
+} from '../github/github-attachment.store';
 import {
   GitHubWebhookController,
   ProviderIntegrationController,
@@ -54,6 +66,8 @@ import { IntegrationErrorFilter } from './integration-error.filter';
     GitHubWebhookController,
     IntegrationAdminController,
     IntegrationWebhookController,
+    IntegrationOAuthController,
+    IntegrationOAuthCallbackController,
     IntegrationsController,
   ],
   providers: [
@@ -68,10 +82,13 @@ import { IntegrationErrorFilter } from './integration-error.filter';
     JiraWorkItemAdapter,
     IntegrationAdminService,
     IntegrationWebhookService,
+    IntegrationOAuthService,
+    OAuthStateService,
     IntegrationsService,
     { provide: APP_FILTER, useClass: IntegrationErrorFilter },
     { provide: GITHUB_AUTH_FETCH, useValue: fetch },
     { provide: GITHUB_FETCH, useValue: fetch },
+    { provide: INTEGRATION_OAUTH_FETCH, useValue: fetch },
     {
       provide: GITHUB_SLEEP,
       useValue: (milliseconds: number) =>
@@ -83,7 +100,11 @@ import { IntegrationErrorFilter } from './integration-error.filter';
     GitHubIntegrationService,
     GitHubCheckoutService,
     GitHubScmAdapter,
-    DisabledGitHubAttachmentStore,
+    PrismaGitHubAttachmentStore,
+    {
+      provide: GITHUB_ATTACHMENT_STORE,
+      useExisting: PrismaGitHubAttachmentStore,
+    },
     GitHubWorkItemAdapter,
     GitHubWebhookService,
     {

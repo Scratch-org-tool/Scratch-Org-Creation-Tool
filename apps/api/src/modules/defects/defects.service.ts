@@ -447,7 +447,7 @@ export class DefectsService {
       id,
       { fileName, contentType, buffer },
       resolved.project,
-      this.context(resolved),
+      this.context(resolved, userId),
     );
     await this.refreshSnapshot(id, resolved);
     return attachment;
@@ -742,8 +742,8 @@ export class DefectsService {
     );
   }
 
-  private context(resolved: ResolvedProvider): AdapterContext {
-    return { connectionId: resolved.connectionId ?? undefined };
+  private context(resolved: ResolvedProvider, actorId?: string): AdapterContext {
+    return { connectionId: resolved.connectionId ?? undefined, actorId };
   }
 
   private itemDto<T extends WorkItemSummary>(item: T, resolved: ResolvedProvider): T & {

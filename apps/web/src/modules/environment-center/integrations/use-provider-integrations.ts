@@ -15,6 +15,12 @@ interface ConnectionsResponse {
   workItems: PublicIntegrationConnection[];
 }
 
+interface JiraSite {
+  id: string;
+  name: string;
+  url: string;
+}
+
 export type ConnectionKind = 'scm' | 'work-items';
 
 export interface ConnectionAction {
@@ -38,6 +44,8 @@ export function useProviderIntegrations() {
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [jiraSelectionState, setJiraSelectionState] = useState<string | null>(null);
+  const [jiraSites, setJiraSites] = useState<JiraSite[]>([]);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -60,6 +68,70 @@ export function useProviderIntegrations() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('integration_status');
+    const callbackMessage = params.get('integration_message');
+    const selectionState = params.get('integration_selection_state');
+    if (!status) return;
+    if (status === 'success') setNotice(callbackMessage || 'Provider connected successfully.');
+    else if (status === 'error') setError(callbackMessage || 'Provider authorization failed.');
+    else if (status === 'pending' && selectionState) {
+      setNotice(callbackMessage || 'Select a Jira Cloud site.');
+      setJiraSelectionState(selectionState);
+      void api<{ sites: JiraSite[] }>(
+        `/integrations/oauth/jira/selections/${encodeURIComponent(selectionState)}`,
+      )
+        .then((result) => setJiraSites(result.sites))
+        .catch((cause) => setError(message(cause, 'Could not load Jira sites.')));
+    }
+    for (const key of [
+      'integration_provider',
+      'integration_status',
+      'integration_message',
+      'integration_selection_state',
+    ]) {
+      params.delete(key);
+    }
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+  }, []);
+
+  const startOAuth = useCallback(async (provider: 'github' | 'bitbucket' | 'jira') => {
+    setMutating(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api<{ authorizationUrl: string }>(
+        `/integrations/oauth/${provider}/start`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ returnPath: '/environment-center' }),
+        },
+      );
+      window.location.assign(result.authorizationUrl);
+    } catch (cause) {
+      setError(message(cause, `Could not start ${provider} authorization.`));
+      setMutating(false);
+    }
+  }, []);
+
+  const selectJiraSite = useCallback(async (siteId: string) => {
+    if (!jiraSelectionState) return;
+    setMutating(true);
+    setError(null);
+    try {
+      const result = await api<{ redirectUrl: string }>(
+        `/integrations/oauth/jira/selections/${encodeURIComponent(jiraSelectionState)}`,
+        { method: 'POST', body: JSON.stringify({ siteId }) },
+      );
+      window.location.assign(result.redirectUrl);
+    } catch (cause) {
+      setError(message(cause, 'Could not connect the selected Jira site.'));
+      setMutating(false);
+    }
+  }, [jiraSelectionState]);
 
   const connect = useCallback(async (
     kind: ConnectionKind,
@@ -168,9 +240,13 @@ export function useProviderIntegrations() {
     mutating,
     error,
     notice,
+    jiraSelectionState,
+    jiraSites,
     setError,
     setNotice,
     refresh,
+    startOAuth,
+    selectJiraSite,
     connect,
     verify,
     disconnect,

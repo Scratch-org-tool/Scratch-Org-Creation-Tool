@@ -426,6 +426,23 @@ model AppUser {
   @@index([status])
 }
 
+/// Short-lived, one-use browser authorization state. tokenHash stores no bearer state token.
+model OAuthState {
+  id               String    @id @default(uuid())
+  tokenHash        String    @unique
+  provider         String
+  purpose          String
+  appUserId        String
+  encryptedPayload String
+  returnPath       String
+  expiresAt        DateTime
+  consumedAt       DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([provider, purpose, expiresAt])
+  @@index([appUserId, consumedAt])
+}
+
 model AzureDevOpsConnection {
   id                 String              @id @default(uuid())
   orgSlug            String              @unique
@@ -488,10 +505,30 @@ model WorkItemConnection {
   identityBindings              ExternalIdentityBinding[]
   snapshots                     WorkItemSnapshot[]
   webhookDeliveries             WebhookDelivery[]
+  githubAttachments             GitHubAttachment[]
 
   @@unique([provider, externalAccountId])
   @@index([provider, status])
   @@index([connectedBy])
+}
+
+/// App-managed encrypted bytes for GitHub Issues, scoped to one connection and issue.
+model GitHubAttachment {
+  id                   String             @id @default(uuid())
+  workItemConnectionId String
+  workItemConnection   WorkItemConnection @relation(fields: [workItemConnectionId], references: [id], onDelete: Cascade)
+  externalProjectId    String
+  externalItemId       String
+  fileName             String
+  contentType          String
+  sizeBytes            Int
+  sha256               String
+  encryptedBlob        Bytes
+  createdBy            String?
+  createdAt            DateTime           @default(now())
+
+  @@index([workItemConnectionId, externalItemId, createdAt])
+  @@index([createdBy])
 }
 
 /// Binds an app-owned context to provider project/repository identifiers.

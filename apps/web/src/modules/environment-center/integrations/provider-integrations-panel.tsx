@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import type { Repository } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
-import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { Input, Label, Select } from '@/components/ui/input';
 import { ConfirmDialog, FormSection, GlassCard, InlineAlert } from '@/components/studio';
 import { api } from '@/services/api';
 import { cn } from '@/utils/cn';
@@ -219,24 +219,22 @@ function ConnectionForm({
 }) {
   const [form, setForm] = useState<Record<string, string>>({ authType: 'api_token' });
   const [pendingRotation, setPendingRotation] = useState(false);
+  const [selectedJiraSite, setSelectedJiraSite] = useState('');
 
   const submit = async () => {
+    if (provider === 'github' || (
+      (provider === 'bitbucket' || provider === 'jira') && form.authType === 'oauth2'
+    )) {
+      await state.startOAuth(provider);
+      return;
+    }
     const payload: Record<string, unknown> =
       provider === 'azure_devops'
         ? { orgSlug: form.orgSlug, project: form.project || undefined, pat: form.pat }
-        : provider === 'github'
-          ? {
-              appId: form.appId,
-              installationId: form.installationId,
-              privateKey: form.privateKey,
-              pat: form.pat || undefined,
-              baseUrl: form.baseUrl || undefined,
-            }
-          : {
+        : {
               authType: form.authType,
-              ...(form.authType === 'oauth2'
-                ? { accessToken: form.accessToken, refreshToken: form.refreshToken || undefined }
-                : { email: form.email, apiToken: form.apiToken }),
+              email: form.email,
+              apiToken: form.apiToken,
               ...(provider === 'bitbucket'
                 ? { workspace: form.workspace || undefined }
                 : { siteUrl: form.siteUrl }),
@@ -249,9 +247,9 @@ function ConnectionForm({
     provider === 'azure_devops'
       ? Boolean(form.orgSlug?.trim() && form.pat?.trim())
       : provider === 'github'
-        ? Boolean(form.appId?.trim() && form.installationId?.trim() && form.privateKey?.trim())
+        ? true
         : form.authType === 'oauth2'
-          ? Boolean(form.accessToken?.trim())
+          ? true
           : Boolean(form.email?.trim() && form.apiToken?.trim() && (provider !== 'jira' || form.siteUrl?.trim()));
 
   return (
@@ -271,22 +269,9 @@ function ConnectionForm({
             </>
           )}
           {provider === 'github' && (
-            <>
-              <Field label="GitHub App ID" id="provider-github-app" value={form.appId} setValue={(appId) => setForm({ ...form, appId })} />
-              <Field label="Installation ID" id="provider-github-installation" value={form.installationId} setValue={(installationId) => setForm({ ...form, installationId })} />
-              <div className="sm:col-span-2">
-                <Label htmlFor="provider-github-key">GitHub App private key (PEM)</Label>
-                <Textarea
-                  id="provider-github-key"
-                  value={form.privateKey ?? ''}
-                  onChange={(event) => setForm({ ...form, privateKey: event.target.value })}
-                  className="min-h-28 font-mono text-xs"
-                  placeholder="-----BEGIN RSA PRIVATE KEY-----"
-                />
-              </div>
-              <Field label="Fine-grained PAT fallback (optional)" id="provider-github-pat" type="password" value={form.pat} setValue={(pat) => setForm({ ...form, pat })} />
-              <Field label="GitHub Enterprise API URL (optional)" id="provider-github-url" value={form.baseUrl} setValue={(baseUrl) => setForm({ ...form, baseUrl })} placeholder="https://api.github.com" />
-            </>
+            <InlineAlert variant="info">
+              The GitHub App id, slug, private key, and GitHub Enterprise URL are configured on the server. The private key is never sent to this browser.
+            </InlineAlert>
           )}
           {(provider === 'bitbucket' || provider === 'jira') && (
             <>
@@ -298,14 +283,13 @@ function ConnectionForm({
                   onChange={(event) => setForm({ ...form, authType: event.target.value })}
                 >
                   <option value="api_token">Atlassian scoped API token</option>
-                  <option value="oauth2">OAuth 2.0 access token</option>
+                  <option value="oauth2">OAuth 2.0 in provider</option>
                 </Select>
               </div>
               {form.authType === 'oauth2' ? (
-                <>
-                  <Field label="OAuth access token" id={`provider-${provider}-access`} type="password" value={form.accessToken} setValue={(accessToken) => setForm({ ...form, accessToken })} />
-                  <Field label="Refresh token (optional)" id={`provider-${provider}-refresh`} type="password" value={form.refreshToken} setValue={(refreshToken) => setForm({ ...form, refreshToken })} />
-                </>
+                <InlineAlert variant="info">
+                  Continue to {PROVIDER_NAMES[provider]} to authorize. Access and refresh tokens are exchanged and encrypted by the server.
+                </InlineAlert>
               ) : (
                 <>
                   <Field label="Atlassian account email" id={`provider-${provider}-email`} type="email" value={form.email} setValue={(email) => setForm({ ...form, email })} />
@@ -321,12 +305,39 @@ function ConnectionForm({
           )}
         </div>
       </FormSection>
+      {provider === 'jira' && state.jiraSelectionState && state.jiraSites.length > 0 && (
+        <div className="mb-4 rounded-lg border border-border/60 p-4">
+          <Label htmlFor="provider-jira-site-selection">Authorized Jira Cloud site</Label>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Select
+              id="provider-jira-site-selection"
+              value={selectedJiraSite}
+              onChange={(event) => setSelectedJiraSite(event.target.value)}
+            >
+              <option value="">Select a site…</option>
+              {state.jiraSites.map((site) => (
+                <option key={site.id} value={site.id}>{site.name} · {site.url}</option>
+              ))}
+            </Select>
+            <Button
+              disabled={!selectedJiraSite || state.mutating}
+              onClick={() => void state.selectJiraSite(selectedJiraSite)}
+            >
+              Connect selected site
+            </Button>
+          </div>
+        </div>
+      )}
       <Button
         disabled={!valid || state.mutating}
         loading={state.mutating}
         onClick={() => existing ? setPendingRotation(true) : void submit()}
       >
-        {existing ? 'Rotate credentials' : 'Connect and verify'}
+        {provider === 'github'
+          ? existing ? 'Reinstall GitHub App' : 'Install GitHub App'
+          : form.authType === 'oauth2'
+            ? `Continue to ${PROVIDER_NAMES[provider]}`
+            : existing ? 'Rotate credentials' : 'Connect and verify'}
       </Button>
       <ConfirmDialog
         open={pendingRotation}
@@ -350,7 +361,7 @@ function ScopeHelp({ provider, authType }: { provider: ScmProvider | 'jira'; aut
     return <>Required PAT scopes: Code (Read), Project and Team (Read); add Work Items (Read &amp; write) when using Azure Boards.</>;
   }
   if (provider === 'github') {
-    return <>Install a GitHub App with Metadata and Contents read access, Issues read/write, and webhook access. A fine-grained PAT may be stored only as an API fallback.</>;
+    return <>Install the server-configured GitHub App with Metadata and Contents read access, Issues read/write, and webhook access.</>;
   }
   if (provider === 'bitbucket') {
     return authType === 'oauth2'

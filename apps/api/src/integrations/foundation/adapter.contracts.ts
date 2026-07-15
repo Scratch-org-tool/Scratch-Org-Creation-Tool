@@ -22,6 +22,8 @@ export const WORK_ITEM_ADAPTERS = Symbol('WORK_ITEM_ADAPTERS');
 
 export interface AdapterContext {
   connectionId?: string;
+  /** Authenticated app actor, used only for app-managed ownership/audit metadata. */
+  actorId?: string;
 }
 
 export interface RepositoryQuery extends AdapterContext {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type {
   WorkItemAttachment,
   WorkItemComment,
@@ -12,17 +12,22 @@ import type {
 } from '@sfcc/shared';
 import {
   type AdapterContext,
+  type AttachmentContent,
   type WorkItemAdapter,
   type WorkItemCreateInput,
   type WorkItemMutationResult,
   type WorkItemOverview,
   type WorkItemQuery,
   type WorkItemUpdateInput,
+  type WorkItemUpload,
 } from '../foundation/adapter.contracts';
 import { IntegrationError } from '../foundation/adapter.errors';
 import { GitHubApiClient } from './github-api.client';
-import type { GitHubAttachmentStore } from './github-attachment.store';
-import { DisabledGitHubAttachmentStore } from './github-attachment.store';
+import {
+  GITHUB_ATTACHMENT_STORE,
+  type GitHubAttachmentScope,
+  type GitHubAttachmentStore,
+} from './github-attachment.store';
 import { GitHubIntegrationService } from './github-integration.service';
 import {
   githubIssueId,
@@ -37,7 +42,7 @@ const CAPABILITIES = {
   read: true,
   write: true,
   webhooks: true,
-  attachments: false,
+  attachments: true,
   history: true,
   stateTransitions: true,
 } as const;
@@ -104,7 +109,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
   constructor(
     private readonly integration: GitHubIntegrationService,
     private readonly api: GitHubApiClient,
-    private readonly attachments: DisabledGitHubAttachmentStore,
+    @Inject(GITHUB_ATTACHMENT_STORE) private readonly attachments: GitHubAttachmentStore,
   ) {}
 
   async getConnectionStatus(context: AdapterContext = {}): Promise<WorkItemConnectionStatus> {
@@ -557,10 +562,64 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
   async listAttachments(
     id: string,
     project?: string,
-    _context: AdapterContext = {},
+    context: AdapterContext = {},
   ): Promise<WorkItemAttachment[]> {
     const ref = this.issueRef(id, project);
-    return this.attachments.list(githubIssueId(ref));
+    return this.attachments.list(await this.attachmentScope(ref, context.connectionId));
+  }
+
+  async getAttachmentContent(
+    id: string,
+    attachmentId: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<AttachmentContent> {
+    const ref = this.issueRef(id, project);
+    const result = await this.attachments.get(
+      await this.attachmentScope(ref, context.connectionId),
+      attachmentId,
+    );
+    return {
+      buffer: result.buffer,
+      contentType: result.attachment.contentType ?? 'application/octet-stream',
+      fileName: result.attachment.name,
+    };
+  }
+
+  async uploadAttachment(
+    id: string,
+    upload: WorkItemUpload,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemAttachment> {
+    const credentials = await this.requireCredentials(context.connectionId);
+    const ref = this.issueRef(id, project);
+    // Verifies the issue is visible to this installation before persisting bytes.
+    await this.api.request(
+      credentials,
+      `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/issues/${ref.number}`,
+    );
+    const scope = await this.attachmentScope(ref, context.connectionId);
+    const attachment = await this.attachments.put({
+      scope,
+      name: upload.fileName,
+      contentType: upload.contentType,
+      content: upload.buffer,
+      authorId: context.actorId,
+    });
+    const url = this.attachmentUrl(githubIssueId(ref), attachment.id, scope.workItemConnectionId);
+    const safeName = attachment.name.replace(/([\\[\]])/g, '\\$1');
+    await this.api.request(
+      credentials,
+      `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/issues/${ref.number}/comments`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          body: `Attachment uploaded to the authenticated application store: [${safeName}](${url})`,
+        }),
+      },
+    );
+    return { ...attachment, url };
   }
 
   private async projectItems(
@@ -1039,6 +1098,39 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       'Creating a GitHub issue requires an owner/repository project',
       { provider: this.provider },
     );
+  }
+
+  private async attachmentScope(
+    ref: GitHubIssueRef,
+    connectionId?: string,
+  ): Promise<GitHubAttachmentScope> {
+    const connection = await this.integration.getWorkItemConnection(connectionId);
+    if (!connection) {
+      throw new IntegrationError('not_connected', 'GitHub Issues is not connected', {
+        provider: this.provider,
+      });
+    }
+    const repository = `${ref.owner}/${ref.repo}`;
+    return {
+      workItemConnectionId: connection.id,
+      externalProjectId: repository,
+      workItemId: githubIssueId(ref),
+    };
+  }
+
+  private attachmentUrl(workItemId: string, attachmentId: string, connectionId: string): string {
+    const configured =
+      process.env.INTEGRATION_PUBLIC_ORIGIN ??
+      process.env.WEB_ORIGIN ??
+      process.env.NEXT_PUBLIC_APP_URL ??
+      'http://localhost:8080';
+    const origin = new URL(configured).origin;
+    const url = new URL(
+      `/api/defects/providers/github_issues/work-items/${encodeURIComponent(workItemId)}/attachments/${encodeURIComponent(attachmentId)}/content`,
+      `${origin}/`,
+    );
+    url.searchParams.set('connectionId', connectionId);
+    return url.toString();
   }
 
   private async requireCredentials(connectionId?: string): Promise<GitHubCredentials> {
