@@ -691,6 +691,48 @@ export class SfCliClient extends EventEmitter {
     });
   }
 
+  async updateBulk(
+    sobject: string,
+    file: string,
+    targetOrg: string,
+    waitMinutes = 15,
+    options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
+  ): Promise<SfCommandResult> {
+    return this.runStreaming([
+      'data', 'update', 'bulk',
+      '-f', file,
+      '-s', sobject,
+      '--target-org', targetOrg,
+      '--wait', String(waitMinutes),
+      '--line-ending', 'CRLF',
+    ], undefined, {
+      cwd: options?.cwd,
+      onSpawn: options?.onSpawn,
+      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+    });
+  }
+
+  async deleteBulk(
+    sobject: string,
+    file: string,
+    targetOrg: string,
+    waitMinutes = 15,
+    options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
+  ): Promise<SfCommandResult> {
+    return this.runStreaming([
+      'data', 'delete', 'bulk',
+      '-f', file,
+      '-s', sobject,
+      '--target-org', targetOrg,
+      '--wait', String(waitMinutes),
+      '--line-ending', 'CRLF',
+    ], undefined, {
+      cwd: options?.cwd,
+      onSpawn: options?.onSpawn,
+      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+    });
+  }
+
   async listMetadataTypes(alias: string): Promise<SfCommandResult<{
     result: {
       metadataObjects: SfMetadataTypeInfo[];

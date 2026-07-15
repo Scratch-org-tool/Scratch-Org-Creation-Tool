@@ -344,8 +344,8 @@ export function compileQuerySectionPlan(
   for (const query of ordered) {
     const externalIdField =
       query.externalIdField ?? defaultExternalIdField(query.category, query.object);
-    if (query.operation === 'upsert' && !externalIdField) {
-      throw new Error(`Upsert query ${query.id} requires externalIdField`);
+    if (['upsert', 'update', 'delete'].includes(query.operation) && !externalIdField) {
+      throw new Error(`${query.operation} query ${query.id} requires externalIdField`);
     }
     const offices = expansionOffices(query, options);
     const variants = offices ?? [undefined];

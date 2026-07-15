@@ -185,6 +185,20 @@ describe('compileQuerySectionPlan', () => {
         }),
       /requires externalIdField/,
     );
+    assert.throws(
+      () =>
+        compileQuerySectionPlan({
+          name: 'Unsafe update',
+          queries: [query({
+            category: 'arbitrary',
+            object: 'Widget__c',
+            soql: 'SELECT Name FROM Widget__c',
+            operation: 'update',
+            externalIdField: undefined,
+          })],
+        }),
+      /update query .* requires externalIdField/,
+    );
   });
 
   it('expands sales offices deterministically and substitutes variables', () => {

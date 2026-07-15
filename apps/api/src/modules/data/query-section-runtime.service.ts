@@ -150,9 +150,18 @@ export class QuerySectionRuntimeService {
       for (const field of extractFieldsFromSoql(query.soql).filter((name) => !name.includes('.'))) {
         if (field.toLowerCase() === 'id') continue;
         if (!sourceFields.has(field.toLowerCase())) errors.push(`${query.id}: source field ${field} is missing`);
-        if (!targetFields.has(field.toLowerCase())) errors.push(`${query.id}: target field ${field} is missing`);
+        const targetField = targetFields.get(field.toLowerCase());
+        if (!targetField) errors.push(`${query.id}: target field ${field} is missing`);
+        else if (query.operation !== 'delete') {
+          if (['insert', 'upsert'].includes(query.operation) && targetField.createable === false) {
+            errors.push(`${query.id}: target field ${field} is not createable`);
+          }
+          if (['update', 'upsert'].includes(query.operation) && targetField.updateable === false) {
+            errors.push(`${query.id}: target field ${field} is not updateable`);
+          }
+        }
       }
-      if (query.operation === 'upsert') {
+      if (['upsert', 'update', 'delete'].includes(query.operation)) {
         const sourceExternalId = sourceFields.get(query.externalIdField!.toLowerCase());
         const externalId = targetFields.get(query.externalIdField!.toLowerCase());
         if (!sourceExternalId) errors.push(`${query.id}: source external ID ${query.externalIdField} is missing`);
@@ -165,7 +174,10 @@ export class QuerySectionRuntimeService {
         if (!externalId) errors.push(`${query.id}: target external ID ${query.externalIdField} is missing`);
         else if (!externalId.externalId && !['name', 'developername'].includes(query.externalIdField!.toLowerCase())) {
           errors.push(`${query.id}: ${query.externalIdField} is not marked as an external ID`);
-        } else if (externalId.createable === false || externalId.updateable === false) {
+        } else if (
+          query.operation === 'upsert'
+          && (externalId.createable === false || externalId.updateable === false)
+        ) {
           errors.push(`${query.id}: target external ID ${query.externalIdField} is not writable`);
         }
       }
@@ -350,23 +362,68 @@ export class QuerySectionRuntimeService {
     workDir: string,
     queryId: string,
   ) {
-    if (operation !== 'upsert' && operation !== 'insert') {
-      throw new Error(`Query ${queryId} operation ${operation} is not supported safely by Template V2`);
+    if (!['upsert', 'insert', 'update', 'delete'].includes(operation)) {
+      throw new Error(`Query ${queryId} operation ${operation} is not supported by Template V2`);
+    }
+    let loadRows = rows;
+    if (operation === 'update' || operation === 'delete') {
+      if (!externalIdField) throw new Error(`${operation} query ${queryId} requires externalIdField`);
+      const targetIds = await this.targetRecordIds(targetAlias, objectName, externalIdField);
+      loadRows = rows.map(({ Id: _sourceId, id: _lowerSourceId, ...row }) => {
+        const externalId = String(row[externalIdField] ?? '').trim();
+        const targetId = targetIds.get(externalId);
+        if (!externalId || !targetId) {
+          throw new Error(
+            `${operation} query ${queryId} cannot reconcile target ${externalIdField}=${externalId || '<empty>'}`,
+          );
+        }
+        return operation === 'delete' ? { Id: targetId } : { ...row, Id: targetId };
+      });
     }
     let loaded = 0;
-    for (let offset = 0; offset < rows.length; offset += BULK_CHUNK_SIZE) {
-      const chunk = rows.slice(offset, offset + BULK_CHUNK_SIZE)
+    for (let offset = 0; offset < loadRows.length; offset += BULK_CHUNK_SIZE) {
+      const chunk = loadRows.slice(offset, offset + BULK_CHUNK_SIZE)
         .map(({ Id: _id, id: _lowerId, ...row }) => row);
-      if (chunk.length === 0) continue;
+      const records = operation === 'update' || operation === 'delete'
+        ? loadRows.slice(offset, offset + BULK_CHUNK_SIZE)
+        : chunk;
+      if (records.length === 0) continue;
       const path = join(workDir, `${queryId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${offset}.csv`);
-      await writeFile(path, writeRows(chunk), 'utf8');
+      await writeFile(path, writeRows(records), 'utf8');
       const result = operation === 'upsert'
         ? await this.sfCli.upsertBulk(objectName, path, externalIdField!, targetAlias, 30, { cwd: workDir })
-        : await this.sfCli.importBulk(objectName, path, targetAlias, 30, { cwd: workDir });
+        : operation === 'insert'
+          ? await this.sfCli.importBulk(objectName, path, targetAlias, 30, { cwd: workDir })
+          : operation === 'update'
+            ? await this.sfCli.updateBulk(objectName, path, targetAlias, 30, { cwd: workDir })
+            : await this.sfCli.deleteBulk(objectName, path, targetAlias, 30, { cwd: workDir });
       if (!result.success) throw new Error(result.error ?? `${operation} failed for ${queryId}`);
-      loaded += chunk.length;
+      loaded += records.length;
     }
     return loaded;
+  }
+
+  private async targetRecordIds(alias: string, objectName: string, externalIdField: string) {
+    const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
+    if (!identifier.test(objectName) || !identifier.test(externalIdField)) {
+      throw new Error(`Invalid target reconciliation key ${objectName}.${externalIdField}`);
+    }
+    const result = await this.sfCli.query(
+      alias,
+      `SELECT Id, ${externalIdField} FROM ${objectName} WHERE ${externalIdField} != null LIMIT 100000`,
+    );
+    if (!result.success) {
+      throw new Error(result.error ?? `Target reconciliation failed for ${objectName}`);
+    }
+    const ids = new Map<string, string>();
+    for (const record of (result.data?.result?.records ?? []) as Array<Record<string, unknown>>) {
+      const key = String(record[externalIdField] ?? '').trim();
+      const id = String(record.Id ?? '').trim();
+      if (!key || !id) continue;
+      if (ids.has(key)) throw new Error(`Duplicate target ${externalIdField}: ${key}`);
+      ids.set(key, id);
+    }
+    return ids;
   }
 
   private async saveCheckpoint(automationRunId: string, querySection: QueryRuntimeCheckpoint) {
