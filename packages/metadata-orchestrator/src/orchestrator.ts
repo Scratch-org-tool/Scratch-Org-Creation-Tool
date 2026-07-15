@@ -25,9 +25,11 @@ export interface IntelligentOrchestratorOptions {
 export class IntelligentOrchestrator {
   private readonly checkpointStore: CheckpointStore;
   private readonly workDir: string;
+  private readonly ownsWorkDir: boolean;
 
   constructor(private readonly options: IntelligentOrchestratorOptions) {
     this.checkpointStore = options.checkpointStore ?? new CheckpointStore();
+    this.ownsWorkDir = !options.workDir;
     this.workDir =
       options.workDir ??
       path.join(os.tmpdir(), 'sfcc-intelligent-deploy', randomUUID());
@@ -35,6 +37,19 @@ export class IntelligentOrchestrator {
   }
 
   async run(ctx: OrchestratorRunContext, callbacks: ExecutionCallbacks = {}): Promise<FinalReport> {
+    try {
+      return await this.executeRun(ctx, callbacks);
+    } finally {
+      if (this.ownsWorkDir) {
+        fs.rmSync(this.workDir, { recursive: true, force: true });
+      }
+    }
+  }
+
+  private async executeRun(
+    ctx: OrchestratorRunContext,
+    callbacks: ExecutionCallbacks,
+  ): Promise<FinalReport> {
     const started = Date.now();
     const repo = new MetadataRepository();
     const source = ctx.source;

@@ -2,6 +2,9 @@ import { spawn, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import * as path from 'node:path';
 
+const DEFAULT_STREAM_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+const TERMINATION_GRACE_MS = 5000;
+
 export interface SfCliOptions {
   cliPath?: string;
   cwd?: string;
@@ -90,11 +93,11 @@ export interface DeployStartOptions {
   cwd?: string;
 }
 
-function formatRecordValues(fields: Record<string, string>): string {
+export function formatRecordValues(fields: Record<string, string>): string {
   return Object.entries(fields)
     .map(([key, value]) => {
-      const needsQuote = /[\s=]/.test(value);
-      const escaped = value.replace(/'/g, "\\'");
+      const needsQuote = value.length === 0 || /[\s='\\]/.test(value);
+      const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       return needsQuote ? `${key}='${escaped}'` : `${key}=${value}`;
     })
     .join(' ');
@@ -104,6 +107,31 @@ function recordValuesArgs(fields: Record<string, string>): string[] {
   const entries = Object.entries(fields);
   if (entries.length === 0) return [];
   return ['--values', formatRecordValues(fields)];
+}
+
+function killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
+  if (!proc.pid) return;
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-proc.pid, signal);
+      return;
+    } catch {
+      // Fall back to the direct child if it has already left its process group.
+    }
+  }
+  try {
+    proc.kill(signal);
+  } catch {
+    // The process may have exited between the state check and the signal.
+  }
+}
+
+function configuredStreamTimeout(timeoutMs?: number): number {
+  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    return timeoutMs;
+  }
+  const configured = Number(process.env.SF_STREAM_TIMEOUT_MS ?? DEFAULT_STREAM_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_STREAM_TIMEOUT_MS;
 }
 
 export class SfCliClient extends EventEmitter {
@@ -131,75 +159,7 @@ export class SfCliClient extends EventEmitter {
     onLine?: (line: StreamLine) => void,
     options?: StreamRunOptions,
   ): Promise<SfCommandResult> {
-    const cmdArgs = options?.json ? [...args, '--json'] : args;
-    const spawnCwd = options?.cwd ?? this.cwd;
-    return new Promise((resolve) => {
-      const proc = spawn(this.cliPath, cmdArgs, {
-        cwd: spawnCwd,
-        env: this.env,
-        shell: process.platform === 'win32',
-      });
-
-      options?.onSpawn?.(proc);
-
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-
-      const timer = options?.timeoutMs
-        ? setTimeout(() => {
-            timedOut = true;
-            proc.kill('SIGTERM');
-            setTimeout(() => {
-              if (!proc.killed) proc.kill('SIGKILL');
-            }, 5000);
-          }, options.timeoutMs)
-        : undefined;
-
-      const handleData = (stream: 'stdout' | 'stderr') => (chunk: Buffer) => {
-        const text = chunk.toString();
-        if (stream === 'stdout') stdout += text;
-        else stderr += text;
-
-        const lines = text.split('\n').filter(Boolean);
-        for (const line of lines) {
-          const event: StreamLine = { stream, line, timestamp: new Date() };
-          this.emit('line', event);
-          onLine?.(event);
-        }
-      };
-
-      proc.stdout.on('data', handleData('stdout'));
-      proc.stderr.on('data', handleData('stderr'));
-
-      proc.on('close', (code) => {
-        if (timer) clearTimeout(timer);
-        if (timedOut) {
-          resolve({
-            success: false,
-            error: `Command timed out after ${Math.round((options?.timeoutMs ?? 0) / 60000)} minute(s)`,
-            stdout,
-            stderr,
-            exitCode: 124,
-          });
-          return;
-        }
-        const exitCode = code ?? 1;
-        const result = this.parseResult(stdout, stderr, exitCode);
-        resolve(result);
-      });
-
-      proc.on('error', (err) => {
-        if (timer) clearTimeout(timer);
-        resolve({
-          success: false,
-          error: err.message,
-          stdout,
-          stderr: err.message,
-          exitCode: 1,
-        });
-      });
-    });
+    return this.runStreamingCancellable(args, onLine, options).promise;
   }
 
   runStreamingCancellable(
@@ -208,41 +168,60 @@ export class SfCliClient extends EventEmitter {
     options?: StreamRunOptions,
   ): { promise: Promise<SfCommandResult>; kill: () => void } {
     let proc: ChildProcess | null = null;
-    let killed = false;
+    let timedOut = false;
+    let cancelled = false;
     const cmdArgs = options?.json ? [...args, '--json'] : args;
+    const timeoutMs = configuredStreamTimeout(options?.timeoutMs);
+    let cancelProcess = () => {
+      cancelled = true;
+    };
 
     const promise = new Promise<SfCommandResult>((resolve) => {
       proc = spawn(this.cliPath, cmdArgs, {
         cwd: options?.cwd ?? this.cwd,
         env: this.env,
         shell: process.platform === 'win32',
+        detached: process.platform !== 'win32',
       });
 
       options?.onSpawn?.(proc);
 
       let stdout = '';
       let stderr = '';
+      let closed = false;
+      let settled = false;
+      let killTimer: NodeJS.Timeout | undefined;
+      const partial: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' };
 
-      const timer = options?.timeoutMs
-        ? setTimeout(() => {
-            killed = true;
-            proc?.kill('SIGTERM');
-            setTimeout(() => {
-              if (proc && !proc.killed) proc.kill('SIGKILL');
-            }, 5000);
-          }, options.timeoutMs)
-        : undefined;
+      const terminate = () => {
+        if (!proc || closed) return;
+        killProcessGroup(proc, 'SIGTERM');
+        killTimer = setTimeout(() => {
+          if (proc) killProcessGroup(proc, 'SIGKILL');
+        }, TERMINATION_GRACE_MS);
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        terminate();
+      }, timeoutMs);
+      timer.unref();
+
+      const emitLine = (stream: 'stdout' | 'stderr', line: string) => {
+        const event: StreamLine = { stream, line, timestamp: new Date() };
+        this.emit('line', event);
+        onLine?.(event);
+      };
 
       const handleData = (stream: 'stdout' | 'stderr') => (chunk: Buffer) => {
         const text = chunk.toString();
         if (stream === 'stdout') stdout += text;
         else stderr += text;
 
-        const lines = text.split('\n').filter(Boolean);
+        const lines = (partial[stream] + text).split('\n');
+        partial[stream] = lines.pop() ?? '';
         for (const line of lines) {
-          const event: StreamLine = { stream, line, timestamp: new Date() };
-          this.emit('line', event);
-          onLine?.(event);
+          emitLine(stream, line.endsWith('\r') ? line.slice(0, -1) : line);
         }
       };
 
@@ -250,32 +229,53 @@ export class SfCliClient extends EventEmitter {
       proc.stderr?.on('data', handleData('stderr'));
 
       proc.on('close', (code) => {
-        if (timer) clearTimeout(timer);
-        const exitCode = killed ? 124 : (code ?? 1);
+        closed = true;
+        clearTimeout(timer);
+        if (killTimer && !timedOut && !cancelled) clearTimeout(killTimer);
+        for (const stream of ['stdout', 'stderr'] as const) {
+          if (partial[stream]) emitLine(stream, partial[stream]);
+        }
+        if (settled) return;
+        settled = true;
+        if (timedOut) {
+          resolve({
+            success: false,
+            error: `Command timed out after ${Math.ceil(timeoutMs / 60000)} minute(s)`,
+            stdout,
+            stderr,
+            exitCode: 124,
+          });
+          return;
+        }
+        const exitCode = cancelled ? 130 : (code ?? 1);
         resolve(this.parseResult(stdout, stderr, exitCode));
       });
 
       proc.on('error', (err) => {
-        if (timer) clearTimeout(timer);
+        clearTimeout(timer);
+        if (killTimer && !timedOut && !cancelled) clearTimeout(killTimer);
+        if (settled) return;
+        settled = true;
         resolve({
           success: false,
           error: err.message,
           stdout,
           stderr: err.message,
-          exitCode: killed ? 124 : 1,
+          exitCode: timedOut ? 124 : cancelled ? 130 : 1,
         });
       });
+
+      // The returned cancellation closure and timeout callback share this
+      // function without exposing the child outside the client.
+      cancelProcess = () => {
+        cancelled = true;
+        terminate();
+      };
     });
 
     return {
       promise,
-      kill: () => {
-        killed = true;
-        if (proc && !proc.killed) {
-          proc.kill('SIGTERM');
-          setTimeout(() => proc?.kill('SIGKILL'), 2000);
-        }
-      },
+      kill: () => cancelProcess(),
     };
   }
 
@@ -290,6 +290,7 @@ export class SfCliClient extends EventEmitter {
         cwd: cwd ?? this.cwd,
         env: this.env,
         shell: process.platform === 'win32',
+        detached: process.platform !== 'win32',
       });
 
       onProcess?.(proc);
@@ -297,13 +298,18 @@ export class SfCliClient extends EventEmitter {
       let stdout = '';
       let stderr = '';
       let killed = false;
+      let killTimer: NodeJS.Timeout | undefined;
 
       const timer = timeout
         ? setTimeout(() => {
             killed = true;
-            proc.kill('SIGTERM');
+            killProcessGroup(proc, 'SIGTERM');
+            killTimer = setTimeout(() => {
+              killProcessGroup(proc, 'SIGKILL');
+            }, TERMINATION_GRACE_MS);
           }, timeout)
         : undefined;
+      timer?.unref();
 
       proc.stdout.on('data', (chunk: Buffer) => {
         stdout += chunk.toString();
@@ -315,12 +321,14 @@ export class SfCliClient extends EventEmitter {
 
       proc.on('close', (code) => {
         if (timer) clearTimeout(timer);
+        if (killTimer && !killed) clearTimeout(killTimer);
         const exitCode = killed ? 124 : (code ?? 1);
         resolve(this.parseResult<T>(stdout, stderr, exitCode));
       });
 
       proc.on('error', (err) => {
         if (timer) clearTimeout(timer);
+        if (killTimer && !killed) clearTimeout(killTimer);
         resolve({
           success: false,
           error: err.message,
@@ -344,9 +352,11 @@ export class SfCliClient extends EventEmitter {
     return {
       promise,
       kill: () => {
-        if (proc && !proc.killed) {
-          proc.kill('SIGTERM');
-          setTimeout(() => proc?.kill('SIGKILL'), 2000);
+        if (proc) {
+          killProcessGroup(proc, 'SIGTERM');
+          const killTimer = setTimeout(() => {
+            if (proc) killProcessGroup(proc, 'SIGKILL');
+          }, 2000);
         }
       },
     };

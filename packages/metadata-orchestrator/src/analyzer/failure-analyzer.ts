@@ -111,7 +111,7 @@ export class FailureAnalyzer {
   }
 
   buildRetryQueue(
-    plan: DeploymentPlan,
+    _plan: DeploymentPlan,
     repo: MetadataRepository,
     maxRetries: number,
   ): string[] {
@@ -120,7 +120,6 @@ export class FailureAnalyzer {
       if (node.deploymentState === 'FAILED' && node.retryCount < maxRetries) {
         const err = node.lastError;
         if (err && (err.class === 'MISSING_DEPENDENCY' || err.class === 'REFERENCE_ERROR' || err.class === 'TRANSIENT')) {
-          node.deploymentState = 'RETRYING';
           retry.push(node.id);
         }
       }

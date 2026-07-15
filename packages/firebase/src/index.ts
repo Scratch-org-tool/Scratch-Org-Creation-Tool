@@ -110,6 +110,15 @@ function isValidServiceAccountCredentials(
   return true;
 }
 
+function allowInMemoryFirebase(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  return (
+    process.env.NODE_ENV === 'development' ||
+    process.env.NODE_ENV === 'test' ||
+    process.env.FIREBASE_ALLOW_IN_MEMORY === 'true'
+  );
+}
+
 export function initFirebase(config?: FirebaseConfig): Firestore {
   if (db) return db;
 
@@ -121,12 +130,19 @@ export function initFirebase(config?: FirebaseConfig): Firestore {
   ).replace(/\\n/g, '\n');
 
   if (!isValidServiceAccountCredentials(projectId, clientEmail, privateKey)) {
+    if (!allowInMemoryFirebase()) {
+      throw new Error(
+        'Missing or invalid Firebase Admin SDK credentials. ' +
+        'In-memory Firebase is only available in development/test or with FIREBASE_ALLOW_IN_MEMORY=true.',
+      );
+    }
     console.warn(
       '[Firebase] Missing or invalid Admin SDK credentials — using dev auth mode. ' +
       'Set FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY or FIREBASE_SERVICE_ACCOUNT_PATH for production.',
     );
     usingInMemory = true;
-    return createInMemoryStore();
+    db = createInMemoryStore();
+    return db;
   }
 
   usingInMemory = false;
@@ -144,6 +160,13 @@ export function initFirebase(config?: FirebaseConfig): Firestore {
     auth = getAuth(app);
     return db;
   } catch (error) {
+    app = null;
+    auth = null;
+    db = null;
+    if (!allowInMemoryFirebase()) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to initialize Firebase Admin SDK: ${message}`, { cause: error });
+    }
     console.warn(
       '[Firebase] Failed to initialize Admin SDK — using dev auth mode:',
       error instanceof Error ? error.message : error,
@@ -223,9 +246,54 @@ export function getFirebaseDb(): Firestore {
 
 // In-memory fallback when Firebase is not configured
 const memoryStore = new Map<string, Map<string, unknown>>();
+let memoryTransactionTail: Promise<void> = Promise.resolve();
+
+type MemoryDocumentReference = {
+  get: () => Promise<unknown>;
+  set: (data: unknown, options?: unknown) => Promise<void>;
+  update: (data: unknown) => Promise<void>;
+  delete: () => Promise<void>;
+};
+
+async function runMemoryTransaction<T>(
+  updateFunction: (transaction: {
+    get: (ref: MemoryDocumentReference) => Promise<unknown>;
+    set: (ref: MemoryDocumentReference, data: unknown, options?: unknown) => void;
+    update: (ref: MemoryDocumentReference, data: unknown) => void;
+    delete: (ref: MemoryDocumentReference) => void;
+  }) => Promise<T>,
+): Promise<T> {
+  const previous = memoryTransactionTail;
+  let release!: () => void;
+  memoryTransactionTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    const pending: Promise<void>[] = [];
+    const transaction = {
+      get: (ref: MemoryDocumentReference) => ref.get(),
+      set: (ref: MemoryDocumentReference, data: unknown, options?: unknown) => {
+        pending.push(ref.set(data, options));
+      },
+      update: (ref: MemoryDocumentReference, data: unknown) => {
+        pending.push(ref.update(data));
+      },
+      delete: (ref: MemoryDocumentReference) => {
+        pending.push(ref.delete());
+      },
+    };
+    const result = await updateFunction(transaction);
+    await Promise.all(pending);
+    return result;
+  } finally {
+    release();
+  }
+}
 
 function createInMemoryStore(): Firestore {
   return {
+    runTransaction: runMemoryTransaction,
     collection: (name: string) => ({
       doc: (id: string) => ({
         get: async () => ({
@@ -346,15 +414,42 @@ export async function getAgentSession(sessionId: string): Promise<AgentSession |
 }
 
 export async function saveAgentSession(session: AgentSession): Promise<void> {
-  await getFirebaseDb().collection(COLLECTIONS.AGENT_SESSIONS).doc(session.id).set(session);
+  const firestore = getFirebaseDb();
+  const ref = firestore.collection(COLLECTIONS.AGENT_SESSIONS).doc(session.id);
+  await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    const existing = snapshot.exists ? (snapshot.data() as AgentSession) : null;
+    if (!existing) {
+      transaction.set(ref, session);
+      return;
+    }
+
+    const messages = new Map(existing.messages.map((message) => [message.id, message]));
+    for (const message of session.messages) messages.set(message.id, message);
+    transaction.set(ref, {
+      ...existing,
+      ...session,
+      messages: [...messages.values()],
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString(),
+    });
+  });
 }
 
 export async function appendAgentMessage(sessionId: string, message: CopilotMessage): Promise<void> {
-  const session = await getAgentSession(sessionId);
-  if (!session) return;
-  session.messages.push(message);
-  session.updatedAt = new Date().toISOString();
-  await saveAgentSession(session);
+  const firestore = getFirebaseDb();
+  const ref = firestore.collection(COLLECTIONS.AGENT_SESSIONS).doc(sessionId);
+  await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists) return;
+    const session = snapshot.data() as AgentSession;
+    const messages = new Map(session.messages.map((existing) => [existing.id, existing]));
+    messages.set(message.id, message);
+    transaction.update(ref, {
+      messages: [...messages.values()],
+      updatedAt: new Date().toISOString(),
+    });
+  });
 }
 
 export { COLLECTIONS };
