@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Bug, ExternalLink, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/input';
-import { DeploymentPageHeader } from '@/components/studio';
+import { DeploymentPageHeader, InlineAlert } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import type { DefectsWorkspaceState } from './use-defects-workspace';
 import {
@@ -98,7 +98,7 @@ export function DefectsPageHeader({ w }: { w: DefectsWorkspaceState }) {
                 </a>
               </Button>
             )}
-            {w.capabilities.write && w.selectedProject && (
+            {w.operations.create && w.selectedProject && (
               <Button size="sm" onClick={() => setCreateOpen(true)}>
                 <Plus className="w-4 h-4 mr-2" />
                 Create
@@ -117,12 +117,26 @@ export function DefectsPageHeader({ w }: { w: DefectsWorkspaceState }) {
           </>
         }
       />
-      <WorkItemEditorDialog
-        open={createOpen}
-        mode="create"
-        w={w}
-        onOpenChange={setCreateOpen}
-      />
+      {w.unboundGitHubProjects > 0 && (
+        <InlineAlert variant="info" className="mt-3">
+          {w.unboundGitHubProjects} GitHub Project
+          {w.unboundGitHubProjects === 1 ? '' : 's'} hidden until configured in a project binding.{' '}
+          <a
+            href="/environment-center?tab=github"
+            className="font-medium text-primary hover:underline"
+          >
+            Configure bindings
+          </a>
+        </InlineAlert>
+      )}
+      {w.operations.create && (
+        <WorkItemEditorDialog
+          open={createOpen}
+          mode="create"
+          w={w}
+          onOpenChange={setCreateOpen}
+        />
+      )}
     </>
   );
 }

@@ -7,6 +7,8 @@ import {
   projectValue,
   providerEndpoint,
   providerProjectUrl,
+  selectableWorkItemProjects,
+  workItemOperationCapabilities,
   workItemEndpoint,
   type WorkItemContext,
 } from './work-item-contracts';
@@ -65,5 +67,65 @@ describe('provider-neutral work-item routing', () => {
     expect(isWorkItemProvider('azure_boards')).toBe(true);
     expect(isWorkItemProvider('azure')).toBe(false);
     expect(parseCsv('api, ui, api,  ')).toEqual(['api', 'ui']);
+  });
+
+  it('derives provider-specific operations instead of treating write as universal', () => {
+    const capabilities = {
+      read: true,
+      write: true,
+      create: true,
+      update: true,
+      comments: true,
+      webhooks: false,
+      attachments: true,
+      attachmentUploads: true,
+      history: true,
+      stateTransitions: true,
+      issueTypes: true,
+      users: true,
+      labels: true,
+      subIssues: true,
+    };
+    expect(workItemOperationCapabilities('github_issues', capabilities)).toMatchObject({
+      create: true,
+      edit: true,
+      addComments: true,
+      uploadAttachments: true,
+      readSubissues: true,
+      addSubissues: true,
+    });
+    expect(workItemOperationCapabilities('azure_boards', {
+      ...capabilities,
+      create: false,
+      update: false,
+      comments: false,
+      attachmentUploads: false,
+      subIssues: false,
+    })).toMatchObject({
+      create: false,
+      edit: false,
+      addComments: false,
+      uploadAttachments: false,
+      readSubissues: false,
+      transitionState: true,
+    });
+  });
+
+  it('hides unbound GitHub Projects v2 while retaining repositories and bindings', () => {
+    const projects = [
+      { id: 'PVT_unbound', key: 'PVT_unbound', name: 'Unbound', description: null, url: null },
+      { id: 'PVT_bound', key: 'PVT_bound', name: 'Bound', description: null, url: null },
+      { id: 'acme/repo', key: 'acme/repo', name: 'acme/repo', description: null, url: null },
+    ];
+    const result = selectableWorkItemProjects('github_issues', projects, [{
+      id: 'binding-1',
+      connectionId: 'connection-1',
+      provider: 'github_issues',
+      externalProjectId: 'PVT_bound',
+      projectKey: 'acme',
+      repositoryName: 'repo',
+    }], 'connection-1');
+    expect(result.projects.map((project) => project.id)).toEqual(['PVT_bound', 'acme/repo']);
+    expect(result.unboundGitHubProjects).toBe(1);
   });
 });

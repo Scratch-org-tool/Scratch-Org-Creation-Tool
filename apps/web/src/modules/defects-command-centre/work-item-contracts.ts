@@ -1,4 +1,9 @@
-import type { WorkItemProvider } from './types';
+import type {
+  IntegrationCapabilities,
+  ProjectBindingOption,
+  WorkItemProject,
+  WorkItemProvider,
+} from './types';
 
 export const WORK_ITEM_PROVIDERS: Array<{
   value: WorkItemProvider;
@@ -16,6 +21,80 @@ export interface WorkItemContext {
   connectionId: string;
   bindingId: string;
   project: string;
+}
+
+export interface WorkItemOperationCapabilities {
+  create: boolean;
+  edit: boolean;
+  readComments: boolean;
+  addComments: boolean;
+  readAttachments: boolean;
+  uploadAttachments: boolean;
+  readHistory: boolean;
+  transitionState: boolean;
+  readSubissues: boolean;
+  addSubissues: boolean;
+  issueTypes: boolean;
+  users: boolean;
+  labels: boolean;
+}
+
+export type GranularIntegrationCapabilities = IntegrationCapabilities & Partial<{
+  create: boolean;
+  update: boolean;
+  comments: boolean;
+  attachmentUploads: boolean;
+  issueTypes: boolean;
+  users: boolean;
+  labels: boolean;
+  subIssues: boolean;
+}>;
+
+export function workItemOperationCapabilities(
+  _provider: WorkItemProvider,
+  capabilities: GranularIntegrationCapabilities,
+): WorkItemOperationCapabilities {
+  return {
+    create: Boolean(capabilities.create),
+    edit: Boolean(capabilities.update),
+    readComments: capabilities.read,
+    addComments: Boolean(capabilities.comments),
+    readAttachments: capabilities.attachments,
+    uploadAttachments: Boolean(capabilities.attachmentUploads),
+    readHistory: capabilities.history,
+    transitionState: capabilities.stateTransitions,
+    readSubissues: Boolean(capabilities.subIssues),
+    addSubissues: Boolean(capabilities.subIssues),
+    issueTypes: Boolean(capabilities.issueTypes),
+    users: Boolean(capabilities.users),
+    labels: Boolean(capabilities.labels),
+  };
+}
+
+export function selectableWorkItemProjects(
+  provider: WorkItemProvider,
+  projects: WorkItemProject[],
+  bindings: ProjectBindingOption[],
+  connectionId: string,
+): { projects: WorkItemProject[]; unboundGitHubProjects: number } {
+  if (provider !== 'github_issues') {
+    return { projects, unboundGitHubProjects: 0 };
+  }
+  const boundProjectIds = new Set(
+    bindings
+      .filter((binding) =>
+        binding.provider === provider &&
+        (!connectionId || binding.connectionId === connectionId))
+      .map((binding) => binding.externalProjectId),
+  );
+  let unboundGitHubProjects = 0;
+  const selectable = projects.filter((project) => {
+    const isRepository = project.id.includes('/');
+    const isSelectable = isRepository || boundProjectIds.has(project.id);
+    if (!isSelectable) unboundGitHubProjects += 1;
+    return isSelectable;
+  });
+  return { projects: selectable, unboundGitHubProjects };
 }
 
 export function isWorkItemProvider(value: string | null): value is WorkItemProvider {

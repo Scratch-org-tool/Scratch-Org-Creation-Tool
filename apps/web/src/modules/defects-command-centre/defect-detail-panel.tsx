@@ -111,13 +111,13 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
           Open in {providerLabel(w.provider)}
         </a>
       </Button>
-      {w.capabilities.write && (
+      {w.operations.edit && (
         <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
           <Edit3 className="w-4 h-4 mr-2" />
           Edit
         </Button>
       )}
-      {w.capabilities.stateTransitions ? (
+      {w.operations.transitionState ? (
         <div className="space-y-1.5 w-full">
           <p className="text-xs font-medium text-muted-foreground">Workflow state</p>
           <UiSelect
@@ -219,7 +219,7 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
             </div>
           </dl>
 
-          {w.capabilities.history ? (
+          {w.operations.readHistory ? (
             <>
               {w.sectionErrors.history && <InlineAlert variant="warning">{w.sectionErrors.history}</InlineAlert>}
               <DefectHistoryTimeline events={w.history} loading={w.detailLoading} />
@@ -266,20 +266,22 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
             </div>
           )}
 
-          <DefectSubissuesPanel
-            items={w.subissues}
-            writable={w.capabilities.write}
-            mutating={w.mutating}
-            error={w.sectionErrors.subissues}
-            onSelect={w.selectWorkItem}
-            onAdd={w.addSubIssue}
-          />
+          {w.operations.readSubissues && (
+            <DefectSubissuesPanel
+              items={w.subissues}
+              writable={w.operations.addSubissues}
+              mutating={w.mutating}
+              error={w.sectionErrors.subissues}
+              onSelect={w.selectWorkItem}
+              onAdd={w.addSubIssue}
+            />
+          )}
 
-          {w.capabilities.attachments ? (
+          {w.operations.readAttachments ? (
             <DefectAttachmentsPanel
               attachments={w.attachments}
               loading={w.detailLoading}
-              writable={w.capabilities.write}
+              writable={w.operations.uploadAttachments}
               mutating={w.mutating}
               error={w.sectionErrors.attachments}
               contentPath={(attachmentId) =>
@@ -289,6 +291,7 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
                   `attachments/${encodeURIComponent(attachmentId)}/content`,
                 )}
               onUpload={w.uploadAttachment}
+              onDelete={w.deleteAttachment}
             />
           ) : (
             <p className="text-xs text-muted-foreground pt-2 border-t border-border/40">
@@ -322,15 +325,19 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
         </div>
       </GlassCard>
 
-      <DefectCommentsThread
-        comments={w.comments}
-        loading={w.detailLoading}
-        writable={w.capabilities.write}
-        mutating={w.mutating}
-        error={w.sectionErrors.comments}
-        onAdd={w.addComment}
-      />
-      <WorkItemEditorDialog open={editOpen} mode="edit" w={w} onOpenChange={setEditOpen} />
+      {w.operations.readComments && (
+        <DefectCommentsThread
+          comments={w.comments}
+          loading={w.detailLoading}
+          writable={w.operations.addComments}
+          mutating={w.mutating}
+          error={w.sectionErrors.comments}
+          onAdd={w.addComment}
+        />
+      )}
+      {w.operations.edit && (
+        <WorkItemEditorDialog open={editOpen} mode="edit" w={w} onOpenChange={setEditOpen} />
+      )}
     </div>
   );
 }

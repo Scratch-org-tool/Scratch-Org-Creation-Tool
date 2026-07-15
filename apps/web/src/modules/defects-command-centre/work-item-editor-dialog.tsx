@@ -91,9 +91,13 @@ export function WorkItemEditorDialog({
     const input = {
       title: form.title.trim(),
       description: form.description.trim() || null,
-      type: form.type || null,
-      assigneeId,
-      assigneeLogins: assigneeId ? [assigneeId] : [],
+      ...(w.operations.issueTypes ? { type: form.type || null } : {}),
+      ...(w.operations.users
+        ? {
+            assigneeId,
+            assigneeLogins: assigneeId ? [assigneeId] : [],
+          }
+        : {}),
       severity: form.severity.trim() || null,
       priority: form.priority.trim()
         ? Number.isFinite(numericPriority)
@@ -103,7 +107,7 @@ export function WorkItemEditorDialog({
       area: form.area.trim() || null,
       components: parseCsv(form.components),
       iteration: form.iteration.trim() || null,
-      labels: parseCsv(form.labels),
+      ...(w.operations.labels ? { labels: parseCsv(form.labels) } : {}),
     };
     try {
       if (mode === 'create') await w.createWorkItem(input);
@@ -152,40 +156,44 @@ export function WorkItemEditorDialog({
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor={`${mode}-work-item-type`}>Issue type</Label>
-              <Select
-                id={`${mode}-work-item-type`}
-                value={form.type}
-                onChange={(event) => set('type', event.target.value)}
-                disabled={w.mutating}
-              >
-                <option value="">Provider default</option>
-                {[...new Set([item?.type, ...w.issueTypes].filter((value): value is string => Boolean(value)))].map(
-                  (type) => <option key={type} value={type}>{type}</option>,
+            {w.operations.issueTypes && (
+              <div>
+                <Label htmlFor={`${mode}-work-item-type`}>Issue type</Label>
+                <Select
+                  id={`${mode}-work-item-type`}
+                  value={form.type}
+                  onChange={(event) => set('type', event.target.value)}
+                  disabled={w.mutating}
+                >
+                  <option value="">Provider default</option>
+                  {[...new Set([item?.type, ...w.issueTypes].filter((value): value is string => Boolean(value)))].map(
+                    (type) => <option key={type} value={type}>{type}</option>,
+                  )}
+                </Select>
+              </div>
+            )}
+            {w.operations.users && (
+              <div>
+                <Label htmlFor={`${mode}-work-item-assignee`}>Assignee</Label>
+                <Select
+                  id={`${mode}-work-item-assignee`}
+                  value={form.assigneeId}
+                  onChange={(event) => set('assigneeId', event.target.value)}
+                  disabled={w.mutating || !isAdmin}
+                  aria-describedby={!isAdmin ? `${mode}-assignee-help` : undefined}
+                >
+                  <option value="">Unassigned</option>
+                  {w.users.filter((user) => user.id).map((user) => (
+                    <option key={user.id!} value={user.id!}>{user.displayName}</option>
+                  ))}
+                </Select>
+                {!isAdmin && (
+                  <p id={`${mode}-assignee-help`} className="text-xs text-muted-foreground mt-1">
+                    Assignment remains bound to your provider identity.
+                  </p>
                 )}
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor={`${mode}-work-item-assignee`}>Assignee</Label>
-              <Select
-                id={`${mode}-work-item-assignee`}
-                value={form.assigneeId}
-                onChange={(event) => set('assigneeId', event.target.value)}
-                disabled={w.mutating || !isAdmin}
-                aria-describedby={!isAdmin ? `${mode}-assignee-help` : undefined}
-              >
-                <option value="">Unassigned</option>
-                {w.users.filter((user) => user.id).map((user) => (
-                  <option key={user.id!} value={user.id!}>{user.displayName}</option>
-                ))}
-              </Select>
-              {!isAdmin && (
-                <p id={`${mode}-assignee-help`} className="text-xs text-muted-foreground mt-1">
-                  Assignment remains bound to your provider identity.
-                </p>
-              )}
-            </div>
+              </div>
+            )}
             <div>
               <Label htmlFor={`${mode}-work-item-severity`}>Severity</Label>
               <Input
@@ -235,16 +243,18 @@ export function WorkItemEditorDialog({
                 disabled={w.mutating}
               />
             </div>
-            <div>
-              <Label htmlFor={`${mode}-work-item-labels`}>Labels</Label>
-              <Input
-                id={`${mode}-work-item-labels`}
-                value={form.labels}
-                onChange={(event) => set('labels', event.target.value)}
-                placeholder="Comma-separated"
-                disabled={w.mutating}
-              />
-            </div>
+            {w.operations.labels && (
+              <div>
+                <Label htmlFor={`${mode}-work-item-labels`}>Labels</Label>
+                <Input
+                  id={`${mode}-work-item-labels`}
+                  value={form.labels}
+                  onChange={(event) => set('labels', event.target.value)}
+                  placeholder="Comma-separated"
+                  disabled={w.mutating}
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={w.mutating}>

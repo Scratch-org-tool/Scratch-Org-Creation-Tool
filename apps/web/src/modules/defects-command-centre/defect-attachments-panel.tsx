@@ -8,6 +8,7 @@ import {
   FileText,
   FileType,
   Image as ImageIcon,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -16,7 +17,6 @@ import { InlineAlert } from '@/components/studio';
 import { apiBlob } from '@/services/api';
 import type { WorkItemAttachment } from './types';
 import { DefectAttachmentPreview } from './defect-attachment-preview';
-import { fileToBase64 } from './work-item-contracts';
 
 interface DefectAttachmentsPanelProps {
   attachments: WorkItemAttachment[];
@@ -25,7 +25,8 @@ interface DefectAttachmentsPanelProps {
   mutating: boolean;
   error?: string;
   contentPath: (attachmentId: string) => string;
-  onUpload: (input: { fileName: string; contentType: string; base64: string }) => Promise<void>;
+  onUpload: (file: File) => Promise<void>;
+  onDelete: (attachmentId: string) => Promise<void>;
 }
 
 function fileIcon(name: string) {
@@ -51,6 +52,7 @@ export function DefectAttachmentsPanel({
   error,
   contentPath,
   onUpload,
+  onDelete,
 }: DefectAttachmentsPanelProps) {
   const [preview, setPreview] = useState<WorkItemAttachment | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -70,11 +72,7 @@ export function DefectAttachmentsPanel({
     if (!file) return;
     setActionError(null);
     try {
-      await onUpload({
-        fileName: file.name,
-        contentType: file.type || 'application/octet-stream',
-        base64: await fileToBase64(file),
-      });
+      await onUpload(file);
     } catch (uploadError) {
       setActionError(uploadError instanceof Error ? uploadError.message : 'Attachment upload failed');
     } finally {
@@ -164,6 +162,18 @@ export function DefectAttachmentsPanel({
                     >
                       <Download className="w-3.5 h-3.5" />
                     </Button>
+                    {writable && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8"
+                        disabled={mutating}
+                        onClick={() => void onDelete(file.id)}
+                        aria-label={`Delete ${file.name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
                   </div>
                 </li>
               );

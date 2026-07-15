@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { api } from '@/services/api';
+import { oauthReturnPath, type OAuthProvider } from './oauth-return-path';
 import type {
   ProjectBinding,
   PublicIntegrationConnection,
@@ -98,7 +99,7 @@ export function useProviderIntegrations() {
     window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
   }, []);
 
-  const startOAuth = useCallback(async (provider: 'github' | 'bitbucket' | 'jira') => {
+  const startOAuth = useCallback(async (provider: OAuthProvider) => {
     setMutating(true);
     setError(null);
     setNotice(null);
@@ -107,7 +108,7 @@ export function useProviderIntegrations() {
         `/integrations/oauth/${provider}/start`,
         {
           method: 'POST',
-          body: JSON.stringify({ returnPath: '/environment-center' }),
+          body: JSON.stringify({ returnPath: oauthReturnPath(provider) }),
         },
       );
       window.location.assign(result.authorizationUrl);

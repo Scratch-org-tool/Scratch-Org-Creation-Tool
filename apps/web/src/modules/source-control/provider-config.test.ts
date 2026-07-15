@@ -1,16 +1,20 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { gitSourceFromLegacy, providerFromDeployment } from './provider-config';
+import { describe, expect, it } from 'vitest';
+import {
+  gitSourceConnectionId,
+  gitSourceFromLegacy,
+  providerFromDeployment,
+} from './provider-config';
 
-test('gitSourceFromLegacy preserves old scratch-org source fields', () => {
-  assert.deepEqual(
-    gitSourceFromLegacy({
-      azureProject: 'Core',
-      azureRepo: 'metadata',
-      azureBranch: 'main',
-      azureManifestPath: 'manifest/package.xml',
-    }),
-    {
+describe('source-control provider config', () => {
+  it('gitSourceFromLegacy preserves old scratch-org source fields', () => {
+    expect(
+      gitSourceFromLegacy({
+        azureProject: 'Core',
+        azureRepo: 'metadata',
+        azureBranch: 'main',
+        azureManifestPath: 'manifest/package.xml',
+      }),
+    ).toEqual({
       provider: 'azure_devops',
       connectionId: undefined,
       bindingId: undefined,
@@ -20,17 +24,34 @@ test('gitSourceFromLegacy preserves old scratch-org source fields', () => {
       repo: 'metadata',
       branch: 'main',
       manifestPath: 'manifest/package.xml',
-    },
-  );
-});
+    });
+  });
 
-test('providerFromDeployment reads canonical provider before legacy strategy', () => {
-  assert.equal(
-    providerFromDeployment({
-      strategy: 'azure',
-      metadata: { gitSource: { provider: 'github' } },
-    }),
-    'github',
-  );
-  assert.equal(providerFromDeployment({ strategy: 'azure' }), 'azure_devops');
+  it('providerFromDeployment reads canonical provider before legacy strategy', () => {
+    expect(
+      providerFromDeployment({
+        strategy: 'azure',
+        metadata: { gitSource: { provider: 'github' } },
+      }),
+    ).toBe('github');
+    expect(providerFromDeployment({ strategy: 'azure' })).toBe('azure_devops');
+  });
+
+  it('gitSourceConnectionId omits only synthetic environment Azure connections', () => {
+    expect(gitSourceConnectionId({
+      id: 'environment-azure-devops',
+      provider: 'azure_devops',
+      source: 'environment',
+    })).toBeUndefined();
+    expect(gitSourceConnectionId({
+      id: 'azure-db',
+      provider: 'azure_devops',
+      source: 'database',
+    })).toBe('azure-db');
+    expect(gitSourceConnectionId({
+      id: 'github-app',
+      provider: 'github',
+      source: 'environment',
+    })).toBe('github-app');
+  });
 });

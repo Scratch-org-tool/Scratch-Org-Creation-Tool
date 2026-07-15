@@ -12,6 +12,17 @@ export const SCM_PROVIDER_SHORT_LABELS: Record<ScmProvider, string> = {
   bitbucket: 'Bitbucket',
 };
 
+export function gitSourceConnectionId(connection: {
+  id: string;
+  provider: string;
+  source?: 'database' | 'environment' | null;
+} | undefined): string | undefined {
+  if (connection?.provider === 'azure_devops' && connection.source === 'environment') {
+    return undefined;
+  }
+  return connection?.id;
+}
+
 export function gitSourceFromLegacy(
   value?: Partial<GitSourceConfig> & {
     azureProject?: string;

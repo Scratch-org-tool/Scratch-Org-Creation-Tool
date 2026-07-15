@@ -156,6 +156,7 @@ export function useScratchOrgWorkspace() {
   });
 
   const isMountedRef = useRef(true);
+  const bootstrapGenerationRef = useRef(0);
   const formRef = useRef<ScratchOrgFormState>({ ...DEFAULT_FORM });
   const terminalHandledRef = useRef<string | null>(null);
 
@@ -226,6 +227,10 @@ export function useScratchOrgWorkspace() {
       };
     });
   }, [metadataSource.source]);
+
+  useEffect(() => {
+    setAzureStatus({ connected: metadataSource.connected });
+  }, [metadataSource.connected]);
 
   const jobIds = useMemo(() => run?.jobs?.map((j) => j.id) ?? [], [run?.jobs]);
   const jobIdsKey = jobIds.join(',');
@@ -412,7 +417,12 @@ export function useScratchOrgWorkspace() {
   );
 
   const restoreRun = useCallback(
-    async (runId: string, snapshot?: ScratchOrgWorkspaceSnapshot | null) => {
+    async (
+      runId: string,
+      snapshot?: ScratchOrgWorkspaceSnapshot | null,
+      isCurrent: () => boolean = () => isMountedRef.current,
+    ) => {
+      if (!isCurrent()) return;
       if (snapshot) {
         setForm(snapshot.form);
         setInstallPackage(snapshot.installPackage);
@@ -427,12 +437,13 @@ export function useScratchOrgWorkspace() {
 
       try {
         const r = await refreshRunWithRetry(runId);
+        if (!isCurrent()) return;
         if (!snapshot) {
           setForm((f) => formFromRunConfig(r, f));
         }
         await hydrateRunState(r, { fromRestore: true, alias: formRef.current.alias });
       } catch (err) {
-        if (isNotFoundError(err)) {
+        if (isCurrent() && isNotFoundError(err)) {
           if (isMountedRef.current) {
             clearWorkspaceSnapshot();
             setAutomationRunId(null);
@@ -445,20 +456,29 @@ export function useScratchOrgWorkspace() {
     [hydrateRunState, refreshRunWithRetry, syncRunIdInUrl],
   );
 
-  const loadInitial = useCallback(async () => {
+  const loadInitial = useCallback(async (generation: number, signal: AbortSignal) => {
+    const isCurrent = () =>
+      isMountedRef.current &&
+      bootstrapGenerationRef.current === generation &&
+      !signal.aborted;
     const [hubList, templateList, allOrgs] = await Promise.all([
-      api<ConnectedOrgRow[]>('/environment/connected-orgs/refresh', { method: 'POST' }).catch(
-        () => api<ConnectedOrgRow[]>('/environment/connected-orgs'),
+      api<ConnectedOrgRow[]>('/environment/connected-orgs/refresh', {
+        method: 'POST',
+        signal,
+      }).catch(
+        () => api<ConnectedOrgRow[]>('/environment/connected-orgs', { signal }),
       ),
-      api<Array<{ id: string; name: string; isSystem: boolean }>>('/environment/scratch-templates').catch(() => []),
-      fetchOrgsList().catch(() => []),
+      api<Array<{ id: string; name: string; isSystem: boolean }>>(
+        '/environment/scratch-templates',
+        { signal },
+      ).catch(() => []),
+      fetchOrgsList({ signal }).catch(() => []),
     ]);
-    if (!isMountedRef.current) return;
+    if (!isCurrent()) return;
 
     setOrgs(hubList);
     setTemplates(templateList);
     setSourceOrgs(allOrgs);
-    setAzureStatus({ connected: metadataSource.connected });
     const hubs = hubList.filter((o) => o.isDevHub || o.orgType === 'Dev Hub');
     setForm((f) => ({
       ...f,
@@ -473,31 +493,49 @@ export function useScratchOrgWorkspace() {
     const resolvedRunId = urlRunId ?? snapshot?.automationRunId ?? null;
 
     if (resolvedRunId) {
-      await restoreRun(resolvedRunId, snapshot?.automationRunId === resolvedRunId ? snapshot : null);
+      if (!isCurrent()) return;
+      await restoreRun(
+        resolvedRunId,
+        snapshot?.automationRunId === resolvedRunId ? snapshot : null,
+        isCurrent,
+      );
     } else {
       try {
         const active = await api<{ automationRunId: string | null }>(
           '/environment/automation-runs/active?intent=scratch_org_pipeline',
+          { signal },
         );
-        if (!isMountedRef.current) return;
+        if (!isCurrent()) return;
         if (active.automationRunId) {
-          await restoreRun(active.automationRunId);
+          await restoreRun(active.automationRunId, null, isCurrent);
         }
       } catch {
         /* no active run */
       }
     }
 
-    if (isMountedRef.current) setInitialLoading(false);
-  }, [restoreRun, urlRunId, urlTemplateId, metadataSource.connected]);
+    if (isCurrent()) setInitialLoading(false);
+  }, [restoreRun, urlRunId, urlTemplateId]);
 
   useEffect(() => {
     isMountedRef.current = true;
-    loadInitial().catch(() => {
-      if (isMountedRef.current) setInitialLoading(false);
+    const generation = ++bootstrapGenerationRef.current;
+    const controller = new AbortController();
+    loadInitial(generation, controller.signal).catch(() => {
+      if (
+        isMountedRef.current &&
+        bootstrapGenerationRef.current === generation &&
+        !controller.signal.aborted
+      ) {
+        setInitialLoading(false);
+      }
     });
     return () => {
       isMountedRef.current = false;
+      controller.abort();
+      if (bootstrapGenerationRef.current === generation) {
+        bootstrapGenerationRef.current += 1;
+      }
     };
   }, [loadInitial]);
 

@@ -10,6 +10,7 @@ import {
 import type { Repository } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
+import { activateTabFromKey } from '@/components/ui/tab-keyboard';
 import { ConfirmDialog, FormSection, GlassCard, InlineAlert } from '@/components/studio';
 import { api } from '@/services/api';
 import { cn } from '@/utils/cn';
@@ -19,7 +20,6 @@ import type {
   ScmProvider,
 } from './types';
 import {
-  useProviderIntegrations,
   type ConnectionAction,
   type ConnectionKind,
   type ProviderIntegrationsState,
@@ -529,8 +529,13 @@ function BindingsList({ bindings, state }: { bindings: ProjectBinding[]; state: 
   );
 }
 
-export function SourceControlIntegrationPanel({ initialProvider }: { initialProvider?: ScmProvider }) {
-  const state = useProviderIntegrations();
+export function SourceControlIntegrationPanel({
+  initialProvider,
+  state,
+}: {
+  initialProvider?: ScmProvider;
+  state: ProviderIntegrationsState;
+}) {
   const [provider, setProvider] = useState<ScmProvider>(initialProvider ?? 'azure_devops');
   const definition = SCM_PROVIDERS.find((item) => item.id === provider)!;
   const connection = state.connections.scm.find((item) => item.provider === provider);
@@ -556,8 +561,12 @@ export function SourceControlIntegrationPanel({ initialProvider }: { initialProv
               key={item.id}
               type="button"
               role="tab"
+              id={`source-provider-tab-${item.id}`}
+              aria-controls={`source-provider-panel-${item.id}`}
               aria-selected={provider === item.id}
+              tabIndex={provider === item.id ? 0 : -1}
               onClick={() => setProvider(item.id)}
+              onKeyDown={activateTabFromKey}
               className={cn(
                 'rounded-xl border p-4 text-left transition-colors',
                 provider === item.id ? 'border-primary/50 bg-primary/8' : 'border-border/60 hover:border-primary/25',
@@ -572,26 +581,36 @@ export function SourceControlIntegrationPanel({ initialProvider }: { initialProv
           );
         })}
       </div>
-      <GlassCard title={definition.name} description={definition.description}>
-        <div className="space-y-5">
-          <ConnectionSummary provider={provider} connection={connection} authentication={definition.authentication} state={state} kind="scm" />
-          {state.isAdmin && connection?.source !== 'environment' && (
-            <ConnectionForm provider={provider} existing={connection} state={state} />
-          )}
-          {connection?.source === 'environment' && (
-            <p className="text-xs text-muted-foreground">
-              This credential is managed in the server environment and cannot be rotated or removed here.
-            </p>
-          )}
-        </div>
-      </GlassCard>
+      <div
+        role="tabpanel"
+        id={`source-provider-panel-${provider}`}
+        aria-labelledby={`source-provider-tab-${provider}`}
+        tabIndex={0}
+      >
+        <GlassCard title={definition.name} description={definition.description}>
+          <div className="space-y-5">
+            <ConnectionSummary provider={provider} connection={connection} authentication={definition.authentication} state={state} kind="scm" />
+            {state.isAdmin && connection?.source !== 'environment' && (
+              <ConnectionForm provider={provider} existing={connection} state={state} />
+            )}
+            {connection?.source === 'environment' && (
+              <p className="text-xs text-muted-foreground">
+                This credential is managed in the server environment and cannot be rotated or removed here.
+              </p>
+            )}
+          </div>
+        </GlassCard>
+      </div>
       <BindingsManager state={state} />
     </div>
   );
 }
 
-export function WorkManagementIntegrationPanel() {
-  const state = useProviderIntegrations();
+export function WorkManagementIntegrationPanel({
+  state,
+}: {
+  state: ProviderIntegrationsState;
+}) {
   const jira = state.connections.workItems.find((item) => item.provider === 'jira');
   const linkedProviders = useMemo(
     () => state.connections.workItems.filter((item) => item.provider !== 'jira'),

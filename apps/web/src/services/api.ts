@@ -60,7 +60,7 @@ export async function buildAuthHeaders(
 
 export async function api<T>(path: string, options?: RequestInit, retried = false): Promise<T> {
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options?.headers as Record<string, string> | undefined),
   };
 

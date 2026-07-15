@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GitSourceConfig, Repository, ScmProvider } from '@sfcc/shared';
 import { api } from '@/services/api';
 import type { PublicIntegrationConnection } from '@/modules/environment-center/integrations/types';
+import { gitSourceConnectionId } from './provider-config';
 
 interface ConnectionsResponse {
   scm: PublicIntegrationConnection[];
@@ -92,10 +93,10 @@ export function useGitMetadataSource({
     const request = ++repositoryRequest.current;
     setLoadingRepositories(true);
     setError(null);
-    const params = new URLSearchParams({
-      provider: next.provider,
-      connectionId: next.connectionId,
-    });
+    const connection = connections.find((candidate) => candidate.id === next.connectionId);
+    const effectiveConnectionId = gitSourceConnectionId(connection);
+    const params = new URLSearchParams({ provider: next.provider });
+    if (effectiveConnectionId) params.set('connectionId', effectiveConnectionId);
     if (next.namespace) params.set('namespace', next.namespace);
     if (next.project) params.set('project', next.project);
     try {
@@ -130,7 +131,7 @@ export function useGitMetadataSource({
     } finally {
       if (request === repositoryRequest.current) setLoadingRepositories(false);
     }
-  }, []);
+  }, [connections]);
 
   useEffect(() => {
     if (loading) return;
@@ -152,11 +153,13 @@ export function useGitMetadataSource({
     const request = ++branchRequest.current;
     setLoadingBranches(true);
     setError(null);
+    const connection = connections.find((candidate) => candidate.id === next.connectionId);
+    const effectiveConnectionId = gitSourceConnectionId(connection);
     const params = new URLSearchParams({
       provider: next.provider,
-      connectionId: next.connectionId,
       repo: next.repo,
     });
+    if (effectiveConnectionId) params.set('connectionId', effectiveConnectionId);
     if (next.namespace) params.set('namespace', next.namespace);
     if (next.project) params.set('project', next.project);
     if (next.repositoryId) params.set('repositoryId', next.repositoryId);
@@ -176,7 +179,7 @@ export function useGitMetadataSource({
     } finally {
       if (request === branchRequest.current) setLoadingBranches(false);
     }
-  }, []);
+  }, [connections]);
 
   useEffect(() => {
     void loadBranches(source);
@@ -241,9 +244,10 @@ export function useGitMetadataSource({
 
   const gitSource = useMemo<GitSourceConfig | null>(() => {
     if (!source.provider || !source.connectionId || !source.repo || !source.branch) return null;
+    const connection = connections.find((candidate) => candidate.id === source.connectionId);
     return {
       provider: source.provider,
-      connectionId: source.connectionId,
+      connectionId: gitSourceConnectionId(connection),
       namespace: source.namespace || undefined,
       project: source.project || undefined,
       repositoryId: source.repositoryId || undefined,
@@ -251,7 +255,7 @@ export function useGitMetadataSource({
       branch: source.branch,
       manifestPath: source.manifestPath || undefined,
     };
-  }, [source]);
+  }, [connections, source]);
 
   return {
     source,

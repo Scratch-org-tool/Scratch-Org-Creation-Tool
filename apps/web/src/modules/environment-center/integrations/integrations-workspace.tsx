@@ -12,6 +12,7 @@ import {
   StatCardGrid,
 } from '@/components/studio';
 import { Skeleton } from '@/components/ui/skeleton';
+import { activateTabFromKey } from '@/components/ui/tab-keyboard';
 import { cn } from '@/utils/cn';
 import { IntegrationsPageHeader } from './integrations-page-header';
 import { SalesforceIntegrationPanel } from './salesforce-integration-panel';
@@ -21,24 +22,33 @@ import {
 } from './provider-integrations-panel';
 import { ScratchOrgCredentialsDrawer } from './scratch-org-credentials-drawer';
 import { useIntegrationsWorkspace } from './use-integrations-workspace';
+import { useProviderIntegrations } from './use-provider-integrations';
 
 function TabButton({
   active,
   onClick,
   children,
   badge,
+  id,
+  controls,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
   badge?: React.ReactNode;
+  id: string;
+  controls: string;
 }) {
   return (
     <button
       type="button"
       role="tab"
+      id={id}
+      aria-controls={controls}
       aria-selected={active}
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
+      onKeyDown={activateTabFromKey}
       className={cn(
         'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors',
         active
@@ -54,6 +64,7 @@ function TabButton({
 
 function IntegrationsWorkspaceInner() {
   const w = useIntegrationsWorkspace();
+  const providerState = useProviderIntegrations();
   const showDataSkeleton = w.initialLoading;
 
   const copyAll = () => {
@@ -111,6 +122,8 @@ function IntegrationsWorkspaceInner() {
 
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Environment Center">
         <TabButton
+          id="environment-tab-salesforce"
+          controls="environment-panel-salesforce"
           active={w.activeTab === 'salesforce'}
           onClick={() => w.setTab('salesforce')}
           badge={
@@ -122,6 +135,8 @@ function IntegrationsWorkspaceInner() {
           Salesforce
         </TabButton>
         <TabButton
+          id="environment-tab-source-control"
+          controls="environment-panel-source-control"
           active={w.activeTab === 'source-control'}
           onClick={() => w.setTab('source-control')}
         >
@@ -129,6 +144,8 @@ function IntegrationsWorkspaceInner() {
           Source Control
         </TabButton>
         <TabButton
+          id="environment-tab-work-management"
+          controls="environment-panel-work-management"
           active={w.activeTab === 'work-management'}
           onClick={() => w.setTab('work-management')}
         >
@@ -166,15 +183,22 @@ function IntegrationsWorkspaceInner() {
         />
       )}
 
-      {showDataSkeleton ? (
-        <Skeleton className="h-[480px] w-full rounded-xl" />
-      ) : w.activeTab === 'salesforce' ? (
-        <SalesforceIntegrationPanel w={w} />
-      ) : w.activeTab === 'source-control' ? (
-        <SourceControlIntegrationPanel initialProvider={w.sourceProvider} />
-      ) : (
-        <WorkManagementIntegrationPanel />
-      )}
+      <div
+        role="tabpanel"
+        id={`environment-panel-${w.activeTab}`}
+        aria-labelledby={`environment-tab-${w.activeTab}`}
+        tabIndex={0}
+      >
+        {showDataSkeleton ? (
+          <Skeleton className="h-[480px] w-full rounded-xl" />
+        ) : w.activeTab === 'salesforce' ? (
+          <SalesforceIntegrationPanel w={w} />
+        ) : w.activeTab === 'source-control' ? (
+          <SourceControlIntegrationPanel initialProvider={w.sourceProvider} state={providerState} />
+        ) : (
+          <WorkManagementIntegrationPanel state={providerState} />
+        )}
+      </div>
 
       <ScratchOrgCredentialsDrawer
         alias={w.credentialsAlias}

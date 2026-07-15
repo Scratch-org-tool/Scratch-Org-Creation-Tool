@@ -16,7 +16,6 @@ import type {
   DefectsOverview,
   DefectsProjectsResponse,
   DefectsWorkItemsResponse,
-  IntegrationCapabilities,
   ProjectBindingOption,
   WorkItemAttachment,
   WorkItemComment,
@@ -34,19 +33,30 @@ import {
   isWorkItemProvider,
   projectValue,
   providerEndpoint,
+  selectableWorkItemProjects,
+  workItemOperationCapabilities,
   workItemEndpoint,
+  type GranularIntegrationCapabilities,
   type WorkItemContext,
 } from './work-item-contracts';
 
 const PAGE_SIZE = 15;
 const CONTEXT_STORAGE_KEY = 'defects:selected-context:v2';
-const EMPTY_CAPABILITIES: IntegrationCapabilities = {
+const EMPTY_CAPABILITIES: GranularIntegrationCapabilities = {
   read: false,
   write: false,
+  create: false,
+  update: false,
+  comments: false,
   webhooks: false,
   attachments: false,
+  attachmentUploads: false,
   history: false,
   stateTransitions: false,
+  issueTypes: false,
+  users: false,
+  labels: false,
+  subIssues: false,
 };
 
 type SectionName = 'comments' | 'history' | 'attachments' | 'states' | 'subissues' | 'metadata';
@@ -91,6 +101,7 @@ export function useDefectsWorkspace() {
   const [projectsMeta, setProjectsMeta] = useState<DefectsProjectsResponse | null>(null);
   const [contextsLoading, setContextsLoading] = useState(true);
   const [projectsLoading, setProjectsLoading] = useState(true);
+  const [unboundGitHubProjects, setUnboundGitHubProjects] = useState(0);
   const [setupError, setSetupError] = useState<{ code: string; message: string } | null>(null);
 
   const context = useMemo<WorkItemContext>(
@@ -147,6 +158,10 @@ export function useDefectsWorkspace() {
     overview?.capabilities ??
     selectedConnection?.capabilities ??
     EMPTY_CAPABILITIES;
+  const operations = useMemo(
+    () => workItemOperationCapabilities(provider, capabilities),
+    [capabilities, provider],
+  );
 
   const replaceLocation = useCallback((next: WorkItemContext, id: string | null = null) => {
     writeStoredContext(next);
@@ -273,17 +288,44 @@ export function useDefectsWorkspace() {
       const data = await api<DefectsProjectsResponse>(
         `${providerEndpoint(provider, 'projects')}${query ? `?${query}` : ''}`,
       );
-      setProjectsMeta(data);
-      if (!selectedProject) {
-        const initial = data.defaultProject || (data.projects[0] ? projectValue(provider, data.projects[0]) : '');
+      const selectable = selectableWorkItemProjects(
+        provider,
+        data.projects,
+        bindingOptions,
+        connectionId,
+      );
+      const nextData = { ...data, projects: selectable.projects };
+      setProjectsMeta(nextData);
+      setUnboundGitHubProjects(selectable.unboundGitHubProjects);
+      const selectedIsAvailable = selectable.projects.some(
+        (project) => projectValue(provider, project) === selectedProject,
+      );
+      if (!selectedProject || !selectedIsAvailable) {
+        const defaultIsAvailable = selectable.projects.some(
+          (project) => projectValue(provider, project) === data.defaultProject,
+        );
+        const initial =
+          (defaultIsAvailable ? data.defaultProject : null) ||
+          (selectable.projects[0] ? projectValue(provider, selectable.projects[0]) : '');
+        const initialBinding = bindingOptions.find(
+          (binding) => binding.externalProjectId === initial,
+        );
+        setSelectedProjectState(initial);
+        setBindingIdState(initialBinding?.id ?? '');
         if (initial) {
-          setSelectedProjectState(initial);
-          replaceLocation({ ...context, project: initial });
+          replaceLocation({
+            ...context,
+            bindingId: initialBinding?.id ?? '',
+            project: initial,
+          });
+        } else if (selectedProject) {
+          replaceLocation({ ...context, bindingId: '', project: '' });
         }
       }
-      return data;
+      return nextData;
     } catch (loadError) {
       setProjectsMeta(null);
+      setUnboundGitHubProjects(0);
       if (loadError instanceof ApiError && loadError.code) {
         setSetupError({ code: loadError.code, message: loadError.message });
       } else {
@@ -293,7 +335,7 @@ export function useDefectsWorkspace() {
     } finally {
       setProjectsLoading(false);
     }
-  }, [context, provider, replaceLocation, selectedProject]);
+  }, [bindingOptions, connectionId, context, provider, replaceLocation, selectedProject]);
 
   useEffect(() => {
     const unbound =
@@ -397,7 +439,7 @@ export function useDefectsWorkspace() {
   }, [statusFilter, typeFilter, search, selectedProject]);
 
   useEffect(() => {
-    if (!selectedProject || !capabilities.read) {
+    if (!selectedProject || (!operations.issueTypes && !operations.users)) {
       setIssueTypes([]);
       setUsers([]);
       return;
@@ -405,8 +447,12 @@ export function useDefectsWorkspace() {
     const params = contextParams(context).toString();
     const loadMetadata = async () => {
       const [typesResult, usersResult] = await Promise.allSettled([
-        api<{ types: string[] }>(`${providerEndpoint(provider, 'work-items/types')}?${params}`),
-        api<{ users: WorkItemUser[] }>(`${providerEndpoint(provider, 'work-items/users')}?${params}`),
+        operations.issueTypes
+          ? api<{ types: string[] }>(`${providerEndpoint(provider, 'work-items/types')}?${params}`)
+          : Promise.resolve({ types: [] }),
+        operations.users
+          ? api<{ users: WorkItemUser[] }>(`${providerEndpoint(provider, 'work-items/users')}?${params}`)
+          : Promise.resolve({ users: [] }),
       ]);
       setIssueTypes(typesResult.status === 'fulfilled' ? typesResult.value.types : []);
       setUsers(usersResult.status === 'fulfilled' ? usersResult.value.users : []);
@@ -419,7 +465,7 @@ export function useDefectsWorkspace() {
       }));
     };
     void loadMetadata();
-  }, [capabilities.read, context, provider, selectedProject]);
+  }, [context, operations.issueTypes, operations.users, provider, selectedProject]);
 
   const selectWorkItem = useCallback((id: string | null) => {
     detailAbortRef.current?.abort();
@@ -447,21 +493,28 @@ export function useDefectsWorkspace() {
         section: SectionName;
         run: () => Promise<unknown>;
         apply: (value: unknown) => void;
-      }> = [
-        {
+      }> = [];
+      if (operations.readComments) {
+        requests.push({
           section: 'comments',
           run: () => api<WorkItemComment[]>(workItemEndpoint(context, id, 'comments'), { signal: controller.signal }),
           apply: (value) => setComments(value as WorkItemComment[]),
-        },
-        {
+        });
+      } else {
+        setComments([]);
+      }
+      if (operations.readSubissues) {
+        requests.push({
           section: 'subissues',
           run: () => api<{ items: WorkItemSummary[] }>(workItemEndpoint(context, id, 'subissues'), {
             signal: controller.signal,
           }),
           apply: (value) => setSubissues((value as { items: WorkItemSummary[] }).items),
-        },
-      ];
-      if (capabilities.stateTransitions) {
+        });
+      } else {
+        setSubissues([]);
+      }
+      if (operations.transitionState) {
         requests.push({
           section: 'states',
           run: () => api<WorkItemState[]>(workItemEndpoint(context, id, 'states'), { signal: controller.signal }),
@@ -470,7 +523,7 @@ export function useDefectsWorkspace() {
       } else {
         setStates([]);
       }
-      if (capabilities.history) {
+      if (operations.readHistory) {
         requests.push({
           section: 'history',
           run: () => api<WorkItemHistoryEvent[]>(workItemEndpoint(context, id, 'history'), {
@@ -481,7 +534,7 @@ export function useDefectsWorkspace() {
       } else {
         setHistory([]);
       }
-      if (capabilities.attachments) {
+      if (operations.readAttachments) {
         requests.push({
           section: 'attachments',
           run: () => api<{ attachments: WorkItemAttachment[] }>(
@@ -509,7 +562,14 @@ export function useDefectsWorkspace() {
     } finally {
       if (detailTokenRef.current === token) setDetailLoading(false);
     }
-  }, [capabilities.attachments, capabilities.history, capabilities.stateTransitions, context]);
+  }, [
+    context,
+    operations.readAttachments,
+    operations.readComments,
+    operations.readHistory,
+    operations.readSubissues,
+    operations.transitionState,
+  ]);
 
   useEffect(() => {
     if (selectedId && selectedProject) void loadDetail(selectedId);
@@ -523,6 +583,7 @@ export function useDefectsWorkspace() {
 
   const updateStatus = useCallback(async (state: string) => {
     if (!selectedId) return;
+    if (!operations.transitionState) throw new Error('State transitions are not supported by this provider.');
     setStatusUpdating(true);
     const previous = detail;
     if (detail) setDetail({ ...detail, state: { ...detail.state, name: state } });
@@ -540,9 +601,10 @@ export function useDefectsWorkspace() {
     } finally {
       setStatusUpdating(false);
     }
-  }, [context, detail, loadDetail, loadOverview, selectedId]);
+  }, [context, detail, loadDetail, loadOverview, operations.transitionState, selectedId]);
 
   const createWorkItem = useCallback(async (input: WorkItemMutationInput) => {
+    if (!operations.create) throw new Error('Creating work items is not supported by this provider.');
     if (!selectedProject) throw new Error('Select a project before creating a work item.');
     setMutating(true);
     try {
@@ -560,9 +622,10 @@ export function useDefectsWorkspace() {
     } finally {
       setMutating(false);
     }
-  }, [context, loadList, loadOverview, provider, selectWorkItem, selectedProject]);
+  }, [context, loadList, loadOverview, operations.create, provider, selectWorkItem, selectedProject]);
 
   const updateWorkItem = useCallback(async (input: WorkItemMutationInput) => {
+    if (!operations.edit) throw new Error('Editing work items is not supported by this provider.');
     if (!selectedId) throw new Error('Select a work item before updating it.');
     setMutating(true);
     try {
@@ -576,10 +639,11 @@ export function useDefectsWorkspace() {
     } finally {
       setMutating(false);
     }
-  }, [context, loadDetail, loadList, loadOverview, selectedId]);
+  }, [context, loadDetail, loadList, loadOverview, operations.edit, selectedId]);
 
   const addComment = useCallback(async (body: string) => {
     if (!selectedId) return;
+    if (!operations.addComments) throw new Error('Adding comments is not supported by this provider.');
     setMutating(true);
     try {
       const comment = await api<WorkItemComment>(workItemEndpoint(context, selectedId, 'comments'), {
@@ -590,28 +654,43 @@ export function useDefectsWorkspace() {
     } finally {
       setMutating(false);
     }
-  }, [context, selectedId]);
+  }, [context, operations.addComments, selectedId]);
 
-  const uploadAttachment = useCallback(async (input: {
-    fileName: string;
-    contentType: string;
-    base64: string;
-  }) => {
+  const uploadAttachment = useCallback(async (file: File) => {
     if (!selectedId) return;
+    if (!operations.uploadAttachments) throw new Error('Attachment uploads are not supported by this provider.');
     setMutating(true);
     try {
+      const form = new FormData();
+      form.append('file', file, file.name);
       const attachment = await api<WorkItemAttachment>(
         workItemEndpoint(context, selectedId, 'attachments'),
-        { method: 'POST', body: JSON.stringify(input) },
+        { method: 'POST', body: form },
       );
       setAttachments((current) => [...current, attachment]);
     } finally {
       setMutating(false);
     }
-  }, [context, selectedId]);
+  }, [context, operations.uploadAttachments, selectedId]);
+
+  const deleteAttachment = useCallback(async (attachmentId: string) => {
+    if (!selectedId) return;
+    if (!operations.uploadAttachments) throw new Error('Attachment deletion is not supported by this provider.');
+    setMutating(true);
+    try {
+      await api(
+        workItemEndpoint(context, selectedId, `attachments/${encodeURIComponent(attachmentId)}`),
+        { method: 'DELETE' },
+      );
+      setAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+    } finally {
+      setMutating(false);
+    }
+  }, [context, operations.uploadAttachments, selectedId]);
 
   const addSubIssue = useCallback(async (subIssueId: string) => {
     if (!selectedId) return;
+    if (!operations.addSubissues) throw new Error('Subissues are not supported by this provider.');
     setMutating(true);
     try {
       await api(workItemEndpoint(context, selectedId, 'subissues'), {
@@ -625,7 +704,7 @@ export function useDefectsWorkspace() {
     } finally {
       setMutating(false);
     }
-  }, [context, selectedId]);
+  }, [context, operations.addSubissues, selectedId]);
 
   const investigate = useCallback(async () => {
     if (!selectedId) return;
@@ -665,8 +744,10 @@ export function useDefectsWorkspace() {
     selectedProject,
     setSelectedProject,
     setupError,
+    unboundGitHubProjects,
     connected,
     capabilities,
+    operations,
     overview,
     needsProjectSelection,
     items,
@@ -708,6 +789,7 @@ export function useDefectsWorkspace() {
     updateWorkItem,
     addComment,
     uploadAttachment,
+    deleteAttachment,
     addSubIssue,
     investigate,
     context,
