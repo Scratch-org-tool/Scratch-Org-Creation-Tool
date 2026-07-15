@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/services/api';
 import { getSessionCache, hasFreshSessionCache, setSessionCache, clearSessionCache } from '@/lib/session-cache';
@@ -76,6 +76,8 @@ export function useDefectsWorkspace() {
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [investigating, setInvestigating] = useState(false);
   const [investigation, setInvestigation] = useState<DefectInvestigationResult | null>(null);
+  const detailTokenRef = useRef(0);
+  const detailAbortRef = useRef<AbortController | null>(null);
 
   const projectQuery = useMemo(() => {
     if (!selectedProject) return '';
@@ -115,6 +117,8 @@ export function useDefectsWorkspace() {
 
   const setSelectedProject = useCallback(
     (project: string) => {
+      detailAbortRef.current?.abort();
+      detailTokenRef.current += 1;
       setSelectedProjectState(project);
       writeStoredProject(project);
       setSelectedId(null);
@@ -212,6 +216,7 @@ export function useDefectsWorkspace() {
         setTotal(listData.total);
 
         if (selectedId && !Number.isNaN(selectedId)) {
+          const detailToken = detailTokenRef.current;
           const detailParams = new URLSearchParams();
           if (selectedProject) detailParams.set('project', selectedProject);
           if (opts?.manual) detailParams.set('_t', String(Date.now()));
@@ -225,12 +230,14 @@ export function useDefectsWorkspace() {
               `/defects/work-items/${selectedId}/attachments${pq}`,
             ),
           ]);
-          setDetail(item);
-          setComments(commentList);
-          setStates(stateList);
-          setHistory(historyData.events);
-          setAttachments(attachmentData.attachments);
-          setInvestigation(null);
+          if (detailTokenRef.current === detailToken) {
+            setDetail(item);
+            setComments(commentList);
+            setStates(stateList);
+            setHistory(historyData.events);
+            setAttachments(attachmentData.attachments);
+            setInvestigation(null);
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load defects');
@@ -269,6 +276,8 @@ export function useDefectsWorkspace() {
 
   const selectWorkItem = useCallback(
     (id: number | null) => {
+      detailAbortRef.current?.abort();
+      detailTokenRef.current += 1;
       setSelectedId(id);
       setInvestigation(null);
       const params = new URLSearchParams(searchParams.toString());
@@ -283,22 +292,32 @@ export function useDefectsWorkspace() {
 
   const loadDetail = useCallback(
     async (id: number) => {
+      detailAbortRef.current?.abort();
+      const controller = new AbortController();
+      detailAbortRef.current = controller;
+      const token = ++detailTokenRef.current;
       setDetailLoading(true);
       const pq = projectQuery ? `?${projectQuery}` : '';
       try {
         const [item, commentList, stateList, historyData, attachmentData] = await Promise.all([
-          api<AzureWorkItemDetail>(`/defects/work-items/${id}${pq}`),
-          api<AzureWorkItemComment[]>(`/defects/work-items/${id}/comments${pq}`),
-          api<AzureWorkItemStateOption[]>(`/defects/work-items/${id}/states${pq}`),
-          api<{ events: AzureWorkItemHistoryEvent[] }>(`/defects/work-items/${id}/history${pq}`),
-          api<{ attachments: AzureWorkItemAttachment[] }>(`/defects/work-items/${id}/attachments${pq}`),
+          api<AzureWorkItemDetail>(`/defects/work-items/${id}${pq}`, { signal: controller.signal }),
+          api<AzureWorkItemComment[]>(`/defects/work-items/${id}/comments${pq}`, { signal: controller.signal }),
+          api<AzureWorkItemStateOption[]>(`/defects/work-items/${id}/states${pq}`, { signal: controller.signal }),
+          api<{ events: AzureWorkItemHistoryEvent[] }>(`/defects/work-items/${id}/history${pq}`, {
+            signal: controller.signal,
+          }),
+          api<{ attachments: AzureWorkItemAttachment[] }>(`/defects/work-items/${id}/attachments${pq}`, {
+            signal: controller.signal,
+          }),
         ]);
+        if (detailTokenRef.current !== token) return;
         setDetail(item);
         setComments(commentList);
         setStates(stateList);
         setHistory(historyData.events);
         setAttachments(attachmentData.attachments);
       } catch (err) {
+        if (detailTokenRef.current !== token || controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : 'Failed to load work item detail');
         setDetail(null);
         setComments([]);
@@ -306,7 +325,7 @@ export function useDefectsWorkspace() {
         setAttachments([]);
         setStates([]);
       } finally {
-        setDetailLoading(false);
+        if (detailTokenRef.current === token) setDetailLoading(false);
       }
     },
     [projectQuery],
@@ -316,6 +335,9 @@ export function useDefectsWorkspace() {
     if (selectedId && !Number.isNaN(selectedId) && selectedProject) {
       void loadDetail(selectedId);
     } else {
+      detailAbortRef.current?.abort();
+      detailTokenRef.current += 1;
+      setDetailLoading(false);
       setDetail(null);
       setComments([]);
       setHistory([]);
@@ -323,6 +345,11 @@ export function useDefectsWorkspace() {
       setStates([]);
     }
   }, [selectedId, selectedProject, loadDetail]);
+
+  useEffect(() => () => {
+    detailAbortRef.current?.abort();
+    detailTokenRef.current += 1;
+  }, []);
 
   const updateStatus = useCallback(
     async (state: string) => {

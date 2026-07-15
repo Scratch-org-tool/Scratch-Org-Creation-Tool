@@ -51,6 +51,9 @@ export const dataDeploySchema = z.object({
   recordLimit: dataRecordLimitSchema.optional(),
   /** When set, records are upserted by this external-Id field so re-runs are idempotent. */
   externalIdField: z.string().optional(),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export const dataDeployPreflightSchema = z.object({
@@ -60,6 +63,9 @@ export const dataDeployPreflightSchema = z.object({
   soql: z.string().optional(),
   recordLimit: dataRecordLimitSchema.optional(),
   externalIdField: z.string().optional(),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export const dataReplicationSchema = z.object({
@@ -69,6 +75,9 @@ export const dataReplicationSchema = z.object({
   querySet: querySetSchema.optional(),
   recordTypeMappings: z.record(z.string(), z.string()).optional(),
   recordLimit: dataRecordLimitSchema.optional(),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export const querySetCompileSchema = z.object({
@@ -202,6 +211,9 @@ export const customSettingsLoadSchema = z.object({
   targetOrgId: z.string().uuid(),
   exportConfig: sfdmuExportSchema.optional(),
   mode: z.enum(['bundled', 'custom']).default('bundled'),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export const scratchTemplateCreateSchema = z.object({
@@ -234,6 +246,9 @@ export const conaSeedRunSchema = z.object({
   targetOrgId: z.string().uuid(),
   datasets: z.array(z.enum(['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'])),
   accountSeedRows: accountSeedPreviewSchema.shape.rows.optional(),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export const partnerImportProcessSchema = z.object({
@@ -256,6 +271,9 @@ export const partnerTransferSchema = z.object({
   sourceOrgId: z.string().uuid(),
   targetOrgId: z.string().uuid(),
   bottler: z.enum(['5000', '4900', '4600', 'all']).default('all'),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export const conaUserProvisionSchema = z.object({

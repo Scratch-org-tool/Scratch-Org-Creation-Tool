@@ -73,6 +73,7 @@ export function useAzureDeploy() {
   const [logCount, setLogCount] = useState<number | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
   const [deployStartedAt, setDeployStartedAt] = useState<number | null>(null);
+  const [deployError, setDeployError] = useState<string | null>(null);
   const selectTokenRef = useRef(0);
 
   const loadHistory = useCallback(async (force = false) => {
@@ -230,11 +231,6 @@ export function useAzureDeploy() {
             };
           };
           if (data.payload.jobId !== jobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!].slice(-AZURE_LOG_TAIL));
-            setLogStreams((s) => [...s, data.payload.stream ?? 'stdout'].slice(-AZURE_LOG_TAIL));
-            setLogCount((c) => (c ?? 0) + 1);
-          }
           if (data.type === 'job_status') {
             if (data.payload.status) setJobStatus(data.payload.status);
             if (data.payload.currentStep) setCurrentStep(data.payload.currentStep);
@@ -264,11 +260,13 @@ export function useAzureDeploy() {
 
   const deploy = async () => {
     setDeploying(true);
+    setDeployError(null);
     setLogs([]);
     setLogStreams([]);
     setLogsTruncated(false);
     setLogCount(null);
     setJobId(null);
+    setActiveDeploymentId(null);
     setJobStatus('running');
     setCurrentStep('Connecting to Azure DevOps');
     setDeployStartedAt(Date.now());
@@ -292,6 +290,17 @@ export function useAzureDeploy() {
       setJobId(res.jobId);
       setJobStatus(res.status);
       await loadHistory(true);
+    } catch (err) {
+      setJobId(null);
+      setActiveDeploymentId(null);
+      setJobStatus(null);
+      setCurrentStep(null);
+      setDeployStartedAt(null);
+      setLogs([]);
+      setLogStreams([]);
+      setLogsTruncated(false);
+      setLogCount(null);
+      setDeployError(err instanceof Error ? err.message : 'Failed to submit deployment');
     } finally {
       setDeploying(false);
     }
@@ -365,6 +374,8 @@ export function useAzureDeploy() {
     logCount,
     sseConnected,
     deployStartedAt,
+    deployError,
+    setDeployError,
     targetOrgAlias,
     isRunning,
     canDeploy,

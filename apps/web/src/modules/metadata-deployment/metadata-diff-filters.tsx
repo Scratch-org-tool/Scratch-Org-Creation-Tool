@@ -8,6 +8,7 @@ const FILTERS: Array<{ id: MetadataDiffType | 'all'; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'new', label: 'New' },
   { id: 'changed', label: 'Changed' },
+  { id: 'unknown', label: 'Not inspected' },
   { id: 'deleted', label: 'Deleted' },
 ];
 

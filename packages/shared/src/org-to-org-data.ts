@@ -74,6 +74,13 @@ const orgToOrgCompareBaseSchema = z.object({
 });
 
 export const orgToOrgCompareSchema = orgToOrgCompareBaseSchema.superRefine((data, ctx) => {
+  if (data.sourceOrgId === data.targetOrgId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Source and target org must differ',
+      path: ['targetOrgId'],
+    });
+  }
   const hasSoql = Boolean(data.soql?.trim());
   const hasSelection = Boolean(data.selectedRecordIds?.length);
   if (!hasSoql && !hasSelection) {
@@ -98,6 +105,13 @@ const orgToOrgDeployBaseSchema = z.object({
 });
 
 export const orgToOrgDeploySchema = orgToOrgDeployBaseSchema.superRefine((data, ctx) => {
+  if (data.sourceOrgId === data.targetOrgId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Source and target org must differ',
+      path: ['targetOrgId'],
+    });
+  }
   const hasSoql = Boolean(data.soql?.trim());
   const hasSelection = Boolean(data.selectedRecordIds?.length);
   if (!hasSoql && !hasSelection) {
@@ -295,6 +309,11 @@ export function stripLimitOffset(soql: string): string {
 export function applySoqlPagination(soql: string, page: number, pageSize: number): string {
   const base = stripLimitOffset(soql);
   const offset = (page - 1) * pageSize;
+  if (offset > 2_000) {
+    throw new Error(
+      'Salesforce supports OFFSET only up to 2,000 rows. Narrow the query or reduce the page size.',
+    );
+  }
   return `${base} LIMIT ${pageSize} OFFSET ${offset}`;
 }
 
@@ -663,6 +682,9 @@ export const orgToOrgDeployBatchSchema = z.object({
   targetOrgId: z.string().uuid(),
   strategy: z.enum(['insert', 'upsert']),
   objects: z.array(orgToOrgObjectDeployConfigSchema).min(1),
+}).refine((data) => data.sourceOrgId !== data.targetOrgId, {
+  message: 'Source and target org must differ',
+  path: ['targetOrgId'],
 });
 
 export type OrgToOrgPreviewFilterInput = z.infer<typeof orgToOrgPreviewFilterSchema>;

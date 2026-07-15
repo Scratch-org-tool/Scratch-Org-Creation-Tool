@@ -34,7 +34,7 @@ export function UsersCsvPanel({ w }: UsersCsvPanelProps) {
         </div>
       </FormSection>
       <div className="flex gap-2 mt-4">
-        <Button variant="outline" onClick={() => void w.parseCsv()}>
+        <Button variant="outline" onClick={() => void w.parseCsv()} disabled={w.csvLoading}>
           Parse CSV
         </Button>
         <Button onClick={() => void w.provisionCsv()} loading={w.csvLoading} disabled={!w.csvOrgId}>

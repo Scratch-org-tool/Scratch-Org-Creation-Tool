@@ -37,6 +37,11 @@ export function OrgConfigLoadAction({
   const [result, setResult] = useState<OrgConfigLoadResult | null>(null);
 
   async function run() {
+    if (!orgId.trim()) {
+      setPhase('error');
+      setMessage({ text: 'Select a target org before loading org config.', variant: 'error' });
+      return;
+    }
     setPhase('loading');
     setMessage(null);
     setResult(null);
@@ -77,7 +82,7 @@ export function OrgConfigLoadAction({
     }
   }
 
-  const targetLabel = orgAlias ? `${orgAlias}` : orgId;
+  const targetLabel = orgAlias ?? (orgId || 'the selected org');
   const warnings = result ? warnLines(result.logs) : [];
 
   return (
@@ -105,7 +110,7 @@ export function OrgConfigLoadAction({
 
       <Button
         onClick={run}
-        disabled={phase === 'loading'}
+        disabled={phase === 'loading' || !orgId.trim()}
         variant={phase === 'completed' ? 'outline' : 'default'}
       >
         {phase === 'loading'

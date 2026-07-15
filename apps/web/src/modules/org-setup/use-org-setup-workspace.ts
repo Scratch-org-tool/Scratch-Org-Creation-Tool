@@ -75,6 +75,11 @@ export function useOrgSetupWorkspace() {
     variant: 'success' | 'error';
   } | null>(null);
 
+  useEffect(() => {
+    setCsvParsed([]);
+    setCsvMessage(null);
+  }, [csv]);
+
   const loadRuns = useCallback(async () => {
     if (!orgId) return;
     try {
@@ -146,9 +151,6 @@ export function useOrgSetupWorkspace() {
             payload: { jobId?: string; line?: string; status?: string; error?: string };
           };
           if (data.payload.jobId !== primaryJobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!]);
-          }
           if (data.type === 'job_status' && data.payload.status) {
             setJob((j) =>
               j
@@ -220,11 +222,24 @@ export function useOrgSetupWorkspace() {
   };
 
   const parseCsv = async () => {
-    const users = await api<unknown[]>('/provisioning/parse-csv', {
-      method: 'POST',
-      body: JSON.stringify({ csv }),
-    });
-    setCsvParsed(users);
+    setCsvLoading(true);
+    setCsvMessage(null);
+    try {
+      const users = await api<unknown[]>('/provisioning/parse-csv', {
+        method: 'POST',
+        body: JSON.stringify({ csv }),
+      });
+      setCsvParsed(users);
+      setCsvMessage({ text: `${users.length} users parsed`, variant: 'success' });
+    } catch (err) {
+      setCsvParsed([]);
+      setCsvMessage({
+        text: err instanceof Error ? err.message : 'CSV parsing failed',
+        variant: 'error',
+      });
+    } finally {
+      setCsvLoading(false);
+    }
   };
 
   const provisionCsv = async () => {

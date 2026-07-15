@@ -9,6 +9,7 @@ const BADGE_CLASS: Record<string, string> = {
   changed: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
   deleted: 'bg-red-500/15 text-red-700 dark:text-red-400',
   same: 'bg-muted text-muted-foreground',
+  unknown: 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
 };
 
 export function MetadataCompareTable({ w }: { w: MetadataCompareHook }) {

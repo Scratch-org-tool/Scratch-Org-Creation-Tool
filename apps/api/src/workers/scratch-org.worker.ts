@@ -169,10 +169,12 @@ export class ScratchOrgWorker {
               devHubAlias: config.devHubAlias,
               status: 'Active',
               jobId: dbJobId,
+              createdBy: ownerUserId,
             },
             update: {
               password: encrypt(generatedPassword),
               jobId: dbJobId,
+              createdBy: ownerUserId,
             },
           });
           await log('Password captured for credentials view');

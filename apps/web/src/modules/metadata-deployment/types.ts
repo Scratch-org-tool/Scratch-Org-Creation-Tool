@@ -28,7 +28,7 @@ export interface MetadataComponentInfo {
   lastModifiedBy?: string;
 }
 
-export type MetadataDiffType = 'new' | 'changed' | 'deleted' | 'same';
+export type MetadataDiffType = 'new' | 'changed' | 'deleted' | 'same' | 'unknown';
 
 export interface MetadataCompareItem {
   fullName: string;
@@ -45,7 +45,15 @@ export interface MetadataComparisonSummary {
   changed: number;
   deleted: number;
   same: number;
-  byType: Record<string, { total: number; new: number; changed: number; deleted: number; same: number }>;
+  unknown: number;
+  byType: Record<string, {
+    total: number;
+    new: number;
+    changed: number;
+    deleted: number;
+    same: number;
+    unknown: number;
+  }>;
 }
 
 export interface MetadataCompareSession {
@@ -129,6 +137,7 @@ export const DIFF_TYPE_LABELS: Record<MetadataDiffType, string> = {
   changed: 'Changed',
   deleted: 'Deleted',
   same: 'No difference',
+  unknown: 'Not inspected',
 };
 
 export interface DeploymentRow {
@@ -194,7 +203,7 @@ export function parseItemKey(key: string): { metadataType: string; fullName: str
 export function selectionsFromItems(items: MetadataCompareItem[]): MetadataSelection[] {
   const map = new Map<string, string[]>();
   for (const item of items) {
-    if (item.diffType === 'deleted' || item.diffType === 'same') continue;
+  if (item.diffType === 'deleted' || item.diffType === 'same' || item.diffType === 'unknown') continue;
     const members = map.get(item.metadataType) ?? [];
     members.push(item.fullName);
     map.set(item.metadataType, members);
@@ -203,5 +212,5 @@ export function selectionsFromItems(items: MetadataCompareItem[]): MetadataSelec
 }
 
 export function isDeployableDiffType(diffType: MetadataDiffType) {
-  return diffType !== 'deleted' && diffType !== 'same';
+  return diffType !== 'deleted' && diffType !== 'same' && diffType !== 'unknown';
 }

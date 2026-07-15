@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { FormSection, GlassCard, InlineAlert, StatusBadge } from '@/components/studio';
-import { api, getStreamUrl } from '@/services/api';
+import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 import { Plus, Trash2 } from 'lucide-react';
 
@@ -82,36 +82,6 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     return () => clearInterval(poll);
   }, [jobId]);
 
-  useEffect(() => {
-    if (!jobId) return;
-    let es: EventSource | null = null;
-    let cancelled = false;
-    void (async () => {
-      const url = await getStreamUrl(['job_log', 'job_status']);
-      if (cancelled) return;
-      es = new EventSource(url);
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data as string) as {
-            type: string;
-            payload: { jobId?: string; line?: string; status?: string };
-          };
-          if (data.payload.jobId !== jobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!]);
-          }
-          if (data.type === 'job_status' && data.payload.status) {
-            setJob((j) => (j ? { ...j, status: data.payload.status! } : j));
-          }
-        } catch { /* ignore */ }
-      };
-    })();
-    return () => {
-      cancelled = true;
-      es?.close();
-    };
-  }, [jobId]);
-
   const accountSeedPayload = datasets.includes('Accounts') ? accountRows : undefined;
 
   const validateRows = useCallback(() => {
@@ -123,6 +93,10 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
 
   const handlePreview = async () => {
     if (!sourceOrgId || !targetOrgId) return;
+    if (sourceOrgId === targetOrgId) {
+      setError('Source and target org must differ.');
+      return;
+    }
     setError(null);
     setLoading(true);
     try {
@@ -161,6 +135,10 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
 
   const handleRun = async () => {
     if (!sourceOrgId || !targetOrgId) return;
+    if (sourceOrgId === targetOrgId) {
+      setError('Source and target org must differ.');
+      return;
+    }
     setError(null);
     setLoading(true);
     setLogs([]);
@@ -330,14 +308,14 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
           <Button
             variant="outline"
             onClick={() => void handlePreview()}
-            disabled={!sourceOrgId || !targetOrgId || isRunning}
+            disabled={!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId || isRunning}
             loading={loading && !jobId}
           >
             Preview / validate
           </Button>
           <Button
             onClick={() => void handleRun()}
-            disabled={!sourceOrgId || !targetOrgId || isRunning}
+            disabled={!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId || isRunning}
             loading={loading && !!jobId}
           >
             Run CONA seed

@@ -1,6 +1,6 @@
 'use client';
 
-import { PageSkeleton } from '@/components/studio';
+import { InlineAlert, PageSkeleton } from '@/components/studio';
 import { useAzureDeploy } from './azure/use-azure-deploy';
 import { AzurePageHeader } from './azure/azure-page-header';
 import { AzureDeploymentStats } from './azure/azure-deployment-stats';
@@ -17,6 +17,12 @@ export function AzureDeployWorkspace() {
   return (
     <div className="p-4 md:p-6 space-y-5 min-h-0">
       <AzurePageHeader azureStatus={d.azureStatus} project={d.form.project} />
+
+      {d.deployError && (
+        <InlineAlert variant="error" onDismiss={() => d.setDeployError(null)}>
+          {d.deployError}
+        </InlineAlert>
+      )}
 
       {showDataSkeleton ? (
         <PageSkeleton variant="studio-2row" />

@@ -12,7 +12,7 @@ export function MetadataDeploySummary({ w }: { w: MetadataCompareHook }) {
   const source = w.orgById(w.form.sourceOrgId)?.alias ?? 'Source';
   const target = w.orgById(w.form.targetOrgId)?.alias ?? 'Target';
 
-  const counts = { new: 0, changed: 0, deleted: 0, same: 0 };
+  const counts = { new: 0, changed: 0, deleted: 0, same: 0, unknown: 0 };
   for (const row of deployableItems) counts[row.diffType] += 1;
 
   return (

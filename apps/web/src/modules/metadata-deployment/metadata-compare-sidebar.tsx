@@ -18,7 +18,7 @@ export function MetadataCompareSidebar({ w }: { w: MetadataCompareHook }) {
       </button>
       {types.map((type) => {
         const counts = byType[type];
-        const changed = counts.new + counts.changed + counts.deleted;
+        const changed = counts.new + counts.changed + counts.deleted + (counts.unknown ?? 0);
         return (
           <button
             key={type}

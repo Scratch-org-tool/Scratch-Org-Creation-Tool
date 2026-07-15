@@ -19,7 +19,7 @@ import {
   shouldChunkDeploy,
   chunkCountForLimit,
 } from '@sfcc/shared';
-import { api, getStreamUrl } from '@/services/api';
+import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 import { DataDeployBatchProgress } from './data-deploy-batch-progress';
 import { DataPreviewTable } from './data-preview-table';
@@ -60,6 +60,8 @@ export function GenericDeployPanel() {
     previewCapped?: boolean;
     previewLimit?: number;
   } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
@@ -70,6 +72,7 @@ export function GenericDeployPanel() {
   const [movements, setMovements] = useState<Movement[]>([]);
   const [deployError, setDeployError] = useState<string | null>(null);
   const logBottomRef = useRef<HTMLDivElement>(null);
+  const previewRequestRef = useRef(0);
 
   const loadMovements = useCallback(() => {
     api<Movement[]>('/data/movements')
@@ -119,41 +122,6 @@ export function GenericDeployPanel() {
     return () => clearInterval(poll);
   }, [movementId]);
 
-  useEffect(() => {
-    if (!jobId) return;
-    let es: EventSource | null = null;
-    let cancelled = false;
-
-    void (async () => {
-      const url = await getStreamUrl(['job_log', 'job_status']);
-      if (cancelled) return;
-      es = new EventSource(url);
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data as string) as {
-            type: string;
-            payload: { jobId?: string; line?: string; status?: string };
-          };
-          if (data.payload.jobId !== jobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!]);
-          }
-          if (data.type === 'job_status' && data.payload.status) {
-            setJob((j) => (j ? { ...j, status: data.payload.status! } : j));
-            if (TERMINAL_STATUSES.includes(data.payload.status)) loadMovements();
-          }
-        } catch {
-          /* ignore */
-        }
-      };
-    })();
-
-    return () => {
-      cancelled = true;
-      es?.close();
-    };
-  }, [jobId, loadMovements]);
-
   const previewSoql = replaceOrApplyLimit(
     form.soql?.trim() || `SELECT Id, Name FROM ${form.objectName}`,
     form.recordLimit,
@@ -161,18 +129,41 @@ export function GenericDeployPanel() {
 
   const handlePreview = async () => {
     if (!form.sourceOrgId) return;
-    const res = await api<{
-      records: unknown[];
-      totalSize: number;
-      previewCapped?: boolean;
-      previewLimit?: number;
-    }>(
-      `/data/preview?sourceOrgId=${form.sourceOrgId}&soql=${encodeURIComponent(previewSoql)}&recordLimit=${form.recordLimit}`,
-    );
-    setPreview(res);
+    const request = ++previewRequestRef.current;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const res = await api<{
+        records: unknown[];
+        totalSize: number;
+        previewCapped?: boolean;
+        previewLimit?: number;
+      }>(
+        `/data/preview?sourceOrgId=${form.sourceOrgId}&soql=${encodeURIComponent(previewSoql)}&recordLimit=${form.recordLimit}`,
+      );
+      if (previewRequestRef.current === request) setPreview(res);
+    } catch (err) {
+      if (previewRequestRef.current === request) {
+        setPreview(null);
+        setPreviewError(err instanceof Error ? err.message : 'Preview failed');
+      }
+    } finally {
+      if (previewRequestRef.current === request) setPreviewLoading(false);
+    }
   };
 
+  useEffect(() => {
+    previewRequestRef.current += 1;
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
+  }, [form.sourceOrgId, form.objectName, form.soql, form.recordLimit]);
+
   const handleDeploy = async () => {
+    if (form.sourceOrgId === form.targetOrgId) {
+      setDeployError('Source and target org must differ.');
+      return;
+    }
     setLoading(true);
     setLogs([]);
     setJob(null);
@@ -212,6 +203,11 @@ export function GenericDeployPanel() {
       {deployError && (
         <InlineAlert variant="error" onDismiss={() => setDeployError(null)}>
           {deployError}
+        </InlineAlert>
+      )}
+      {previewError && (
+        <InlineAlert variant="error" onDismiss={() => setPreviewError(null)}>
+          {previewError}
         </InlineAlert>
       )}
 
@@ -308,13 +304,23 @@ export function GenericDeployPanel() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 mt-4">
-            <Button variant="outline" onClick={() => void handlePreview()} disabled={!form.sourceOrgId}>
+            <Button
+              variant="outline"
+              onClick={() => void handlePreview()}
+              disabled={!form.sourceOrgId || previewLoading}
+              loading={previewLoading}
+            >
               Preview Data
             </Button>
             <Button
               onClick={() => void handleDeploy()}
               loading={loading}
-              disabled={isRunning || !form.sourceOrgId || !form.targetOrgId}
+              disabled={
+                isRunning
+                || !form.sourceOrgId
+                || !form.targetOrgId
+                || form.sourceOrgId === form.targetOrgId
+              }
             >
               Deploy
             </Button>
@@ -333,7 +339,7 @@ export function GenericDeployPanel() {
         </FormSection>
 
         <div className="rounded-lg border border-border/60 p-4 space-y-4">
-          {batchId && <DataDeployBatchProgress batchId={batchId} onTerminal={() => loadMovements()} />}
+          {batchId && <DataDeployBatchProgress batchId={batchId} onTerminal={loadMovements} />}
           <p className="text-sm font-medium">{jobId ? 'Deployment progress' : 'Live console'}</p>
           {job?.error && <InlineAlert variant="error">{job.error}</InlineAlert>}
           <div className="studio-console rounded-lg overflow-hidden mt-2">

@@ -3,6 +3,7 @@ import type {
   AzureWorkItemComment,
   AzureWorkItemDetail,
   AzureWorkItemHistoryEvent,
+  AzureWorkItemHistoryKind,
   AzureWorkItemStateOption,
   AzureWorkItemSummary,
   AzureDevOpsProjectOption,

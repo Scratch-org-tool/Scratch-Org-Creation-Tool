@@ -53,15 +53,34 @@ export function ProvisioningWorkspace() {
   const [orgId, setOrgId] = useState('');
   const [csv, setCsv] = useState(SAMPLE_CSV);
   const [parsed, setParsed] = useState<unknown[]>([]);
+  const [parsing, setParsing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; variant: 'success' | 'error' } | null>(null);
 
+  useEffect(() => {
+    setParsed([]);
+    setMessage(null);
+  }, [csv]);
+
   const parseCsv = async () => {
-    const users = await api<unknown[]>('/provisioning/parse-csv', {
-      method: 'POST',
-      body: JSON.stringify({ csv }),
-    });
-    setParsed(users);
+    setParsing(true);
+    setMessage(null);
+    try {
+      const users = await api<unknown[]>('/provisioning/parse-csv', {
+        method: 'POST',
+        body: JSON.stringify({ csv }),
+      });
+      setParsed(users);
+      setMessage({ text: `${users.length} users parsed`, variant: 'success' });
+    } catch (err) {
+      setParsed([]);
+      setMessage({
+        text: err instanceof Error ? err.message : 'CSV parsing failed',
+        variant: 'error',
+      });
+    } finally {
+      setParsing(false);
+    }
   };
 
   const provision = async () => {
@@ -133,7 +152,7 @@ export function ProvisioningWorkspace() {
             </div>
           </FormSection>
           <div className="flex gap-2 mt-4">
-            <Button variant="outline" onClick={() => void parseCsv()}>
+            <Button variant="outline" onClick={() => void parseCsv()} loading={parsing}>
               Parse CSV
             </Button>
             <Button onClick={() => void provision()} loading={loading} disabled={!orgId}>
