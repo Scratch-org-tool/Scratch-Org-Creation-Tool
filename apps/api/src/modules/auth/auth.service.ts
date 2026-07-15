@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   ServiceUnavailableException,
@@ -17,6 +19,7 @@ import {
   AUTH_GENERIC_INVALID,
   AUTH_LOGIN_FAILED,
   AUTH_PASSWORD_CHANGED,
+  AUTH_RATE_LIMITED_CODE,
   AUTH_RESET_SENT,
   AUTH_SESSIONS_REVOKED,
   AUTH_SIGNUP_FAILED,
@@ -89,7 +92,7 @@ export class AuthService {
     const emailHash = this.authSecurity.hashEmail(input.email);
 
     if (!(await this.authSecurity.checkIpRateLimit(clientIp, 'login'))) {
-      throw new UnauthorizedException(AUTH_LOGIN_FAILED);
+      throw this.tooManyRequests(AUTH_LOGIN_FAILED);
     }
     if (await this.authSecurity.isAccountLocked(emailHash)) {
       throw new UnauthorizedException(AUTH_LOGIN_FAILED);
@@ -146,7 +149,7 @@ export class AuthService {
     usePasswordSignIn?: boolean;
   }> {
     if (!(await this.authSecurity.checkIpRateLimit(clientIp, 'signup'))) {
-      throw new BadRequestException(AUTH_SIGNUP_FAILED);
+      throw this.tooManyRequests(AUTH_SIGNUP_FAILED);
     }
 
     try {
@@ -227,7 +230,7 @@ export class AuthService {
     if (body.adminBootstrapToken && !bootstrapValid) {
       if (clientIp) {
         if (!(await this.authSecurity.checkIpRateLimit(clientIp, 'bootstrap'))) {
-          throw new BadRequestException(AUTH_GENERIC_INVALID);
+          throw this.tooManyRequests(AUTH_GENERIC_INVALID);
         }
         await this.authSecurity.recordBootstrapFailure(clientIp);
       }
@@ -261,7 +264,7 @@ export class AuthService {
     if (!this.authSecurity.verifyBootstrapToken(adminBootstrapToken)) {
       if (clientIp) {
         if (!(await this.authSecurity.checkIpRateLimit(clientIp, 'bootstrap'))) {
-          throw new BadRequestException(AUTH_GENERIC_INVALID);
+          throw this.tooManyRequests(AUTH_GENERIC_INVALID);
         }
         await this.authSecurity.recordBootstrapFailure(clientIp);
       }
@@ -303,55 +306,75 @@ export class AuthService {
     input: UpdateMeInput,
     context: AuthAuditContext,
   ) {
-    const profile = await this.assertActiveAccount(
-      firebaseUid,
-      appUserId,
-      context,
-      AUTH_AUDIT_EVENTS.PROFILE_UPDATE_FAILED,
-    );
-
     try {
-      await updateFirebaseAuthDisplayName(firebaseUid, input.displayName);
-    } catch {
-      await this.authAudit.record(
-        profile.id,
-        AUTH_AUDIT_EVENTS.PROFILE_UPDATE_FAILED,
-        context,
-        { stage: 'firebase_update', compensated: false },
-      );
-      throw new BadRequestException(AUTH_ACCOUNT_ACTION_FAILED);
-    }
+      return await this.authSecurity.withAccountMutationLock(
+        firebaseUid,
+        async () => {
+          const profile = await this.assertActiveAccount(
+            firebaseUid,
+            appUserId,
+            context,
+            AUTH_AUDIT_EVENTS.PROFILE_UPDATE_FAILED,
+          );
 
-    try {
-      const updated = await updateAppUser(profile.id, {
-        displayName: input.displayName,
-      });
-      await this.authAudit.record(
-        profile.id,
-        AUTH_AUDIT_EVENTS.PROFILE_UPDATE_SUCCESS,
-        context,
-      );
-      return this.toMeResponse(updated);
-    } catch {
-      let compensated = false;
-      try {
-        await updateFirebaseAuthDisplayName(firebaseUid, profile.displayName);
-        compensated = true;
-      } catch {
-        // The audit marker allows an operator to reconcile Firebase from the
-        // authoritative AppUser profile without exposing profile contents.
-      }
-      await this.authAudit.record(
-        profile.id,
-        AUTH_AUDIT_EVENTS.PROFILE_UPDATE_FAILED,
-        context,
-        {
-          stage: 'database_update',
-          compensated,
-          reconciliationRequired: !compensated,
+          try {
+            await updateFirebaseAuthDisplayName(firebaseUid, input.displayName);
+          } catch {
+            await this.recordAuditBestEffort(
+              profile.id,
+              AUTH_AUDIT_EVENTS.PROFILE_UPDATE_FAILED,
+              context,
+              { stage: 'firebase_update', compensated: false },
+            );
+            throw new BadRequestException(AUTH_ACCOUNT_ACTION_FAILED);
+          }
+
+          let updated;
+          try {
+            updated = await updateAppUser(profile.id, {
+              displayName: input.displayName,
+            });
+          } catch {
+            let compensated = false;
+            try {
+              // Re-read the authoritative profile before compensation. This
+              // prevents a failed older request from overwriting a newer
+              // successful request if distributed locking is degraded.
+              const authoritative = await getAppUserByFirebaseUid(firebaseUid);
+              await updateFirebaseAuthDisplayName(
+                firebaseUid,
+                authoritative?.displayName ?? profile.displayName,
+              );
+              compensated = true;
+            } catch {
+              // The audit marker allows an operator to reconcile Firebase from
+              // the authoritative AppUser profile.
+            }
+            await this.recordAuditBestEffort(
+              profile.id,
+              AUTH_AUDIT_EVENTS.PROFILE_UPDATE_FAILED,
+              context,
+              {
+                stage: 'database_update',
+                compensated,
+                reconciliationRequired: !compensated,
+              },
+            );
+            throw new BadRequestException(AUTH_ACCOUNT_ACTION_FAILED);
+          }
+
+          await this.recordAuditBestEffort(
+            profile.id,
+            AUTH_AUDIT_EVENTS.PROFILE_UPDATE_SUCCESS,
+            context,
+          );
+          return this.toMeResponse(updated);
         },
       );
-      throw new BadRequestException(AUTH_ACCOUNT_ACTION_FAILED);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      this.logger.warn('auth_profile_update_lock_failed');
+      throw new ServiceUnavailableException(AUTH_ACCOUNT_ACTION_FAILED);
     }
   }
 
@@ -402,6 +425,25 @@ export class AuthService {
     }
 
     try {
+      await revokeFirebaseRefreshTokens(firebaseUid);
+    } catch {
+      this.logger.error('auth_password_change_revoke_failed');
+      await this.recordAuditBestEffort(
+        profile.id,
+        AUTH_AUDIT_EVENTS.PASSWORD_CHANGE_SUCCESS,
+        context,
+        {
+          sessionsRevoked: false,
+          reconciliationRequired: true,
+        },
+      );
+      throw new ServiceUnavailableException({
+        message: AUTH_ACCOUNT_ACTION_FAILED,
+        reauthenticationRequired: true,
+      });
+    }
+
+    try {
       await Promise.all([
         this.authSecurity.clearLoginFailures(this.authSecurity.hashEmail(tokenEmail)),
         this.authSecurity.clearAccountActionFailures(
@@ -414,35 +456,21 @@ export class AuthService {
       this.logger.warn('auth_password_change_counter_clear_failed');
     }
 
-    let sessionsRevoked = false;
-    try {
-      await revokeFirebaseRefreshTokens(firebaseUid);
-      sessionsRevoked = true;
-      await this.authAudit.record(
-        profile.id,
-        AUTH_AUDIT_EVENTS.SESSIONS_REVOKED,
-        context,
-        { source: 'password_change' },
-      );
-    } catch {
-      this.logger.error('auth_password_change_revoke_failed');
-    }
-
-    await this.authAudit.record(
+    await this.recordAuditBestEffort(
+      profile.id,
+      AUTH_AUDIT_EVENTS.SESSIONS_REVOKED,
+      context,
+      { source: 'password_change' },
+    );
+    await this.recordAuditBestEffort(
       profile.id,
       AUTH_AUDIT_EVENTS.PASSWORD_CHANGE_SUCCESS,
       context,
       {
-        sessionsRevoked,
-        reconciliationRequired: !sessionsRevoked,
+        sessionsRevoked: true,
+        reconciliationRequired: false,
       },
     );
-    if (!sessionsRevoked) {
-      throw new ServiceUnavailableException({
-        message: AUTH_ACCOUNT_ACTION_FAILED,
-        reauthenticationRequired: true,
-      });
-    }
     return {
       message: AUTH_PASSWORD_CHANGED,
       reauthenticationRequired: true,
@@ -459,11 +487,6 @@ export class AuthService {
 
     try {
       await revokeFirebaseRefreshTokens(firebaseUid);
-      await this.authSecurity.clearAccountActionFailures(
-        profile.id,
-        context.ip,
-        'logout-all',
-      );
     } catch {
       await this.authSecurity.recordAccountActionFailure(
         profile.id,
@@ -473,7 +496,17 @@ export class AuthService {
       throw new BadRequestException(AUTH_ACCOUNT_ACTION_FAILED);
     }
 
-    await this.authAudit.record(
+    try {
+      await this.authSecurity.clearAccountActionFailures(
+        profile.id,
+        context.ip,
+        'logout-all',
+      );
+    } catch {
+      this.logger.warn('auth_logout_all_counter_clear_failed');
+    }
+
+    await this.recordAuditBestEffort(
       profile.id,
       AUTH_AUDIT_EVENTS.SESSIONS_REVOKED,
       context,
@@ -578,14 +611,14 @@ export class AuthService {
     if (!(await this.authSecurity.checkAccountRateLimit(userId, context.ip, action))) {
       await this.authSecurity.recordAccountActionFailure(userId, context.ip, action);
       if (action === 'change-password') {
-        await this.authAudit.record(
+        await this.recordAuditBestEffort(
           userId,
           AUTH_AUDIT_EVENTS.PASSWORD_CHANGE_FAILED,
           context,
           { reason: 'rate_limit' },
         );
       }
-      throw new BadRequestException(AUTH_ACCOUNT_ACTION_FAILED);
+      throw this.tooManyRequests(AUTH_ACCOUNT_ACTION_FAILED);
     }
   }
 
@@ -602,6 +635,30 @@ export class AuthService {
       context,
       { reason },
     );
+  }
+
+  private tooManyRequests(message: string): HttpException {
+    return new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        code: AUTH_RATE_LIMITED_CODE,
+        message,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  }
+
+  private async recordAuditBestEffort(
+    userId: string | null,
+    eventType: (typeof AUTH_AUDIT_EVENTS)[keyof typeof AUTH_AUDIT_EVENTS],
+    context: AuthAuditContext,
+    metadata?: Record<string, string | number | boolean | null>,
+  ): Promise<void> {
+    try {
+      await this.authAudit.record(userId, eventType, context, metadata);
+    } catch {
+      this.logger.warn(`auth_audit_callback_failed event=${eventType}`);
+    }
   }
 
   private toMeResponse(profile: {

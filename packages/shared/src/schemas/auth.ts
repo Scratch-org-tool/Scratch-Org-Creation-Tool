@@ -17,6 +17,7 @@ export const AUTH_PASSWORD_MISMATCH = 'Passwords do not match';
 export const AUTH_PASSWORD_SAME = 'New password must be different from current password';
 export const AUTH_ACCOUNT_ACTION_FAILED =
   'Unable to complete this account request. Please try again.';
+export const AUTH_RATE_LIMITED_CODE = 'AUTH_RATE_LIMITED';
 export const AUTH_PASSWORD_CHANGED =
   'Password changed. Sign in again on all devices.';
 export const AUTH_SESSIONS_REVOKED = 'Signed out from all devices.';

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpStatus } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthAuditService } from './auth-audit.service';
 import type { AuthSecurityService } from './auth-security.service';
@@ -49,6 +49,7 @@ describe('AuthService self-service accounts', () => {
     clearLoginFailures: ReturnType<typeof vi.fn>;
     hashEmail: ReturnType<typeof vi.fn>;
     sleep: ReturnType<typeof vi.fn>;
+    withAccountMutationLock: ReturnType<typeof vi.fn>;
   };
   let audit: { record: ReturnType<typeof vi.fn> };
   let service: AuthService;
@@ -74,6 +75,9 @@ describe('AuthService self-service accounts', () => {
       clearLoginFailures: vi.fn().mockResolvedValue(undefined),
       hashEmail: vi.fn().mockReturnValue('email-hash'),
       sleep: vi.fn().mockResolvedValue(undefined),
+      withAccountMutationLock: vi.fn(
+        async (_userId: string, operation: () => Promise<unknown>) => operation(),
+      ),
     };
     audit = { record: vi.fn().mockResolvedValue(undefined) };
     service = new AuthService(
@@ -129,6 +133,107 @@ describe('AuthService self-service accounts', () => {
       expect.anything(),
       expect.objectContaining({ compensated: true }),
     );
+  });
+
+  it('serializes concurrent updates so older compensation cannot overwrite the latest name', async () => {
+    let lockTail = Promise.resolve();
+    security.withAccountMutationLock.mockImplementation(
+      async (_userId: string, operation: () => Promise<unknown>) => {
+        const previous = lockTail;
+        let releaseLock!: () => void;
+        lockTail = new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+        await previous;
+        try {
+          return await operation();
+        } finally {
+          releaseLock();
+        }
+      },
+    );
+
+    let rejectFirstUpdate!: (error: Error) => void;
+    const firstUpdate = new Promise<never>((_resolve, reject) => {
+      rejectFirstUpdate = reject;
+    });
+    const latest = { ...profile, displayName: 'Latest Name' };
+    users.updateAppUser
+      .mockImplementationOnce(() => firstUpdate)
+      .mockResolvedValueOnce(latest);
+
+    const olderRequest = service.updateMe(
+      'uid-1',
+      profile.id,
+      { displayName: 'Older Name' },
+      { ip: '203.0.113.10' },
+    );
+    await vi.waitFor(() => expect(users.updateAppUser).toHaveBeenCalledTimes(1));
+
+    const latestRequest = service.updateMe(
+      'uid-1',
+      profile.id,
+      { displayName: 'Latest Name' },
+      { ip: '203.0.113.11' },
+    );
+    await Promise.resolve();
+    expect(firebaseAdmin.updateFirebaseAuthDisplayName.mock.calls).toEqual([
+      ['uid-1', 'Older Name'],
+    ]);
+
+    rejectFirstUpdate(new Error('database unavailable'));
+    await expect(olderRequest).rejects.toBeInstanceOf(BadRequestException);
+    await expect(latestRequest).resolves.toMatchObject({
+      displayName: 'Latest Name',
+    });
+
+    expect(firebaseAdmin.updateFirebaseAuthDisplayName.mock.calls).toEqual([
+      ['uid-1', 'Older Name'],
+      ['uid-1', 'Ada'],
+      ['uid-1', 'Latest Name'],
+    ]);
+  });
+
+  it('reconciles failed compensation from the latest authoritative profile', async () => {
+    let authoritativeName = profile.displayName;
+    users.getAppUserByFirebaseUid.mockImplementation(async () => ({
+      ...profile,
+      displayName: authoritativeName,
+    }));
+    let rejectOlderUpdate!: (error: Error) => void;
+    const olderUpdate = new Promise<never>((_resolve, reject) => {
+      rejectOlderUpdate = reject;
+    });
+    users.updateAppUser
+      .mockImplementationOnce(() => olderUpdate)
+      .mockImplementationOnce(async (_id, update) => {
+        authoritativeName = update.displayName!;
+        return { ...profile, displayName: authoritativeName };
+      });
+
+    const olderRequest = service.updateMe(
+      'uid-1',
+      profile.id,
+      { displayName: 'Older Name' },
+      { ip: '203.0.113.10' },
+    );
+    await vi.waitFor(() => expect(users.updateAppUser).toHaveBeenCalledTimes(1));
+    await expect(
+      service.updateMe(
+        'uid-1',
+        profile.id,
+        { displayName: 'Latest Name' },
+        { ip: '203.0.113.11' },
+      ),
+    ).resolves.toMatchObject({ displayName: 'Latest Name' });
+
+    rejectOlderUpdate(new Error('database unavailable'));
+    await expect(olderRequest).rejects.toBeInstanceOf(BadRequestException);
+    expect(firebaseAdmin.updateFirebaseAuthDisplayName.mock.calls).toEqual([
+      ['uid-1', 'Older Name'],
+      ['uid-1', 'Latest Name'],
+      ['uid-1', 'Latest Name'],
+    ]);
   });
 
   it('fails closed for an inactive account before touching Firebase', async () => {
@@ -230,22 +335,51 @@ describe('AuthService self-service accounts', () => {
     );
   });
 
-  it('rate limits by authenticated user and trusted request IP', async () => {
-    security.checkAccountRateLimit.mockResolvedValue(false);
+  it('returns password-change success after revocation when cleanup and audit fail', async () => {
+    security.clearLoginFailures.mockRejectedValue(new Error('redis unavailable'));
+    audit.record.mockRejectedValue(new Error('audit unavailable'));
 
     await expect(
       service.changePassword(
         'uid-1',
-        'DPT_uid-1',
+        profile.id,
         profile.email,
         {
           currentPassword: 'OldPassword1!',
           newPassword: 'NewPassword2!',
           confirmPassword: 'NewPassword2!',
         },
-        { ip: '198.51.100.20' },
+        { ip: '203.0.113.10' },
       ),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).resolves.toEqual({
+      message: 'Password changed. Sign in again on all devices.',
+      reauthenticationRequired: true,
+    });
+    expect(firebaseAdmin.revokeFirebaseRefreshTokens).toHaveBeenCalledWith('uid-1');
+  });
+
+  it('rate limits by authenticated user and trusted request IP', async () => {
+    security.checkAccountRateLimit.mockResolvedValue(false);
+
+    const request = service.changePassword(
+      'uid-1',
+      'DPT_uid-1',
+      profile.email,
+      {
+        currentPassword: 'OldPassword1!',
+        newPassword: 'NewPassword2!',
+        confirmPassword: 'NewPassword2!',
+      },
+      { ip: '198.51.100.20' },
+    );
+    await expect(request).rejects.toMatchObject({
+      status: HttpStatus.TOO_MANY_REQUESTS,
+      response: {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        code: 'AUTH_RATE_LIMITED',
+        message: 'Unable to complete this account request. Please try again.',
+      },
+    });
     expect(security.checkAccountRateLimit).toHaveBeenCalledWith(
       profile.id,
       '198.51.100.20',
@@ -269,5 +403,25 @@ describe('AuthService self-service accounts', () => {
       expect.anything(),
       { source: 'logout_all' },
     );
+  });
+
+  it('returns logout-all success after revocation when cleanup and audit fail', async () => {
+    security.clearAccountActionFailures.mockRejectedValue(
+      new Error('redis unavailable'),
+    );
+    audit.record.mockRejectedValue(new Error('audit unavailable'));
+
+    await expect(
+      service.logoutAll(
+        'uid-1',
+        profile.id,
+        { ip: '203.0.113.10' },
+      ),
+    ).resolves.toEqual({
+      message: 'Signed out from all devices.',
+      reauthenticationRequired: true,
+    });
+    expect(firebaseAdmin.revokeFirebaseRefreshTokens).toHaveBeenCalledWith('uid-1');
+    expect(security.recordAccountActionFailure).not.toHaveBeenCalled();
   });
 });

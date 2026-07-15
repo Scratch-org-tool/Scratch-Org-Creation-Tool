@@ -150,8 +150,33 @@ describe('AuthGuard', () => {
       query: {},
     };
     await expect(guard.canActivate(makeContext(request))).resolves.toBe(true);
+    expect(verifyIdToken).toHaveBeenCalledWith('token', true);
     expect(request.user?.appUserId).toBe('DPT_u1');
     expect(request.userProfile?.status).toBe('active');
+  });
+
+  it('maps revoked Firebase tokens to the stable unauthorized response', async () => {
+    vi.mocked(verifyIdToken).mockRejectedValue(
+      Object.assign(new Error('Firebase ID token has been revoked'), {
+        code: 'auth/id-token-revoked',
+      }),
+    );
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const guard = makeGuard();
+
+    await expect(
+      guard.canActivate(
+        makeContext({ headers: { authorization: 'Bearer revoked' }, query: {} }),
+      ),
+    ).rejects.toMatchObject({
+      status: 401,
+      response: {
+        message: 'Invalid or expired authentication token',
+      },
+    });
+    expect(verifyIdToken).toHaveBeenCalledWith('revoked', true);
+    expect(getProfileByFirebaseUid).not.toHaveBeenCalled();
+    errorLog.mockRestore();
   });
 });
 

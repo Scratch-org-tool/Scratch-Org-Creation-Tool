@@ -96,6 +96,31 @@ describe('AuthController self-service account contracts', () => {
     );
   });
 
+  it('uses the resolved legacy AppUser ID for rejected-request audits', async () => {
+    const legacyRequest: AuthenticatedRequest = {
+      ...request,
+      userProfile: {
+        id: 'firebase-uid',
+        email: request.user!.email,
+        displayName: 'Legacy User',
+        role: 'user',
+        grantedModules: [],
+        status: 'active',
+      },
+    };
+
+    await expect(
+      controller.changePassword(legacyRequest, {
+        currentPassword: 'invalid',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(auth.auditRejectedAccountRequest).toHaveBeenCalledWith(
+      'change-password',
+      'firebase-uid',
+      expect.anything(),
+    );
+  });
+
   it('rejects targeting fields on logout-all', async () => {
     await expect(
       controller.logoutAll(request, { uid: 'another-user' }),

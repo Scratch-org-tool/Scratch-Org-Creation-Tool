@@ -110,7 +110,7 @@ export class AuthController {
     if (!parsed.success) {
       await this.authService.auditRejectedAccountRequest(
         'profile-update',
-        req.user.appUserId,
+        req.userProfile?.id ?? req.user.appUserId,
         context,
       );
       throw new BadRequestException(AUTH_GENERIC_INVALID);
@@ -135,7 +135,7 @@ export class AuthController {
     if (!parsed.success) {
       await this.authService.auditRejectedAccountRequest(
         'change-password',
-        req.user.appUserId,
+        req.userProfile?.id ?? req.user.appUserId,
         context,
       );
       throw new BadRequestException(AUTH_GENERIC_INVALID);

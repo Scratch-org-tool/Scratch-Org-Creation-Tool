@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { QueueService } from '../queue/queue.service';
 
@@ -15,6 +15,9 @@ const ACCOUNT_ACTION_WINDOW_SEC = 5 * 60;
 const ACCOUNT_ACTION_ATTEMPTS_TTL_SEC = 15 * 60;
 const CHANGE_PASSWORD_LIMIT = 5;
 const LOGOUT_ALL_LIMIT = 10;
+const ACCOUNT_MUTATION_LOCK_TTL_MS = 30_000;
+const ACCOUNT_MUTATION_LOCK_WAIT_MS = 10_000;
+const ACCOUNT_MUTATION_LOCK_RETRY_MS = 25;
 
 interface MemoryEntry {
   count: number;
@@ -27,6 +30,7 @@ const BOOTSTRAP_IP_LIMIT = 5;
 export class AuthSecurityService {
   private readonly logger = new Logger(AuthSecurityService.name);
   private readonly memoryStore = new Map<string, MemoryEntry>();
+  private readonly localLocks = new Map<string, Promise<void>>();
 
   constructor(private readonly queueService: QueueService) {}
 
@@ -84,10 +88,15 @@ export class AuthSecurityService {
   ): Promise<boolean> {
     const userHash = this.hashUserId(userId);
     const ipHash = this.hashIp(ip);
-    const key = `auth:rl:${action}:user:${userHash}:ip:${ipHash}`;
-    const count = await this.increment(key, ACCOUNT_ACTION_WINDOW_SEC);
+    const [userCount, ipCount] = await this.incrementMany(
+      [
+        `auth:rl:${action}:user:${userHash}`,
+        `auth:rl:${action}:ip:${ipHash}`,
+      ],
+      ACCOUNT_ACTION_WINDOW_SEC,
+    );
     const limit = action === 'change-password' ? CHANGE_PASSWORD_LIMIT : LOGOUT_ALL_LIMIT;
-    if (count > limit) {
+    if (userCount > limit || ipCount > limit) {
       this.logger.warn(`auth_rate_limited action=${action} userHash=${userHash} ipHash=${ipHash}`);
       return false;
     }
@@ -99,7 +108,9 @@ export class AuthSecurityService {
     ip: string,
     action: 'change-password' | 'logout-all',
   ): Promise<number> {
-    const attempts = await this.getCounter(this.accountAttemptsKey(userId, ip, action));
+    const attempts = await this.getCounters(
+      this.accountAttemptsKeys(userId, ip, action),
+    );
     return Math.min(attempts * PROGRESSIVE_DELAY_MS, MAX_PROGRESSIVE_DELAY_MS);
   }
 
@@ -108,10 +119,11 @@ export class AuthSecurityService {
     ip: string,
     action: 'change-password' | 'logout-all',
   ): Promise<number> {
-    const attempts = await this.increment(
-      this.accountAttemptsKey(userId, ip, action),
+    const counts = await this.incrementMany(
+      this.accountAttemptsKeys(userId, ip, action),
       ACCOUNT_ACTION_ATTEMPTS_TTL_SEC,
     );
+    const attempts = Math.max(...counts);
     this.logger.warn(
       `auth_account_action_failed action=${action} userHash=${this.hashUserId(userId)} ipHash=${this.hashIp(ip)} attempt=${attempts}`,
     );
@@ -123,21 +135,111 @@ export class AuthSecurityService {
     ip: string,
     action: 'change-password' | 'logout-all',
   ): Promise<void> {
-    const key = this.accountAttemptsKey(userId, ip, action);
+    const keys = this.accountAttemptsKeys(userId, ip, action);
     const redis = this.queueService.getConnection();
     if (redis) {
-      await redis.del(key);
-      return;
+      try {
+        await redis.del(...keys);
+        return;
+      } catch {
+        this.logger.warn('auth_counter_clear_redis_failed');
+      }
     }
-    this.memoryStore.delete(key);
+    for (const key of keys) this.memoryStore.delete(key);
   }
 
-  private accountAttemptsKey(
+  private accountAttemptsKeys(
     userId: string,
     ip: string,
     action: 'change-password' | 'logout-all',
-  ): string {
-    return `auth:attempts:${action}:user:${this.hashUserId(userId)}:ip:${this.hashIp(ip)}`;
+  ): [string, string] {
+    return [
+      `auth:attempts:${action}:user:${this.hashUserId(userId)}`,
+      `auth:attempts:${action}:ip:${this.hashIp(ip)}`,
+    ];
+  }
+
+  async withAccountMutationLock<T>(
+    userId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = `auth:lock:profile:${this.hashUserId(userId)}`;
+    return this.withLocalLock(key, async () => {
+      const redis = this.queueService.getConnection();
+      if (!redis) return operation();
+
+      const token = randomUUID();
+      let acquired = false;
+      try {
+        const deadline = Date.now() + ACCOUNT_MUTATION_LOCK_WAIT_MS;
+        do {
+          acquired =
+            (await redis.set(
+              key,
+              token,
+              'PX',
+              ACCOUNT_MUTATION_LOCK_TTL_MS,
+              'NX',
+            )) === 'OK';
+          if (!acquired) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, ACCOUNT_MUTATION_LOCK_RETRY_MS),
+            );
+          }
+        } while (!acquired && Date.now() < deadline);
+      } catch {
+        this.logger.warn('auth_profile_lock_redis_failed');
+        return operation();
+      }
+
+      if (!acquired) {
+        throw new Error('Account profile update lock timed out');
+      }
+
+      const renew = setInterval(() => {
+        redis.eval(
+          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end",
+          1,
+          key,
+          token,
+          String(ACCOUNT_MUTATION_LOCK_TTL_MS),
+        ).catch(() => undefined);
+      }, ACCOUNT_MUTATION_LOCK_TTL_MS / 3);
+      renew.unref?.();
+
+      try {
+        return await operation();
+      } finally {
+        clearInterval(renew);
+        await redis.eval(
+          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
+          1,
+          key,
+          token,
+        ).catch(() => undefined);
+      }
+    });
+  }
+
+  private async withLocalLock<T>(
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.localLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.localLocks.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.localLocks.get(key) === current) {
+        this.localLocks.delete(key);
+      }
+    }
   }
 
   async isAccountLocked(emailHash: string): Promise<boolean> {
@@ -190,23 +292,86 @@ export class AuthSecurityService {
   private async getCounter(key: string): Promise<number> {
     const redis = this.queueService.getConnection();
     if (redis) {
-      const val = await redis.get(key);
-      return val ? parseInt(val, 10) : 0;
+      try {
+        const val = await redis.get(key);
+        return val ? parseInt(val, 10) : 0;
+      } catch {
+        this.logger.warn('auth_counter_read_redis_failed');
+      }
     }
     const entry = this.memoryStore.get(key);
     if (!entry || entry.expiresAt <= Date.now()) return 0;
     return entry.count;
   }
 
+  private async getCounters(keys: string[]): Promise<number> {
+    const redis = this.queueService.getConnection();
+    if (redis) {
+      try {
+        const values = await redis.mget(...keys);
+        return Math.max(
+          0,
+          ...values.map((value) => (value ? parseInt(value, 10) : 0)),
+        );
+      } catch {
+        this.logger.warn('auth_counter_read_redis_failed');
+      }
+    }
+    const now = Date.now();
+    return Math.max(
+      0,
+      ...keys.map((key) => {
+        const entry = this.memoryStore.get(key);
+        return !entry || entry.expiresAt <= now ? 0 : entry.count;
+      }),
+    );
+  }
+
   private async increment(key: string, ttlSec: number): Promise<number> {
     const redis = this.queueService.getConnection();
     if (redis) {
-      const count = await redis.incr(key);
-      if (count === 1) {
-        await redis.expire(key, ttlSec);
+      try {
+        const count = await redis.incr(key);
+        if (count === 1) {
+          await redis.expire(key, ttlSec);
+        }
+        return count;
+      } catch {
+        this.logger.warn('auth_counter_increment_redis_failed');
       }
-      return count;
     }
+    return this.incrementMemory(key, ttlSec);
+  }
+
+  private async incrementMany(
+    keys: string[],
+    ttlSec: number,
+  ): Promise<number[]> {
+    const redis = this.queueService.getConnection();
+    if (redis) {
+      try {
+        const result = await redis.eval(
+          "local result = {}; for i, key in ipairs(KEYS) do local count = redis.call('INCR', key); if count == 1 then redis.call('EXPIRE', key, ARGV[1]); end; result[i] = count; end; return result",
+          keys.length,
+          ...keys,
+          String(ttlSec),
+        );
+        if (
+          Array.isArray(result) &&
+          result.length === keys.length &&
+          result.every((value) => typeof value === 'number')
+        ) {
+          return result as number[];
+        }
+        throw new Error('Invalid Redis counter result');
+      } catch {
+        this.logger.warn('auth_counter_increment_redis_failed');
+      }
+    }
+    return keys.map((key) => this.incrementMemory(key, ttlSec));
+  }
+
+  private incrementMemory(key: string, ttlSec: number): number {
     const now = Date.now();
     const entry = this.memoryStore.get(key);
     if (!entry || entry.expiresAt <= now) {

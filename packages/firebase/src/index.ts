@@ -213,10 +213,13 @@ export async function listFirebaseAuthUsers(): Promise<FirebaseAuthUserSummary[]
   return users;
 }
 
-export async function verifyIdToken(token: string): Promise<DecodedIdToken> {
+export async function verifyIdToken(
+  token: string,
+  checkRevoked = true,
+): Promise<DecodedIdToken> {
   const firebaseAuth = getFirebaseAuth();
   if (firebaseAuth) {
-    return firebaseAuth.verifyIdToken(token);
+    return firebaseAuth.verifyIdToken(token, checkRevoked);
   }
 
   if (process.env.NODE_ENV === 'production') {

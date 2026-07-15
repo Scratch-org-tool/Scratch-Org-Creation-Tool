@@ -52,7 +52,10 @@ export class AuthGuard implements CanActivate {
     ]);
 
     try {
-      const decoded = await verifyIdToken(token);
+      // Every protected request checks Firebase's tokensValidAfterTime. A
+      // signature-only check would continue accepting cached ID tokens after
+      // logout-all or a password change.
+      const decoded = await verifyIdToken(token, true);
       const uid = decoded.uid;
       const email = decoded.email ?? '';
       const appUserId = toAppUserId(uid);
