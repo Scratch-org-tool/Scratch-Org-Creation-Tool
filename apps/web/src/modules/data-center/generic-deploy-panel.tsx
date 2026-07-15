@@ -24,7 +24,18 @@ import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 import { DataDeployBatchProgress } from './data-deploy-batch-progress';
 import { DataPreviewTable } from './data-preview-table';
-import type { Org } from './types';
+import type { OrgToOrgObjectMeta } from './types';
+import {
+  buildGenericDeployPayload,
+  defaultOperationForMeta,
+  externalIdOptions,
+  DATA_CENTER_ADD_QUERY_EVENT,
+  preflightKey,
+  type DataPreflightReport,
+  type DataOperation,
+  type ReplicationQuery,
+} from './data-center-contracts';
+import { DataPreflightReportView } from './data-preflight-report';
 
 interface JobData {
   id: string;
@@ -54,7 +65,16 @@ export function GenericDeployPanel() {
     objectName: 'Account',
     soql: '',
     recordLimit: 200,
+    operation: 'insert' as DataOperation,
+    externalIdField: '',
+    rollbackEnabled: false,
+    maxParallelChunks: 4,
   });
+  const [objectMeta, setObjectMeta] = useState<OrgToOrgObjectMeta | null>(null);
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [preflight, setPreflight] = useState<DataPreflightReport | null>(null);
+  const [preflightConfigKey, setPreflightConfigKey] = useState<string | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const [preview, setPreview] = useState<{
     records: unknown[];
     totalSize: number;
@@ -76,6 +96,14 @@ export function GenericDeployPanel() {
   const logBottomRef = useRef<HTMLDivElement>(null);
   const previewRequestRef = useRef(0);
 
+  const runtimePayload = buildGenericDeployPayload({
+    ...form,
+    dryRun: false,
+  });
+  const runtimeKey = preflightKey(runtimePayload);
+  const hasCurrentPreflight = Boolean(preflight && preflightConfigKey === runtimeKey);
+  const externalIds = externalIdOptions(objectMeta);
+
   const loadMovements = useCallback(() => {
     api<Movement[]>('/data/movements')
       .then((list) => setMovements(list.filter((m) => m.movementType === 'deploy')))
@@ -85,6 +113,26 @@ export function GenericDeployPanel() {
   useEffect(() => {
     loadMovements();
   }, [loadMovements]);
+
+  useEffect(() => {
+    const addTemplate = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        target: string;
+        query: ReplicationQuery;
+      }>).detail;
+      if (detail?.target !== 'deploy' || !detail.query) return;
+      setForm((current) => ({
+        ...current,
+        objectName: detail.query.object,
+        soql: detail.query.soql,
+        recordLimit: detail.query.limit ?? current.recordLimit,
+        operation: detail.query.operation,
+        externalIdField: detail.query.externalIdField ?? '',
+      }));
+    };
+    window.addEventListener(DATA_CENTER_ADD_QUERY_EVENT, addTemplate);
+    return () => window.removeEventListener(DATA_CENTER_ADD_QUERY_EVENT, addTemplate);
+  }, []);
 
   useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -161,6 +209,68 @@ export function GenericDeployPanel() {
     setPreviewLoading(false);
   }, [form.sourceOrgId, form.objectName, form.soql, form.recordLimit]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setObjectMeta(null);
+    if (!form.sourceOrgId || !form.objectName.trim()) return;
+    const timer = setTimeout(async () => {
+      setMetadataLoading(true);
+      try {
+        const meta = await api<OrgToOrgObjectMeta>(
+          `/data/org-to-org/object-meta?orgId=${encodeURIComponent(form.sourceOrgId)}&objectName=${encodeURIComponent(form.objectName.trim())}`,
+        );
+        if (cancelled) return;
+        setObjectMeta(meta);
+        const defaults = defaultOperationForMeta(meta);
+        setForm((current) => ({
+          ...current,
+          operation: defaults.operation,
+          externalIdField: defaults.externalIdField ?? '',
+          rollbackEnabled: defaults.operation === 'upsert' && current.rollbackEnabled,
+        }));
+      } catch {
+        if (!cancelled) setObjectMeta(null);
+      } finally {
+        if (!cancelled) setMetadataLoading(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [form.sourceOrgId, form.objectName]);
+
+  useEffect(() => {
+    if (preflightConfigKey && preflightConfigKey !== runtimeKey) {
+      setPreflight(null);
+      setPreflightConfigKey(null);
+      setConfirmingDeploy(false);
+    }
+  }, [preflightConfigKey, runtimeKey]);
+
+  const runPreflight = async (openConfirmation: boolean) => {
+    setPreflightLoading(true);
+    setDeployError(null);
+    try {
+      const report = await api<DataPreflightReport>('/data/deploy/preflight', {
+        method: 'POST',
+        body: JSON.stringify({ ...runtimePayload, dryRun: true }),
+      });
+      setPreflight(report);
+      setPreflightConfigKey(runtimeKey);
+      if (openConfirmation && report.ok) setConfirmingDeploy(true);
+      if (openConfirmation && !report.ok) {
+        setDeployError('Preflight failed. Resolve every blocking issue before deployment.');
+      }
+    } catch (err) {
+      setPreflight(null);
+      setPreflightConfigKey(null);
+      setDeployError(err instanceof Error ? err.message : 'Preflight failed');
+    } finally {
+      setPreflightLoading(false);
+    }
+  };
+
   const handleDeploy = async () => {
     if (form.sourceOrgId === form.targetOrgId) {
       setDeployError('Source and target org must differ.');
@@ -174,6 +284,10 @@ export function GenericDeployPanel() {
     setBatchId(null);
     setDeployError(null);
     try {
+      if (!hasCurrentPreflight || !preflight?.ok) {
+        setDeployError('Run a successful preflight for the current configuration before deploying.');
+        return;
+      }
       const res = await api<{
         movementId: string;
         jobId: string;
@@ -182,7 +296,7 @@ export function GenericDeployPanel() {
         totalChunks?: number;
       }>('/data/deploy', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify(runtimePayload),
       });
       setJobId(res.jobId);
       setMovementId(res.movementId);
@@ -243,6 +357,71 @@ export function GenericDeployPanel() {
           <div>
             <Label htmlFor="generic-deploy-object">Object</Label>
             <Input id="generic-deploy-object" value={form.objectName} onChange={(e) => setForm({ ...form, objectName: e.target.value })} />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {metadataLoading
+                ? 'Reading object metadata…'
+                : objectMeta
+                  ? `Metadata loaded for ${objectMeta.label}.`
+                  : 'Object metadata is required to discover safe upsert keys.'}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <Label htmlFor="generic-deploy-operation">Write operation</Label>
+              <Select
+                id="generic-deploy-operation"
+                value={form.operation}
+                onChange={(e) => setForm({
+                  ...form,
+                  operation: e.target.value as DataOperation,
+                  externalIdField: e.target.value === 'upsert'
+                    ? form.externalIdField || externalIds[0] || ''
+                    : '',
+                  rollbackEnabled: e.target.value === 'upsert' && form.rollbackEnabled,
+                })}
+              >
+                <option value="insert">Insert (non-idempotent)</option>
+                <option value="upsert" disabled={externalIds.length === 0}>Upsert (safe retry)</option>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="generic-deploy-external-id">External ID</Label>
+              <Select
+                id="generic-deploy-external-id"
+                value={form.externalIdField}
+                disabled={form.operation !== 'upsert'}
+                onChange={(e) => setForm({ ...form, externalIdField: e.target.value })}
+              >
+                <option value="">Select external ID…</option>
+                {externalIds.map((field) => <option key={field} value={field}>{field}</option>)}
+              </Select>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-5">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.rollbackEnabled}
+                disabled={form.operation !== 'upsert'}
+                onChange={(event) => setForm({ ...form, rollbackEnabled: event.target.checked })}
+              />
+              Capture rollback data
+            </label>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="generic-deploy-parallel">Parallel chunks</Label>
+              <Input
+                id="generic-deploy-parallel"
+                type="number"
+                min={1}
+                max={32}
+                className="w-20"
+                value={form.maxParallelChunks}
+                onChange={(event) => setForm({
+                  ...form,
+                  maxParallelChunks: Math.min(32, Math.max(1, Number(event.target.value) || 1)),
+                })}
+              />
+            </div>
           </div>
           <div>
             <Label htmlFor="generic-deploy-record-limit">Maximum records to deploy</Label>
@@ -318,18 +497,37 @@ export function GenericDeployPanel() {
               Preview Data
             </Button>
             <Button
-              onClick={() => setConfirmingDeploy(true)}
-              loading={loading}
+              variant="outline"
+              onClick={() => void runPreflight(false)}
+              loading={preflightLoading}
+              disabled={
+                !form.sourceOrgId
+                || !form.targetOrgId
+                || form.sourceOrgId === form.targetOrgId
+                || (form.operation === 'upsert' && !form.externalIdField)
+              }
+            >
+              Dry-run preflight
+            </Button>
+            <Button
+              onClick={() => void runPreflight(true)}
+              loading={preflightLoading || loading}
               disabled={
                 isRunning
                 || !form.sourceOrgId
                 || !form.targetOrgId
                 || form.sourceOrgId === form.targetOrgId
+                || (form.operation === 'upsert' && !form.externalIdField)
               }
             >
-              Deploy
+              Review &amp; deploy
             </Button>
           </div>
+          {preflight && hasCurrentPreflight && (
+            <div className="mt-4">
+              <DataPreflightReportView report={preflight} />
+            </div>
+          )}
           {preview && (
             <div className="mt-4">
               <DataPreviewTable
@@ -393,7 +591,7 @@ export function GenericDeployPanel() {
       <ConfirmDialog
         open={confirmingDeploy}
         title="Deploy data to the target org?"
-        message={`Deploy up to ${form.recordLimit.toLocaleString()} ${form.objectName} records from the selected source org to the selected target org. This can overwrite matching target data.`}
+        message={`${preflight?.operation ?? form.operation} up to ${preflight?.sourceCount?.toLocaleString() ?? form.recordLimit.toLocaleString()} ${form.objectName} records in ${preflight?.estimatedBulkBatches ?? 'an unknown number of'} batch(es). ${preflight?.idempotent ? 'This operation is idempotent.' : 'Insert is non-idempotent and failed chunks cannot be retried safely.'}`}
         confirmLabel="Deploy data"
         loading={loading}
         onConfirm={() => void handleDeploy()}

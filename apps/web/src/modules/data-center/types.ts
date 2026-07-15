@@ -43,6 +43,8 @@ export interface OrgToOrgDeployableField {
   reference: boolean;
   custom: boolean;
   selected: boolean;
+  externalId?: boolean;
+  idLookup?: boolean;
 }
 
 export interface OrgToOrgObjectMeta {
@@ -50,6 +52,7 @@ export interface OrgToOrgObjectMeta {
   label: string;
   nameField: string;
   matchField: string;
+  externalIdFields?: string[];
   displayFields: string[];
   filterableFields: Array<{ name: string; label: string; type: string }>;
   deployableFields: OrgToOrgDeployableField[];
@@ -68,6 +71,7 @@ export interface OrgToOrgRecordPage {
 export type OrgToOrgQueryMode = 'builder' | 'soql';
 
 export interface OrgToOrgObjectDeployConfig {
+  id?: string;
   objectName: string;
   recordLimit: number;
   filters: OrgToOrgFilterRow[];
@@ -79,6 +83,8 @@ export interface OrgToOrgObjectDeployConfig {
   matchCount?: number;
   previewRecords?: unknown[];
   displayFields?: string[];
+  dependsOn?: string[];
+  order?: number;
 }
 
 export interface OrgToOrgFilterPreviewResult {
@@ -118,10 +124,21 @@ export interface OrgToOrgDeployBatchResult {
   deployments: Array<{
     objectName: string;
     movementId: string;
-    jobId: string;
+    jobId?: string;
     status: string;
     batchId?: string;
     totalChunks?: number;
+  }>;
+  dryRun?: boolean;
+  quotaSummary?: {
+    estimatedBulkBatches: number;
+    remaining: number | null;
+    sufficient: boolean;
+  };
+  preflight?: Array<{
+    id: string;
+    objectName: string;
+    report: import('./data-center-contracts').DataPreflightReport;
   }>;
 }
 
