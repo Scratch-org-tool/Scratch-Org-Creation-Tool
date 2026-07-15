@@ -15,6 +15,14 @@ import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { InlineAlert } from '@/components/studio';
 import { api } from '@/services/api';
+import {
+  canMoveQuery,
+  generatedStableQueryId,
+  inferQueryCategory,
+  inferQueryObject,
+  queryReferenceLabels,
+  reorderQueries,
+} from './query-section-editor-utils';
 
 const CATEGORIES: Array<{ value: QueryCategory; label: string }> = [
   { value: 'account', label: 'Account' },
@@ -25,71 +33,6 @@ const CATEGORIES: Array<{ value: QueryCategory; label: string }> = [
   { value: 'visit_plan', label: 'Visit plan' },
   { value: 'arbitrary', label: 'Other / arbitrary' },
 ];
-
-function slug(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '') || 'query';
-}
-
-export function generatedStableQueryId(name: string, existingIds: readonly string[]): string {
-  const base = slug(name);
-  const ids = new Set(existingIds);
-  if (!ids.has(base)) return base;
-  let suffix = 2;
-  while (ids.has(`${base}-${suffix}`)) suffix += 1;
-  return `${base}-${suffix}`;
-}
-
-export function inferQueryObject(soql: string): string | undefined {
-  let depth = 0;
-  let quote: string | null = null;
-  for (let index = 0; index < soql.length; index += 1) {
-    const character = soql[index];
-    if (quote) {
-      if (character === quote && soql[index - 1] !== '\\') quote = null;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    if (character === '(') depth += 1;
-    if (character === ')') depth = Math.max(0, depth - 1);
-    if (depth === 0 && soql.slice(index).match(/^FROM\b/i)) {
-      return soql.slice(index + 4).trim().match(/^([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
-    }
-  }
-  return undefined;
-}
-
-export function inferQueryCategory(objectName: string): QueryCategory {
-  const value = objectName.toLowerCase();
-  if (value === 'account') return 'account';
-  if (value.includes('employeemaster')) return 'employee_master';
-  if (value.includes('accountpartner')) return 'account_partner';
-  if (value.includes('onboarding') && value.includes('config')) return 'onboarding_config';
-  if (value.includes('product')) return 'product';
-  if (value.includes('visit') && value.includes('plan')) return 'visit_plan';
-  return 'arbitrary';
-}
-
-export function canMoveQuery(
-  queries: readonly QuerySectionQuery[],
-  index: number,
-  direction: -1 | 1,
-): boolean {
-  const target = index + direction;
-  if (target < 0 || target >= queries.length) return false;
-  const moving = queries[index];
-  const other = queries[target];
-  if (direction < 0 && moving.dependsOn.includes(other.id)) return false;
-  if (direction > 0 && other.dependsOn.includes(moving.id)) return false;
-  return true;
-}
 
 function defaultQuery(index: number, ids: readonly string[]): QuerySectionQuery {
   const name = `Query ${index + 1}`;
@@ -190,8 +133,12 @@ function AccountPartnerPlanEditor({
             {querySelect('accountQueryId', 'Account query', 'account')}
             {querySelect('employeeMasterQueryId', 'Employee query', 'employee_master')}
             {querySelect('accountPartnerQueryId', 'Mapping query', 'account_partner')}
-            {querySelect('roleQueryId', 'Role query (optional)')}
+            {querySelect('roleQueryId', 'Role lookup query (optional)', 'arbitrary')}
           </div>
+          <p className="text-xs text-muted-foreground">
+            When selected, the runtime requires this query to select its external ID field and
+            uses those values to validate the mapping role field before partner rows are loaded.
+          </p>
           <div className="grid sm:grid-cols-2 gap-3">
             {([
               ['accountKeyField', 'Account key field'],
@@ -221,19 +168,31 @@ function AccountPartnerPlanEditor({
 export function QuerySectionEditor({
   value,
   sourceOrgId,
+  salesOfficesByBottler,
   legacySummary,
   onChange,
 }: {
   value?: QuerySection;
   sourceOrgId?: string;
+  salesOfficesByBottler?: Record<string, string[]>;
   legacySummary?: string;
   onChange: (value: QuerySection | undefined) => void;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(value?.queries[0]?.id ?? null);
   const [message, setMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
-  const [previews, setPreviews] = useState<Record<string, { totalSize: number; records: unknown[] }>>({});
-  const queries = value?.queries ?? [];
+  const [previews, setPreviews] = useState<Record<string, Array<{
+    id: string;
+    name: string;
+    totalSize: number;
+    records: unknown[];
+  }>>>({});
+  const queries = useMemo(
+    () => [...(value?.queries ?? [])].sort(
+      (left, right) => left.stage - right.stage || left.order - right.order,
+    ),
+    [value?.queries],
+  );
 
   const validation = useMemo(() => {
     if (!value) return null;
@@ -263,9 +222,7 @@ export function QuerySectionEditor({
       setMessage({ kind: 'error', text: 'This move would put a dependency after the query that needs it.' });
       return;
     }
-    const next = [...queries];
-    [next[index], next[index + direction]] = [next[index + direction], next[index]];
-    setQueries(next);
+    setQueries(reorderQueries(queries, index, direction));
     setMessage(null);
   };
 
@@ -277,25 +234,27 @@ export function QuerySectionEditor({
     setPreviewingId(query.id);
     setMessage(null);
     try {
-      const compiled = compileQuerySectionPlan({
-        name: value?.name || 'Preview',
-        queries: [{ ...query, dependsOn: [] }],
-      }).queries[0];
       const result = await api<{
-        queries: Array<{ totalSize: number; records: unknown[] }>;
+        queries: Array<{
+          id: string;
+          name: string;
+          totalSize: number;
+          records: unknown[];
+        }>;
       }>('/data/query-section/preview', {
         method: 'POST',
         body: JSON.stringify({
           sourceOrgId,
           section: {
             name: value?.name || 'Preview',
-            queries: [{ ...query, soql: compiled.soql, dependsOn: [] }],
+            queries: [{ ...query, dependsOn: [] }],
           },
+          salesOfficesByBottler,
         }),
       });
       setPreviews((current) => ({
         ...current,
-        [query.id]: result.queries[0] ?? { totalSize: 0, records: [] },
+        [query.id]: result.queries,
       }));
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Preview failed' });
@@ -345,10 +304,14 @@ export function QuerySectionEditor({
       )}
 
       <div className="space-y-3" role="list" aria-label="Ordered deployment queries">
+        <p className="text-xs text-muted-foreground">
+          Rows are the preferred execution sequence. Moving a row renumbers stage and order
+          together; declared dependencies always run first.
+        </p>
         {queries.map((query, index) => {
           const inferredObject = inferQueryObject(query.soql);
           const previewResult = previews[query.id];
-          const dependents = queries.filter((candidate) => candidate.dependsOn.includes(query.id));
+          const references = queryReferenceLabels(query.id, queries, value?.accountPartnerPlan);
           return (
             <article key={query.id} role="listitem" className="rounded-lg border border-border/60 bg-card/30">
               <div className="flex flex-wrap items-center gap-2 p-3">
@@ -364,7 +327,13 @@ export function QuerySectionEditor({
                   </span>
                 </button>
                 <label className="inline-flex items-center gap-1.5 text-xs">
-                  <input type="checkbox" checked={query.enabled} onChange={(event) => update(index, { enabled: event.target.checked })} />
+                  <input
+                    type="checkbox"
+                    checked={query.enabled}
+                    disabled={query.enabled && references.length > 0}
+                    title={references.length ? `Required as ${references.join(', ')}` : undefined}
+                    onChange={(event) => update(index, { enabled: event.target.checked })}
+                  />
                   Enabled
                 </label>
                 <Button type="button" size="sm" variant="ghost" aria-label={`Move ${query.name} up`} disabled={!canMoveQuery(queries, index, -1)} onClick={() => move(index, -1)}>
@@ -396,8 +365,8 @@ export function QuerySectionEditor({
                   size="sm"
                   variant="ghost"
                   aria-label={`Delete ${query.name}`}
-                  disabled={dependents.length > 0}
-                  title={dependents.length ? `Required by ${dependents.map((item) => item.name).join(', ')}` : undefined}
+                  disabled={references.length > 0}
+                  title={references.length ? `Required as ${references.join(', ')}` : undefined}
                   onClick={() => setQueries(queries.filter((_, queryIndex) => queryIndex !== index))}
                 >
                   <Trash2 className="w-4 h-4 text-destructive" />
@@ -412,11 +381,12 @@ export function QuerySectionEditor({
                     </div>
                     <div>
                       <Label htmlFor={`query-${query.id}-id`}>Stable ID</Label>
-                      <Input id={`query-${query.id}-id`} value={query.id} onChange={(event) => update(index, { id: event.target.value })} />
+                      <Input id={`query-${query.id}-id`} value={query.id} readOnly aria-readonly="true" />
+                      <p className="text-xs text-muted-foreground mt-1">Immutable after creation so references remain valid.</p>
                     </div>
                     <div>
                       <Label htmlFor={`query-${query.id}-stage`}>Stage</Label>
-                      <Input id={`query-${query.id}-stage`} type="number" min={0} value={query.stage} onChange={(event) => update(index, { stage: Number(event.target.value) })} />
+                      <Input id={`query-${query.id}-stage`} type="number" value={query.stage} readOnly aria-readonly="true" />
                     </div>
                     <div>
                       <Label htmlFor={`query-${query.id}-object`}>Salesforce object</Label>
@@ -532,8 +502,30 @@ export function QuerySectionEditor({
                     <Button type="button" size="sm" variant="outline" loading={previewingId === query.id} onClick={() => void preview(query)}>
                       <Eye className="w-4 h-4 mr-1" /> Validate & preview
                     </Button>
-                    {previewResult && <span className="text-xs text-muted-foreground">{previewResult.totalSize} matching records · {previewResult.records.length} previewed</span>}
+                    {previewResult && (
+                      <span className="text-xs text-muted-foreground">
+                        {previewResult.length} variant{previewResult.length === 1 ? '' : 's'} ·{' '}
+                        {previewResult.reduce((sum, result) => sum + result.totalSize, 0)} matching records
+                      </span>
+                    )}
                   </div>
+                  {previewResult?.length ? (
+                    <ul className="space-y-1 text-xs" aria-label={`${query.name} preview variants`}>
+                      {previewResult.map((result) => (
+                        <li key={result.id} className="rounded-md border border-border/50 p-2">
+                          <span className="font-medium">{result.name}</span>
+                          <span className="text-muted-foreground">
+                            {' '}· {result.totalSize} matching · {result.records.length} previewed
+                          </span>
+                          {result.records.length > 0 && (
+                            <pre className="mt-2 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-[10px]">
+                              {JSON.stringify(result.records, null, 2)}
+                            </pre>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
               )}
             </article>

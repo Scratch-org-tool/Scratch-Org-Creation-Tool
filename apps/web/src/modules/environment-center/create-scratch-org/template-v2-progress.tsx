@@ -3,6 +3,7 @@
 import type { AutomationRunView } from '@/components/scratch-org/types';
 import type { QueryRuntimeCheckpoint, ResolvedProvisionUser, ScratchPipelineTemplateConfig } from '@sfcc/shared';
 import { cn } from '@/utils/cn';
+import { latestJobOfType } from './template-v2-progress-utils';
 
 type State = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 
@@ -22,7 +23,7 @@ function StatePill({ state }: { state: State }) {
 }
 
 function jobState(run: AutomationRunView, type: string): State {
-  const job = run.jobs?.find((candidate) => candidate.type === type);
+  const job = latestJobOfType(run.jobs, type);
   if (!job) return 'pending';
   if (job.status === 'completed') return 'completed';
   if (job.status === 'failed') return 'failed';
@@ -31,13 +32,13 @@ function jobState(run: AutomationRunView, type: string): State {
 }
 
 function parseUsers(run: AutomationRunView): ResolvedProvisionUser[] {
-  const job = run.jobs?.find((candidate) => candidate.type === 'cona_user_provision');
+  const job = latestJobOfType(run.jobs, 'cona_user_provision');
   const users = job?.payload?.users;
   return Array.isArray(users) ? users as ResolvedProvisionUser[] : [];
 }
 
 function userState(run: AutomationRunView, user: ResolvedProvisionUser, index: number): State {
-  const job = run.jobs?.find((candidate) => candidate.type === 'cona_user_provision');
+  const job = latestJobOfType(run.jobs, 'cona_user_provision');
   if (!job) return 'pending';
   const logs = job.logs?.map((log) => log.line) ?? [];
   const identity = user.username ?? user.email;
@@ -85,7 +86,7 @@ export function TemplateV2Progress({ run }: { run: AutomationRunView }) {
         state: undefined,
       }));
   const users = parseUsers(run);
-  const dataJob = run.jobs?.find((job) => job.type === 'cona_seed');
+  const dataJob = latestJobOfType(run.jobs, 'cona_seed');
   const partnerLog = dataJob?.logs
     ?.map((log) => {
       try {
@@ -100,7 +101,7 @@ export function TemplateV2Progress({ run }: { run: AutomationRunView }) {
         return null;
       }
     })
-    .find((entry) => entry?.partnerJoin)?.partnerJoin;
+    .findLast((entry) => entry?.partnerJoin)?.partnerJoin;
 
   return (
     <div className="space-y-3 rounded-lg border border-border/60 bg-card/30 p-3" aria-label="Template V2 progress">

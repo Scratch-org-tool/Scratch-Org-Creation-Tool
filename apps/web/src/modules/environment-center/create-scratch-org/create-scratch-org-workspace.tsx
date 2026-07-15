@@ -98,8 +98,15 @@ function ConfigCard({
           installPackage={w.installPackage}
           sourceControlConnected={w.metadataSource.connected}
           templateMeta={w.templateMeta}
-          dataOrgAlias={w.sourceOrgs.find((o) => o.id === (w.form.dataDeploymentOrgId || w.form.sourceOrgId))?.alias}
-          settingsOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.customSettingsOrgId)?.alias}
+          dataOrgAlias={w.sourceOrgs.find((o) => o.id === (
+            w.templatePreview?.config.dataDeploymentOrgId
+            ?? w.templatePreview?.config.sourceOrgId
+            ?? (w.form.dataDeploymentOrgId || w.form.sourceOrgId)
+          ))?.alias}
+          settingsOrgAlias={w.sourceOrgs.find((o) => o.id === (
+            w.templatePreview?.config.customSettingsOrgId
+            ?? (w.form.customSettingsOrgId || undefined)
+          ))?.alias}
           templatePreview={w.templatePreview}
         />
       )}
@@ -265,8 +272,15 @@ export function CreateScratchOrgWorkspace() {
                   installPackage={w.installPackage}
                   sourceControlConnected={w.metadataSource.connected}
                   templateMeta={w.templateMeta}
-                  dataOrgAlias={w.sourceOrgs.find((o) => o.id === (w.form.dataDeploymentOrgId || w.form.sourceOrgId))?.alias}
-                  settingsOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.customSettingsOrgId)?.alias}
+                  dataOrgAlias={w.sourceOrgs.find((o) => o.id === (
+                    w.templatePreview?.config.dataDeploymentOrgId
+                    ?? w.templatePreview?.config.sourceOrgId
+                    ?? (w.form.dataDeploymentOrgId || w.form.sourceOrgId)
+                  ))?.alias}
+                  settingsOrgAlias={w.sourceOrgs.find((o) => o.id === (
+                    w.templatePreview?.config.customSettingsOrgId
+                    ?? (w.form.customSettingsOrgId || undefined)
+                  ))?.alias}
                   templatePreview={w.templatePreview}
                 />
               )}

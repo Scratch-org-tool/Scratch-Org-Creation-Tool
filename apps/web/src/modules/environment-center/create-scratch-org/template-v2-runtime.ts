@@ -1,7 +1,6 @@
 import {
   compileQuerySectionPlan,
-  expandUserGenerators,
-  migrateTemplateConfigToV2,
+  resolveUserProvisioningPlan,
   type CompiledQuerySectionPlan,
   type ResolvedProvisionUser,
   type ScratchPipelineTemplateConfig,
@@ -19,24 +18,11 @@ export function parseRuntimeEmailPool(value: string): string[] {
   return emails;
 }
 
-export function applyRuntimeEmailPool(
-  input: ScratchPipelineTemplateConfig,
-  poolText: string,
-): ScratchPipelineTemplateConfig {
-  const emails = parseRuntimeEmailPool(poolText);
-  if (!emails.length) return input;
-  const provisioning = input.userProvisioning;
-  if (!provisioning?.teams?.length) throw new Error('This template has no team email pool to replace');
-  return {
-    ...input,
-    userProvisioning: {
-      ...provisioning,
-      teams: provisioning.teams.map((team) => ({
-        ...team,
-        emailPool: { ...team.emailPool, emails },
-      })),
-    },
-  };
+export interface ProvisioningPlanMetadata {
+  alias: string;
+  profiles: Array<{ Id: string; Name: string }>;
+  permissionSets: Array<{ Id: string; Name: string; Label: string }>;
+  missingFields: string[];
 }
 
 export interface ResolvedTemplateV2Preview {
@@ -45,32 +31,20 @@ export interface ResolvedTemplateV2Preview {
   users: ResolvedProvisionUser[];
   userCount: number;
   errors: string[];
+  warnings: string[];
+  metadata: ProvisioningPlanMetadata | null;
 }
 
-export function resolveTemplateV2Preview(
-  input: ScratchPipelineTemplateConfig,
-  options: {
-    seed: string;
-    runtimeEmailPool?: string;
+export function buildTemplateV2Preview(
+  config: ScratchPipelineTemplateConfig,
+  provisioningPlan?: {
+    users: ResolvedProvisionUser[];
+    errors: string[];
+    warnings: string[];
+    metadata: ProvisioningPlanMetadata | null;
   },
 ): ResolvedTemplateV2Preview {
   const errors: string[] = [];
-  let config = input;
-  try {
-    config = migrateTemplateConfigToV2(config);
-    if (options.runtimeEmailPool?.trim()) config = applyRuntimeEmailPool(config, options.runtimeEmailPool);
-    if (config.userProvisioning?.users?.length && config.userProvisioning.slots?.length) {
-      // Migration deliberately retains legacy slots for old edit paths. At
-      // runtime their resolved concrete copies are authoritative, so do not
-      // enqueue both representations of the same users.
-      config = {
-        ...config,
-        userProvisioning: { ...config.userProvisioning, slots: undefined },
-      };
-    }
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : 'Template migration failed');
-  }
 
   let queries: CompiledQuerySectionPlan | undefined;
   if (config.dataSeed?.querySection) {
@@ -87,37 +61,28 @@ export function resolveTemplateV2Preview(
     }
   }
 
-  let generated: ResolvedProvisionUser[] = [];
-  const provisioning = config.userProvisioning;
-  if (provisioning?.userGenerators?.length) {
+  let users = provisioningPlan?.users ?? [];
+  if (!provisioningPlan && config.userProvisioning) {
     try {
-      generated = expandUserGenerators(provisioning.userGenerators, {
-        automationRunId: options.seed,
-        teams: provisioning.teams,
-        roleBottlerMappings: provisioning.roleBottlerMappings,
-        usernamePolicy: provisioning.usernamePolicy,
-        emailPolicy: provisioning.emailPolicy,
-      });
+      users = resolveUserProvisioningPlan(config.userProvisioning, 'server-plan-preview');
     } catch (error) {
-      errors.push(error instanceof Error ? error.message : 'User generation failed');
+      errors.push(error instanceof Error ? error.message : 'User plan resolution failed');
     }
   }
-
-  const concrete = (provisioning?.users ?? []).map((user) => ({
-    ...user,
-    modules: user.modules ?? [],
-    locations: user.locations ?? [],
-  }));
-  const users = [...concrete, ...generated];
-  const legacyCount = provisioning?.slots?.length
-    ? provisioning.slots.length
-    : (provisioning?.users?.length ?? 0);
 
   return {
     config,
     queries,
     users,
-    userCount: provisioning?.userGenerators?.length ? users.length : legacyCount,
-    errors,
+    userCount: users.length,
+    errors: [
+      ...errors,
+      ...(provisioningPlan?.errors ?? []),
+      ...(provisioningPlan?.warnings ?? []).map(
+        (warning) => `Provisioning metadata validation: ${warning}`,
+      ),
+    ],
+    warnings: [],
+    metadata: provisioningPlan?.metadata ?? null,
   };
 }

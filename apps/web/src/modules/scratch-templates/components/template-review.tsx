@@ -26,7 +26,10 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export function TemplateReview({ name, description, config, orgAliases, onEditStep }: TemplateReviewProps) {
   const dataOrg = config.dataDeploymentOrgId ?? config.sourceOrgId;
-  const settingsOrg = config.customSettingsOrgId ?? config.sourceOrgId;
+  const customSettingsEnabled = config.customSettings?.enabled !== false;
+  const settingsOrg = customSettingsEnabled
+    ? (config.customSettingsOrgId ?? config.sourceOrgId)
+    : undefined;
   const userCount = countConfiguredUsers(config.userProvisioning);
   const querySection = config.dataSeed?.querySection;
 
@@ -62,7 +65,12 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
       title: 'Source orgs',
       rows: [
         ['Data deployment org', dataOrg ? orgAliases[dataOrg] ?? dataOrg : '—'],
-        ['Custom settings org', settingsOrg ? orgAliases[settingsOrg] ?? settingsOrg : '—'],
+        [
+          'Custom settings org',
+          customSettingsEnabled
+            ? (settingsOrg ? orgAliases[settingsOrg] ?? settingsOrg : '—')
+            : 'Not used (disabled)',
+        ],
       ] as const,
     },
     {
@@ -70,7 +78,12 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
       title: 'Custom settings',
       rows: [
         ['Enabled', config.customSettings?.enabled !== false ? 'Yes' : 'No'],
-        ['Mode', config.customSettings?.mode === 'custom' ? 'Custom JSON' : 'Bundled'],
+        [
+          'Mode',
+          customSettingsEnabled
+            ? (config.customSettings?.mode === 'custom' ? 'Custom JSON' : 'Bundled')
+            : 'Not applicable',
+        ],
       ] as const,
     },
     {

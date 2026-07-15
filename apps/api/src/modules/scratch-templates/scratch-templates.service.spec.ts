@@ -119,7 +119,9 @@ describe('ScratchTemplatesService authoritative launch merge', () => {
       templateId,
       alias: 'pool',
       devHubAlias: 'devhub',
-      runtimeEmailPool: 'runtime.one@example.com\nruntime.two@example.com',
+      runtimeEmailPoolOverride: {
+        emails: ['runtime.one@example.com', 'runtime.two@example.com'],
+      },
       gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
     }, 'owner');
     expect(result.userProvisioning?.teams?.[0].emailPool.emails).toEqual([
@@ -131,8 +133,8 @@ describe('ScratchTemplatesService authoritative launch merge', () => {
       templateId,
       alias: 'pool',
       devHubAlias: 'devhub',
-      runtimeEmailPool: ['not', 'a string'],
+      runtimeEmailPoolOverride: { emails: 'not-an-array' },
       gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
-    }, 'owner')).rejects.toThrow('must be a string');
+    }, 'owner')).rejects.toThrow('must be an array');
   });
 });

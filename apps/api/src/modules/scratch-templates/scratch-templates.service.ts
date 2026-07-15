@@ -280,10 +280,10 @@ export class ScratchTemplatesService implements OnModuleInit {
     let authoritativeConfig = migrateTemplateConfigToV2(
       template.config as Parameters<typeof migrateTemplateConfigToV2>[0],
     );
-    if (body.runtimeEmailPool !== undefined) {
+    if (body.runtimeEmailPoolOverride !== undefined) {
       authoritativeConfig = this.applyRuntimeEmailPool(
         authoritativeConfig,
-        body.runtimeEmailPool,
+        body.runtimeEmailPoolOverride,
       );
     }
     const merged = this.mergeTemplateWithLaunch(
@@ -314,21 +314,24 @@ export class ScratchTemplatesService implements OnModuleInit {
     config: Parameters<typeof migrateTemplateConfigToV2>[0],
     value: unknown,
   ) {
-    if (typeof value !== 'string') {
-      throw new BadRequestException('runtimeEmailPool must be a string');
+    if (!value || typeof value !== 'object' || !Array.isArray((value as { emails?: unknown }).emails)) {
+      throw new BadRequestException('runtimeEmailPoolOverride.emails must be an array');
     }
-    if (value.length > 20_000) {
-      throw new BadRequestException('runtimeEmailPool is too large');
+    const rawEmails = (value as { emails: unknown[] }).emails;
+    if (!rawEmails.every((email) => typeof email === 'string')) {
+      throw new BadRequestException('runtimeEmailPoolOverride.emails must contain strings');
     }
-    const emails = value
-      .split(/[\n,;]/)
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean);
+    const emails = rawEmails.map((email) => (email as string).trim().toLowerCase());
     if (emails.length === 0 || emails.length > 1000) {
-      throw new BadRequestException('runtimeEmailPool must contain between 1 and 1000 emails');
+      throw new BadRequestException(
+        'runtimeEmailPoolOverride.emails must contain between 1 and 1000 emails',
+      );
+    }
+    if (emails.some((email) => !email)) {
+      throw new BadRequestException('runtimeEmailPoolOverride.emails cannot contain blank values');
     }
     if (new Set(emails).size !== emails.length) {
-      throw new BadRequestException('runtimeEmailPool contains duplicate emails');
+      throw new BadRequestException('runtimeEmailPoolOverride.emails contains duplicate emails');
     }
     for (const email of emails) {
       if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {

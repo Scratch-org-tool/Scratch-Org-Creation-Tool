@@ -143,8 +143,20 @@ export function JobProgressPanel({
     );
   }
 
+  const terminalAnnouncement =
+    run?.status === 'completed'
+      ? 'Pipeline completed successfully.'
+      : run?.status === 'failed'
+        ? `Pipeline failed${run.failedStep ? ` at ${formatPipelineStepId(run.failedStep)}` : ''}.`
+        : run?.status === 'cancelled'
+          ? 'Pipeline stopped.'
+          : '';
+
   return (
     <div className={cn('flex flex-col min-h-0', fillHeight && 'h-full overflow-hidden')}>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {terminalAnnouncement}
+      </div>
       <div
         className={cn(
           'shrink-0 overflow-y-auto scrollbar-thin',
@@ -194,9 +206,17 @@ export function JobProgressPanel({
           </div>
         </div>
 
-        {isRunning && progressPercent > 0 && (
+        {isRunning && (
           <div className="space-y-0.5">
-            <div className="h-1 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-1 rounded-full bg-muted overflow-hidden"
+              role="progressbar"
+              aria-label="Pipeline completion"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.min(100, progressPercent)}
+              aria-valuetext={`${Math.min(100, progressPercent)}% complete`}
+            >
               <div
                 className="h-full bg-primary transition-all duration-500"
                 style={{ width: `${Math.min(100, progressPercent)}%` }}

@@ -1,11 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Plus, RefreshCw, Trash2, Users } from 'lucide-react';
 import {
-  expandUserGenerators,
   generateEmailStyleUsername,
   normalizeRoleSlug,
+  resolveUserProvisioningPlan,
   type ConcreteProvisionUser,
   type RoleBottlerMapping,
   type UserGenerator,
@@ -25,6 +25,17 @@ interface PicklistField {
 interface DiscoveryResult {
   alias: string;
   picklists: PicklistField[];
+  profiles: Array<{ Id: string; Name: string }>;
+  permissionSets: Array<{ Id: string; Name: string; Label: string }>;
+  missingFields: string[];
+}
+
+interface ProvisioningPlanPreview {
+  ok: boolean;
+  users: ReturnType<typeof resolveUserProvisioningPlan>;
+  metadata: DiscoveryResult | null;
+  errors: string[];
+  warnings: string[];
 }
 
 function picklistValues(fields: PicklistField[], name: string): string[] {
@@ -93,25 +104,31 @@ function emptyUser(): ConcreteProvisionUser {
 
 export function countConfiguredUsers(config?: UserProvisioningConfig): number {
   if (!config) return 0;
-  const generated = (config.userGenerators ?? []).reduce((sum, generator) => sum + generator.count, 0);
-  if (generated > 0) return generated + (config.users?.length ?? 0);
-  if (config.slots?.length) return config.slots.length;
-  return config.users?.length ?? 0;
+  try {
+    return resolveUserProvisioningPlan(config, 'count-preview').length;
+  } catch {
+    return 0;
+  }
 }
 
 export function UserProvisioningV2Section({
   sourceOrgId,
   value,
   onChange,
+  onValidationChange,
 }: {
   sourceOrgId?: string;
   value: UserProvisioningConfig;
   onChange: (value: UserProvisioningConfig) => void;
+  onValidationChange?: (state: { valid: boolean; checking: boolean }) => void;
 }) {
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [previewSeed, setPreviewSeed] = useState('template-preview');
+  const [planPreview, setPlanPreview] = useState<ProvisioningPlanPreview | null>(null);
+  const [planChecking, setPlanChecking] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
 
   const discover = useCallback(async () => {
     if (!sourceOrgId) {
@@ -142,37 +159,53 @@ export function UserProvisioningV2Section({
   const teams = value.teams ?? [];
   const generators = value.userGenerators ?? [];
 
-  const generatedPreview = useMemo(() => {
-    try {
-      const explicit = (value.users ?? []).filter((user) => user.email && user.role).map((user, index) => ({
-        ...user,
-        username: user.username ?? generateEmailStyleUsername({
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          domain: value.usernamePolicy?.domain,
-          uniqueKey: `${previewSeed}-explicit-${index + 1}`,
-        }),
-        modules: user.modules ?? [],
-        locations: user.locations ?? [],
-      }));
-      return {
-        users: [
-          ...explicit,
-          ...expandUserGenerators(generators, {
-            automationRunId: previewSeed,
-            teams,
-            roleBottlerMappings: mappings,
-            usernamePolicy: value.usernamePolicy,
-            emailPolicy: value.emailPolicy,
-          }),
-        ],
-        error: null,
-      };
-    } catch (error) {
-      return { users: [], error: error instanceof Error ? error.message : 'Cannot generate preview' };
+  useEffect(() => {
+    if (!sourceOrgId) {
+      setPlanPreview(null);
+      setPlanError('Select a Data Deployment Org to validate the provisioning plan.');
+      setPlanChecking(false);
+      onValidationChange?.({ valid: false, checking: false });
+      return;
     }
-  }, [generators, mappings, previewSeed, teams, value.emailPolicy, value.usernamePolicy, value.users]);
+    const controller = new AbortController();
+    setPlanChecking(true);
+    setPlanError(null);
+    onValidationChange?.({ valid: false, checking: true });
+    const timer = setTimeout(() => {
+      void api<ProvisioningPlanPreview>('/provisioning/plan/preview', {
+        method: 'POST',
+        signal: controller.signal,
+        body: JSON.stringify({
+          orgId: sourceOrgId,
+          automationRunId: previewSeed,
+          config: value,
+        }),
+      }).then((result) => {
+        if (controller.signal.aborted) return;
+        setPlanPreview(result);
+        if (result.metadata) setDiscovery(result.metadata);
+        onValidationChange?.({
+          valid: result.ok && result.warnings.length === 0,
+          checking: false,
+        });
+      }).catch((error) => {
+        if (controller.signal.aborted) return;
+        setPlanPreview(null);
+        setPlanError(error instanceof Error ? error.message : 'Provisioning plan preview failed');
+        onValidationChange?.({ valid: false, checking: false });
+      }).finally(() => {
+        if (!controller.signal.aborted) setPlanChecking(false);
+      });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [onValidationChange, previewSeed, sourceOrgId, value]);
+
+  const generatedPreview = planPreview?.users ?? [];
+  const profiles = discovery?.profiles ?? [];
+  const permissionSets = discovery?.permissionSets ?? [];
 
   const patch = (next: Partial<UserProvisioningConfig>) => onChange({
     ...value,
@@ -200,7 +233,8 @@ export function UserProvisioningV2Section({
           <div>
             <h3 id="discovery-title" className="text-sm font-medium">Source / target discovery preview</h3>
             <p className="text-xs text-muted-foreground">
-              Preview roles, bottlers, modules, and locations from the source. The new target org is discovered and validated again at runtime.
+              Preview roles, bottlers, profiles, permission sets, modules, and locations. The
+              server validates the resolved provisioning plan against this org before save.
             </p>
           </div>
           <Button type="button" size="sm" variant="outline" loading={discovering} disabled={!sourceOrgId} onClick={() => void discover()}>
@@ -209,10 +243,12 @@ export function UserProvisioningV2Section({
         </div>
         {!sourceOrgId && <p className="text-xs text-muted-foreground">Select a Data Deployment Org first.</p>}
         {discovery && (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
             {[
               ['Roles', roles],
               ['Bottlers', bottlers],
+              ['Profiles', profiles.map((profile) => profile.Name)],
+              ['Permission sets', permissionSets.map((permissionSet) => permissionSet.Name)],
               ['Modules', discoveredModules],
               ['Locations', discoveredLocations],
             ].map(([label, items]) => (
@@ -253,11 +289,11 @@ export function UserProvisioningV2Section({
               </div>
               <div>
                 <Label htmlFor={`mapping-${index}-profile`}>Profile</Label>
-                <Input id={`mapping-${index}-profile`} value={mapping.profile ?? ''} onChange={(event) => updateMapping(index, { profile: event.target.value || undefined })} />
+                <Input id={`mapping-${index}-profile`} list="discovered-profiles" value={mapping.profile ?? ''} onChange={(event) => updateMapping(index, { profile: event.target.value || undefined })} />
               </div>
               <div>
                 <Label htmlFor={`mapping-${index}-permissions`}>Permission sets</Label>
-                <Input id={`mapping-${index}-permissions`} value={listText(mapping.permissionSets)} onChange={(event) => updateMapping(index, { permissionSets: parseList(event.target.value) })} />
+                <Input id={`mapping-${index}-permissions`} list="discovered-permission-sets" value={listText(mapping.permissionSets)} onChange={(event) => updateMapping(index, { permissionSets: parseList(event.target.value) })} />
               </div>
               <div>
                 <Label htmlFor={`mapping-${index}-modules`}>Modules</Label>
@@ -277,6 +313,8 @@ export function UserProvisioningV2Section({
         ))}
         <datalist id="discovered-roles">{roles.map((role) => <option key={role} value={role} />)}</datalist>
         <datalist id="discovered-bottlers">{bottlers.map((bottler) => <option key={bottler} value={bottler} />)}</datalist>
+        <datalist id="discovered-profiles">{profiles.map((profile) => <option key={profile.Id} value={profile.Name} />)}</datalist>
+        <datalist id="discovered-permission-sets">{permissionSets.map((permissionSet) => <option key={permissionSet.Id} value={permissionSet.Name} />)}</datalist>
       </section>
 
       <section className="space-y-3" aria-labelledby="email-pools-title">
@@ -419,6 +457,15 @@ export function UserProvisioningV2Section({
         <h3 id="user-policy-title" className="text-sm font-medium">Email, username, and execution policy</h3>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div>
+            <Label htmlFor="user-default-profile">Default profile</Label>
+            <Input
+              id="user-default-profile"
+              list="discovered-profiles"
+              value={value.defaultProfile ?? ''}
+              onChange={(event) => patch({ defaultProfile: event.target.value || undefined })}
+            />
+          </div>
+          <div>
             <Label htmlFor="user-email-strategy">Email source</Label>
             <Select
               id="user-email-strategy"
@@ -530,7 +577,11 @@ export function UserProvisioningV2Section({
                 </div>
                 <div>
                   <Label htmlFor={`explicit-${index}-permsets`}>Permission sets</Label>
-                  <Input id={`explicit-${index}-permsets`} value={listText(user.permissionSets)} onChange={(event) => updateUser({ permissionSets: parseList(event.target.value) })} />
+                  <Input id={`explicit-${index}-permsets`} list="discovered-permission-sets" value={listText(user.permissionSets)} onChange={(event) => updateUser({ permissionSets: parseList(event.target.value) })} />
+                </div>
+                <div>
+                  <Label htmlFor={`explicit-${index}-profile`}>Profile</Label>
+                  <Input id={`explicit-${index}-profile`} list="discovered-profiles" value={user.profile ?? ''} onChange={(event) => updateUser({ profile: event.target.value || undefined })} />
                 </div>
                 <div className="flex items-end justify-end">
                   <Button type="button" size="sm" variant="ghost" aria-label={`Delete explicit user ${index + 1}`} onClick={() => patch({ users: value.users!.filter((_, itemIndex) => itemIndex !== index) })}>
@@ -554,9 +605,15 @@ export function UserProvisioningV2Section({
             <Input id="user-preview-seed" value={previewSeed} onChange={(event) => setPreviewSeed(event.target.value || 'template-preview')} />
           </div>
         </div>
-        {generatedPreview.error ? (
-          <InlineAlert variant="warning">{generatedPreview.error}</InlineAlert>
-        ) : generatedPreview.users.length ? (
+        {planChecking && <p className="text-xs text-muted-foreground">Validating server provisioning plan…</p>}
+        {planError && <InlineAlert variant="error">{planError}</InlineAlert>}
+        {planPreview?.errors.map((error) => (
+          <InlineAlert key={error} variant="error">{error}</InlineAlert>
+        ))}
+        {planPreview?.warnings.map((warning) => (
+          <InlineAlert key={warning} variant="warning">{warning}</InlineAlert>
+        ))}
+        {generatedPreview.length ? (
           <div className="overflow-x-auto rounded-lg border border-border/60">
             <table className="w-full text-xs">
               <thead className="bg-muted/30 text-left">
@@ -568,12 +625,13 @@ export function UserProvisioningV2Section({
                 </tr>
               </thead>
               <tbody>
-                {generatedPreview.users.map((user, index) => (
+                {generatedPreview.map((user, index) => (
                   <tr key={`${'generatorId' in user ? user.generatorId : user.email}-${index}`} className="border-t border-border/50 align-top">
                     <td className="p-2">{user.firstName} {user.lastName}<br /><span className="text-muted-foreground">{user.role} · {user.bottler}</span></td>
                     <td className="p-2 break-all"><span className="font-medium">Email:</span> {user.email}</td>
                     <td className="p-2 break-all"><span className="font-medium">Username:</span> {user.username}</td>
                     <td className="p-2">
+                      Profile: {user.profile ?? '—'}<br />
                       Modules: {user.modules.join(', ') || '—'}<br />
                       Locations: {user.locations.join(', ') || '—'}<br />
                       Permission sets: {user.permissionSets?.join(', ') || '—'}
@@ -583,12 +641,12 @@ export function UserProvisioningV2Section({
               </tbody>
             </table>
           </div>
-        ) : (
+        ) : !planChecking && !planError ? (
           <div className="rounded-lg border border-dashed border-border/60 p-5 text-center text-sm text-muted-foreground">
             <Users className="w-6 h-6 mx-auto mb-2 opacity-40" />
             Add a generator and valid email policy to preview users.
           </div>
-        )}
+        ) : null}
       </section>
 
       {((value.templates?.length ?? 0) > 0 || (value.slots?.length ?? 0) > 0 || (value.users?.length ?? 0) > 0) && (

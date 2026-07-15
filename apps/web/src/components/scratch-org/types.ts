@@ -106,6 +106,7 @@ export interface AutomationRunView {
   };
   jobs?: Array<{
     id: string;
+    createdAt?: string;
     status: string;
     currentStep: string;
     type: string;

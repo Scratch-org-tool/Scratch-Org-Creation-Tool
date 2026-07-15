@@ -34,7 +34,16 @@ import {
   type MobileView,
   type ScratchCredentials,
 } from './types';
-import { resolveTemplateV2Preview } from './template-v2-runtime';
+import {
+  buildTemplateV2Preview,
+  type ProvisioningPlanMetadata,
+  type ResolvedTemplateV2Preview,
+} from './template-v2-runtime';
+import {
+  buildTemplateLaunchRequest,
+  completedRunAlias,
+  retrieveCredentialsWithRetry,
+} from './template-v2-workspace-utils';
 
 async function fetchAzureBranches(project: string, repo: string): Promise<string[]> {
   const params = new URLSearchParams({ repo, project });
@@ -209,6 +218,8 @@ export function useScratchOrgWorkspace() {
     name: string;
     config: ScratchPipelineTemplateConfig;
   } | null>(null);
+  const [templatePreview, setTemplatePreview] = useState<ResolvedTemplateV2Preview | null>(null);
+  const [templatePreviewLoading, setTemplatePreviewLoading] = useState(false);
 
   formRef.current = form;
 
@@ -337,7 +348,6 @@ export function useScratchOrgWorkspace() {
     async (r: AutomationRunView, opts?: { fromRestore?: boolean; alias?: string }) => {
       if (!isMountedRef.current) return;
 
-      const alias = opts?.alias ?? formRef.current.alias;
       const runId = r.id;
 
       if (r.status === 'running' || r.status === 'paused') {
@@ -360,7 +370,6 @@ export function useScratchOrgWorkspace() {
       if (r.status === 'completed') {
         const terminalKey = `${runId}:completed`;
         if (terminalHandledRef.current === terminalKey) return;
-        terminalHandledRef.current = terminalKey;
 
         setDesktopStep(2);
         const awaitingUser = r.checkpoint?.awaitingUserActions;
@@ -375,18 +384,29 @@ export function useScratchOrgWorkspace() {
           return;
         }
 
-        if (alias) {
-          try {
-            const creds = await api<ScratchCredentials>(
-              `/environment/scratch-orgs/${encodeURIComponent(alias)}/credentials`,
+        const alias = completedRunAlias(r);
+        if (!alias) {
+          setRestoredBanner('Pipeline completed, but its saved run configuration has no scratch org alias.');
+          return;
+        }
+        try {
+          const creds = await retrieveCredentialsWithRetry(
+            alias,
+            (savedAlias) => api<ScratchCredentials>(
+              `/environment/scratch-orgs/${encodeURIComponent(savedAlias)}/credentials`,
+            ),
+          );
+          if (!isMountedRef.current) return;
+          setCredentials(creds);
+          setMobileView('success');
+          terminalHandledRef.current = terminalKey;
+        } catch {
+          if (isMountedRef.current) {
+            setRestoredBanner(
+              `Pipeline completed. Credentials for ${alias} are not available yet; reload to retry.`,
             );
-            if (isMountedRef.current) {
-              setCredentials(creds);
-              setMobileView('success');
-            }
-          } catch {
-            /* credentials may not be ready yet */
           }
+          return;
         }
 
         if (isMountedRef.current) {
@@ -563,6 +583,7 @@ export function useScratchOrgWorkspace() {
       .then((t) => {
         if (cancelled) return;
         setTemplateMeta({ name: t.name, config: t.config });
+        if (initialLoading || automationRunId) return;
         const cfg = t.config;
         const azureCfg = cfg.azureDeploy as { manifestPath?: string } | undefined;
         const gitCfg = cfg.gitSource as {
@@ -604,7 +625,7 @@ export function useScratchOrgWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [form.templateId, metadataSource.setSource]);
+  }, [automationRunId, form.templateId, initialLoading, metadataSource.setSource]);
 
   useEffect(() => {
     if (!automationRunId) return;
@@ -680,21 +701,83 @@ export function useScratchOrgWorkspace() {
 
   void jobIdsKey;
 
-  const templatePreview = useMemo(
-    () => templateMeta
-      ? resolveTemplateV2Preview(templateMeta.config, {
-          seed: `launch-${form.alias || 'preview'}`,
-          runtimeEmailPool: form.runtimeEmailPool,
-        })
-      : null,
-    [form.alias, form.runtimeEmailPool, templateMeta],
+  const templateLaunchRequest = useMemo(
+    () => buildTemplateLaunchRequest(form, metadataSource.gitSource, installPackage),
+    [form, installPackage, metadataSource.gitSource],
   );
+
+  useEffect(() => {
+    if (!templateMeta || !form.templateId) {
+      setTemplatePreview(null);
+      setTemplatePreviewLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setTemplatePreviewLoading(true);
+    const timer = setTimeout(() => {
+      void api<{ config: ScratchPipelineTemplateConfig }>(
+        `/environment/scratch-templates/${form.templateId}/launch-plan`,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          body: JSON.stringify(templateLaunchRequest),
+        },
+      ).then(async ({ config }) => {
+        const provisioning = config.userProvisioning;
+        const hasUsers = Boolean(
+          provisioning?.users?.length
+          || provisioning?.slots?.length
+          || provisioning?.userGenerators?.length,
+        );
+        if (!hasUsers) return buildTemplateV2Preview(config);
+        const orgId = config.dataDeploymentOrgId ?? config.sourceOrgId;
+        if (!orgId) {
+          return {
+            ...buildTemplateV2Preview(config),
+            errors: ['Select a Data Deployment Org to validate the provisioning plan.'],
+          };
+        }
+        const plan = await api<{
+          ok: boolean;
+          users: ResolvedTemplateV2Preview['users'];
+          metadata: ProvisioningPlanMetadata | null;
+          errors: string[];
+          warnings: string[];
+        }>('/provisioning/plan/preview', {
+          method: 'POST',
+          signal: controller.signal,
+          body: JSON.stringify({
+            orgId,
+            automationRunId: `launch-${form.alias || 'preview'}`,
+            config: provisioning,
+          }),
+        });
+        return buildTemplateV2Preview(config, plan);
+      }).then((preview) => {
+        if (!controller.signal.aborted) setTemplatePreview(preview);
+      }).catch((error) => {
+        if (controller.signal.aborted) return;
+        const fallback = buildTemplateV2Preview(templateMeta.config);
+        setTemplatePreview({
+          ...fallback,
+          errors: [error instanceof Error ? error.message : 'Launch plan preview failed'],
+        });
+      }).finally(() => {
+        if (!controller.signal.aborted) setTemplatePreviewLoading(false);
+      });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [form.alias, form.templateId, templateLaunchRequest, templateMeta]);
 
   const canLaunch =
     !!form.alias &&
     !!form.devHubAlias &&
     !!metadataSource.gitSource &&
-    (!templatePreview || templatePreview.errors.length === 0);
+    !templatePreviewLoading &&
+    (!templateMeta || Boolean(templatePreview && templatePreview.errors.length === 0));
 
   const launchPipeline = async () => {
     setSubmitting(true);
@@ -721,60 +804,14 @@ export function useScratchOrgWorkspace() {
       };
 
       if (form.templateId) {
-        const tmpl = await api<{ config: ScratchPipelineTemplateConfig }>(
-          `/environment/scratch-templates/${form.templateId}`,
-        );
-        const runtime = resolveTemplateV2Preview(tmpl.config, {
-          seed: `launch-${form.alias}`,
-          runtimeEmailPool: form.runtimeEmailPool,
-        });
-        if (runtime.errors.length) throw new Error(runtime.errors.join(' '));
-        const cfg = runtime.config;
-        const tmplAzure = cfg.azureDeploy as { manifestPath?: string } | undefined;
-        const tmplGit = cfg.gitSource as { manifestPath?: string } | undefined;
-        const {
-          azureDeploy: _legacyAzureDeploy,
-          gitSource: _templateGitSource,
-          ...templateConfig
-        } = cfg;
+        if (templatePreviewLoading) throw new Error('Wait for the server launch plan preview.');
+        if (!templatePreview || templatePreview.errors.length) {
+          throw new Error(templatePreview?.errors.join(' ') || 'Launch plan preview is unavailable.');
+        }
         payload = {
-          ...templateConfig,
-          alias: form.alias,
-          duration: form.duration,
-          devHubAlias: form.devHubAlias,
-          description: form.description || undefined,
-          template: (cfg.template as string) ?? form.template,
-          definitionFile: (cfg.template as string) ?? form.template,
-          sourceOrgId:
-            form.dataDeploymentOrgId
-            || form.sourceOrgId
-            || cfg.dataDeploymentOrgId
-            || cfg.sourceOrgId
-            || undefined,
-          dataDeploymentOrgId:
-            form.dataDeploymentOrgId
-            || form.sourceOrgId
-            || cfg.dataDeploymentOrgId
-            || cfg.sourceOrgId
-            || undefined,
-          customSettingsOrgId:
-            form.customSettingsOrgId
-            || cfg.customSettingsOrgId
-            || cfg.sourceOrgId
-            || undefined,
-          templateId: form.templateId,
-          gitSource: metadataSource.gitSource
-            ? {
-                ...metadataSource.gitSource,
-                manifestPath:
-                  form.azureManifestPath ||
-                  tmplGit?.manifestPath ||
-                  tmplAzure?.manifestPath ||
-                  undefined,
-              }
-            : undefined,
+          ...templateLaunchRequest,
           skipSteps: buildSkipSteps({
-            installPackage: (cfg.installPackage as boolean | undefined) ?? installPackage,
+            installPackage,
           }),
         };
       }
