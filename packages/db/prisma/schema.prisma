@@ -433,6 +433,22 @@ model AppUser {
   @@index([status])
 }
 
+/// Security audit trail. Metadata must never contain credentials, bearer
+/// tokens, passwords, raw IP addresses, or raw user-agent values.
+model AuthAuditEvent {
+  id            String   @id @default(uuid())
+  userId        String?
+  eventType     String
+  metadata      Json?
+  ipHash        String?
+  userAgentHash String?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([createdAt])
+}
+
 /// Short-lived, one-use browser authorization state. tokenHash stores no bearer state token.
 model OAuthState {
   id               String    @id @default(uuid())

@@ -23,6 +23,7 @@ import { useAuthForm, type AuthMode } from './use-auth-form';
 interface LoginWorkspaceProps {
   mode: AuthMode;
   onModeChange: (mode: AuthMode) => void;
+  notice?: string;
 }
 
 const COPY = {
@@ -44,7 +45,7 @@ const COPY = {
   },
 } as const;
 
-export function LoginWorkspace({ mode, onModeChange }: LoginWorkspaceProps) {
+export function LoginWorkspace({ mode, onModeChange, notice }: LoginWorkspaceProps) {
   const isLogin = mode === 'login';
   const form = useAuthForm(mode);
   const isBusy = form.isBusy;
@@ -112,6 +113,8 @@ export function LoginWorkspace({ mode, onModeChange }: LoginWorkspaceProps) {
               <h1 className="text-2xl font-bold tracking-wide">{copy.title}</h1>
               <p className="text-base text-muted-foreground">{copy.subtitle}</p>
             </div>
+
+            {notice && <InlineAlert variant="success">{notice}</InlineAlert>}
 
             <form onSubmit={form.handleSubmit} className="space-y-3 [&_input]:scroll-mt-24 [&_input]:text-base">
               <div className="space-y-1.5">

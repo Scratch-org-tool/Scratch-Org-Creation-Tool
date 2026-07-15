@@ -13,6 +13,7 @@ import { usePathname, useRouter } from 'next/navigation';
 
 /** Main app routes — prefetched after mount so menu clicks load JS chunks from cache. */
 const PREFETCH_ROUTES = [
+  '/account',
   '/dashboard',
   '/environment-center',
   '/environment-center/create-scratch-org',

@@ -213,10 +213,13 @@ export async function listFirebaseAuthUsers(): Promise<FirebaseAuthUserSummary[]
   return users;
 }
 
-export async function verifyIdToken(token: string): Promise<DecodedIdToken> {
+export async function verifyIdToken(
+  token: string,
+  checkRevoked = true,
+): Promise<DecodedIdToken> {
   const firebaseAuth = getFirebaseAuth();
   if (firebaseAuth) {
-    return firebaseAuth.verifyIdToken(token);
+    return firebaseAuth.verifyIdToken(token, checkRevoked);
   }
 
   if (process.env.NODE_ENV === 'production') {
@@ -237,6 +240,38 @@ export async function createCustomTokenForUid(uid: string): Promise<string> {
     throw new Error('Firebase Admin credentials not configured');
   }
   return firebaseAuth.createCustomToken(uid);
+}
+
+/** Keep the Firebase Auth profile aligned with the application-owned profile. */
+export async function updateFirebaseAuthDisplayName(
+  uid: string,
+  displayName: string,
+): Promise<void> {
+  const firebaseAuth = getFirebaseAuth();
+  if (!firebaseAuth) {
+    throw new Error('Firebase Admin credentials not configured');
+  }
+  await firebaseAuth.updateUser(uid, { displayName });
+}
+
+/** Password material is sent directly to Firebase and is never persisted here. */
+export async function updateFirebaseAuthPassword(
+  uid: string,
+  password: string,
+): Promise<void> {
+  const firebaseAuth = getFirebaseAuth();
+  if (!firebaseAuth) {
+    throw new Error('Firebase Admin credentials not configured');
+  }
+  await firebaseAuth.updateUser(uid, { password });
+}
+
+export async function revokeFirebaseRefreshTokens(uid: string): Promise<void> {
+  const firebaseAuth = getFirebaseAuth();
+  if (!firebaseAuth) {
+    throw new Error('Firebase Admin credentials not configured');
+  }
+  await firebaseAuth.revokeRefreshTokens(uid);
 }
 
 export function getFirebaseDb(): Firestore {
