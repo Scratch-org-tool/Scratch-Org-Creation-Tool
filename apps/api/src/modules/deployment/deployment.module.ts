@@ -12,6 +12,8 @@ import { IntelligentDeployModule } from '../intelligent-deploy/intelligent-deplo
 import { MetadataDataChainService } from '../metadata/metadata-data-chain.service';
 import { DeploymentWorkbenchController } from './deployment-workbench.controller';
 import { DeploymentWorkbenchService } from './deployment-workbench.service';
+import { DeploymentWorkbenchRuntimeService } from './deployment-workbench-runtime.service';
+import { SafeExecFileAdapter, StaticAnalysisService } from './static-analysis.service';
 
 @Module({
   imports: [JobsModule, StreamModule, IntelligentDeployModule],
@@ -19,6 +21,9 @@ import { DeploymentWorkbenchService } from './deployment-workbench.service';
   providers: [
     DeploymentService,
     DeploymentWorkbenchService,
+    DeploymentWorkbenchRuntimeService,
+    SafeExecFileAdapter,
+    StaticAnalysisService,
     MetadataDeployQueueService,
     MetadataDeployJobService,
     MetadataDataChainService,
@@ -31,6 +36,8 @@ import { DeploymentWorkbenchService } from './deployment-workbench.service';
     MetadataDeployJobService,
     DeploymentService,
     DeploymentWorkbenchService,
+    DeploymentWorkbenchRuntimeService,
+    StaticAnalysisService,
     MetadataDataChainService,
   ],
 })

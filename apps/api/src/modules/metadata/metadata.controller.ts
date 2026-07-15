@@ -132,6 +132,15 @@ export class MetadataController {
     return this.compareService.getItemDiff(id, userId, metadataType, fullName);
   }
 
+  @Post('compare/:id/resolve-unknowns')
+  resolveUnknowns(
+    @Param('id') id: string,
+    @Body() body: { items?: Array<{ metadataType: string; fullName: string }> },
+    @CurrentUser() userId: string,
+  ) {
+    return this.compareService.resolveUnknowns(id, userId, body);
+  }
+
   @Get('compare/:id/children')
   getObjectChildren(
     @Param('id') id: string,

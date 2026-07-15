@@ -4,6 +4,8 @@ import { tarjanScc, kahnTopologicalSort, condenseScc } from './algorithms';
 import { defaultPriority, parseMetadataNodeId } from '../types/metadata-node';
 
 export class GraphEngine {
+  private detectedCycles: string[][] = [];
+
   constructor(private readonly graph: DependencyGraph) {}
 
   static fromRepository(repo: MetadataRepository): GraphEngine {
@@ -16,6 +18,14 @@ export class GraphEngine {
 
   findCycles(): string[][] {
     return tarjanScc(this.graph.toAdjacencyList());
+  }
+
+  recordDetectedCycles(cycles: string[][]): void {
+    this.detectedCycles = cycles.map((cycle) => [...cycle]);
+  }
+
+  getDetectedCycles(): string[][] {
+    return this.detectedCycles.map((cycle) => [...cycle]);
   }
 
   topologicalOrder(): string[] | null {

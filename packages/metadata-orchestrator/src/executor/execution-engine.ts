@@ -13,6 +13,7 @@ import { checkpointFromPlan } from '../analyzer/failure-analyzer';
 import type { DeploySourceContext } from '../types/deploy-source';
 
 export interface ExecutionCallbacks {
+  onPlan?: (plan: DeploymentPlan, nodes: ReturnType<MetadataRepository['allNodes']>) => void | Promise<void>;
   onBatchStart?: (batch: DeploymentBatch, index: number, total: number) => void | Promise<void>;
   onBatchComplete?: (outcome: BatchDeployOutcome) => void | Promise<void>;
   onLog?: (stream: 'stdout' | 'stderr', line: string) => void | Promise<void>;
@@ -37,6 +38,7 @@ export class ExecutionEngine {
       startBatch?: number;
       maxRetries?: number;
       testLevel?: string;
+      tests?: string[];
     },
   ): Promise<{ success: boolean; outcomes: BatchDeployOutcome[] }> {
     const outcomes: BatchDeployOutcome[] = [];
@@ -65,6 +67,7 @@ export class ExecutionEngine {
           source.targetOrgAlias,
           manifestPath,
           testLevel,
+          { tests: options?.tests ?? source.tests },
         );
         callbacks.registerKill?.(deploy.kill);
 

@@ -46,16 +46,22 @@ function plan(runId: string, batches: string[][]): DeploymentPlan {
   };
 }
 
-function mockCli(results: SfCommandResult[]): { cli: SfCliClient; calls: () => number } {
+function mockCli(results: SfCommandResult[]): {
+  cli: SfCliClient;
+  calls: () => number;
+  arguments: () => unknown[][];
+} {
   let callCount = 0;
+  const argumentsSeen: unknown[][] = [];
   const cli = {
-    deployManifestCancellable: () => {
+    deployManifestCancellable: (...args: unknown[]) => {
+      argumentsSeen.push(args);
       const result = results[callCount++];
       if (!result) throw new Error('Unexpected deploy call');
       return { promise: Promise.resolve(result), kill: () => undefined };
     },
   } as unknown as SfCliClient;
-  return { cli, calls: () => callCount };
+  return { cli, calls: () => callCount, arguments: () => argumentsSeen };
 }
 
 function successfulResult(): SfCommandResult {
@@ -169,6 +175,37 @@ describe('ExecutionEngine', () => {
 
       assert.equal(resumed.success, true);
       assert.equal(resumedCli.calls(), 1);
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes every RunSpecifiedTests class to intelligent batch deploys', async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'execution-tests-test-'));
+    try {
+      const repo = new MetadataRepository();
+      repo.getOrCreate('ApexClass', 'DeployMe');
+      const mock = mockCli([successfulResult()]);
+      const engine = new ExecutionEngine(
+        mock.cli,
+        new ManifestBuilder(workDir, '62.0'),
+        new CheckpointStore(),
+      );
+
+      const result = await engine.executePlan(
+        plan('tests-run', [['ApexClass:DeployMe']]),
+        repo,
+        { ...source, testLevel: 'RunSpecifiedTests' },
+        {},
+        { tests: ['FirstTest', 'SecondTest'] },
+      );
+
+      assert.equal(result.success, true);
+      assert.deepEqual(mock.arguments()[0]?.[3], {
+        tests: ['FirstTest', 'SecondTest'],
+      });
+      const manifest = fs.readFileSync(mock.arguments()[0]?.[1] as string, 'utf8');
+      assert.match(manifest, /<version>62\.0<\/version>/);
     } finally {
       fs.rmSync(workDir, { recursive: true, force: true });
     }

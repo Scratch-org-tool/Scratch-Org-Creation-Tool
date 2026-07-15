@@ -22,6 +22,9 @@ export interface MetadataSelection {
   folder?: string;
 }
 
+/** One default for generated manifests and temporary Salesforce projects. */
+export const DEFAULT_METADATA_API_VERSION = '62.0';
+
 export interface ParsedManifestMember {
   metadataType: string;
   apiName: string;
@@ -188,7 +191,7 @@ function escapeXml(s: string): string {
 
 export function buildPackageXml(
   selections: MetadataSelection[],
-  apiVersion = '62.0',
+  apiVersion = DEFAULT_METADATA_API_VERSION,
 ): string {
   const byType = new Map<string, Set<string>>();
   for (const sel of selections) {
@@ -418,13 +421,13 @@ export function resolveManifestXml(input: {
   if (!input.selections?.length) {
     throw new Error('Provide selections or packageXml');
   }
-  return buildPackageXml(input.selections, input.apiVersion ?? '62.0');
+  return buildPackageXml(input.selections, input.apiVersion ?? DEFAULT_METADATA_API_VERSION);
 }
 
 /** destructiveChanges.xml shares the package.xml format (no version element required). */
 export function buildDestructiveChangesXml(
   selections: MetadataSelection[],
-  apiVersion = '62.0',
+  apiVersion = DEFAULT_METADATA_API_VERSION,
 ): string {
   return buildPackageXml(selections, apiVersion);
 }

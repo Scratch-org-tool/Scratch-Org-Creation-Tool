@@ -82,8 +82,12 @@ export class IntelligentOrchestrator {
     const planner = new DeploymentPlanner(config);
     let plan = planner.buildPlan(ctx.runId, repo, graphEngine);
     plan = new BatchOptimizer(config).optimize(plan);
+    await callbacks.onPlan?.(plan, repo.allNodes());
 
-    const manifestBuilder = new ManifestBuilder(path.join(this.workDir, 'manifests'));
+    const manifestBuilder = new ManifestBuilder(
+      path.join(this.workDir, 'manifests'),
+      source.apiVersion ?? parsed.apiVersion ?? '62.0',
+    );
     const engine = new ExecutionEngine(this.options.sfCli, manifestBuilder, this.checkpointStore);
 
     const startBatch = ctx.resumeCheckpoint
@@ -99,6 +103,7 @@ export class IntelligentOrchestrator {
         startBatch,
         maxRetries: ctx.maxRetriesPerNode ?? 3,
         testLevel: source.testLevel,
+        tests: source.tests,
       },
     );
 

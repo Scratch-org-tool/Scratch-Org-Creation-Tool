@@ -9,6 +9,8 @@ export interface DeploySourceContext {
   manifestAbsolutePath: string;
   targetOrgAlias: string;
   testLevel?: string;
+  tests?: string[];
+  apiVersion?: string;
   sourceOrgAlias?: string;
   targetOrgProfile?: TargetOrgProfile;
 }

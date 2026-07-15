@@ -450,7 +450,11 @@ export function buildDeploymentStagePlan(input: DeploymentWorkbenchInput): Quali
   }
   if (input.policy.snapshot.required) stages.push({ key: 'snapshot', required: true });
   if (input.policy.staticAnalysis.enabled) stages.push({ key: 'static_analysis', required: true });
-  if (input.policy.validation.required || input.strategy === 'validate_then_quick') {
+  if (
+    input.policy.validation.required
+    || input.strategy === 'validate_then_quick'
+    || input.policy.tests.level !== 'NoTestRun'
+  ) {
     stages.push({ key: 'validation', required: true });
   }
   if (input.policy.tests.level !== 'NoTestRun') stages.push({ key: 'apex_tests', required: true });
@@ -633,7 +637,7 @@ export function evaluateDeploymentQualityGate(
 }
 
 export const deploymentWorkbenchCapabilitiesSchema = z.object({
-  executionAvailable: z.literal(false),
+  executionAvailable: z.boolean(),
   strategies: z.array(workbenchStrategySchema),
   sourceTypes: z.array(z.enum(['org_compare', 'scm'])),
   environments: z.array(deploymentEnvironmentSchema),

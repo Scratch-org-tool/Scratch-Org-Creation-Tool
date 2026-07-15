@@ -105,7 +105,15 @@ export interface AgentSession {
 }
 
 export interface StreamEvent {
-  type: 'job_log' | 'job_status' | 'job_skip' | 'job_failed' | 'auth_status' | 'copilot_chunk';
+  type:
+    | 'job_log'
+    | 'job_status'
+    | 'job_skip'
+    | 'job_failed'
+    | 'auth_status'
+    | 'copilot_chunk'
+    | 'deployment_stage'
+    | 'deployment_result';
   payload: Record<string, unknown>;
   timestamp: string;
   /** Owning app-user id — SSE events are only delivered to their owner (admins see all). */

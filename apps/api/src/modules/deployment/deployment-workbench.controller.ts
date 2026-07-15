@@ -12,10 +12,7 @@ import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { DeploymentWorkbenchService } from './deployment-workbench.service';
 
-/**
- * Planning-only foundation. The deployments/workbench prefix is a compatibility
- * shim for clients rooted on the existing deployments API.
- */
+/** Provider-neutral workbench; the deployments prefix remains a compatibility alias. */
 @Controller(['deployment-workbench', 'deployments/workbench'])
 @UseGuards(AuthGuard, ModuleGuard)
 @RequireModule('deployment')
@@ -65,6 +62,40 @@ export class DeploymentWorkbenchController {
   @Get(':id/results')
   results(@Param('id') id: string, @CurrentUser() userId: string) {
     return this.workbench.getResults(id, userId);
+  }
+
+  @Get(':id/progress')
+  progress(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.workbench.getProgress(id, userId);
+  }
+
+  @Get(':id/destructive-review')
+  destructiveReview(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.workbench.destructiveReview(id, userId);
+  }
+
+  @Post(':id/resume')
+  resume(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.workbench.resume(id, userId);
+  }
+
+  @Post(':id/cancel')
+  cancel(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.workbench.cancel(id, userId);
+  }
+
+  @Post(':id/quick-deploy')
+  quickDeploy(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.workbench.quickDeploy(id, userId);
+  }
+
+  @Post(':id/rollback')
+  rollback(
+    @Param('id') id: string,
+    @Body('reason') reason: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.rollback(id, reason, userId);
   }
 
   @Post(':id/approve')

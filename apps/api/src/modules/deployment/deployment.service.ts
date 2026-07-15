@@ -406,7 +406,12 @@ export class DeploymentService {
    * Real rollback: redeploy the pre-deploy snapshot that was retrieved from
    * the target org before the original deploy ran.
    */
-  async rollback(id: string, reason: string, userId: string) {
+  async rollback(
+    id: string,
+    reason: string,
+    userId: string,
+    testPolicy?: { testLevel: string; tests?: string[] },
+  ) {
     const deployment = await prisma.deployment.findUnique({
       where: { id },
       include: { targetOrg: true },
@@ -447,7 +452,8 @@ export class DeploymentService {
       orgAlias: dep.targetOrg.username ?? dep.targetOrg.alias,
       deployMode: 'local_workspace',
       localProjectRoot: dep.snapshotPath,
-      testLevel: 'NoTestRun',
+      testLevel: testPolicy?.testLevel ?? 'NoTestRun',
+      tests: testPolicy?.tests,
       createdBy: userId,
       intelligentDeployEnabled: false,
     });
