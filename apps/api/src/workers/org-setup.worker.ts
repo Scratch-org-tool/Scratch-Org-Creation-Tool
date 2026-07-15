@@ -22,7 +22,13 @@ export class OrgSetupWorker {
       orgId: string;
       setupType?: string;
       config?: Record<string, unknown>;
-      orgConfig?: { upsertQueueIds?: boolean; upsertDomainFields?: boolean; upsertRequestId?: boolean };
+      orgConfig?: {
+        upsertQueueIds?: boolean;
+        upsertDomainFields?: boolean;
+        upsertRequestId?: boolean;
+        bottler?: string;
+        configKey?: string;
+      };
       runId?: string;
       dbJobId: string;
     };

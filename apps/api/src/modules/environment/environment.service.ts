@@ -3,7 +3,6 @@ import { prisma, Prisma } from '@sfcc/db';
 import {
   QUEUE_NAMES,
   scratchOrgCreateSchema,
-  scratchOrgPipelineSchema,
   scratchOrgSkipStepSchema,
   type GitSourceConfig,
   type ScmProvider,
@@ -28,6 +27,7 @@ import { resolveOrgTypeFromInstance, isLikelyScratchOrg } from '../../common/org
 import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 import { IntegrationAdminService } from '../integrations/integration-admin.service';
+import { ScratchTemplatesService } from '../scratch-templates/scratch-templates.service';
 
 async function resolveScratchOrgPassword(
   sfCli: ReturnType<typeof createSfCliClient>,
@@ -76,6 +76,7 @@ export class EnvironmentService {
     private readonly orgConfigLoader: OrgConfigLoaderService,
     private readonly processRegistry: JobProcessRegistryService,
     private readonly dataDeployOrchestrator: DataDeployOrchestratorService,
+    private readonly scratchTemplates: ScratchTemplatesService,
   ) {}
 
   deleteScratchOrg(alias: string, userId: string) {
@@ -526,7 +527,18 @@ export class EnvironmentService {
   }
 
   async createScratchOrgPipeline(body: unknown, userId: string) {
-    const config = scratchOrgPipelineSchema.parse(body);
+    const config = await this.scratchTemplates.resolveLaunch(
+      (body ?? {}) as Record<string, unknown>,
+      userId,
+    );
+    for (const orgId of new Set(
+      [config.dataDeploymentOrgId, config.customSettingsOrgId].filter(
+        (value): value is string => Boolean(value),
+      ),
+    )) {
+      const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
+      assertResourceOwner(org, userId, 'Source org');
+    }
     await this.scmSources.requireActive(config.gitSource!);
     return this.pipelineOrchestrator.startPipeline(config, userId);
   }
@@ -555,7 +567,13 @@ export class EnvironmentService {
     const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
     assertResourceOwner(org, userId, 'Org');
     const { orgConfig } = (body ?? {}) as {
-      orgConfig?: { upsertQueueIds?: boolean; upsertDomainFields?: boolean; upsertRequestId?: boolean };
+      orgConfig?: {
+        upsertQueueIds?: boolean;
+        upsertDomainFields?: boolean;
+        upsertRequestId?: boolean;
+        bottler?: string;
+        configKey?: string;
+      };
     };
     try {
       return await this.orgConfigLoader.loadForOrg(orgId, orgConfig ?? {});

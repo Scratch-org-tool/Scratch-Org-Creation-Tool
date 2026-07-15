@@ -212,6 +212,13 @@ export class WorkerRegistry implements OnModuleInit {
             if (runId && options?.failedStep) {
               const failedStep = options.resolveFailedStep?.(error) ?? options.failedStep;
               await this.pipelineOrchestrator.handleJobFailed(runId, failedStep, message);
+            } else if (runId && ['cona_seed', 'account_partner_import', 'cona_user_provision'].includes(job.name)) {
+              const action = job.name === 'cona_seed'
+                ? 'load_data_seed'
+                : job.name === 'account_partner_import'
+                  ? 'load_account_partners'
+                  : 'provision_users';
+              await this.pipelineOrchestrator.handleUserActionFailed(runId, action, message);
             } else if (runId && job.name === 'org_to_org_data_deploy') {
               await this.completeChainedRunIfDone(runId);
             } else if (data.deploymentId) {

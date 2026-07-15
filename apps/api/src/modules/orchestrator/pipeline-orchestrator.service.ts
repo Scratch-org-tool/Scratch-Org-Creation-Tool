@@ -14,6 +14,11 @@ import {
   pipelineResumeSchema,
   pipelineRunActionsSchema,
   resolveUserProvisionSlots,
+  expandUserGenerators,
+  generateEmailStyleUsername,
+  formatProvisioningUsername,
+  resolveRoleBottlerMapping,
+  userProvisioningConfigSchema,
 } from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
@@ -30,6 +35,7 @@ import {
 } from '../data/sfdmu-config.generator';
 import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
+import { createSfCliClient } from '@sfcc/sf-cli';
 
 export interface PipelineCheckpoint {
   completedSteps: PipelineStepId[];
@@ -42,6 +48,7 @@ export interface PipelineCheckpoint {
   intelligentDeployRunId?: string;
   awaitingUserActions?: boolean;
   userActionsCompleted?: UserTriggeredPipelineStepId[];
+  failedUserAction?: UserTriggeredPipelineStepId;
   fullyProvisioned?: boolean;
   artifacts?: {
     manifestPath?: string;
@@ -50,6 +57,7 @@ export interface PipelineCheckpoint {
 
 @Injectable()
 export class PipelineOrchestratorService {
+  private readonly sfCli = createSfCliClient();
   constructor(
     private readonly queueService: QueueService,
     private readonly jobsService: JobsService,
@@ -246,6 +254,7 @@ export class PipelineOrchestratorService {
         const completed = new Set(checkpoint.userActionsCompleted ?? []);
         completed.add(action);
         checkpoint.userActionsCompleted = [...completed];
+        checkpoint.failedUserAction = undefined;
         await prisma.automationRun.update({
           where: { id: automationRunId },
           data: { checkpoint: checkpoint as unknown as Prisma.InputJsonValue },
@@ -312,6 +321,34 @@ export class PipelineOrchestratorService {
       'stderr',
       `[PIPELINE PAUSED] ${canonicalFailedStep}: ${error}`,
     );
+  }
+
+  async handleUserActionFailed(
+    automationRunId: string,
+    action: UserTriggeredPipelineStepId,
+    error: string,
+  ) {
+    const run = await prisma.automationRun.findUnique({ where: { id: automationRunId } });
+    if (!run) return;
+    const checkpoint = (run.checkpoint ?? {}) as unknown as PipelineCheckpoint;
+    checkpoint.failedUserAction = action;
+    await prisma.automationRun.update({
+      where: { id: automationRunId },
+      data: {
+        status: 'paused',
+        lastError: error,
+        failedStep: action,
+        checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await this.streamService.publish('job_status', {
+      automationRunId,
+      status: 'paused',
+      step: action,
+      message: error,
+      recoverable: action !== 'load_data_seed'
+        || !error.toLowerCase().includes('unsafe insert retry'),
+    });
   }
 
   async resumeRun(automationRunId: string, body: unknown, userId?: string) {
@@ -423,6 +460,20 @@ export class PipelineOrchestratorService {
       (run.checkpoint ?? { completedSteps: [], resumeFrom: 'scratch_org_create' }) as unknown as PipelineCheckpoint,
     ) as PipelineCheckpoint;
 
+    if (checkpoint.failedUserAction) {
+      try {
+        await this.runUserActions(automationRunId, { actions: [checkpoint.failedUserAction] });
+        return {
+          automationRunId,
+          status: 'running',
+          resumeFrom: checkpoint.failedUserAction,
+        };
+      } catch (error) {
+        await this.restorePausedResume(automationRunId, error);
+        throw error;
+      }
+    }
+
     await prisma.automationRun.update({
       where: { id: automationRunId },
       data: {
@@ -481,30 +532,55 @@ export class PipelineOrchestratorService {
 
     for (const action of actions) {
       if (action === 'provision_users') {
-        const templates = config.userProvisioning?.templates ?? [];
-        const slots = config.userProvisioning?.slots ?? [];
-        const users = slots.length && templates.length
-          ? resolveUserProvisionSlots(slots, templates)
-          : (config.userProvisioning?.users ?? []);
+        const users = this.resolveProvisioningUsers(config, automationRunId);
         if (!users.length) throw new Error('No users configured in pipeline config');
+        config.userProvisioning = {
+          ...config.userProvisioning,
+          users,
+        };
+        await prisma.automationRun.update({
+          where: { id: automationRunId },
+          data: { config: config as unknown as Prisma.InputJsonValue },
+        });
+        const batch = await prisma.provisioningBatch.create({
+          data: {
+            orgId: targetOrgId,
+            totalRows: users.length,
+            status: 'queued',
+            createdBy: run.createdBy,
+            users: {
+              create: users.map((user) => ({
+                firstName: user.firstName,
+                lastName: user.lastName,
+                email: user.email,
+                username: user.username!,
+                profile: user.profile,
+                role: user.role,
+                permissionSets: user.permissionSets ?? [],
+                status: 'queued',
+              })),
+            },
+          },
+        });
         const job = await this.jobsService.create({
           queue: QUEUE_NAMES.USER_PROVISION,
           type: 'cona_user_provision',
           parentRunId: automationRunId,
           payload: {
             orgId: targetOrgId,
-            users: users.map((u) => ({
-              ...u,
-              username: u.email,
-            })),
+            batchId: batch.id,
+            users,
             conaMode: true,
+            strictMetadata: config.version === 2,
             automationRunId,
           },
         });
         await this.queueService.addJob(QUEUE_NAMES.USER_PROVISION, 'cona_user_provision', {
           orgId: targetOrgId,
+          batchId: batch.id,
           users,
           conaMode: true,
+          strictMetadata: config.version === 2,
           dbJobId: job.id,
           automationRunId,
         }, job.id);
@@ -532,6 +608,7 @@ export class PipelineOrchestratorService {
             accountSeedRows: config.accountSeedRows,
             dataSeedMode,
             querySet,
+            querySection: config.dataSeed?.querySection,
             salesOfficeConfig,
             automationRunId,
           },
@@ -543,6 +620,7 @@ export class PipelineOrchestratorService {
           accountSeedRows: config.accountSeedRows,
           dataSeedMode,
           querySet,
+          querySection: config.dataSeed?.querySection,
           salesOfficeConfig,
           dbJobId: job.id,
           automationRunId,
@@ -551,6 +629,9 @@ export class PipelineOrchestratorService {
       }
 
       if (action === 'load_account_partners') {
+        if (config.dataSeed?.mode === 'query_section' && config.dataSeed.querySection?.accountPartnerPlan) {
+          continue;
+        }
         const partner = config.partnerImport ?? {
           mode: (partnerExcelBase64 ? 'excel' : 'org_to_org_matched') as 'excel' | 'org_to_org' | 'org_to_org_matched',
           bottler: '5000' as const,
@@ -865,20 +946,21 @@ export class PipelineOrchestratorService {
   ) {
     const sourceOrgId = getCustomSettingsOrgId({
       customSettingsOrgId: config.customSettingsOrgId,
-      sourceOrgId: config.dataDeploymentOrgId ?? config.sourceOrgId,
+      sourceOrgId: config.sourceOrgId,
       dataDeploymentOrgId: config.dataDeploymentOrgId,
     });
     const targetOrgId = checkpoint.targetOrgConnectionId;
     if (!sourceOrgId || !targetOrgId) {
-      await this.enqueuePostDeployChain(automationRunId, config, checkpoint);
-      return;
+      throw new Error('customSettingsOrgId and scratch target org are required');
     }
 
     const source = await prisma.orgConnection.findUnique({ where: { id: sourceOrgId } });
     const target = await prisma.orgConnection.findUnique({ where: { id: targetOrgId } });
     if (!source || !target) {
-      await this.enqueuePostDeployChain(automationRunId, config, checkpoint);
-      return;
+      throw new Error('Custom settings source or target org not found');
+    }
+    if (source.createdBy !== createdBy || target.createdBy !== createdBy) {
+      throw new Error('Custom settings org ownership validation failed');
     }
 
     const mode = config.customSettings?.mode ?? 'bundled';
@@ -886,6 +968,7 @@ export class PipelineOrchestratorService {
       mode === 'custom' && config.customSettings?.exportConfig
         ? config.customSettings.exportConfig
         : loadBundledCustomSettingsExport();
+    await this.sfCli.ensureSfdmuPlugin();
 
     const movement = await prisma.dataMovement.create({
       data: {
@@ -950,16 +1033,7 @@ export class PipelineOrchestratorService {
     config: ScratchOrgPipelineInput,
     checkpoint: PipelineCheckpoint,
   ) {
-    const steps = config.pipelineSteps ?? {
-      autoRunDataSeed: true,
-      autoRunPartners: false,
-      autoRunUsers: true,
-    };
-
-    const actions: UserTriggeredPipelineStepId[] = [];
-    if (steps.autoRunDataSeed) actions.push('load_data_seed');
-    if (steps.autoRunPartners) actions.push('load_account_partners');
-    if (steps.autoRunUsers) actions.push('provision_users');
+    const actions = this.autoActions(config);
 
     if (!actions.length) {
       await this.completeAutoPipeline(automationRunId, checkpoint, false);
@@ -968,7 +1042,7 @@ export class PipelineOrchestratorService {
 
     const partnerExcelBase64 = config.partnerImport?.partnerExcelBase64;
     await this.runUserActions(automationRunId, {
-      actions,
+      actions: [actions[0]],
       partnerExcelBase64,
       partnerSheet: config.partnerImport?.sheet,
     });
@@ -984,20 +1058,81 @@ export class PipelineOrchestratorService {
     config: ScratchOrgPipelineInput,
     checkpoint: PipelineCheckpoint,
   ) {
+    const expected = this.autoActions(config);
+    const done = new Set(checkpoint.userActionsCompleted ?? []);
+    if (expected.every((a) => done.has(a))) {
+      checkpoint.fullyProvisioned = true;
+      await this.completeAutoPipeline(automationRunId, checkpoint, false);
+      return;
+    }
+    const next = expected.find((action) => !done.has(action));
+    if (next) await this.runUserActions(automationRunId, { actions: [next] });
+  }
+
+  private autoActions(config: ScratchOrgPipelineInput): UserTriggeredPipelineStepId[] {
     const steps = config.pipelineSteps ?? {
       autoRunDataSeed: true,
       autoRunPartners: false,
       autoRunUsers: true,
     };
-    const expected: UserTriggeredPipelineStepId[] = [];
-    if (steps.autoRunDataSeed) expected.push('load_data_seed');
-    if (steps.autoRunPartners) expected.push('load_account_partners');
-    if (steps.autoRunUsers) expected.push('provision_users');
-    const done = new Set(checkpoint.userActionsCompleted ?? []);
-    if (expected.every((a) => done.has(a))) {
-      checkpoint.fullyProvisioned = true;
-      await this.completeAutoPipeline(automationRunId, checkpoint, false);
-    }
+    const actions: UserTriggeredPipelineStepId[] = [];
+    if (steps.autoRunDataSeed) actions.push('load_data_seed');
+    const queryHandlesPartners = Boolean(
+      config.dataSeed?.mode === 'query_section'
+      && config.dataSeed.querySection?.accountPartnerPlan,
+    );
+    if (steps.autoRunPartners && !queryHandlesPartners) actions.push('load_account_partners');
+    if (steps.autoRunUsers && this.hasProvisioningUsers(config)) actions.push('provision_users');
+    return actions;
+  }
+
+  private hasProvisioningUsers(config: ScratchOrgPipelineInput): boolean {
+    return Boolean(
+      config.userProvisioning?.users?.length
+      || config.userProvisioning?.slots?.length
+      || config.userProvisioning?.userGenerators?.length,
+    );
+  }
+
+  private resolveProvisioningUsers(config: ScratchOrgPipelineInput, automationRunId: string) {
+    const provisioning = userProvisioningConfigSchema.parse(config.userProvisioning ?? {});
+    const slotted = provisioning.slots?.length
+      ? resolveUserProvisionSlots(provisioning.slots, provisioning.templates ?? [])
+      : [];
+    const generated = provisioning.userGenerators?.length
+      ? expandUserGenerators(provisioning.userGenerators, {
+          automationRunId,
+          teams: provisioning.teams,
+          roleBottlerMappings: provisioning.roleBottlerMappings,
+          usernamePolicy: provisioning.usernamePolicy,
+          emailPolicy: provisioning.emailPolicy,
+        })
+      : [];
+    return [...(provisioning.users ?? []), ...slotted, ...generated].map((user, index) => {
+      const mapping = resolveRoleBottlerMapping(
+        user.role,
+        user.bottler,
+        provisioning.roleBottlerMappings ?? [],
+      );
+      return {
+        ...user,
+        profile: user.profile ?? mapping?.profile,
+        permissionSets: user.permissionSets ?? mapping?.permissionSets ?? [],
+        modules: user.modules ?? mapping?.modules ?? [],
+        locations: user.locations ?? mapping?.locations ?? [],
+        username: user.username ?? formatProvisioningUsername(
+          generateEmailStyleUsername({
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            domain: provisioning.usernamePolicy?.domain,
+            uniqueKey: `${automationRunId}-${index + 1}`,
+          }),
+          provisioning.usernamePolicy?.pattern,
+          { runId: automationRunId, ordinal: index + 1 },
+        ),
+      };
+    });
   }
 
   private async completeAutoPipeline(

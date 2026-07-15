@@ -76,6 +76,8 @@ const scratchPipelineTemplateConfigBaseSchema = z.object({
     upsertQueueIds: z.boolean().default(true),
     upsertDomainFields: z.boolean().default(true),
     upsertRequestId: z.boolean().default(true),
+    bottler: z.string().min(1).optional(),
+    configKey: z.string().min(1).optional(),
   }).optional(),
   customSettings: customSettingsConfigSchema.optional(),
   /** @deprecated Use dataDeploymentOrgId / customSettingsOrgId */

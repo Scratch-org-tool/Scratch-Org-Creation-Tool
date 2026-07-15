@@ -756,7 +756,8 @@ export class SfCliClient extends EventEmitter {
         defaultedOnCreate?: boolean;
         custom?: boolean;
         referenceTo?: string[];
-        picklistValues?: Array<{ value: string; active: boolean }>;
+        controllerName?: string;
+        picklistValues?: Array<{ value: string; active: boolean; validFor?: string }>;
       }>;
     };
   }>> {

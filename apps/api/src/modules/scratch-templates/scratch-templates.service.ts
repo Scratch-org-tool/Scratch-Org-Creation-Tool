@@ -5,6 +5,7 @@ import {
   normalizeGitSourceConfig,
   type GitSourceConfig,
   migrateTemplateConfig,
+  scratchOrgPipelineSchema,
   sanitizeTemplateConfigForStorage,
   scratchTemplateCreateSchema,
   scratchTemplateUpdateSchema,
@@ -228,11 +229,17 @@ export class ScratchTemplatesService implements OnModuleInit {
       overrides.dataDeploymentOrgId ?? overrides.sourceOrgId ?? tmpl.dataDeploymentOrgId ?? tmpl.sourceOrgId;
     const customSettingsOrgId =
       overrides.customSettingsOrgId ?? overrides.sourceOrgId ?? tmpl.customSettingsOrgId ?? tmpl.sourceOrgId;
+    const hasUsers = Boolean(
+      tmpl.userProvisioning?.users?.length
+      || tmpl.userProvisioning?.slots?.length
+      || tmpl.userProvisioning?.userGenerators?.length,
+    );
     return {
       ...tmpl,
       alias: overrides.alias,
       devHubAlias: overrides.devHubAlias,
       duration: overrides.duration ?? tmpl.duration,
+      installPackage: overrides.installPackage ?? tmpl.installPackage,
       description: overrides.description,
       sourceOrgId: dataDeploymentOrgId,
       dataDeploymentOrgId,
@@ -249,6 +256,41 @@ export class ScratchTemplatesService implements OnModuleInit {
           }
         : undefined,
       skipSteps: [],
+      pipelineSteps: {
+        ...tmpl.pipelineSteps,
+        ...(hasUsers ? {} : { autoRunUsers: false }),
+      },
     };
+  }
+
+  /** Build the immutable run snapshot from the stored template, never client template fields. */
+  async resolveLaunch(body: Record<string, unknown>, userId: string) {
+    const templateId = typeof body.templateId === 'string' ? body.templateId : undefined;
+    if (!templateId) {
+      return scratchOrgPipelineSchema.parse(body);
+    }
+    const template = await this.get(templateId, userId);
+    const merged = this.mergeTemplateWithLaunch(
+      template.config as Record<string, unknown>,
+      {
+        alias: String(body.alias ?? ''),
+        devHubAlias: String(body.devHubAlias ?? ''),
+        sourceOrgId: body.sourceOrgId as string | undefined,
+        dataDeploymentOrgId: body.dataDeploymentOrgId as string | undefined,
+        customSettingsOrgId: body.customSettingsOrgId as string | undefined,
+        templateId,
+        gitSource: body.gitSource as GitSourceConfig | undefined,
+        azureDeploy: body.azureDeploy as {
+          project?: string;
+          repo: string;
+          branch: string;
+          manifestPath?: string;
+        } | undefined,
+        installPackage: body.installPackage as boolean | undefined,
+        duration: body.duration as number | undefined,
+        description: body.description as string | undefined,
+      },
+    );
+    return scratchOrgPipelineSchema.parse(merged);
   }
 }

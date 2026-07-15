@@ -152,6 +152,8 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
     upsertQueueIds: z.boolean().default(true),
     upsertDomainFields: z.boolean().default(true),
     upsertRequestId: z.boolean().default(true),
+    bottler: z.string().min(1).optional(),
+    configKey: z.string().min(1).optional(),
   }).optional(),
   accountSeedRows: z.array(z.object({
     accountGroup: z.enum(['Z001', 'ZFSV', 'Z003']),

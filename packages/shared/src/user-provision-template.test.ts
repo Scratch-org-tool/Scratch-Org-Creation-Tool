@@ -4,6 +4,7 @@ import {
   allocateEmailPool,
   expandUserGenerators,
   generateEmailStyleUsername,
+  formatProvisioningUsername,
   normalizeRoleSlug,
   resolveRoleBottlerMapping,
   stableDeterministicShuffle,
@@ -121,6 +122,17 @@ describe('deterministic user helpers', () => {
           uniqueKey: 'one',
         }),
       /domain/,
+    );
+  });
+
+  it('formats configured username patterns deterministically', () => {
+    assert.equal(
+      formatProvisioningUsername(
+        'ada+seed@users.example.com',
+        '{{local}}.{{runId}}.{{ordinal}}@{{domain}}',
+        { runId: 'Run 42', ordinal: 3 },
+      ),
+      'ada+seed.run-42.3@users.example.com',
     );
   });
 

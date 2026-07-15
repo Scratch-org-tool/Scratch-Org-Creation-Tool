@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
-import { ONBOARDING_CONFIG_OBJECT, ONBOARDING_CONFIG_QUEUE_MAP } from '@sfcc/shared';
+import { escapeSoqlLiteral, ONBOARDING_CONFIG_OBJECT, ONBOARDING_CONFIG_QUEUE_MAP } from '@sfcc/shared';
 
 export interface OrgConfigLoadOptions {
   upsertQueueIds?: boolean;
   upsertDomainFields?: boolean;
   upsertRequestId?: boolean;
+  bottler?: string;
+  configKey?: string;
 }
 
 @Injectable()
@@ -84,11 +86,24 @@ export class OrgConfigLoaderService {
       return { success: true, logs: ['No org config operations enabled'], recordId: null };
     }
 
+    const selectors = [
+      options.bottler
+        ? `cfs_ob__Bottler__c = '${escapeSoqlLiteral(options.bottler)}'`
+        : undefined,
+      options.configKey ? `Name = '${escapeSoqlLiteral(options.configKey)}'` : undefined,
+    ].filter(Boolean);
     const existing = await this.sfCli.query(
       alias,
-      `SELECT Id FROM ${ONBOARDING_CONFIG_OBJECT} LIMIT 1`,
+      selectors.length
+        ? `SELECT Id FROM ${ONBOARDING_CONFIG_OBJECT} WHERE ${selectors.join(' AND ')} ORDER BY Id LIMIT 2`
+        : `SELECT Id FROM ${ONBOARDING_CONFIG_OBJECT} LIMIT 1`,
     );
-    const recordId = (existing.data as { result?: { records?: Array<{ Id: string }> } })?.result?.records?.[0]?.Id;
+    const existingRecords =
+      (existing.data as { result?: { records?: Array<{ Id: string }> } })?.result?.records ?? [];
+    if (selectors.length && existingRecords.length > 1) {
+      throw new Error(`OnboardingConfig selector is ambiguous: ${selectors.join(', ')}`);
+    }
+    const recordId = existingRecords[0]?.Id;
 
     if (recordId) {
       const updateResult = await this.sfCli.updateRecord(alias, ONBOARDING_CONFIG_OBJECT, recordId, updates);

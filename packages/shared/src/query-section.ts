@@ -53,6 +53,16 @@ export const accountPartnerPlanSchema = z.object({
   employeeMasterQueryId: z.string().min(1),
   accountPartnerQueryId: z.string().min(1),
   roleQueryId: z.string().min(1).optional(),
+  accountKeyField: z.string().min(1).default('cfs_ob__u_CustomerNumber__c'),
+  employeeKeyField: z.string().min(1).default('cfs_ob__EmployeeNo__c'),
+  mappingAccountKeyField: z.string().min(1)
+    .default('cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c'),
+  mappingEmployeeKeyField: z.string().min(1)
+    .default('cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c'),
+  mappingRoleField: z.string().min(1).default('cfs_ob__PartnerRole__c'),
+  externalIdField: z.string().min(1).default('cfs_ob__AccountPartnerExternalId__c'),
+  externalIdPattern: z.string().min(1).default('{{account}}-{{employee}}-{{role}}'),
+  targetDistributionField: z.string().min(1).optional(),
 });
 
 const querySectionBaseSchema = z.object({

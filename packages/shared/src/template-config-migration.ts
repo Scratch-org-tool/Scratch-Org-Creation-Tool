@@ -175,7 +175,18 @@ function buildMigratedQuerySection(
   const accountPartnerQueryId = categoryId('account_partner');
   const accountPartnerPlan =
     accountQueryId && employeeMasterQueryId && accountPartnerQueryId
-      ? { accountQueryId, employeeMasterQueryId, accountPartnerQueryId }
+      ? {
+          accountQueryId,
+          employeeMasterQueryId,
+          accountPartnerQueryId,
+          accountKeyField: DEFAULT_EXTERNAL_ID_FIELDS.account,
+          employeeKeyField: DEFAULT_EXTERNAL_ID_FIELDS.employee,
+          mappingAccountKeyField: 'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c',
+          mappingEmployeeKeyField: 'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c',
+          mappingRoleField: 'cfs_ob__PartnerRole__c',
+          externalIdField: DEFAULT_EXTERNAL_ID_FIELDS.partner,
+          externalIdPattern: '{{account}}-{{employee}}-{{role}}',
+        }
       : undefined;
   return {
     name: 'Migrated legacy data seed',

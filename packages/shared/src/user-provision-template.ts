@@ -8,6 +8,7 @@ export const userDiscoveryPolicySchema = z
 export const usernamePolicySchema = z.object({
   strategy: z.literal('email_style').default('email_style'),
   domain: z.string().min(1).optional(),
+  pattern: z.string().min(1).optional(),
   seed: z.literal('automation_run').default('automation_run'),
 });
 
@@ -69,6 +70,8 @@ export const concreteProvisionUserSchema = z.object({
   bottler: z.string(),
   modules: z.array(z.string()).optional(),
   locations: z.array(z.string()).optional(),
+  profile: z.string().min(1).optional(),
+  permissionSets: z.array(z.string().min(1)).optional(),
   teamId: z.string().min(1).optional(),
 });
 
@@ -162,6 +165,8 @@ export interface ResolvedProvisionUser {
   username?: string;
   teamId?: string;
   generatorId?: string;
+  profile?: string;
+  permissionSets?: string[];
 }
 
 export function resolveUserProvisionSlots(
@@ -292,6 +297,24 @@ export function generateEmailStyleUsername(input: EmailStyleUsernameInput): stri
 
 export const generateUniqueUsername = generateEmailStyleUsername;
 
+export function formatProvisioningUsername(
+  username: string,
+  pattern: string | undefined,
+  values: { runId: string; generatorId?: string; ordinal: number },
+): string {
+  if (!pattern) return username;
+  const formatted = pattern
+    .replace(/\{\{local\}\}/g, username.split('@')[0])
+    .replace(/\{\{domain\}\}/g, username.split('@')[1])
+    .replace(/\{\{runId\}\}/g, normalizeRoleSlug(values.runId))
+    .replace(/\{\{generatorId\}\}/g, normalizeRoleSlug(values.generatorId ?? 'user'))
+    .replace(/\{\{ordinal\}\}/g, String(values.ordinal));
+  if (!/^[^@\s]+@[^@\s]+$/.test(formatted)) {
+    throw new Error('Username pattern produced an invalid username');
+  }
+  return formatted;
+}
+
 export function resolveRoleBottlerMapping(
   role: string,
   bottler: string,
@@ -384,17 +407,24 @@ export function expandUserGenerators(
         domain: usernamePolicy.domain,
         uniqueKey,
       });
+      const patternedUsername = formatProvisioningUsername(username, usernamePolicy.pattern, {
+        runId: options.automationRunId,
+        generatorId: generator.id,
+        ordinal,
+      });
       result.push({
         firstName,
         lastName,
         email,
-        username,
+        username: patternedUsername,
         role: mapping?.salesforceRole ?? generator.role,
         bottler: generator.bottler,
         modules: generator.modules ?? mapping?.modules ?? [],
         locations: generator.locations ?? mapping?.locations ?? [],
         teamId: generator.teamId,
         generatorId: generator.id,
+        profile: mapping?.profile,
+        permissionSets: mapping?.permissionSets ?? [],
       });
     }
   }

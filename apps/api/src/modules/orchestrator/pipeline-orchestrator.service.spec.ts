@@ -107,3 +107,43 @@ describe('PipelineOrchestratorService provider-neutral resume', () => {
     expect(db.automationRun.updateMany).not.toHaveBeenCalled();
   });
 });
+
+describe('PipelineOrchestratorService custom-settings transition', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.automationRun.update.mockResolvedValue({});
+  });
+
+  it('always queues target-only org config after successful SFDMU', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'running',
+      config: {
+        alias: 'scratch',
+        devHubAlias: 'devhub',
+        gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+        customSettings: { enabled: true, mode: 'bundled' },
+      },
+      checkpoint: {
+        completedSteps: ['scratch_org_create', 'git_metadata_deploy'],
+        resumeFrom: 'load_custom_settings',
+        targetOrgConnectionId: 'scratch-target',
+      },
+    });
+    const service = createService();
+    const enqueueLoadOrgConfig = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { enqueueLoadOrgConfig: typeof enqueueLoadOrgConfig })
+      .enqueueLoadOrgConfig = enqueueLoadOrgConfig;
+
+    await service.handleJobSucceeded('run-1', 'custom_settings_load');
+
+    expect(enqueueLoadOrgConfig).toHaveBeenCalledWith(
+      'run-1',
+      expect.any(Object),
+      expect.objectContaining({
+        targetOrgConnectionId: 'scratch-target',
+        completedSteps: expect.arrayContaining(['load_custom_settings']),
+      }),
+    );
+  });
+});
