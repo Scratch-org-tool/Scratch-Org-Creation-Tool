@@ -89,12 +89,12 @@ export function ScratchOrgsTable({
               <IntegrationsTd>
                 <div className="flex items-center justify-end gap-1 flex-wrap">
                   {loginHref && (
-                    <a href={loginHref} target="_blank" rel="noreferrer" title="Login to scratch org">
-                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-primary">
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-primary" asChild>
+                      <a href={loginHref} target="_blank" rel="noreferrer" title={`Login to ${org.alias}`}>
                         <ExternalLink className="w-3 h-3" />
                         Login
-                      </Button>
-                    </a>
+                      </a>
+                    </Button>
                   )}
                   <Button
                     variant="ghost"
@@ -113,6 +113,7 @@ export function ScratchOrgsTable({
                     loading={deletingAlias === org.alias}
                     disabled={!!deletingAlias}
                     onClick={() => onDelete(org.alias)}
+                    aria-label={`Delete scratch org ${org.alias}`}
                   >
                     <Trash2 className="w-3 h-3" />
                   </Button>

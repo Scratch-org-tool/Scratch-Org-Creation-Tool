@@ -54,18 +54,28 @@ export function MetadataCompareTable({ w }: { w: MetadataCompareHook }) {
               return (
                 <tr
                   key={key}
-                  className={`border-t border-border cursor-pointer hover:bg-muted/30 ${selected ? 'bg-primary/5' : ''}`}
-                  onClick={() => void w.loadItemDiff(item)}
+                  className={`border-t border-border hover:bg-muted/30 ${selected ? 'bg-primary/5' : ''}`}
                 >
-                  <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                  <td className="p-2">
                     <input
                       type="checkbox"
                       checked={w.selectedKeys.has(key)}
                       disabled={!canSelect}
                       onChange={() => w.toggleSelect(item)}
+                      aria-label={`Select ${item.fullName} for deployment`}
                     />
                   </td>
-                  <td className="p-2 font-mono text-[11px]">{item.fullName}</td>
+                  <td className="p-2 font-mono text-[11px]">
+                    <button
+                      type="button"
+                      className="text-left hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+                      onClick={() => void w.loadItemDiff(item)}
+                      aria-label={`View diff for ${item.fullName}`}
+                      aria-pressed={selected}
+                    >
+                      {item.fullName}
+                    </button>
+                  </td>
                   <td className="p-2 hidden sm:table-cell text-muted-foreground">{item.metadataType}</td>
                   <td className="p-2 hidden md:table-cell text-muted-foreground">
                     {item.lastModifiedDate ? new Date(item.lastModifiedDate).toLocaleString() : '—'}
@@ -90,14 +100,15 @@ export function MetadataCompareTable({ w }: { w: MetadataCompareHook }) {
         </table>
       </div>
       {w.itemsTotal > 100 && (
-        <div className="flex justify-between items-center px-3 py-2 border-t border-border text-xs">
-          <span className="text-muted-foreground">Page {w.page} · {w.itemsTotal} items</span>
+        <nav className="flex justify-between items-center px-3 py-2 border-t border-border text-xs" aria-label="Metadata pagination">
+          <span className="text-muted-foreground" aria-current="page">Page {w.page} · {w.itemsTotal} items</span>
           <div className="flex gap-1">
             <button
               type="button"
               className="px-2 py-1 rounded border border-border disabled:opacity-40"
               disabled={w.page <= 1}
               onClick={() => w.setPage(w.page - 1)}
+              aria-label="Previous metadata page"
             >
               Prev
             </button>
@@ -106,11 +117,12 @@ export function MetadataCompareTable({ w }: { w: MetadataCompareHook }) {
               className="px-2 py-1 rounded border border-border disabled:opacity-40"
               disabled={w.page * 100 >= w.itemsTotal}
               onClick={() => w.setPage(w.page + 1)}
+              aria-label="Next metadata page"
             >
               Next
             </button>
           </div>
-        </div>
+        </nav>
       )}
       {w.selectedItem?.metadataType === 'CustomObject' && (
         <MetadataObjectChildren w={w} />

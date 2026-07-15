@@ -175,8 +175,8 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
         <FormSection title="Orgs">
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label>Source Org</Label>
-              <Select value={sourceOrgId} onChange={(e) => setSourceOrgId(e.target.value)}>
+              <Label htmlFor="cona-seed-source-org">Source Org</Label>
+              <Select id="cona-seed-source-org" value={sourceOrgId} onChange={(e) => setSourceOrgId(e.target.value)}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>{o.alias}</option>
@@ -184,8 +184,8 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
               </Select>
             </div>
             <div>
-              <Label>Target Org</Label>
-              <Select value={targetOrgId} onChange={(e) => setTargetOrgId(e.target.value)}>
+              <Label htmlFor="cona-seed-target-org">Target Org</Label>
+              <Select id="cona-seed-target-org" value={targetOrgId} onChange={(e) => setTargetOrgId(e.target.value)}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>{o.alias}</option>
@@ -228,8 +228,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                   }`}
                 >
                   <div>
-                    <Label>Group</Label>
+                    <Label htmlFor={`cona-seed-${index}-group`}>Group</Label>
                     <Select
+                      id={`cona-seed-${index}-group`}
                       value={row.accountGroup}
                       onChange={(e) => updateRow(index, { accountGroup: e.target.value as AccountGroup })}
                     >
@@ -239,8 +240,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                     </Select>
                   </div>
                   <div>
-                    <Label>Bottler</Label>
+                    <Label htmlFor={`cona-seed-${index}-bottler`}>Bottler</Label>
                     <Select
+                      id={`cona-seed-${index}-bottler`}
                       value={row.bottler}
                       onChange={(e) => updateRow(index, { bottler: e.target.value as Bottler })}
                     >
@@ -250,8 +252,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                     </Select>
                   </div>
                   <div>
-                    <Label>Channel</Label>
+                    <Label htmlFor={`cona-seed-${index}-channel`}>Channel</Label>
                     <Select
+                      id={`cona-seed-${index}-channel`}
                       value={row.distributionChannel}
                       onChange={(e) =>
                         updateRow(index, { distributionChannel: e.target.value as DistributionChannel })
@@ -262,8 +265,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                     </Select>
                   </div>
                   <div>
-                    <Label>Limit</Label>
+                    <Label htmlFor={`cona-seed-${index}-limit`}>Limit</Label>
                     <Input
+                      id={`cona-seed-${index}-limit`}
                       type="number"
                       min={1}
                       value={row.limit}
@@ -277,6 +281,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                         size="sm"
                         variant="ghost"
                         onClick={() => setAccountRows((rows) => rows.filter((_, i) => i !== index))}
+                        aria-label={`Remove account seed row ${index + 1}`}
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>

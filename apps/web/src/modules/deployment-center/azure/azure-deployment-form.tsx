@@ -73,8 +73,9 @@ export function AzureDeploymentForm({
         <FormSection title="Target & repository">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field>
-              <Label>Target Org</Label>
+              <Label htmlFor="azure-deploy-target-org">Target Org</Label>
               <Select
+                id="azure-deploy-target-org"
                 value={form.targetOrgId}
                 onChange={(e) => setForm((f) => ({ ...f, targetOrgId: e.target.value }))}
                 disabled={isRunning}
@@ -95,8 +96,9 @@ export function AzureDeploymentForm({
             </Field>
 
             <Field>
-              <Label>Repository</Label>
+              <Label htmlFor="azure-deploy-repository">Repository</Label>
               <Select
+                id="azure-deploy-repository"
                 value={form.repo}
                 onChange={(e) => onRepoChange(e.target.value)}
                 disabled={isRunning || !azureStatus.connected}
@@ -115,8 +117,9 @@ export function AzureDeploymentForm({
         <FormSection title="Branch & manifest">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field>
-              <Label>Branch</Label>
+              <Label htmlFor="azure-deploy-branch">Branch</Label>
               <Select
+                id="azure-deploy-branch"
                 value={form.branch}
                 onChange={(e) => setForm((f) => ({ ...f, branch: e.target.value }))}
                 disabled={isRunning}
@@ -131,8 +134,9 @@ export function AzureDeploymentForm({
             </Field>
 
             <Field>
-              <Label>Manifest</Label>
+              <Label htmlFor="azure-deploy-manifest">Manifest</Label>
               <Input
+                id="azure-deploy-manifest"
                 value={form.manifestPath}
                 onChange={(e) => setForm((f) => ({ ...f, manifestPath: e.target.value }))}
                 placeholder="CoreFlex Onboarding/manifest/package.xml"
@@ -144,8 +148,9 @@ export function AzureDeploymentForm({
 
         <FormSection title="Test level">
           <Field className="max-w-xs">
-            <Label>Test Level</Label>
+            <Label htmlFor="azure-deploy-test-level">Test Level</Label>
             <Select
+              id="azure-deploy-test-level"
               value={form.testLevel}
               onChange={(e) => setForm((f) => ({ ...f, testLevel: e.target.value as TestLevel }))}
               disabled={isRunning}

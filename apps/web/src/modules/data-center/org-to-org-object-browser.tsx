@@ -95,8 +95,9 @@ export function OrgToOrgObjectBrowser({
   return (
     <div className={cn('space-y-3', loading && 'opacity-60 pointer-events-none')}>
       <div>
-        <Label>Search objects</Label>
+        <Label htmlFor="org-object-search">Search objects</Label>
         <Input
+          id="org-object-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter by name or API name…"

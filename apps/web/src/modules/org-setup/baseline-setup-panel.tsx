@@ -47,8 +47,8 @@ export function BaselineSetupPanel({ w }: BaselineSetupPanelProps) {
           <FormSection title="Org and permission sets">
             <div className="grid gap-3">
               <div>
-                <Label>Target Org</Label>
-                <Select value={w.orgId} onChange={(e) => w.setOrgId(e.target.value)}>
+                <Label htmlFor="baseline-target-org">Target Org</Label>
+                <Select id="baseline-target-org" value={w.orgId} onChange={(e) => w.setOrgId(e.target.value)}>
                   <option value="">Select…</option>
                   {w.orgs.map((o) => (
                     <option key={o.id} value={o.id}>
@@ -58,8 +58,9 @@ export function BaselineSetupPanel({ w }: BaselineSetupPanelProps) {
                 </Select>
               </div>
               <div>
-                <Label>Assign to</Label>
+                <Label htmlFor="baseline-assign-scope">Assign to</Label>
                 <Select
+                  id="baseline-assign-scope"
                   value={w.assignScope}
                   onChange={(e) =>
                     w.setAssignScope(e.target.value as 'default_user' | 'all_active_users')
@@ -70,8 +71,9 @@ export function BaselineSetupPanel({ w }: BaselineSetupPanelProps) {
                 </Select>
               </div>
               <div>
-                <Label>Permission Sets (comma-separated API names)</Label>
+                <Label htmlFor="baseline-permission-sets">Permission Sets (comma-separated API names)</Label>
                 <Input
+                  id="baseline-permission-sets"
                   value={w.permissionSets}
                   onChange={(e) => w.setPermissionSets(e.target.value)}
                   placeholder={SCRATCH_PERMISSION_SET}
@@ -88,8 +90,8 @@ export function BaselineSetupPanel({ w }: BaselineSetupPanelProps) {
                 )}
               </div>
               <div>
-                <Label>Theme</Label>
-                <Select value={w.theme} onChange={(e) => w.setTheme(e.target.value)}>
+                <Label htmlFor="baseline-theme">Theme</Label>
+                <Select id="baseline-theme" value={w.theme} onChange={(e) => w.setTheme(e.target.value)}>
                   <option value="lightning">Lightning</option>
                   <option value="classic">Classic</option>
                 </Select>

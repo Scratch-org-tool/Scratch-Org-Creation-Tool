@@ -1,9 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import { Unplug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
-import { FormSection, GlassCard, InlineAlert } from '@/components/studio';
+import { ConfirmDialog, FormSection, GlassCard, InlineAlert } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import type { IntegrationsWorkspaceState } from './use-integrations-workspace';
 
@@ -13,6 +14,7 @@ interface AzureIntegrationPanelProps {
 
 export function AzureIntegrationPanel({ w }: AzureIntegrationPanelProps) {
   const connected = w.azureStatus?.connected;
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -42,8 +44,9 @@ export function AzureIntegrationPanel({ w }: AzureIntegrationPanelProps) {
         >
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <Label>Organization slug</Label>
+              <Label htmlFor="azure-organization-slug">Organization slug</Label>
               <Input
+                id="azure-organization-slug"
                 value={w.azureForm.orgSlug}
                 onChange={(e) => w.setAzureForm({ ...w.azureForm, orgSlug: e.target.value })}
                 placeholder="my-org"
@@ -54,8 +57,9 @@ export function AzureIntegrationPanel({ w }: AzureIntegrationPanelProps) {
               </p>
             </div>
             <div>
-              <Label>Default project (optional)</Label>
+              <Label htmlFor="azure-default-project">Default project (optional)</Label>
               <Input
+                id="azure-default-project"
                 value={w.azureForm.project}
                 onChange={(e) => w.setAzureForm({ ...w.azureForm, project: e.target.value })}
                 placeholder="MyProject"
@@ -63,8 +67,9 @@ export function AzureIntegrationPanel({ w }: AzureIntegrationPanelProps) {
               />
             </div>
             <div className="sm:col-span-2">
-              <Label>Personal Access Token</Label>
+              <Label htmlFor="azure-personal-access-token">Personal Access Token</Label>
               <Input
+                id="azure-personal-access-token"
                 type="password"
                 value={w.azureForm.pat}
                 onChange={(e) => w.setAzureForm({ ...w.azureForm, pat: e.target.value })}
@@ -91,7 +96,7 @@ export function AzureIntegrationPanel({ w }: AzureIntegrationPanelProps) {
               <Button
                 variant="ghost"
                 className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                onClick={() => void w.azureDisconnect()}
+                onClick={() => setConfirmingDisconnect(true)}
                 loading={w.azureSubmitting}
               >
                 <Unplug className="w-4 h-4 mr-2" />
@@ -107,6 +112,18 @@ export function AzureIntegrationPanel({ w }: AzureIntegrationPanelProps) {
           </InlineAlert>
         )}
       </GlassCard>
+      <ConfirmDialog
+        open={confirmingDisconnect}
+        title="Disconnect Azure DevOps?"
+        message={`Remove the connection to ${w.azureStatus?.orgSlug ?? 'the current Azure DevOps organization'} from this app. You will need a Personal Access Token to reconnect.`}
+        confirmLabel="Disconnect"
+        loading={w.azureSubmitting}
+        onConfirm={() => {
+          setConfirmingDisconnect(false);
+          void w.azureDisconnect();
+        }}
+        onOpenChange={setConfirmingDisconnect}
+      />
     </div>
   );
 }

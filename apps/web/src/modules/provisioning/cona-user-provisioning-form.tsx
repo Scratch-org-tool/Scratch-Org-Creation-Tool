@@ -123,8 +123,8 @@ export function ConaUserProvisioningForm({ embedded }: { embedded?: boolean } = 
       <FormSection title="Target org">
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <Label>Target Org</Label>
-            <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+            <Label htmlFor="cona-users-target-org">Target Org</Label>
+            <Select id="cona-users-target-org" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
               <option value="">Select…</option>
               {orgs.map((o) => (
                 <option key={o.id} value={o.id}>
@@ -158,6 +158,7 @@ export function ConaUserProvisioningForm({ embedded }: { embedded?: boolean } = 
                     size="sm"
                     variant="ghost"
                     onClick={() => setUsers((rows) => rows.filter((_, i) => i !== index))}
+                    aria-label={`Remove user ${index + 1}`}
                   >
                     <Trash2 className="w-4 h-4" />
                   </Button>
@@ -165,20 +166,20 @@ export function ConaUserProvisioningForm({ embedded }: { embedded?: boolean } = 
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
-                  <Label>First name</Label>
-                  <Input value={user.firstName} onChange={(e) => updateUser(index, { firstName: e.target.value })} />
+                  <Label htmlFor={`cona-user-${index}-first-name`}>First name</Label>
+                  <Input id={`cona-user-${index}-first-name`} value={user.firstName} onChange={(e) => updateUser(index, { firstName: e.target.value })} />
                 </div>
                 <div>
-                  <Label>Last name</Label>
-                  <Input value={user.lastName} onChange={(e) => updateUser(index, { lastName: e.target.value })} />
+                  <Label htmlFor={`cona-user-${index}-last-name`}>Last name</Label>
+                  <Input id={`cona-user-${index}-last-name`} value={user.lastName} onChange={(e) => updateUser(index, { lastName: e.target.value })} />
                 </div>
                 <div className="md:col-span-2">
-                  <Label>Email</Label>
-                  <Input type="email" value={user.email} onChange={(e) => updateUser(index, { email: e.target.value })} />
+                  <Label htmlFor={`cona-user-${index}-email`}>Email</Label>
+                  <Input id={`cona-user-${index}-email`} type="email" value={user.email} onChange={(e) => updateUser(index, { email: e.target.value })} />
                 </div>
                 <div>
-                  <Label>Onboarding role</Label>
-                  <Select value={user.role} onChange={(e) => updateUser(index, { role: e.target.value })}>
+                  <Label htmlFor={`cona-user-${index}-role`}>Onboarding role</Label>
+                  <Select id={`cona-user-${index}-role`} value={user.role} onChange={(e) => updateUser(index, { role: e.target.value })}>
                     <option value="">Select…</option>
                     {(roleOptions.length ? roleOptions : ['Requestor', 'Manager', 'Master Data']).map((v) => (
                       <option key={v} value={v}>{v}</option>
@@ -186,8 +187,8 @@ export function ConaUserProvisioningForm({ embedded }: { embedded?: boolean } = 
                   </Select>
                 </div>
                 <div>
-                  <Label>Bottler</Label>
-                  <Select value={user.bottler} onChange={(e) => updateUser(index, { bottler: e.target.value })}>
+                  <Label htmlFor={`cona-user-${index}-bottler`}>Bottler</Label>
+                  <Select id={`cona-user-${index}-bottler`} value={user.bottler} onChange={(e) => updateUser(index, { bottler: e.target.value })}>
                     {(bottlerOptions.length ? bottlerOptions : ['5000', '4900', '4600']).map((v) => (
                       <option key={v} value={v}>{v}</option>
                     ))}
@@ -196,7 +197,7 @@ export function ConaUserProvisioningForm({ embedded }: { embedded?: boolean } = 
               </div>
               {moduleOptions.length > 0 && (
                 <div>
-                  <Label>Modules</Label>
+                  <p className="text-sm font-medium leading-none">Modules</p>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {moduleOptions.map((m) => (
                       <label key={m} className="flex items-center gap-1 text-xs border rounded px-2 py-1">
@@ -213,7 +214,7 @@ export function ConaUserProvisioningForm({ embedded }: { embedded?: boolean } = 
               )}
               {locationOptions.length > 0 && (
                 <div>
-                  <Label>Locations</Label>
+                  <p className="text-sm font-medium leading-none">Locations</p>
                   <div className="flex flex-wrap gap-2 mt-1 max-h-24 overflow-y-auto">
                     {locationOptions.map((loc) => (
                       <label key={loc} className="flex items-center gap-1 text-xs border rounded px-2 py-1">

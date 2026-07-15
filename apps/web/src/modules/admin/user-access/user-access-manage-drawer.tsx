@@ -1,7 +1,13 @@
 'use client';
 
-import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { Switch } from '@/components/ui/switch';
 import { LOCKED_MODULES, MODULE_LABELS, type AppModule } from '@/lib/auth-utils';
 import { cn } from '@/utils/cn';
@@ -28,25 +34,15 @@ export function UserAccessManageDrawer({
   onSave,
   isSelf,
 }: UserAccessManageDrawerProps) {
-  if (!user || !draft) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        aria-label="Close"
-        onClick={onClose}
-      />
-      <aside className="relative w-full max-w-md h-full bg-card border-l border-border shadow-xl flex flex-col animate-in slide-in-from-right duration-200">
+    <Sheet open={Boolean(user && draft)} onOpenChange={(open) => !open && onClose()}>
+      {user && draft && (
+      <SheetContent side="right" className="w-full max-w-md sm:max-w-md p-0 gap-0 flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <div>
-            <h2 className="text-lg font-semibold">Manage access</h2>
-            <p className="text-sm text-muted-foreground">{user.email}</p>
-          </div>
-          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={onClose}>
-            <X className="w-4 h-4" />
-          </Button>
+          <SheetHeader className="pr-8">
+            <SheetTitle>Manage access</SheetTitle>
+            <SheetDescription>{user.email}</SheetDescription>
+          </SheetHeader>
         </div>
 
         <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-6">
@@ -55,6 +51,7 @@ export function UserAccessManageDrawer({
             <div className="flex items-center justify-between rounded-lg border border-border/60 p-3">
               <span className="text-sm">{draft.status === 'active' ? 'Active' : 'Inactive'}</span>
               <Switch
+                aria-label={`Set ${user.email} account ${draft.status === 'active' ? 'inactive' : 'active'}`}
                 checked={draft.status === 'active'}
                 disabled={isSelf}
                 onChange={(checked) =>
@@ -123,7 +120,8 @@ export function UserAccessManageDrawer({
             Save changes
           </Button>
         </div>
-      </aside>
-    </div>
+      </SheetContent>
+      )}
+    </Sheet>
   );
 }

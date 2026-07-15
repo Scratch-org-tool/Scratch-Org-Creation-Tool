@@ -131,8 +131,9 @@ export function SalesforceOrgTypeSelector({
 
       {value === 'custom' && (
         <div>
-          <Label>Custom instance URL</Label>
+          <Label htmlFor="salesforce-custom-instance-url">Custom instance URL</Label>
           <Input
+            id="salesforce-custom-instance-url"
             value={customUrl}
             onChange={(e) => onCustomUrlChange(e.target.value)}
             placeholder="https://mydomain.my.salesforce.com"

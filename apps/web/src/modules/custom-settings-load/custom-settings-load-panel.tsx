@@ -268,8 +268,8 @@ export function CustomSettingsLoadPanel() {
           <FormSection title="Orgs" className="mt-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <Label>Source org</Label>
-                <Select value={sourceOrgId} onChange={(e) => setSourceOrgId(e.target.value)}>
+                <Label htmlFor="custom-settings-source-org">Source org</Label>
+                <Select id="custom-settings-source-org" value={sourceOrgId} onChange={(e) => setSourceOrgId(e.target.value)}>
                   <option value="">Select…</option>
                   {orgs.map((o) => (
                     <option key={o.id} value={o.id}>
@@ -279,8 +279,8 @@ export function CustomSettingsLoadPanel() {
                 </Select>
               </div>
               <div>
-                <Label>Target org</Label>
-                <Select value={targetOrgId} onChange={(e) => setTargetOrgId(e.target.value)}>
+                <Label htmlFor="custom-settings-target-org">Target org</Label>
+                <Select id="custom-settings-target-org" value={targetOrgId} onChange={(e) => setTargetOrgId(e.target.value)}>
                   <option value="">Select…</option>
                   {orgs.map((o) => (
                     <option key={o.id} value={o.id}>

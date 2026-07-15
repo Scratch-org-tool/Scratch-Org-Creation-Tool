@@ -61,8 +61,9 @@ export function PartnerImportSection({
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label>Mode</Label>
+              <Label htmlFor="partner-import-mode">Mode</Label>
               <Select
+                id="partner-import-mode"
                 value={value.mode}
                 onChange={(e) =>
                   onChange({ ...value, mode: e.target.value as PartnerImport['mode'] })
@@ -74,8 +75,9 @@ export function PartnerImportSection({
               </Select>
             </div>
             <div>
-              <Label>Bottler</Label>
+              <Label htmlFor="partner-import-bottler">Bottler</Label>
               <Select
+                id="partner-import-bottler"
                 value={value.bottler}
                 onChange={(e) =>
                   onChange({ ...value, bottler: e.target.value as PartnerImport['bottler'] })
@@ -88,8 +90,9 @@ export function PartnerImportSection({
               </Select>
             </div>
             <div>
-              <Label>Per office limit</Label>
+              <Label htmlFor="partner-import-office-limit">Per office limit</Label>
               <input
+                id="partner-import-office-limit"
                 type="number"
                 min={1}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
@@ -110,7 +113,7 @@ export function PartnerImportSection({
           </div>
 
           <div className="space-y-2">
-            <Label>Sales office JSON (bottler-wise)</Label>
+            <p className="text-sm font-medium leading-none">Sales office JSON (bottler-wise)</p>
             <p className="text-xs text-muted-foreground">
               Offices, roles, and per-office partner limit used for matched import and account seeding.
             </p>
@@ -132,7 +135,7 @@ export function PartnerImportSection({
 
           {value.mode === 'excel' && (
             <div className="space-y-2">
-              <Label>Partner Excel file</Label>
+              <p className="text-sm font-medium leading-none">Partner Excel file</p>
               {storedFileName && !excelFile && (
                 <p className="text-xs text-muted-foreground">Saved file: {storedFileName}</p>
               )}

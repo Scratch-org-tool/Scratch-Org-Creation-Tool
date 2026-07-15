@@ -97,8 +97,9 @@ export function ScratchOrgForm({
       <FormSection title="Pipeline template" description="Use a saved template or manage templates in the sidebar.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field className="sm:col-span-2">
-            <Label>Scratch pipeline template</Label>
+            <Label htmlFor="scratch-org-pipeline-template">Scratch pipeline template</Label>
             <Select
+              id="scratch-org-pipeline-template"
               value={form.templateId}
               onChange={(e) => setForm({ ...form, templateId: e.target.value })}
               disabled={isRunning}
@@ -123,8 +124,9 @@ export function ScratchOrgForm({
             </Field>
           )}
           <Field>
-            <Label>Source org (data + custom settings)</Label>
+            <Label htmlFor="scratch-org-source-org">Source org (data + custom settings)</Label>
             <Select
+              id="scratch-org-source-org"
               value={form.sourceOrgId}
               onChange={(e) => setForm({ ...form, sourceOrgId: e.target.value })}
               disabled={isRunning}
@@ -143,8 +145,9 @@ export function ScratchOrgForm({
       <FormSection title="Salesforce" description="Scratch org identity and lifetime.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field>
-            <Label>Dev Hub Org</Label>
+            <Label htmlFor="scratch-org-dev-hub">Dev Hub Org</Label>
             <Select
+              id="scratch-org-dev-hub"
               value={form.devHubAlias}
               onChange={(e) => setForm({ ...form, devHubAlias: e.target.value })}
               disabled={isRunning}
@@ -157,8 +160,9 @@ export function ScratchOrgForm({
             </Select>
           </Field>
           <Field>
-            <Label>Scratch Org Alias</Label>
+            <Label htmlFor="scratch-org-alias">Scratch Org Alias</Label>
             <Input
+              id="scratch-org-alias"
               value={form.alias}
               onChange={(e) => setForm({ ...form, alias: e.target.value })}
               placeholder="Sprint40DevScratch"
@@ -168,8 +172,9 @@ export function ScratchOrgForm({
           {!usingTemplate && (
             <>
               <Field>
-                <Label>Duration (days)</Label>
+                <Label htmlFor="scratch-org-duration">Duration (days)</Label>
                 <Input
+                  id="scratch-org-duration"
                   type="number"
                   value={form.duration}
                   onChange={(e) => setForm({ ...form, duration: Number(e.target.value) })}
@@ -178,8 +183,9 @@ export function ScratchOrgForm({
                 <p className="text-xs text-muted-foreground mt-1">Min 1 day, max 30 days</p>
               </Field>
               <Field>
-                <Label>Scratch Org Template</Label>
+                <Label htmlFor="scratch-org-definition">Scratch Org Template</Label>
                 <Input
+                  id="scratch-org-definition"
                   value={form.template}
                   onChange={(e) => setForm({ ...form, template: e.target.value })}
                   disabled={isRunning}
@@ -189,14 +195,15 @@ export function ScratchOrgForm({
           )}
           {usingTemplate && (
             <Field>
-              <Label>Duration (days)</Label>
-              <Input type="number" value={form.duration} disabled className="opacity-70" />
+              <Label htmlFor="scratch-org-duration">Duration (days)</Label>
+              <Input id="scratch-org-duration" type="number" value={form.duration} disabled className="opacity-70" />
               <p className="text-xs text-muted-foreground mt-1">From template</p>
             </Field>
           )}
           <Field className="sm:col-span-2">
-            <Label>Description</Label>
+            <Label htmlFor="scratch-org-description">Description</Label>
             <Textarea
+              id="scratch-org-description"
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value.slice(0, 255) })}
               className="min-h-[72px] resize-none"
@@ -211,8 +218,9 @@ export function ScratchOrgForm({
         {azureStatus.connected ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field>
-              <Label>Azure Repository</Label>
+              <Label htmlFor="scratch-org-azure-repository">Azure Repository</Label>
               <Select
+                id="scratch-org-azure-repository"
                 value={form.azureRepo}
                 onChange={(e) => onRepoChange(e.target.value)}
                 disabled={isRunning}
@@ -229,8 +237,9 @@ export function ScratchOrgForm({
               </Select>
             </Field>
             <Field>
-              <Label>Branch</Label>
+              <Label htmlFor="scratch-org-azure-branch">Branch</Label>
               <Select
+                id="scratch-org-azure-branch"
                 value={form.azureBranch}
                 onChange={(e) => setForm({ ...form, azureBranch: e.target.value })}
                 disabled={isRunning}
@@ -247,8 +256,9 @@ export function ScratchOrgForm({
               </Select>
             </Field>
             <Field className="sm:col-span-2">
-              <Label>Manifest Path</Label>
+              <Label htmlFor="scratch-org-manifest-path">Manifest Path</Label>
               <Input
+                id="scratch-org-manifest-path"
                 value={form.azureManifestPath}
                 onChange={(e) => setForm({ ...form, azureManifestPath: e.target.value })}
                 placeholder="CoreFlex Onboarding/manifest/package.xml"

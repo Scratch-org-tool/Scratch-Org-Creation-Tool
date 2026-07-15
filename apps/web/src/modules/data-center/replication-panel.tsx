@@ -214,8 +214,9 @@ export function ReplicationPanel() {
           <FormSection title="Source and target">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label>Source Org</Label>
+                <Label htmlFor="replication-source-org">Source Org</Label>
                 <Select
+                  id="replication-source-org"
                   value={form.sourceOrgId}
                   onChange={(e) => setForm({ ...form, sourceOrgId: e.target.value })}
                 >
@@ -228,8 +229,9 @@ export function ReplicationPanel() {
                 </Select>
               </div>
               <div>
-                <Label>Target Org</Label>
+                <Label htmlFor="replication-target-org">Target Org</Label>
                 <Select
+                  id="replication-target-org"
                   value={form.targetOrgId}
                   onChange={(e) => setForm({ ...form, targetOrgId: e.target.value })}
                 >
@@ -243,9 +245,10 @@ export function ReplicationPanel() {
               </div>
             </div>
             <div className="mt-4">
-              <Label>Maximum records to replicate</Label>
+              <Label htmlFor="replication-record-limit">Maximum records to replicate</Label>
               <div className="flex flex-wrap items-center gap-2 mt-1">
                 <Input
+                  id="replication-record-limit"
                   type="number"
                   min={1}
                   max={ORG_TO_ORG_RECORD_LIMIT_MAX}
@@ -273,8 +276,9 @@ export function ReplicationPanel() {
               )}
             </div>
             <div className="mt-4">
-              <Label>SOQL Query</Label>
+              <Label htmlFor="replication-soql-query">SOQL Query</Label>
               <Textarea
+                id="replication-soql-query"
                 value={form.soql}
                 onChange={(e) => setForm({ ...form, soql: e.target.value })}
                 className="font-mono text-xs min-h-[120px] studio-console"
