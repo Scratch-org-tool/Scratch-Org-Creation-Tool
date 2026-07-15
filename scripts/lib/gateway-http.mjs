@@ -1,3 +1,4 @@
+import { BlockList, isIP } from 'node:net';
 import { constants as zlibConstants, createBrotliCompress, createGzip } from 'node:zlib';
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -37,7 +38,9 @@ function parseQuality(raw) {
  * compression coding, but an explicit higher-quality identity preference does.
  */
 export function negotiateContentEncoding(header) {
-  if (!header?.trim()) return { encoding: null, acceptable: true };
+  if (!header?.trim()) {
+    return { encoding: null, acceptable: true, identityAcceptable: true };
+  }
 
   const qualities = new Map();
   for (const item of header.split(',')) {
@@ -61,12 +64,16 @@ export function negotiateContentEncoding(header) {
   const bestCompressed = Math.max(br, gzip);
 
   if (identityExplicit && identity > bestCompressed) {
-    return { encoding: null, acceptable: identity > 0 };
+    return { encoding: null, acceptable: identity > 0, identityAcceptable: identity > 0 };
   }
   if (bestCompressed > 0) {
-    return { encoding: br === bestCompressed ? 'br' : 'gzip', acceptable: true };
+    return {
+      encoding: br === bestCompressed ? 'br' : 'gzip',
+      acceptable: true,
+      identityAcceptable: identity > 0,
+    };
   }
-  return { encoding: null, acceptable: identity > 0 };
+  return { encoding: null, acceptable: identity > 0, identityAcceptable: identity > 0 };
 }
 
 export function isStreamingPath(requestUrl) {
@@ -100,18 +107,74 @@ function appendForwardedValue(existing, value) {
   return existing ? `${existing}, ${value}` : value;
 }
 
-export function createUpstreamHeaders(req, target) {
+function normalizeIpAddress(address) {
+  const withoutZone = String(address ?? '').split('%', 1)[0];
+  if (withoutZone.toLowerCase().startsWith('::ffff:')) {
+    const ipv4 = withoutZone.slice(7);
+    if (isIP(ipv4) === 4) return ipv4;
+  }
+  return withoutZone;
+}
+
+/**
+ * Match the socket peer against an explicit proxy policy. The policy accepts
+ * Express-compatible "loopback", exact IPs, and IP CIDRs. It is default-deny.
+ */
+export function isTrustedImmediatePeer(address, policy) {
+  const normalizedAddress = normalizeIpAddress(address);
+  const addressFamily = isIP(normalizedAddress);
+  const rawPolicy = String(policy ?? '').trim().toLowerCase();
+  if (!addressFamily || !rawPolicy || rawPolicy === 'false' || rawPolicy === '0') return false;
+  if (rawPolicy === 'true' || rawPolicy === '1' || rawPolicy === '*') return true;
+
+  const trusted = new BlockList();
+  for (const rawEntry of rawPolicy.split(',')) {
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+    if (entry === 'loopback') {
+      trusted.addSubnet('127.0.0.0', 8, 'ipv4');
+      trusted.addAddress('::1', 'ipv6');
+      continue;
+    }
+
+    const separator = entry.lastIndexOf('/');
+    const network = separator === -1 ? entry : entry.slice(0, separator);
+    const family = isIP(network);
+    if (!family) continue;
+    const type = family === 4 ? 'ipv4' : 'ipv6';
+    if (separator === -1) {
+      trusted.addAddress(network, type);
+      continue;
+    }
+    const prefix = Number(entry.slice(separator + 1));
+    const maximum = family === 4 ? 32 : 128;
+    if (Number.isInteger(prefix) && prefix >= 0 && prefix <= maximum) {
+      trusted.addSubnet(network, prefix, type);
+    }
+  }
+  return trusted.check(normalizedAddress, addressFamily === 4 ? 'ipv4' : 'ipv6');
+}
+
+export function createUpstreamHeaders(req, target, trustedProxyPolicy) {
   const headers = stripHopByHopHeaders(req.headers);
+  const trustedPeer = isTrustedImmediatePeer(req.socket.remoteAddress, trustedProxyPolicy);
+  const forwardedFor = trustedPeer ? headers['x-forwarded-for'] : undefined;
+  const forwardedProto = trustedPeer ? headers['x-forwarded-proto'] : undefined;
+  const forwardedHost = trustedPeer ? headers['x-forwarded-host'] : undefined;
+  for (const name of Object.keys(headers)) {
+    if (name.startsWith('x-forwarded-')) delete headers[name];
+  }
+
   const remoteAddress = req.socket.remoteAddress;
   if (remoteAddress) {
-    headers['x-forwarded-for'] = appendForwardedValue(headers['x-forwarded-for'], remoteAddress);
+    headers['x-forwarded-for'] = appendForwardedValue(forwardedFor, remoteAddress);
   }
   headers['x-forwarded-proto'] = appendForwardedValue(
-    headers['x-forwarded-proto'],
+    forwardedProto,
     req.socket.encrypted ? 'https' : 'http',
   );
   if (req.headers.host) {
-    headers['x-forwarded-host'] = appendForwardedValue(headers['x-forwarded-host'], req.headers.host);
+    headers['x-forwarded-host'] = appendForwardedValue(forwardedHost, req.headers.host);
   }
   headers.host = target.host;
   return headers;

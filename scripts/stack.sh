@@ -14,10 +14,20 @@ WEB_PORT=3000
 API_PORT=3001
 GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 GATEWAY_ENABLED="${GATEWAY_ENABLED:-1}"
-GATEWAY_COMPRESSION_ENABLED="${GATEWAY_COMPRESSION_ENABLED:-1}"
+normalize_compression_enabled() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  case "$value" in
+    0|false) printf '0' ;;
+    *) printf '1' ;;
+  esac
+}
+GATEWAY_COMPRESSION_ENABLED="$(normalize_compression_enabled "${GATEWAY_COMPRESSION_ENABLED:-1}")"
 WEB_UPSTREAM="${WEB_UPSTREAM:-http://127.0.0.1:${WEB_PORT}}"
 TRUST_PROXY="${TRUST_PROXY:-}"
-if [[ "$GATEWAY_ENABLED" == "1" && "$GATEWAY_COMPRESSION_ENABLED" != "0" && "$GATEWAY_COMPRESSION_ENABLED" != "false" ]]; then
+if [[ "$GATEWAY_ENABLED" == "1" && "$GATEWAY_COMPRESSION_ENABLED" == "1" ]]; then
   EDGE_COMPRESSION_ENABLED=1
 else
   EDGE_COMPRESSION_ENABLED=0
@@ -412,6 +422,10 @@ Environment:
   GATEWAY_COMPRESSION_ENABLED=0 Disable edge compression (Next gzip remains enabled)
 EOF
 }
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
 
 case "${1:-start}" in
   start) cmd_start "${2:-}" ;;

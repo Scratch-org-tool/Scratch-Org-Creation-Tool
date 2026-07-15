@@ -38,8 +38,9 @@ const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.GATEWAY_HEALTH_TIMEOUT_MS ?? 
 const CONNECT_TIMEOUT_MS = Number(process.env.GATEWAY_CONNECT_TIMEOUT_MS ?? 10_000);
 const RESPONSE_TIMEOUT_MS = Number(process.env.GATEWAY_RESPONSE_TIMEOUT_MS ?? 120_000);
 const COMPRESSION_ENABLED = !['0', 'false'].includes(
-  (process.env.GATEWAY_COMPRESSION_ENABLED ?? '1').toLowerCase(),
+  (process.env.GATEWAY_COMPRESSION_ENABLED ?? '1').trim().toLowerCase(),
 );
+const TRUSTED_PROXY_POLICY = process.env.GATEWAY_TRUST_PROXY ?? '';
 const parsedCompressionThreshold = Number(process.env.GATEWAY_COMPRESSION_THRESHOLD ?? 1024);
 const COMPRESSION_THRESHOLD = Number.isFinite(parsedCompressionThreshold) && parsedCompressionThreshold >= 0
   ? parsedCompressionThreshold
@@ -132,9 +133,10 @@ async function runHealthChecks() {
 // ---------------------------------------------------------------------------
 
 class CompressionThreshold extends Transform {
-  constructor(threshold, decide) {
+  constructor(threshold, forceCompression, decide) {
     super();
     this.threshold = threshold;
+    this.forceCompression = forceCompression;
     this.decide = decide;
     this.chunks = [];
     this.size = 0;
@@ -161,22 +163,25 @@ class CompressionThreshold extends Transform {
   }
 
   _flush(callback) {
-    this.decideOnce(false);
+    this.decideOnce(this.forceCompression);
     callback();
   }
 }
 
 function forwardResponse(req, res, status, inputHeaders, source, onError) {
   const headers = stripHopByHopHeaders(inputHeaders);
-  const candidate = COMPRESSION_ENABLED && isCompressionCandidate(req, status, headers);
-  if (candidate) appendVary(headers, 'Accept-Encoding');
+  const eligible = isCompressionCandidate(req, status, headers);
+  const candidate = COMPRESSION_ENABLED && eligible;
+  if (eligible) appendVary(headers, 'Accept-Encoding');
 
-  const negotiation = candidate
+  const negotiation = eligible
     ? negotiateContentEncoding(String(req.headers['accept-encoding'] ?? ''))
-    : { encoding: null, acceptable: true };
+    : { encoding: null, acceptable: true, identityAcceptable: true };
 
-  if (!negotiation.acceptable) {
-    source.resume();
+  const canRespond = candidate
+    ? negotiation.acceptable
+    : !eligible || negotiation.identityAcceptable;
+  if (!canRespond) {
     const body = 'No acceptable content encoding is available';
     res.writeHead(406, {
       'Content-Type': 'text/plain; charset=utf-8',
@@ -184,6 +189,10 @@ function forwardResponse(req, res, status, inputHeaders, source, onError) {
       Vary: 'Accept-Encoding',
     });
     res.end(body);
+    // Draining permits socket reuse, and the listener owns any late upstream
+    // failure after the final client response has already been selected.
+    source.on('error', () => {});
+    source.resume();
     return;
   }
 
@@ -218,16 +227,37 @@ function forwardResponse(req, res, status, inputHeaders, source, onError) {
   const contentLength = typeof rawLength === 'string' && /^\d+$/.test(rawLength)
     ? Number(rawLength)
     : null;
+  const forceCompression = !negotiation.identityAcceptable;
   if (contentLength !== null) {
-    startPipeline(source, contentLength > COMPRESSION_THRESHOLD ? negotiation.encoding : null);
+    const compress = forceCompression || contentLength > COMPRESSION_THRESHOLD;
+    startPipeline(source, compress ? negotiation.encoding : null);
     return;
   }
 
   let gate;
-  gate = new CompressionThreshold(COMPRESSION_THRESHOLD, (compress) => {
+  let failed = false;
+  const failBeforeOrDuringPipeline = (error) => {
+    if (failed) return;
+    failed = true;
+    source.unpipe(gate);
+    if (!source.destroyed) source.destroy();
+    if (!gate.destroyed) gate.destroy();
+    if (!res.headersSent) onError(error);
+    else if (!res.destroyed) res.destroy(error);
+  };
+  gate = new CompressionThreshold(COMPRESSION_THRESHOLD, forceCompression, (compress) => {
     startPipeline(gate, compress ? negotiation.encoding : null);
   });
-  source.once('error', (error) => gate.destroy(error));
+  source.once('error', failBeforeOrDuringPipeline);
+  source.once('aborted', () => {
+    failBeforeOrDuringPipeline(new Error('upstream response aborted'));
+  });
+  source.once('close', () => {
+    if (!source.readableEnded) {
+      failBeforeOrDuringPipeline(new Error('upstream response closed prematurely'));
+    }
+  });
+  gate.once('error', failBeforeOrDuringPipeline);
   source.pipe(gate);
 }
 
@@ -336,7 +366,7 @@ function proxyRequest(req, res, upstreams, options = {}) {
       return;
     }
 
-    const headers = createUpstreamHeaders(req, target);
+    const headers = createUpstreamHeaders(req, target, TRUSTED_PROXY_POLICY);
     let proxyRes;
     let responseTimer;
     let attemptFinished = false;
@@ -492,7 +522,7 @@ server.on('upgrade', (req, clientSocket, head) => {
       Number(target.port || 80),
       target.hostname,
       () => {
-        const upgradeHeaders = createUpstreamHeaders(req, target);
+        const upgradeHeaders = createUpstreamHeaders(req, target, TRUSTED_PROXY_POLICY);
         upgradeHeaders.connection = 'Upgrade';
         upgradeHeaders.upgrade = req.headers.upgrade ?? 'websocket';
         const headerLines = [

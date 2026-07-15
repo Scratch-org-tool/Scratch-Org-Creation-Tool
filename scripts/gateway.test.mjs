@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import { after, before, describe, test } from 'node:test';
 import { brotliDecompressSync, gzipSync, gunzipSync } from 'node:zlib';
 import {
+  createUpstreamHeaders,
   isCompressionCandidate,
   isRetryableMethod,
   isStreamingPath,
+  isTrustedImmediatePeer,
   negotiateContentEncoding,
   stripHopByHopHeaders,
 } from './lib/gateway-http.mjs';
@@ -53,6 +55,8 @@ function request(path, { method = 'GET', headers = {} } = {}) {
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
+      res.once('aborted', () => reject(new Error('gateway response aborted')));
+      res.once('error', reject);
       res.on('end', () => resolve({
         status: res.statusCode,
         headers: res.headers,
@@ -76,6 +80,17 @@ before(async () => {
     if (url.pathname === '/api/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
+      return;
+    }
+    if (url.pathname === '/small-chunked') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"ok":true}');
+      return;
+    }
+    if (url.pathname === '/destroyed-mid-body') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.write('partial');
+      setImmediate(() => res.destroy());
       return;
     }
     if (url.pathname === '/large-json' || url.pathname === '/api/copilot/chat') {
@@ -225,19 +240,82 @@ after(async () => {
 
 describe('gateway helper behavior', () => {
   test('honors encoding quality and explicit identity preferences', () => {
-    assert.deepEqual(negotiateContentEncoding('gzip, br'), { encoding: 'br', acceptable: true });
+    assert.deepEqual(negotiateContentEncoding('gzip, br'), {
+      encoding: 'br',
+      acceptable: true,
+      identityAcceptable: true,
+    });
     assert.deepEqual(negotiateContentEncoding('br;q=.4, gzip;q=.8'), {
       encoding: 'gzip',
       acceptable: true,
+      identityAcceptable: true,
     });
     assert.deepEqual(negotiateContentEncoding('identity;q=1, br;q=.5'), {
       encoding: null,
       acceptable: true,
+      identityAcceptable: true,
     });
     assert.deepEqual(negotiateContentEncoding('identity;q=0, br;q=0, gzip;q=0'), {
       encoding: null,
       acceptable: false,
+      identityAcceptable: false,
     });
+    assert.deepEqual(negotiateContentEncoding('identity;q=0, gzip;q=.5'), {
+      encoding: 'gzip',
+      acceptable: true,
+      identityAcceptable: false,
+    });
+  });
+
+  test('trusts forwarded chains only for an explicitly matched immediate peer', () => {
+    const request = {
+      headers: {
+        host: 'public.example',
+        'x-forwarded-for': '198.51.100.7',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'edge.example',
+        'x-forwarded-port': '443',
+      },
+      socket: { remoteAddress: '::ffff:127.0.0.1', encrypted: false },
+    };
+    const target = new URL('http://127.0.0.1:3000');
+
+    assert.equal(isTrustedImmediatePeer(request.socket.remoteAddress, undefined), false);
+    assert.equal(isTrustedImmediatePeer(request.socket.remoteAddress, 'loopback'), true);
+    const untrusted = createUpstreamHeaders(request, target);
+    assert.equal(untrusted['x-forwarded-for'], '::ffff:127.0.0.1');
+    assert.equal(untrusted['x-forwarded-proto'], 'http');
+    assert.equal(untrusted['x-forwarded-host'], 'public.example');
+    assert.equal(untrusted['x-forwarded-port'], undefined);
+
+    const trusted = createUpstreamHeaders(request, target, 'loopback');
+    assert.equal(trusted['x-forwarded-for'], '198.51.100.7, ::ffff:127.0.0.1');
+    assert.equal(trusted['x-forwarded-proto'], 'https, http');
+    assert.equal(trusted['x-forwarded-host'], 'edge.example, public.example');
+  });
+
+  test('normalizes the stack compression flag before deriving Next compression', () => {
+    const resolveFlags = (value, gatewayEnabled = '1') => {
+      const result = spawnSync(
+        'bash',
+        ['-c', 'source scripts/stack.sh; printf "%s:%s" "$GATEWAY_COMPRESSION_ENABLED" "$EDGE_COMPRESSION_ENABLED"'],
+        {
+          cwd: new URL('..', import.meta.url),
+          env: { ...process.env, GATEWAY_COMPRESSION_ENABLED: value, GATEWAY_ENABLED: gatewayEnabled },
+          encoding: 'utf8',
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout;
+    };
+
+    for (const value of ['false', ' False ', '\t0\n']) {
+      assert.equal(resolveFlags(value), '0:0');
+    }
+    for (const value of ['true', ' TRUE ', '1', 'unexpected']) {
+      assert.equal(resolveFlags(value), '1:1');
+    }
+    assert.equal(resolveFlags('true', '0'), '1:0');
   });
 
   test('matches only the exact streaming routes', () => {
@@ -336,6 +414,22 @@ describe('gateway edge compression', () => {
     assert.equal(small.body.toString(), '{"ok":true}');
   });
 
+  test('never selects identity for eligible small bodies when identity is forbidden', async () => {
+    for (const path of ['/small', '/small-chunked']) {
+      const response = await request(path, {
+        headers: { 'Accept-Encoding': 'identity;q=0, gzip;q=.8' },
+      });
+      assert.equal(response.status, 200, path);
+      assert.equal(response.headers['content-encoding'], 'gzip', path);
+      assert.equal(decoded(response).toString(), '{"ok":true}', path);
+
+      const unacceptable = await request(path, {
+        headers: { 'Accept-Encoding': 'identity;q=0, br;q=0, gzip;q=0' },
+      });
+      assert.equal(unacceptable.status, 406, path);
+    }
+  });
+
   test('does not double-compress encoded responses or compress excluded bodies', async () => {
     const encoded = await request('/encoded', {
       headers: { 'Accept-Encoding': 'br, gzip' },
@@ -373,24 +467,41 @@ describe('gateway edge compression', () => {
 });
 
 describe('gateway proxy safety', () => {
-  test('appends trusted forwarding chains and removes hop-by-hop headers', async () => {
+  test('replaces spoofed forwarding headers and removes hop-by-hop headers', async () => {
     const response = await request('/forwarded', {
       headers: {
         Host: 'client.example',
         'X-Forwarded-For': '198.51.100.7',
         'X-Forwarded-Proto': 'https',
         'X-Forwarded-Host': 'edge.example',
+        'X-Forwarded-Port': '443',
         Connection: 'keep-alive, x-client-hop',
         'X-Client-Hop': 'remove-me',
       },
     });
     const received = JSON.parse(response.body.toString());
-    assert.match(received['x-forwarded-for'], /^198\.51\.100\.7, /);
-    assert.equal(received['x-forwarded-proto'], 'https, http');
-    assert.equal(received['x-forwarded-host'], 'edge.example, client.example');
+    assert.equal(received['x-forwarded-for'], '127.0.0.1');
+    assert.equal(received['x-forwarded-proto'], 'http');
+    assert.equal(received['x-forwarded-host'], 'client.example');
+    assert.equal(received['x-forwarded-port'], undefined);
     assert.notEqual(received.host, 'client.example');
     assert.equal(received['x-client-hop'], undefined);
     assert.equal(response.headers['x-remove-me'], undefined);
+  });
+
+  test('survives upstream destruction before threshold selection and while draining 406', async () => {
+    const failed = await request('/destroyed-mid-body', {
+      headers: { 'Accept-Encoding': 'gzip' },
+    });
+    assert.equal(failed.status, 502);
+
+    const unacceptable = await request('/destroyed-mid-body', {
+      headers: { 'Accept-Encoding': 'identity;q=0, br;q=0, gzip;q=0' },
+    });
+    assert.equal(unacceptable.status, 406);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(gateway.exitCode, null, gatewayLogs);
+    assert.equal((await request('/gateway/health')).status, 200);
   });
 
   test('keeps the response timeout as an idle timeout through body completion', async () => {
