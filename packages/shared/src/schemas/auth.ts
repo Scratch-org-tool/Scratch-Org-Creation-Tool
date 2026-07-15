@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import { isDisplayNameValid, sanitizeDisplayName } from '../sanitize.js';
+import {
+  AUTH_PASSWORD_TOO_WEAK,
+  MIN_SIGNUP_PASSWORD_SCORE,
+  scorePassword,
+} from '../password-strength.js';
 
 export const AUTH_GENERIC_INVALID =
   'Unable to process your request. Please check your input and try again.';
@@ -9,6 +14,12 @@ export const AUTH_SIGNUP_FAILED = 'Unable to create account. Please try again or
 export const AUTH_EMAIL_EXISTS = 'An account with this email already exists. Please sign in instead.';
 export const AUTH_UNAVAILABLE = 'Unable to sign in right now. Please try again later.';
 export const AUTH_PASSWORD_MISMATCH = 'Passwords do not match';
+export const AUTH_PASSWORD_SAME = 'New password must be different from current password';
+export const AUTH_ACCOUNT_ACTION_FAILED =
+  'Unable to complete this account request. Please try again.';
+export const AUTH_PASSWORD_CHANGED =
+  'Password changed. Sign in again on all devices.';
+export const AUTH_SESSIONS_REVOKED = 'Signed out from all devices.';
 
 const emailSchema = z
   .string()
@@ -18,8 +29,33 @@ const emailSchema = z
   .max(254);
 
 const passwordSchema = z.string().min(8).max(128);
+const signupPasswordSchema = passwordSchema.refine(
+  (password) => scorePassword(password).score >= MIN_SIGNUP_PASSWORD_SCORE,
+  { message: AUTH_PASSWORD_TOO_WEAK },
+);
+
+const displayNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .transform(sanitizeDisplayName)
+  .refine((value) => value.length >= 1 && value.length <= 80 && isDisplayNameValid(value), {
+    message: 'invalid',
+  });
 
 const adminBootstrapTokenSchema = z.string().max(128).optional();
+const appModuleSchema = z.enum([
+  'dashboard',
+  'environment',
+  'data',
+  'deployment',
+  'org-setup',
+  'provisioning',
+  'monitoring',
+  'copilot',
+  'defects',
+]);
 
 export const loginSchema = z.object({
   email: emailSchema,
@@ -29,13 +65,8 @@ export const loginSchema = z.object({
 
 export const signupSchema = loginSchema
   .extend({
-    displayName: z
-      .string()
-      .trim()
-      .min(1)
-      .max(80)
-      .transform(sanitizeDisplayName)
-      .refine(isDisplayNameValid, { message: 'invalid' }),
+    password: signupPasswordSchema,
+    displayName: displayNameSchema,
     confirmPassword: z.string().min(8).max(128),
   })
   .refine((d) => d.password === d.confirmPassword, {
@@ -48,14 +79,57 @@ export const forgotPasswordSchema = z.object({
 });
 
 export const registerBodySchema = z.object({
-  displayName: z
-    .string()
-    .trim()
-    .min(1)
-    .max(80)
-    .transform(sanitizeDisplayName)
-    .refine(isDisplayNameValid, { message: 'invalid' }),
+  displayName: displayNameSchema,
   adminBootstrapToken: adminBootstrapTokenSchema,
+});
+
+/** Self-service profile updates intentionally expose no privilege-bearing fields. */
+export const updateMeSchema = z
+  .object({
+    displayName: displayNameSchema,
+  })
+  .strict();
+
+export const changePasswordSchema = z
+  .object({
+    currentPassword: passwordSchema,
+    newPassword: signupPasswordSchema,
+    confirmPassword: passwordSchema,
+  })
+  .strict()
+  .superRefine((data, context) => {
+    if (data.newPassword !== data.confirmPassword) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: AUTH_PASSWORD_MISMATCH,
+        path: ['confirmPassword'],
+      });
+    }
+    if (data.currentPassword === data.newPassword) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: AUTH_PASSWORD_SAME,
+        path: ['newPassword'],
+      });
+    }
+  });
+
+export const logoutAllSchema = z.preprocess(
+  (value) => value === undefined ? {} : value,
+  z.object({}).strict(),
+);
+
+export const meResponseSchema = z.object({
+  id: z.string(),
+  email: emailSchema,
+  displayName: z.string(),
+  role: z.enum(['admin', 'user']),
+  grantedModules: z.array(appModuleSchema),
+  status: z.enum(['active', 'inactive']).optional(),
+  lastActiveAt: z.string().nullable().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  effectiveModules: z.array(appModuleSchema),
 });
 
 export const claimAdminSchema = z.object({
@@ -86,6 +160,10 @@ export type LoginInput = z.infer<typeof loginSchema>;
 export type SignupInput = z.infer<typeof signupSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type RegisterBodyInput = z.infer<typeof registerBodySchema>;
+export type UpdateMeInput = z.infer<typeof updateMeSchema>;
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+export type LogoutAllInput = z.infer<typeof logoutAllSchema>;
+export type MeResponse = z.infer<typeof meResponseSchema>;
 
 export function parseLoginInput(body: unknown) {
   return loginSchema.safeParse(body);
@@ -101,4 +179,16 @@ export function parseForgotPasswordInput(body: unknown) {
 
 export function parseRegisterBody(body: unknown) {
   return registerBodySchema.safeParse(body);
+}
+
+export function parseUpdateMeInput(body: unknown) {
+  return updateMeSchema.safeParse(body);
+}
+
+export function parseChangePasswordInput(body: unknown) {
+  return changePasswordSchema.safeParse(body);
+}
+
+export function parseLogoutAllInput(body: unknown) {
+  return logoutAllSchema.safeParse(body);
 }

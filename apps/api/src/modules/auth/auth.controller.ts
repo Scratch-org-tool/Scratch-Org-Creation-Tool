@@ -18,9 +18,12 @@ import { AuthGuard, AllowUnregistered, type AuthenticatedRequest } from '../../c
 import {
   AUTH_GENERIC_INVALID,
   parseForgotPasswordInput,
+  parseChangePasswordInput,
   parseLoginInput,
+  parseLogoutAllInput,
   parseRegisterBody,
   parseSignupInput,
+  parseUpdateMeInput,
   claimAdminSchema,
   updateUserAccessSchema,
 } from '@sfcc/shared';
@@ -65,7 +68,11 @@ export class AuthController {
       throw new BadRequestException(AUTH_GENERIC_INVALID);
     }
     const ip = this.authSecurity.extractClientIp(req.headers, req.ip);
-    const result = await this.authService.sendPasswordReset(parsed.data, ip);
+    const result = await this.authService.sendPasswordReset(
+      parsed.data,
+      ip,
+      this.getUserAgent(req.headers),
+    );
     return result;
   }
 
@@ -89,6 +96,75 @@ export class AuthController {
   me(@Req() req: AuthenticatedRequest) {
     if (!req.user) throw new UnauthorizedException();
     return this.authService.getMe(req.user.uid);
+  }
+
+  @Patch('me')
+  @UseGuards(AuthGuard)
+  async updateMe(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    if (!req.user) throw new UnauthorizedException();
+    const context = this.getAuditContext(req);
+    const parsed = parseUpdateMeInput(body);
+    if (!parsed.success) {
+      await this.authService.auditRejectedAccountRequest(
+        'profile-update',
+        req.user.appUserId,
+        context,
+      );
+      throw new BadRequestException(AUTH_GENERIC_INVALID);
+    }
+    return this.authService.updateMe(
+      req.user.uid,
+      req.user.appUserId,
+      parsed.data,
+      context,
+    );
+  }
+
+  @Post('change-password')
+  @UseGuards(AuthGuard)
+  async changePassword(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    if (!req.user) throw new UnauthorizedException();
+    const context = this.getAuditContext(req);
+    const parsed = parseChangePasswordInput(body);
+    if (!parsed.success) {
+      await this.authService.auditRejectedAccountRequest(
+        'change-password',
+        req.user.appUserId,
+        context,
+      );
+      throw new BadRequestException(AUTH_GENERIC_INVALID);
+    }
+    return this.authService.changePassword(
+      req.user.uid,
+      req.user.appUserId,
+      req.user.email,
+      parsed.data,
+      context,
+    );
+  }
+
+  @Post('logout-all')
+  @UseGuards(AuthGuard)
+  async logoutAll(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+  ) {
+    if (!req.user) throw new UnauthorizedException();
+    const parsed = parseLogoutAllInput(body);
+    if (!parsed.success) {
+      throw new BadRequestException(AUTH_GENERIC_INVALID);
+    }
+    return this.authService.logoutAll(
+      req.user.uid,
+      req.user.appUserId,
+      this.getAuditContext(req),
+    );
   }
 
   @Get('users')
@@ -138,5 +214,19 @@ export class AuthController {
       throw new BadRequestException(AUTH_GENERIC_INVALID);
     }
     return this.authService.updateUserAccess(req.user.uid, id, parsed.data);
+  }
+
+  private getAuditContext(req: AuthenticatedRequest) {
+    return {
+      ip: this.authSecurity.extractClientIp(req.headers, req.ip),
+      userAgent: this.getUserAgent(req.headers),
+    };
+  }
+
+  private getUserAgent(
+    headers: Record<string, string | string[] | undefined>,
+  ): string | undefined {
+    const value = headers['user-agent'];
+    return Array.isArray(value) ? value[0] : value;
   }
 }

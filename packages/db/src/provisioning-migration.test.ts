@@ -96,3 +96,29 @@ describe('existing scratch-org pipeline migration', () => {
     assert.match(migration, /"finishedAt" = COALESCE/);
   });
 });
+
+describe('authentication audit migration', () => {
+  const migrationPath =
+    'migrations/20260715160000_auth_audit_events/migration.sql';
+
+  it('creates a non-sensitive event record with actor and request hashes', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+
+    assert.match(schema, /model AuthAuditEvent[\s\S]*userId\s+String\?/);
+    assert.match(schema, /model AuthAuditEvent[\s\S]*eventType\s+String/);
+    assert.match(schema, /model AuthAuditEvent[\s\S]*metadata\s+Json\?/);
+    assert.match(migration, /"ipHash" TEXT/);
+    assert.match(migration, /"userAgentHash" TEXT/);
+    assert.match(migration, /"AuthAuditEvent_userId_createdAt_idx"/);
+  });
+
+  it('contains no credential, token, password, or raw network columns', () => {
+    const migration = prismaFile(migrationPath);
+
+    assert.doesNotMatch(
+      migration,
+      /"(?:password|currentPassword|newPassword|token|refreshToken|rawIp|ip|userAgent)"\s/i,
+    );
+  });
+});

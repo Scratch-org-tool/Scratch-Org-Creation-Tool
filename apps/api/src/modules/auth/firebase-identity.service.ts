@@ -8,6 +8,7 @@ export type FirebaseIdentityErrorCode =
   | 'WEAK_PASSWORD'
   | 'TOO_MANY_ATTEMPTS_TRY_LATER'
   | 'OPERATION_NOT_ALLOWED'
+  | 'USER_DISABLED'
   | 'UNKNOWN';
 
 export interface FirebaseIdentitySession {
@@ -54,7 +55,7 @@ export class FirebaseIdentityService {
 
   private parseErrorCode(data: FirebaseRestError): FirebaseIdentityErrorCode {
     const raw = data.error?.message ?? '';
-    const match = raw.match(/^(EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_EMAIL|EMAIL_EXISTS|WEAK_PASSWORD|TOO_MANY_ATTEMPTS_TRY_LATER|OPERATION_NOT_ALLOWED)/);
+    const match = raw.match(/^(EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_EMAIL|EMAIL_EXISTS|WEAK_PASSWORD|TOO_MANY_ATTEMPTS_TRY_LATER|OPERATION_NOT_ALLOWED|USER_DISABLED)/);
     return (match?.[1] as FirebaseIdentityErrorCode) ?? 'UNKNOWN';
   }
 
@@ -75,6 +76,28 @@ export class FirebaseIdentityService {
       localId: data.localId,
       email: data.email,
     };
+  }
+
+  /**
+   * Reauthenticate the token identity. The email must come from the verified
+   * ID token; account request bodies intentionally have no email field.
+   */
+  async verifyCurrentPassword(
+    tokenEmail: string,
+    currentPassword: string,
+    expectedUid: string,
+  ): Promise<FirebaseIdentitySession> {
+    if (!tokenEmail) {
+      throw new FirebaseIdentityError('INVALID_PASSWORD');
+    }
+    const session = await this.signInWithPassword(tokenEmail, currentPassword);
+    if (
+      session.localId !== expectedUid
+      || session.email.trim().toLowerCase() !== tokenEmail.trim().toLowerCase()
+    ) {
+      throw new FirebaseIdentityError('INVALID_PASSWORD');
+    }
+    return session;
   }
 
   async signUp(email: string, password: string, displayName: string): Promise<FirebaseIdentitySession> {

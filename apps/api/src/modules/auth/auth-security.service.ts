@@ -11,6 +11,10 @@ const LOCKOUT_TTL_SEC = 15 * 60;
 const ATTEMPTS_TTL_SEC = 15 * 60;
 const PROGRESSIVE_DELAY_MS = 500;
 const MAX_PROGRESSIVE_DELAY_MS = 5000;
+const ACCOUNT_ACTION_WINDOW_SEC = 5 * 60;
+const ACCOUNT_ACTION_ATTEMPTS_TTL_SEC = 15 * 60;
+const CHANGE_PASSWORD_LIMIT = 5;
+const LOGOUT_ALL_LIMIT = 10;
 
 interface MemoryEntry {
   count: number;
@@ -32,6 +36,14 @@ export class AuthSecurityService {
 
   hashIp(ip: string): string {
     return createHash('sha256').update(ip).digest('hex').slice(0, 16);
+  }
+
+  hashUserAgent(userAgent: string): string {
+    return createHash('sha256').update(userAgent).digest('hex');
+  }
+
+  private hashUserId(userId: string): string {
+    return createHash('sha256').update(userId).digest('hex').slice(0, 16);
   }
 
   extractClientIp(
@@ -56,13 +68,76 @@ export class AuthSecurityService {
           : action === 'bootstrap'
             ? BOOTSTRAP_IP_LIMIT
             : LOGIN_IP_LIMIT;
-    const key = `auth:rl:${action}:ip:${ip}`;
+    const key = `auth:rl:${action}:ip:${this.hashIp(ip)}`;
     const count = await this.increment(key, IP_WINDOW_SEC);
     if (count > limit) {
       this.logger.warn(`auth_rate_limited action=${action} ipHash=${this.hashIp(ip)}`);
       return false;
     }
     return true;
+  }
+
+  async checkAccountRateLimit(
+    userId: string,
+    ip: string,
+    action: 'change-password' | 'logout-all',
+  ): Promise<boolean> {
+    const userHash = this.hashUserId(userId);
+    const ipHash = this.hashIp(ip);
+    const key = `auth:rl:${action}:user:${userHash}:ip:${ipHash}`;
+    const count = await this.increment(key, ACCOUNT_ACTION_WINDOW_SEC);
+    const limit = action === 'change-password' ? CHANGE_PASSWORD_LIMIT : LOGOUT_ALL_LIMIT;
+    if (count > limit) {
+      this.logger.warn(`auth_rate_limited action=${action} userHash=${userHash} ipHash=${ipHash}`);
+      return false;
+    }
+    return true;
+  }
+
+  async getAccountActionDelayMs(
+    userId: string,
+    ip: string,
+    action: 'change-password' | 'logout-all',
+  ): Promise<number> {
+    const attempts = await this.getCounter(this.accountAttemptsKey(userId, ip, action));
+    return Math.min(attempts * PROGRESSIVE_DELAY_MS, MAX_PROGRESSIVE_DELAY_MS);
+  }
+
+  async recordAccountActionFailure(
+    userId: string,
+    ip: string,
+    action: 'change-password' | 'logout-all',
+  ): Promise<number> {
+    const attempts = await this.increment(
+      this.accountAttemptsKey(userId, ip, action),
+      ACCOUNT_ACTION_ATTEMPTS_TTL_SEC,
+    );
+    this.logger.warn(
+      `auth_account_action_failed action=${action} userHash=${this.hashUserId(userId)} ipHash=${this.hashIp(ip)} attempt=${attempts}`,
+    );
+    return attempts;
+  }
+
+  async clearAccountActionFailures(
+    userId: string,
+    ip: string,
+    action: 'change-password' | 'logout-all',
+  ): Promise<void> {
+    const key = this.accountAttemptsKey(userId, ip, action);
+    const redis = this.queueService.getConnection();
+    if (redis) {
+      await redis.del(key);
+      return;
+    }
+    this.memoryStore.delete(key);
+  }
+
+  private accountAttemptsKey(
+    userId: string,
+    ip: string,
+    action: 'change-password' | 'logout-all',
+  ): string {
+    return `auth:attempts:${action}:user:${this.hashUserId(userId)}:ip:${this.hashIp(ip)}`;
   }
 
   async isAccountLocked(emailHash: string): Promise<boolean> {
@@ -160,7 +235,7 @@ export class AuthSecurityService {
   }
 
   async recordBootstrapFailure(ip: string): Promise<void> {
-    await this.increment(`auth:bootstrap:fail:${ip}`, IP_WINDOW_SEC);
+    await this.increment(`auth:bootstrap:fail:${this.hashIp(ip)}`, IP_WINDOW_SEC);
     this.logger.warn(`auth_bootstrap_failed ipHash=${this.hashIp(ip)}`);
   }
 }
