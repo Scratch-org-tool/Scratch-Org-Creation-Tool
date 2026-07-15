@@ -158,6 +158,7 @@ export function useScratchOrgWorkspace() {
     eagerSnapshot?.startedAt ? new Date(eagerSnapshot.startedAt).getTime() : null,
   );
   const [restoredBanner, setRestoredBanner] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [templateMeta, setTemplateMeta] = useState<{
     name: string;
@@ -350,6 +351,23 @@ export function useScratchOrgWorkspace() {
           clearWorkspaceSnapshot();
           syncRunIdInUrl(null);
         }
+        return;
+      }
+
+      if (r.status === 'failed') {
+        const terminalKey = `${runId}:failed`;
+        if (terminalHandledRef.current === terminalKey) return;
+        terminalHandledRef.current = terminalKey;
+        setDesktopStep(2);
+        setMobileView('progress');
+        setRestoredBanner(
+          `Pipeline failed${r.failedStep ? ` at ${r.failedStep}` : ''}. Review the job error and logs below.`,
+        );
+        persistSnapshot({
+          automationRunId: runId,
+          desktopStep: 2,
+          mobileView: 'progress',
+        });
       }
     },
     [persistSnapshot, syncRunIdInUrl],
@@ -529,7 +547,7 @@ export function useScratchOrgWorkspace() {
 
   useEffect(() => {
     if (!automationRunId) return;
-    if (run?.status && ['completed', 'cancelled'].includes(run.status)) {
+    if (run?.status && ['completed', 'cancelled', 'failed'].includes(run.status)) {
       void hydrateRunState(run, { alias: formRef.current.alias });
       return;
     }
@@ -538,7 +556,7 @@ export function useScratchOrgWorkspace() {
       try {
         const r = await refreshRun(automationRunId);
         if (!isMountedRef.current) return;
-        if (['completed', 'cancelled', 'paused'].includes(r.status)) {
+        if (['completed', 'cancelled', 'failed', 'paused'].includes(r.status)) {
           await hydrateRunState(r, { alias: formRef.current.alias });
         }
       } catch {
@@ -563,6 +581,7 @@ export function useScratchOrgWorkspace() {
       if (
         payload.status === 'paused' ||
         payload.status === 'cancelled' ||
+        payload.status === 'failed' ||
         payload.status === 'completed'
       ) {
         if (automationRunId && isMountedRef.current) {
@@ -588,6 +607,7 @@ export function useScratchOrgWorkspace() {
     setLogs([]);
     setCredentials(null);
     setRestoredBanner(null);
+    setLaunchError(null);
     const now = Date.now();
     setStartedAt(now);
     try {
@@ -656,6 +676,9 @@ export function useScratchOrgWorkspace() {
         mobileView: 'progress',
         startedAt: new Date(now).toISOString(),
       });
+    } catch (err) {
+      setStartedAt(null);
+      setLaunchError(err instanceof Error ? err.message : 'Failed to launch scratch org pipeline');
     } finally {
       setSubmitting(false);
     }
@@ -805,5 +828,7 @@ export function useScratchOrgWorkspace() {
     progressPercent,
     streamState,
     restoredBanner,
+    launchError,
+    setLaunchError,
   };
 }

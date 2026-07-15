@@ -41,7 +41,7 @@ export interface MetadataCompareResult {
   inBoth: string[];
 }
 
-export type MetadataDiffType = 'new' | 'changed' | 'deleted' | 'same';
+export type MetadataDiffType = 'new' | 'changed' | 'deleted' | 'same' | 'unknown';
 
 export interface MetadataComponentInfo {
   fullName: string;
@@ -65,7 +65,15 @@ export interface MetadataComparisonSummary {
   changed: number;
   deleted: number;
   same: number;
-  byType: Record<string, { total: number; new: number; changed: number; deleted: number; same: number }>;
+  unknown: number;
+  byType: Record<string, {
+    total: number;
+    new: number;
+    changed: number;
+    deleted: number;
+    same: number;
+    unknown: number;
+  }>;
 }
 
 /** Metadata types compared in a full org comparison (expandable). */
@@ -98,9 +106,10 @@ export function classifyMetadataPair(
 ): MetadataDiffType {
   if (source && !target) return 'new';
   if (!source && target) return 'deleted';
-  if (!source || !target) return 'same';
-  // In-both items start as "same"; content diff upgrades to "changed" when XML differs.
-  return 'same';
+  if (!source || !target) return 'unknown';
+  // Listing APIs prove only that an item exists on both sides. XML must be
+  // inspected before it can safely be called changed or identical.
+  return 'unknown';
 }
 
 export function buildComparisonItems(
@@ -134,11 +143,19 @@ export function summarizeComparisonItems(items: MetadataCompareItem[]): Metadata
     changed: 0,
     deleted: 0,
     same: 0,
+    unknown: 0,
     byType: {},
   };
   for (const item of items) {
     summary[item.diffType] += 1;
-    const bt = summary.byType[item.metadataType] ?? { total: 0, new: 0, changed: 0, deleted: 0, same: 0 };
+    const bt = summary.byType[item.metadataType] ?? {
+      total: 0,
+      new: 0,
+      changed: 0,
+      deleted: 0,
+      same: 0,
+      unknown: 0,
+    };
     bt.total += 1;
     bt[item.diffType] += 1;
     summary.byType[item.metadataType] = bt;
@@ -156,7 +173,7 @@ export const metadataCompareAnalyzeSchema = z.object({
   selectedItems: z.array(z.object({
     fullName: z.string(),
     metadataType: z.string(),
-    diffType: z.enum(['new', 'changed', 'deleted', 'same']).optional(),
+    diffType: z.enum(['new', 'changed', 'deleted', 'same', 'unknown']).optional(),
   })),
   excludeFullNames: z.array(z.string()).optional(),
 });

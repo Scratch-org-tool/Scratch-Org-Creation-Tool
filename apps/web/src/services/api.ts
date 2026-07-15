@@ -11,9 +11,12 @@ async function resolveToken(forceRefresh = false): Promise<string | null> {
   return getIdToken(forceRefresh);
 }
 
-export async function buildAuthHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+export async function buildAuthHeaders(
+  extra?: Record<string, string>,
+  forceRefresh = false,
+): Promise<Record<string, string>> {
   const headers: Record<string, string> = { ...extra };
-  const token = await resolveToken(false);
+  const token = await resolveToken(forceRefresh);
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
 }

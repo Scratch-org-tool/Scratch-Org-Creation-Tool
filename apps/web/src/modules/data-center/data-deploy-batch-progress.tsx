@@ -31,27 +31,37 @@ interface DataDeployBatchProgressProps {
   onTerminal?: (batch: DataDeployBatch) => void;
 }
 
-const TERMINAL = ['completed', 'failed', 'cancelled'];
+const TERMINAL = ['completed', 'partial', 'failed', 'cancelled'];
 
 export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatchProgressProps) {
   const [batch, setBatch] = useState<DataDeployBatch | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<boolean> => {
     try {
       const data = await api<DataDeployBatch>(`/data/batches/${batchId}`);
       setBatch(data);
       if (TERMINAL.includes(data.status)) {
         onTerminal?.(data);
+        return true;
       }
     } catch (err) {
       console.error(err);
     }
+    return false;
   }, [batchId, onTerminal]);
 
   useEffect(() => {
-    void load();
-    const poll = setInterval(() => void load(), 2000);
-    return () => clearInterval(poll);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      const terminal = await load();
+      if (!cancelled && !terminal) timer = setTimeout(() => void poll(), 2000);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [load]);
 
   if (!batch) return null;

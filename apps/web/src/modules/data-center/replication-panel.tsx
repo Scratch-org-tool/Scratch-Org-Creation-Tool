@@ -20,7 +20,7 @@ import {
   shouldChunkDeploy,
   chunkCountForLimit,
 } from '@sfcc/shared';
-import { api, getStreamUrl } from '@/services/api';
+import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 import { DataPreviewTable } from './data-preview-table';
 import { DataDeployBatchProgress } from './data-deploy-batch-progress';
@@ -119,39 +119,6 @@ export function ReplicationPanel() {
     return () => clearInterval(poll);
   }, [movementId]);
 
-  useEffect(() => {
-    if (!jobId) return;
-    let es: EventSource | null = null;
-    let cancelled = false;
-    void (async () => {
-      const url = await getStreamUrl(['job_log', 'job_status']);
-      if (cancelled) return;
-      es = new EventSource(url);
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data as string) as {
-            type: string;
-            payload: { jobId?: string; line?: string; status?: string };
-          };
-          if (data.payload.jobId !== jobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!]);
-          }
-          if (data.type === 'job_status' && data.payload.status) {
-            setJob((j) => (j ? { ...j, status: data.payload.status! } : { id: jobId, status: data.payload.status! }));
-            if (TERMINAL_STATUSES.includes(data.payload.status)) void loadMovements();
-          }
-        } catch {
-          /* ignore */
-        }
-      };
-    })();
-    return () => {
-      cancelled = true;
-      es?.close();
-    };
-  }, [jobId, loadMovements]);
-
   const handlePreview = async () => {
     setPreviewLoading(true);
     setPreview(null);
@@ -175,6 +142,10 @@ export function ReplicationPanel() {
   };
 
   const handleReplicate = async () => {
+    if (form.sourceOrgId === form.targetOrgId) {
+      setReplicateError('Source and target org must differ.');
+      return;
+    }
     setLoading(true);
     setLogs([]);
     setJob(null);
@@ -322,7 +293,12 @@ export function ReplicationPanel() {
             <Button
               onClick={() => void handleReplicate()}
               loading={loading}
-              disabled={!form.sourceOrgId || !form.targetOrgId || isRunning}
+              disabled={
+                !form.sourceOrgId
+                || !form.targetOrgId
+                || form.sourceOrgId === form.targetOrgId
+                || isRunning
+              }
             >
               Replicate
             </Button>
@@ -357,7 +333,7 @@ export function ReplicationPanel() {
 
       {(jobId || replicateStatus) && (
         <GlassCard title="Replication progress" description="Live SFDMU output from the API host.">
-          {batchId && <DataDeployBatchProgress batchId={batchId} onTerminal={() => loadMovements()} />}
+          {batchId && <DataDeployBatchProgress batchId={batchId} onTerminal={loadMovements} />}
           {job?.error && (
             <InlineAlert variant="error" className="mb-3">
               {job.error}

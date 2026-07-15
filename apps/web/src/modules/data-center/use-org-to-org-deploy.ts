@@ -83,6 +83,10 @@ export function useOrgToOrgDeploy() {
   const [deployJobError, setDeployJobError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const orgGenerationRef = useRef(0);
+  const objectsRequestRef = useRef(0);
+  const metaRequestRef = useRef(new Map<string, number>());
+  const previewRequestRef = useRef(new Map<string, number>());
 
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
@@ -133,21 +137,33 @@ export function useOrgToOrgDeploy() {
 
   const loadObjects = useCallback(async () => {
     if (!form.sourceOrgId) return;
+    const sourceOrgId = form.sourceOrgId;
+    const generation = orgGenerationRef.current;
+    const request = ++objectsRequestRef.current;
     setLoadingObjects(true);
     setError(null);
     try {
       const list = await api<OrgToOrgObjectInfo[]>(
-        `/data/org-to-org/objects?orgId=${encodeURIComponent(form.sourceOrgId)}`,
+        `/data/org-to-org/objects?orgId=${encodeURIComponent(sourceOrgId)}`,
       );
+      if (orgGenerationRef.current !== generation || objectsRequestRef.current !== request) return;
       setObjects(list);
     } catch (err) {
+      if (orgGenerationRef.current !== generation || objectsRequestRef.current !== request) return;
       setError(err instanceof Error ? err.message : 'Failed to load objects');
     } finally {
-      setLoadingObjects(false);
+      if (orgGenerationRef.current === generation && objectsRequestRef.current === request) {
+        setLoadingObjects(false);
+      }
     }
   }, [form.sourceOrgId]);
 
   useEffect(() => {
+    orgGenerationRef.current += 1;
+    objectsRequestRef.current += 1;
+    metaRequestRef.current.clear();
+    previewRequestRef.current.clear();
+    if (previewTimer.current) clearTimeout(previewTimer.current);
     setObjects([]);
     setCheckedObjects(new Set());
     setActiveObject(null);
@@ -161,12 +177,20 @@ export function useOrgToOrgDeploy() {
   const runPreviewForObject = useCallback(
     async (objectName: string, config: OrgToOrgObjectDeployConfig) => {
       if (!form.sourceOrgId) return;
+      const sourceOrgId = form.sourceOrgId;
+      const generation = orgGenerationRef.current;
+      const request = (previewRequestRef.current.get(objectName) ?? 0) + 1;
+      previewRequestRef.current.set(objectName, request);
       setLoadingPreview(true);
       try {
         const result = await api<OrgToOrgFilterPreviewResult>('/data/org-to-org/preview-filter', {
           method: 'POST',
-          body: JSON.stringify(buildPreviewBody(form.sourceOrgId, objectName, config)),
+          body: JSON.stringify(buildPreviewBody(sourceOrgId, objectName, config)),
         });
+        if (
+          orgGenerationRef.current !== generation
+          || previewRequestRef.current.get(objectName) !== request
+        ) return;
         setObjectConfigs((prev) => {
           const next = new Map(prev);
           const existing = next.get(objectName) ?? config;
@@ -179,9 +203,16 @@ export function useOrgToOrgDeploy() {
           return next;
         });
       } catch (err) {
+        if (
+          orgGenerationRef.current !== generation
+          || previewRequestRef.current.get(objectName) !== request
+        ) return;
         setError(err instanceof Error ? err.message : 'Filter preview failed');
       } finally {
-        setLoadingPreview(false);
+        if (
+          orgGenerationRef.current === generation
+          && previewRequestRef.current.get(objectName) === request
+        ) setLoadingPreview(false);
       }
     },
     [form.sourceOrgId],
@@ -190,11 +221,18 @@ export function useOrgToOrgDeploy() {
   const loadObjectMeta = useCallback(
     async (objectName: string) => {
       if (!form.sourceOrgId) return null;
+      const sourceOrgId = form.sourceOrgId;
+      const generation = orgGenerationRef.current;
+      const request = (metaRequestRef.current.get(objectName) ?? 0) + 1;
+      metaRequestRef.current.set(objectName, request);
       setLoadingMeta(true);
       try {
         const meta = await api<OrgToOrgObjectMeta>(
-          `/data/org-to-org/object-meta?orgId=${encodeURIComponent(form.sourceOrgId)}&objectName=${encodeURIComponent(objectName)}`,
+          `/data/org-to-org/object-meta?orgId=${encodeURIComponent(sourceOrgId)}&objectName=${encodeURIComponent(objectName)}`,
         );
+        if (orgGenerationRef.current !== generation || metaRequestRef.current.get(objectName) !== request) {
+          return null;
+        }
         setObjectMetaCache((prev) => new Map(prev).set(objectName, meta));
 
         const defaultDeployFields = (meta.deployableFields ?? [])
@@ -232,10 +270,15 @@ export function useOrgToOrgDeploy() {
         }
         return meta;
       } catch (err) {
+        if (orgGenerationRef.current !== generation || metaRequestRef.current.get(objectName) !== request) {
+          return null;
+        }
         setError(err instanceof Error ? err.message : 'Failed to load object metadata');
         return null;
       } finally {
-        setLoadingMeta(false);
+        if (orgGenerationRef.current === generation && metaRequestRef.current.get(objectName) === request) {
+          setLoadingMeta(false);
+        }
       }
     },
     [form.sourceOrgId, runPreviewForObject],
@@ -259,6 +302,13 @@ export function useOrgToOrgDeploy() {
         else next.delete(apiName);
         return next;
       });
+      if (!checked) {
+        setSelectedRecordIds((prev) => {
+          const next = new Map(prev);
+          next.delete(apiName);
+          return next;
+        });
+      }
       if (checked) {
         setActiveObject(apiName);
         void loadObjectMeta(apiName);
@@ -277,6 +327,12 @@ export function useOrgToOrgDeploy() {
 
   const updateObjectConfig = useCallback(
     (objectName: string, patch: Partial<OrgToOrgObjectDeployConfig>) => {
+      setSelectedRecordIds((prev) => {
+        if (!prev.has(objectName)) return prev;
+        const next = new Map(prev);
+        next.delete(objectName);
+        return next;
+      });
       setObjectConfigs((prev) => {
         const next = new Map(prev);
         const existing = next.get(objectName) ?? DEFAULT_OBJECT_CONFIG(objectName);
@@ -306,6 +362,12 @@ export function useOrgToOrgDeploy() {
       if (mode === 'builder') {
         updateObjectConfig(objectName, { queryMode: 'builder', customSoql: '' });
       } else {
+        setSelectedRecordIds((prev) => {
+          if (!prev.has(objectName)) return prev;
+          const next = new Map(prev);
+          next.delete(objectName);
+          return next;
+        });
         setObjectConfigs((prev) => {
           const next = new Map(prev);
           const existing = next.get(objectName) ?? DEFAULT_OBJECT_CONFIG(objectName);
@@ -332,6 +394,12 @@ export function useOrgToOrgDeploy() {
           selectedDeployFields: deployFieldsFromSoqlSelect(parsed.fields),
           filters: parsed.filters,
         };
+        setSelectedRecordIds((prev) => {
+          if (!prev.has(objectName)) return prev;
+          const next = new Map(prev);
+          next.delete(objectName);
+          return next;
+        });
         setObjectConfigs((prev) => {
           const next = new Map(prev);
           next.set(objectName, updated);
@@ -354,6 +422,12 @@ export function useOrgToOrgDeploy() {
 
   const toggleReferenceField = useCallback(
     (objectName: string, fieldName: string, selected: boolean) => {
+      setSelectedRecordIds((prev) => {
+        if (!prev.has(objectName)) return prev;
+        const next = new Map(prev);
+        next.delete(objectName);
+        return next;
+      });
       setObjectConfigs((prev) => {
         const next = new Map(prev);
         const existing = next.get(objectName);

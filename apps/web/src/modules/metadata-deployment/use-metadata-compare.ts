@@ -111,8 +111,20 @@ export function useMetadataCompare() {
   const [deployStartedAt, setDeployStartedAt] = useState<number | null>(null);
   const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(null);
   const [selectingDeploymentId, setSelectingDeploymentId] = useState<string | null>(null);
+  const [historyJobId, setHistoryJobId] = useState<string | null>(null);
+  const [historyJobStatus, setHistoryJobStatus] = useState<string | null>(null);
+  const [historyCurrentStep, setHistoryCurrentStep] = useState<string | null>(null);
+  const [historyLogs, setHistoryLogs] = useState<string[]>([]);
+  const [historyLogStreams, setHistoryLogStreams] = useState<string[]>([]);
+  const [historyLogsTruncated, setHistoryLogsTruncated] = useState(false);
+  const [historyLogCount, setHistoryLogCount] = useState<number | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const selectTokenRef = useRef(0);
+  const sessionTokenRef = useRef(0);
+  const previewTokenRef = useRef(0);
+  const diffTokenRef = useRef(0);
+  const diffAbortRef = useRef<AbortController | null>(null);
 
   const canCompare = Boolean(form.sourceOrgId && form.targetOrgId && form.sourceOrgId !== form.targetOrgId);
 
@@ -169,26 +181,31 @@ export function useMetadataCompare() {
     }
   }, []);
 
-  const refreshJob = useCallback(async (jid: string) => {
-    const data = await api<JobData>(`/jobs/${jid}`);
-    startTransition(() => applyJobData(data));
-    return data;
-  }, [applyJobData]);
+  const applyHistoryJobData = useCallback((data: JobData) => {
+    const lines = data.logs?.map((l) => l.line) ?? [];
+    const streams = data.logs?.map((l) => l.stream ?? 'stdout') ?? [];
+    const capped = capLogs(lines, streams);
+    setHistoryJobStatus(data.status);
+    setHistoryCurrentStep(data.currentStep ?? null);
+    setHistoryLogs(capped.lines);
+    setHistoryLogStreams(capped.streams);
+    setHistoryLogsTruncated(Boolean(data.logsTruncated));
+    setHistoryLogCount(data.logCount ?? lines.length);
+    setHistoryError(data.error && TERMINAL_STATUSES.includes(data.status) ? data.error : null);
+  }, []);
 
   const closeHistoryLogs = useCallback(() => {
     selectTokenRef.current += 1;
     setActiveDeploymentId(null);
     setSelectingDeploymentId(null);
-    setJobId(null);
-    setDeploymentId(null);
-    setJobStatus(null);
-    setCurrentStep(null);
-    setLogs([]);
-    setLogStreams([]);
-    setLogsTruncated(false);
-    setLogCount(null);
-    setError(null);
-    setDeployStartedAt(null);
+    setHistoryJobId(null);
+    setHistoryJobStatus(null);
+    setHistoryCurrentStep(null);
+    setHistoryLogs([]);
+    setHistoryLogStreams([]);
+    setHistoryLogsTruncated(false);
+    setHistoryLogCount(null);
+    setHistoryError(null);
   }, []);
 
   const selectHistory = useCallback(async (row: DeploymentRow) => {
@@ -203,27 +220,27 @@ export function useMetadataCompare() {
     const token = ++selectTokenRef.current;
     setSelectingDeploymentId(row.id);
     setActiveDeploymentId(row.id);
-    setJobId(jid);
-    setDeploymentId(row.id);
-    setJobStatus(row.job?.status ?? row.status);
-    setCurrentStep(row.job?.currentStep ?? null);
-    setError(row.job?.error ?? row.metadata?.error ?? null);
-    setLogs([]);
-    setLogStreams([]);
-    setLogsTruncated(false);
-    setLogCount(null);
-    setDeployStartedAt(
-      row.job?.startedAt ? new Date(row.job.startedAt).getTime() : new Date(row.createdAt).getTime(),
-    );
+    setHistoryJobId(jid);
+    setHistoryJobStatus(row.job?.status ?? row.status);
+    setHistoryCurrentStep(row.job?.currentStep ?? null);
+    setHistoryError(row.job?.error ?? row.metadata?.error ?? null);
+    setHistoryLogs([]);
+    setHistoryLogStreams([]);
+    setHistoryLogsTruncated(false);
+    setHistoryLogCount(null);
 
     try {
-      const data = await refreshJob(jid);
+      const data = await api<JobData>(`/jobs/${jid}`);
       if (selectTokenRef.current !== token) return;
-      if (TERMINAL_STATUSES.includes(data.status)) setSseConnected(false);
+      startTransition(() => applyHistoryJobData(data));
+    } catch (err) {
+      if (selectTokenRef.current === token) {
+        setHistoryError(err instanceof Error ? err.message : 'Failed to load deployment logs');
+      }
     } finally {
       if (selectTokenRef.current === token) setSelectingDeploymentId(null);
     }
-  }, [activeDeploymentId, closeHistoryLogs, refreshJob]);
+  }, [activeDeploymentId, applyHistoryJobData, closeHistoryLogs]);
 
   const openHistory = useCallback(async (preferredDeploymentId?: string | null) => {
     setTab('history');
@@ -234,6 +251,27 @@ export function useMetadataCompare() {
       list[0];
     if (row) await selectHistory(row);
   }, [deploymentId, loadHistory, selectHistory]);
+
+  useEffect(() => {
+    if (tab !== 'history' || !historyJobId || !historyJobStatus || TERMINAL_STATUSES.includes(historyJobStatus)) {
+      return;
+    }
+    const token = selectTokenRef.current;
+    const id = setInterval(async () => {
+      try {
+        const data = await api<JobData>(`/jobs/${historyJobId}`);
+        if (selectTokenRef.current !== token) return;
+        startTransition(() => applyHistoryJobData(data));
+        if (TERMINAL_STATUSES.includes(data.status)) {
+          clearInterval(id);
+          void loadHistory(true);
+        }
+      } catch {
+        // Keep the last known history state and retry transient failures.
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [applyHistoryJobData, historyJobId, historyJobStatus, loadHistory, tab]);
 
   useEffect(() => {
     const src = searchParams.get('sourceOrgId');
@@ -275,12 +313,15 @@ export function useMetadataCompare() {
 
   const loadPreviewCounts = useCallback(async () => {
     if (!canCompare) return;
+    const token = ++previewTokenRef.current;
     try {
       const res = await api<{ sourceCount: number; targetCount: number }>(
         `/metadata/compare/preview-counts?sourceOrgId=${form.sourceOrgId}&targetOrgId=${form.targetOrgId}`,
       );
+      if (previewTokenRef.current !== token) return;
       setPreviewCounts({ source: res.sourceCount, target: res.targetCount });
     } catch {
+      if (previewTokenRef.current !== token) return;
       setPreviewCounts(null);
     }
   }, [canCompare, form.sourceOrgId, form.targetOrgId]);
@@ -291,6 +332,7 @@ export function useMetadataCompare() {
 
   const refreshSession = useCallback(async () => {
     if (!comparisonId) return;
+    const token = ++sessionTokenRef.current;
     setSessionLoading(true);
     try {
       const params = new URLSearchParams({
@@ -301,6 +343,7 @@ export function useMetadataCompare() {
       if (diffFilter !== 'all') params.set('diffType', diffFilter);
       if (itemSearch.trim()) params.set('search', itemSearch.trim());
       const res = await api<MetadataCompareSession>(`/metadata/compare/${comparisonId}?${params}`);
+      if (sessionTokenRef.current !== token) return;
       setSessionStatus(res.status);
       setSummary(res.summary);
       setItems(res.items);
@@ -309,9 +352,10 @@ export function useMetadataCompare() {
         /* session ready */
       }
     } catch (err) {
+      if (sessionTokenRef.current !== token) return;
       setError(err instanceof Error ? err.message : 'Failed to load comparison');
     } finally {
-      setSessionLoading(false);
+      if (sessionTokenRef.current === token) setSessionLoading(false);
     }
   }, [comparisonId, page, activeType, diffFilter, itemSearch, phase]);
 
@@ -374,6 +418,10 @@ export function useMetadataCompare() {
 
   const loadItemDiff = useCallback(async (item: MetadataCompareItem) => {
     if (!comparisonId) return;
+    diffAbortRef.current?.abort();
+    const controller = new AbortController();
+    diffAbortRef.current = controller;
+    const token = ++diffTokenRef.current;
     setSelectedItem(item);
     setDiffLoading(true);
     setItemDiff(null);
@@ -381,10 +429,12 @@ export function useMetadataCompare() {
     try {
       const res = await api<ItemDiffPayload>(
         `/metadata/compare/${comparisonId}/diff?type=${encodeURIComponent(item.metadataType)}&name=${encodeURIComponent(item.fullName)}`,
+        { signal: controller.signal },
       );
+      if (diffTokenRef.current !== token) return;
       setItemDiff(res);
       const key = itemKey(item.metadataType, item.fullName);
-      if (res.contentDiffers && item.diffType === 'same') {
+      if (res.loadStatus !== 'failed' && res.contentDiffers && (item.diffType === 'same' || item.diffType === 'unknown')) {
         const upgraded = { ...item, diffType: 'changed' as const };
         setSelectedItem(upgraded);
         setSelectionSnapshot((prev) => ({ ...prev, [key]: upgraded }));
@@ -394,7 +444,11 @@ export function useMetadataCompare() {
           ),
         );
         void refreshSession();
-      } else if (!res.contentDiffers && item.diffType === 'changed') {
+      } else if (
+        res.loadStatus !== 'failed'
+        && !res.contentDiffers
+        && (item.diffType === 'changed' || item.diffType === 'unknown')
+      ) {
         const downgraded = { ...item, diffType: 'same' as const };
         setSelectedItem(downgraded);
         setSelectionSnapshot((prev) => {
@@ -419,16 +473,27 @@ export function useMetadataCompare() {
         void loadObjectFields(item.fullName);
         const childRes = await api<{ childTypes: Array<{ type: string; count: number }> }>(
           `/metadata/compare/${comparisonId}/children?objectName=${encodeURIComponent(item.fullName)}`,
+          { signal: controller.signal },
         );
+        if (diffTokenRef.current !== token) return;
         setChildren(childRes.childTypes);
         setChildrenLoading(false);
       }
     } catch (err) {
+      if (diffTokenRef.current !== token || controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : 'Failed to load diff');
     } finally {
-      setDiffLoading(false);
+      if (diffTokenRef.current === token) {
+        setDiffLoading(false);
+        setChildrenLoading(false);
+      }
     }
   }, [comparisonId, loadObjectFields, refreshSession]);
+
+  useEffect(() => () => {
+    diffAbortRef.current?.abort();
+    diffTokenRef.current += 1;
+  }, []);
 
   const toggleSelect = useCallback((item: MetadataCompareItem) => {
     const key = itemKey(item.metadataType, item.fullName);
@@ -471,9 +536,8 @@ export function useMetadataCompare() {
     setError(null);
     try {
       const selected = [...selectedKeys].map((k) => {
-        const [metadataType, ...rest] = k.split('::');
-        const fullName = rest.join('::');
-        const item = items.find((i) => i.metadataType === metadataType && i.fullName === fullName);
+        const { metadataType, fullName } = parseItemKey(k);
+        const item = resolveItem(k);
         return { fullName, metadataType, diffType: item?.diffType };
       });
       const res = await api<ProblemAnalysisResult>(`/metadata/compare/${comparisonId}/analyze`, {
@@ -499,7 +563,7 @@ export function useMetadataCompare() {
     } finally {
       setAnalysisLoading(false);
     }
-  }, [comparisonId, selectedKeys, items, excludedKeys]);
+  }, [comparisonId, selectedKeys, excludedKeys, resolveItem]);
 
   const refreshPreview = useCallback(async () => {
     const deployItems = getDeployableItems();
@@ -611,10 +675,6 @@ export function useMetadataCompare() {
             payload: { jobId?: string; line?: string; status?: string; currentStep?: string; stream?: string };
           };
           if (data.payload.jobId !== jobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!].slice(-METADATA_LOG_TAIL));
-            setLogStreams((s) => [...s, data.payload.stream ?? 'stdout'].slice(-METADATA_LOG_TAIL));
-          }
           if (data.type === 'job_status') {
             if (data.payload.status) setJobStatus(data.payload.status);
             if (data.payload.currentStep) setCurrentStep(data.payload.currentStep);
@@ -651,20 +711,57 @@ export function useMetadataCompare() {
   }, [jobId, jobStatus, applyJobData, loadHistory]);
 
   const resetFlow = useCallback(() => {
+    sessionTokenRef.current += 1;
+    previewTokenRef.current += 1;
+    diffTokenRef.current += 1;
+    diffAbortRef.current?.abort();
     setPhase('setup');
     setComparisonId(null);
+    setSessionStatus('pending');
     setSummary(null);
     setItems([]);
+    setItemsTotal(0);
+    setActiveType(null);
+    setDiffFilter('all');
+    setItemSearch('');
+    setPage(1);
     setSelectedKeys(new Set());
     setSelectionSnapshot({});
     setSelectedItem(null);
     setItemDiff(null);
+    setDiffLoading(false);
+    setChildren([]);
+    setChildrenLoading(false);
+    setPreviewCounts(null);
+    setCompareStarting(false);
+    setSessionLoading(false);
     setAnalysis(null);
+    setAnalysisLoading(false);
+    setExcludedKeys(new Set());
+    setPackageXmlPreview('');
+    setError(null);
+    setFieldWarning(null);
+    setDeploying(false);
     setJobId(null);
     setDeploymentId(null);
     setActiveDeploymentId(null);
+    setSelectingDeploymentId(null);
+    setHistoryJobId(null);
+    setHistoryJobStatus(null);
+    setHistoryCurrentStep(null);
+    setHistoryLogs([]);
+    setHistoryLogStreams([]);
+    setHistoryLogsTruncated(false);
+    setHistoryLogCount(null);
+    setHistoryError(null);
     setJobStatus(null);
+    setCurrentStep(null);
     setLogs([]);
+    setLogStreams([]);
+    setLogsTruncated(false);
+    setLogCount(null);
+    setSseConnected(false);
+    setDeployStartedAt(null);
     sessionStorage.removeItem(METADATA_DRAFT_KEY);
   }, []);
 
@@ -678,6 +775,14 @@ export function useMetadataCompare() {
     history,
     activeDeploymentId,
     selectingDeploymentId,
+    historyJobId,
+    historyJobStatus,
+    historyCurrentStep,
+    historyLogs,
+    historyLogStreams,
+    historyLogsTruncated,
+    historyLogCount,
+    historyError,
     selectHistory,
     closeHistoryLogs,
     openHistory,

@@ -15,33 +15,36 @@ export interface StreamCopilotOptions {
 }
 
 export async function streamCopilotChat(options: StreamCopilotOptions): Promise<void> {
-  const headers = await buildAuthHeaders({
-    'Content-Type': 'application/json',
-    Accept: 'application/x-ndjson',
-  });
+  const request = async (forceRefresh = false): Promise<Response> => {
+    const headers = await buildAuthHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+    }, forceRefresh);
+    try {
+      return await fetch(buildApiUrl('/copilot/chat/stream'), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          message: options.message,
+          sessionId: options.sessionId,
+          context: options.context,
+        }),
+        signal: options.signal,
+        cache: 'no-store',
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      throw new Error(
+        'Cannot reach API. Make sure `npm run dev` is running on the host machine (web + API).',
+      );
+    }
+  };
 
-  let res: Response;
-  try {
-    res = await fetch(buildApiUrl('/copilot/chat/stream'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        message: options.message,
-        sessionId: options.sessionId,
-        context: options.context,
-      }),
-      signal: options.signal,
-      cache: 'no-store',
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') throw err;
-    throw new Error(
-      'Cannot reach API. Make sure `npm run dev` is running on the host machine (web + API).',
-    );
-  }
+  let res = await request();
 
   if (res.status === 401) {
-    throw new Error('Session expired — please sign in again.');
+    res = await request(true);
+    if (res.status === 401) throw new Error('Session expired — please sign in again.');
   }
 
   if (!res.ok) {

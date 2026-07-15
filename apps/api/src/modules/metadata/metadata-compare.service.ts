@@ -257,9 +257,19 @@ export class MetadataCompareService {
       });
     }
 
-    if (contentDiffers && item && item.diffType === 'same') {
+    if (
+      loadStatus !== 'failed'
+      && contentDiffers
+      && item
+      && (item.diffType === 'same' || item.diffType === 'unknown')
+    ) {
       await this.upgradeItemDiffType(comparisonId, metadataType, fullName, 'changed');
-    } else if (!contentDiffers && item && item.diffType === 'changed') {
+    } else if (
+      loadStatus !== 'failed'
+      && !contentDiffers
+      && item
+      && (item.diffType === 'changed' || item.diffType === 'unknown')
+    ) {
       await this.upgradeItemDiffType(comparisonId, metadataType, fullName, 'same');
     }
 
@@ -317,7 +327,7 @@ export class MetadataCompareService {
     const allItems = (session.items as MetadataCompareItem[] | null) ?? [];
     const selected = input.selectedItems.length
       ? input.selectedItems
-      : allItems.filter((i) => i.diffType !== 'same');
+      : allItems.filter((i) => i.diffType !== 'same' && i.diffType !== 'unknown');
 
     const fixes: ProblemFix[] = [];
     const warnings: ProblemFix[] = [];
@@ -354,7 +364,11 @@ export class MetadataCompareService {
     const deployable = selected.filter(
       (s) => {
         const k = `${s.metadataType}::${s.fullName}`;
-        return !excluded.has(k) && !excluded.has(s.fullName) && s.diffType !== 'deleted' && s.diffType !== 'same';
+        return !excluded.has(k)
+          && !excluded.has(s.fullName)
+          && s.diffType !== 'deleted'
+          && s.diffType !== 'same'
+          && s.diffType !== 'unknown';
       },
     );
 

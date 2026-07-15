@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/services/api';
 import { getSessionCache, hasFreshSessionCache, setSessionCache } from '@/lib/session-cache';
 import { isJobLive } from './format-utils';
@@ -32,8 +32,10 @@ export function useMonitoringWorkspace() {
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>('all');
   const [page, setPage] = useState(1);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const requestRef = useRef(0);
 
   const loadOverview = useCallback(async (period: MonitoringDays) => {
+    const request = ++requestRef.current;
     const key = `monitoring:overview:${period}`;
     if (!getSessionCache<MonitoringOverview>(key)) {
       setLoading(true);
@@ -41,19 +43,30 @@ export function useMonitoringWorkspace() {
     setError(null);
     try {
       const data = await api<MonitoringOverview>(`/monitoring/overview?days=${period}`);
+      if (requestRef.current !== request) return;
       setOverview(data);
       setSessionCache(key, data);
       setSelectedJobId((prev) =>
         prev && data.recentJobs.some((j) => j.id === prev) ? prev : null,
       );
     } catch (err) {
+      if (requestRef.current !== request) return;
       setError(err instanceof Error ? err.message : 'Failed to load monitoring data');
     } finally {
-      setLoading(false);
+      if (requestRef.current === request) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    requestRef.current += 1;
+    const periodCache = getSessionCache<MonitoringOverview>(cacheKey);
+    setOverview(periodCache);
+    setLoading(!periodCache);
+    setRefreshing(false);
+    setError(null);
+    setSelectedJobId((prev) =>
+      prev && periodCache?.recentJobs.some((j) => j.id === prev) ? prev : null,
+    );
     if (hasFreshSessionCache(cacheKey)) return;
     void loadOverview(days);
   }, [cacheKey, days, loadOverview]);
@@ -80,18 +93,21 @@ export function useMonitoringWorkspace() {
   );
 
   const refresh = useCallback(async () => {
+    const request = ++requestRef.current;
     setRefreshing(true);
     try {
       const data = await api<MonitoringOverview>(`/monitoring/overview?days=${days}`);
+      if (requestRef.current !== request) return;
       setOverview(data);
       setSessionCache(`monitoring:overview:${days}`, data);
       setSelectedJobId((prev) =>
         prev && data.recentJobs.some((j) => j.id === prev) ? prev : null,
       );
     } catch (err) {
+      if (requestRef.current !== request) return;
       setError(err instanceof Error ? err.message : 'Failed to refresh');
     } finally {
-      setRefreshing(false);
+      if (requestRef.current === request) setRefreshing(false);
     }
   }, [days]);
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { toAppUserId } from '@sfcc/shared';
 import { useAuth } from '@/contexts/auth-context';
@@ -8,6 +8,7 @@ import { getFirebaseDb, FIREBASE_COLLECTIONS } from '@/lib/firebase';
 import {
   SIDEBAR_STORAGE_KEY,
   persistSidebarOpen,
+  readSidebarOpen,
   useSidebar,
 } from '@/components/ui/sidebar';
 
@@ -16,32 +17,44 @@ export function SidebarPreferencesSync() {
   const { user } = useAuth();
   const { open, setOpen } = useSidebar();
   const userId = user?.uid ? toAppUserId(user.uid) : undefined;
+  const [loadedForUser, setLoadedForUser] = useState<string | null>(null);
 
   useEffect(() => {
     const db = getFirebaseDb();
-    if (!db || !userId) return;
+    let cancelled = false;
+    setLoadedForUser(null);
+    if (!userId) return;
 
     const load = async () => {
       const hasLocal = localStorage.getItem(SIDEBAR_STORAGE_KEY) !== null;
-      if (hasLocal) return;
-
-      const ref = doc(db, FIREBASE_COLLECTIONS.UI_PREFERENCES, userId);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) return;
-
-      const data = snap.data() as { sidebarCollapsed?: boolean };
-      if (typeof data.sidebarCollapsed === 'boolean') {
-        setOpen(!data.sidebarCollapsed);
-        persistSidebarOpen(!data.sidebarCollapsed);
+      if (hasLocal) {
+        setOpen(readSidebarOpen(false));
+      } else if (db) {
+        const ref = doc(db, FIREBASE_COLLECTIONS.UI_PREFERENCES, userId);
+        const snap = await getDoc(ref);
+        if (!cancelled && snap.exists()) {
+          const data = snap.data() as { sidebarCollapsed?: boolean };
+          if (typeof data.sidebarCollapsed === 'boolean') {
+            setOpen(!data.sidebarCollapsed);
+            persistSidebarOpen(!data.sidebarCollapsed);
+          }
+        }
       }
+      if (!cancelled) setLoadedForUser(userId);
     };
 
-    load().catch(console.error);
+    load().catch((err) => {
+      console.error(err);
+      if (!cancelled) setLoadedForUser(userId);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [userId, setOpen]);
 
   useEffect(() => {
     const db = getFirebaseDb();
-    if (!db || !userId) return;
+    if (!db || !userId || loadedForUser !== userId) return;
 
     const sync = async () => {
       const ref = doc(db, FIREBASE_COLLECTIONS.UI_PREFERENCES, userId);
@@ -57,7 +70,7 @@ export function SidebarPreferencesSync() {
     };
 
     sync().catch(console.error);
-  }, [userId, open]);
+  }, [userId, open, loadedForUser]);
 
   return null;
 }

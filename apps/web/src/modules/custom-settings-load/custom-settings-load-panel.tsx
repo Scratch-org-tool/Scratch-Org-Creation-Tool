@@ -13,7 +13,7 @@ import {
   StatusBadge,
   relativeTime,
 } from '@/components/studio';
-import { api, getStreamUrl } from '@/services/api';
+import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 import {
   OrgConfigLoadAction,
@@ -50,6 +50,7 @@ export function CustomSettingsLoadPanel() {
   const [sourceOrgId, setSourceOrgId] = useState('');
   const [targetOrgId, setTargetOrgId] = useState('');
   const [validation, setValidation] = useState<{ objectCount: number; warnings: string[] } | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobData | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -110,38 +111,6 @@ export function CustomSettingsLoadPanel() {
   }, [jobId, loadMovements]);
 
   useEffect(() => {
-    if (!jobId) return;
-    let es: EventSource | null = null;
-    let cancelled = false;
-    void (async () => {
-      const url = await getStreamUrl(['job_log', 'job_status']);
-      if (cancelled) return;
-      es = new EventSource(url);
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data as string) as {
-            type: string;
-            payload: { jobId?: string; line?: string; status?: string };
-          };
-          if (data.payload.jobId !== jobId) return;
-          if (data.type === 'job_log' && data.payload.line) {
-            setLogs((l) => [...l, data.payload.line!]);
-          }
-          if (data.type === 'job_status' && data.payload.status) {
-            setJob((j) => (j ? { ...j, status: data.payload.status! } : { id: jobId, status: data.payload.status! }));
-          }
-        } catch {
-          /* ignore */
-        }
-      };
-    })();
-    return () => {
-      cancelled = true;
-      es?.close();
-    };
-  }, [jobId]);
-
-  useEffect(() => {
     if (job?.status !== 'completed' || !targetOrgId || autoOrgConfigRef.current) return;
     autoOrgConfigRef.current = true;
     setAutoOrgConfigStatus('loading');
@@ -168,16 +137,29 @@ export function CustomSettingsLoadPanel() {
   }, [job?.status, targetOrgId]);
 
   const validate = async () => {
-    const body = mode === 'bundled' ? await api('/data/custom-settings/template') : JSON.parse(customJson);
-    const res = await api<{ objectCount: number; warnings: string[] }>('/data/custom-settings/validate', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-    setValidation(res);
+    setConfigError(null);
+    try {
+      const body = mode === 'bundled' ? await api('/data/custom-settings/template') : JSON.parse(customJson);
+      const res = await api<{ objectCount: number; warnings: string[] }>('/data/custom-settings/validate', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setValidation(res);
+    } catch (err) {
+      setValidation(null);
+      setConfigError(err instanceof SyntaxError
+        ? 'Custom export config is not valid JSON.'
+        : err instanceof Error ? err.message : 'Validation failed');
+    }
   };
 
   const run = async () => {
+    if (sourceOrgId === targetOrgId) {
+      setConfigError('Source and target org must differ.');
+      return;
+    }
     setLoading(true);
+    setConfigError(null);
     setLogs([]);
     setJob(null);
     setJobId(null);
@@ -198,7 +180,11 @@ export function CustomSettingsLoadPanel() {
       setJobId(res.jobId);
       setJob({ id: res.jobId, status: 'queued' });
     } catch (err) {
-      setJob({ id: '', status: 'failed', error: err instanceof Error ? err.message : 'Run failed' });
+      const message = err instanceof SyntaxError
+        ? 'Custom export config is not valid JSON.'
+        : err instanceof Error ? err.message : 'Run failed';
+      setConfigError(message);
+      setJob({ id: '', status: 'failed', error: message });
     } finally {
       setLoading(false);
     }
@@ -210,6 +196,12 @@ export function CustomSettingsLoadPanel() {
   return (
     <div className="p-4 md:p-6 w-full space-y-5">
       <CustomSettingsPageHeader sfdmuInstalled={sfdmuInstalled} />
+
+      {configError && (
+        <InlineAlert variant="error" onDismiss={() => setConfigError(null)}>
+          {configError}
+        </InlineAlert>
+      )}
 
       {sfdmuInstalled === false && (
         <InlineAlert variant="warning" title="SFDMU plugin not installed">
@@ -302,7 +294,7 @@ export function CustomSettingsLoadPanel() {
               className="mt-4"
               onClick={() => void run()}
               loading={loading}
-              disabled={!sourceOrgId || !targetOrgId || isRunning}
+              disabled={!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId || isRunning}
             >
               Run custom settings load
             </Button>

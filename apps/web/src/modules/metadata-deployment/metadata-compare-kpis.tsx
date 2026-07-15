@@ -1,6 +1,6 @@
 'use client';
 
-import { GitCompare, Plus, Minus, RefreshCw, CheckSquare } from 'lucide-react';
+import { CircleHelp, GitCompare, Plus, Minus, RefreshCw, CheckSquare } from 'lucide-react';
 import { StatCard, StatCardGrid } from '@/components/studio/stat-card';
 import type { MetadataCompareHook } from './use-metadata-compare';
 
@@ -14,6 +14,7 @@ export function MetadataCompareKpis({ w }: { w: MetadataCompareHook }) {
       <StatCard label="Changed" value={s?.changed ?? 0} icon={RefreshCw} iconClass="text-amber-500" />
       <StatCard label="Deleted" value={s?.deleted ?? 0} icon={Minus} iconClass="text-red-500" />
       <StatCard label="No difference" value={s?.same ?? 0} icon={GitCompare} iconClass="text-muted-foreground" />
+      <StatCard label="Not inspected" value={s?.unknown ?? 0} icon={CircleHelp} iconClass="text-sky-500" />
       <StatCard label="Selected" value={w.deployableCount} icon={CheckSquare} iconClass="text-primary" />
     </StatCardGrid>
   );
