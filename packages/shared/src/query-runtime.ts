@@ -8,6 +8,10 @@ export interface QueryCheckpointEntry {
   exported: number;
   loaded: number;
   failed: number;
+  completedChunkIndexes?: number[];
+  completedChunkFingerprints?: Record<string, string>;
+  runningChunkIndex?: number;
+  runningChunkFingerprint?: string;
   error?: string;
 }
 
@@ -56,11 +60,44 @@ function valueAt(record: Record<string, unknown>, path: string): string {
   return value == null ? '' : String(value).trim();
 }
 
+function csvEscape(value: unknown): string {
+  const text = value == null ? '' : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** Serialize Bulk API input with the LF-only line endings emitted by Salesforce Bulk CLI exports. */
+export function serializeBulkCsv(rows: Array<Record<string, unknown>>): string {
+  const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  const lines = [
+    headers.map(csvEscape).join(','),
+    ...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(',')),
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Select support variants for a compiled mapping query. Office-specific rows
+ * never share a cache key, and an unexpanded support query is a valid fallback.
+ */
+export function selectCompiledSupportQueries(
+  queries: readonly CompiledQuerySectionQuery[],
+  sourceQueryId: string,
+  salesOffice?: string,
+): CompiledQuerySectionQuery[] {
+  const candidates = queries.filter((query) => query.sourceQueryId === sourceQueryId);
+  if (!salesOffice) return candidates;
+  const exact = candidates.filter((query) => query.salesOffice === salesOffice);
+  if (exact.length > 0) return exact;
+  return candidates.filter((query) => !query.salesOffice);
+}
+
 export interface AccountPartnerJoinInput {
   plan: AccountPartnerPlan;
   accounts: Array<Record<string, unknown>>;
   employees: Array<Record<string, unknown>>;
   mappings: Array<Record<string, unknown>>;
+  roles?: Array<Record<string, unknown>>;
+  roleKeyField?: string;
   targetAccountKeys?: ReadonlySet<string>;
   targetEmployeeKeys?: ReadonlySet<string>;
 }
@@ -69,6 +106,7 @@ export interface AccountPartnerJoinResult {
   rows: Array<Record<string, string>>;
   skippedMissingAccount: number;
   skippedMissingEmployee: number;
+  skippedMissingRole: number;
   duplicates: number;
 }
 
@@ -79,10 +117,14 @@ export function buildAccountPartnerRows(input: AccountPartnerJoinInput): Account
   const employeeKeys = new Set(input.employees.map((row) => valueAt(row, plan.employeeKeyField)).filter(Boolean));
   const targetAccounts = input.targetAccountKeys ?? accountKeys;
   const targetEmployees = input.targetEmployeeKeys ?? employeeKeys;
+  const roleKeys = input.roles && input.roleKeyField
+    ? new Set(input.roles.map((row) => valueAt(row, input.roleKeyField!)).filter(Boolean))
+    : undefined;
   const rows: Array<Record<string, string>> = [];
   const seen = new Set<string>();
   let skippedMissingAccount = 0;
   let skippedMissingEmployee = 0;
+  let skippedMissingRole = 0;
   let duplicates = 0;
 
   for (const mapping of input.mappings) {
@@ -95,6 +137,10 @@ export function buildAccountPartnerRows(input: AccountPartnerJoinInput): Account
     }
     if (!employee || !employeeKeys.has(employee) || !targetEmployees.has(employee)) {
       skippedMissingEmployee += 1;
+      continue;
+    }
+    if (roleKeys && (!role || !roleKeys.has(role))) {
+      skippedMissingRole += 1;
       continue;
     }
     const dedupeKey = `${account}\u0000${employee}\u0000${role}`;
@@ -115,5 +161,11 @@ export function buildAccountPartnerRows(input: AccountPartnerJoinInput): Account
       [plan.mappingEmployeeKeyField]: employee,
     });
   }
-  return { rows, skippedMissingAccount, skippedMissingEmployee, duplicates };
+  return {
+    rows,
+    skippedMissingAccount,
+    skippedMissingEmployee,
+    skippedMissingRole,
+    duplicates,
+  };
 }

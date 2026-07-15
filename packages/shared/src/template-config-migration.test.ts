@@ -55,6 +55,31 @@ describe('ScratchPipelineTemplateConfig V2 compatibility', () => {
     assert.equal(parsed.version, 2);
   });
 
+  it('rejects Insert only for resumable V2 custom settings', () => {
+    const insertSettings = {
+      mode: 'custom' as const,
+      exportConfig: {
+        objects: [{
+          query: 'SELECT Name FROM Example__c',
+          operation: 'Insert' as const,
+        }],
+      },
+    };
+    assert.throws(
+      () => scratchPipelineTemplateConfigSchema.parse({
+        version: 2,
+        customSettings: insertSettings,
+      }),
+      /do not support Insert/,
+    );
+    assert.doesNotThrow(
+      () => scratchPipelineTemplateConfigSchema.parse({
+        version: 1,
+        customSettings: insertSettings,
+      }),
+    );
+  });
+
   it('requires query sections and account partner plans for V2 selector modes', () => {
     assert.throws(
       () =>
@@ -199,5 +224,21 @@ describe('migrateTemplateConfigToV2', () => {
       customSettings: { mode: 'custom' },
     });
     assert.throws(() => migrateTemplateConfigToV2(legacy), /without exportConfig/);
+  });
+
+  it('refuses to migrate legacy Insert custom settings into resumable V2', () => {
+    const legacy = scratchPipelineTemplateConfigSchema.parse({
+      version: 1,
+      customSettings: {
+        mode: 'custom',
+        exportConfig: {
+          objects: [{
+            query: 'SELECT Name FROM Example__c',
+            operation: 'Insert',
+          }],
+        },
+      },
+    });
+    assert.throws(() => migrateTemplateConfigToV2(legacy), /Insert custom settings/);
   });
 });

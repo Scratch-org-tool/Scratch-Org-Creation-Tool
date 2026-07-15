@@ -115,7 +115,7 @@ describe('compileQuerySectionPlan', () => {
     assert.ok(plan.queries.every((item) => !item.soql.includes('999999')));
   });
 
-  it('rejects cycles and dependencies on later stages', () => {
+  it('rejects cycles and lets dependencies override stage hints', () => {
     assert.throws(
       () =>
         compileQuerySectionPlan({
@@ -127,17 +127,14 @@ describe('compileQuerySectionPlan', () => {
         }),
       /cycle/i,
     );
-    assert.throws(
-      () =>
-        compileQuerySectionPlan({
-          name: 'Stages',
-          queries: [
-            query({ id: 'later', stage: 2 }),
-            query({ id: 'early', stage: 1, dependsOn: ['later'] }),
-          ],
-        }),
-      /later-stage/,
-    );
+    const plan = compileQuerySectionPlan({
+      name: 'Stages',
+      queries: [
+        query({ id: 'later', stage: 2 }),
+        query({ id: 'early', stage: 1, dependsOn: ['later'] }),
+      ],
+    });
+    assert.deepEqual(plan.queries.map((item) => item.id), ['later', 'early']);
   });
 
   it('validates SELECT-only SOQL and root object consistency', () => {
@@ -215,5 +212,121 @@ describe('compileQuerySectionPlan', () => {
     assert.deepEqual(plan.queries.map((item) => item.id), ['account:S002', 'account:S001']);
     assert.match(plan.queries[0].soql, /Office__c = 'S002'/);
     assert.ok(plan.queries[0].soql.endsWith('LIMIT 250'));
+  });
+
+  it('injects all account-partner support dependencies regardless of stage/order', () => {
+    const plan = compileQuerySectionPlan({
+      name: 'Partners',
+      queries: [
+        query({
+          id: 'partner',
+          name: 'Partners',
+          stage: 0,
+          category: 'account_partner',
+          object: 'Partner__c',
+          soql: 'SELECT AccountKey__c, EmployeeKey__c, Role__c FROM Partner__c',
+          externalIdField: DEFAULT_EXTERNAL_ID_FIELDS.partner,
+        }),
+        query({ id: 'account', stage: 9, order: 9 }),
+        query({
+          id: 'employee',
+          stage: 8,
+          category: 'employee_master',
+          object: 'Employee__c',
+          soql: 'SELECT cfs_ob__EmployeeNo__c FROM Employee__c',
+          externalIdField: DEFAULT_EXTERNAL_ID_FIELDS.employee,
+        }),
+        query({
+          id: 'role',
+          stage: 7,
+          category: 'arbitrary',
+          object: 'UserRole',
+          soql: 'SELECT DeveloperName FROM UserRole',
+          externalIdField: DEFAULT_EXTERNAL_ID_FIELDS.role,
+        }),
+      ],
+      accountPartnerPlan: {
+        accountQueryId: 'account',
+        employeeMasterQueryId: 'employee',
+        accountPartnerQueryId: 'partner',
+        roleQueryId: 'role',
+      },
+    });
+
+    assert.deepEqual(plan.queries.map((item) => item.id), ['role', 'employee', 'account', 'partner']);
+    assert.deepEqual(
+      plan.queries.at(-1)?.dependsOn,
+      ['account', 'employee', 'role'],
+    );
+  });
+
+  it('requires the generated partner external ID to match the mapping query', () => {
+    assert.throws(
+      () => querySectionSchema.parse({
+        name: 'Mismatch',
+        queries: [
+          query(),
+          query({
+            id: 'employee',
+            category: 'employee_master',
+            object: 'Employee__c',
+            soql: 'SELECT cfs_ob__EmployeeNo__c FROM Employee__c',
+          }),
+          query({
+            id: 'partner',
+            category: 'account_partner',
+            object: 'Partner__c',
+            soql: 'SELECT Name FROM Partner__c',
+            externalIdField: 'WrongExternalId__c',
+          }),
+        ],
+        accountPartnerPlan: {
+          accountQueryId: 'account',
+          employeeMasterQueryId: 'employee',
+          accountPartnerQueryId: 'partner',
+          externalIdField: 'GeneratedExternalId__c',
+        },
+      }),
+      /must match accountPartnerPlan\.externalIdField/,
+    );
+  });
+
+  it('requires roleQueryId to expose a deterministic lookup field', () => {
+    assert.throws(
+      () => querySectionSchema.parse({
+        name: 'Role lookup',
+        queries: [
+          query(),
+          query({
+            id: 'employee',
+            category: 'employee_master',
+            object: 'Employee__c',
+            soql: 'SELECT Employee__c FROM Employee__c',
+          }),
+          query({
+            id: 'partner',
+            category: 'account_partner',
+            object: 'Partner__c',
+            soql: 'SELECT Name FROM Partner__c',
+            externalIdField: DEFAULT_EXTERNAL_ID_FIELDS.partner,
+          }),
+          query({
+            id: 'role',
+            category: 'arbitrary',
+            object: 'PartnerRole__c',
+            soql: 'SELECT Name FROM PartnerRole__c',
+            operation: 'insert',
+            externalIdField: undefined,
+          }),
+        ],
+        accountPartnerPlan: {
+          accountQueryId: 'account',
+          employeeMasterQueryId: 'employee',
+          accountPartnerQueryId: 'partner',
+          roleQueryId: 'role',
+        },
+      }),
+      /requires externalIdField for deterministic lookup/,
+    );
   });
 });

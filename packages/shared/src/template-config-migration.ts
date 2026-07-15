@@ -1,4 +1,4 @@
-import type { ScratchPipelineTemplateConfig } from './sfdmu-export.js';
+import { hasInsertOperation, type ScratchPipelineTemplateConfig } from './sfdmu-export.js';
 import { buildAccountRuleBaseSoql } from './data-seed-query-set.js';
 import {
   DEFAULT_EXTERNAL_ID_FIELDS,
@@ -229,6 +229,9 @@ export function migrateTemplateConfigToV2(
   const config = migrateTemplateConfig(input);
   if (config.customSettings?.mode === 'custom' && !config.customSettings.exportConfig) {
     throw new Error('Cannot migrate custom settings mode to V2 without exportConfig');
+  }
+  if (hasInsertOperation(config.customSettings?.exportConfig)) {
+    throw new Error('Cannot migrate Insert custom settings to resumable V2; use Upsert');
   }
   const querySection = buildMigratedQuerySection(config);
   const templates = config.userProvisioning?.templates ?? [];

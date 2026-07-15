@@ -112,7 +112,16 @@ export class OrgConfigLoaderService {
       return { success: true, logs, recordId };
     }
 
-    const createResult = await this.sfCli.createRecord(alias, ONBOARDING_CONFIG_OBJECT, updates);
+    const createValues = {
+      ...updates,
+      ...(options.bottler ? { cfs_ob__Bottler__c: options.bottler } : {}),
+      ...(options.configKey ? { Name: options.configKey } : {}),
+    };
+    const createResult = await this.sfCli.createRecord(
+      alias,
+      ONBOARDING_CONFIG_OBJECT,
+      createValues,
+    );
     if (!createResult.success) throw new Error(createResult.error ?? 'Failed to create OnboardingConfig');
     logs.push(`Created ${ONBOARDING_CONFIG_OBJECT}`);
     return { success: true, logs, recordId: createResult.data?.result?.id ?? null };

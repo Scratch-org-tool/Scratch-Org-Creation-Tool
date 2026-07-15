@@ -17,6 +17,7 @@ import {
   expandUserGenerators,
   generateEmailStyleUsername,
   formatProvisioningUsername,
+  hasInsertOperation,
   resolveRoleBottlerMapping,
   userProvisioningConfigSchema,
 } from '@sfcc/shared';
@@ -566,6 +567,7 @@ export class PipelineOrchestratorService {
           queue: QUEUE_NAMES.USER_PROVISION,
           type: 'cona_user_provision',
           parentRunId: automationRunId,
+          createdBy: run.createdBy,
           payload: {
             orgId: targetOrgId,
             batchId: batch.id,
@@ -601,6 +603,7 @@ export class PipelineOrchestratorService {
           queue: QUEUE_NAMES.CONA_SEED,
           type: 'cona_seed',
           parentRunId: automationRunId,
+          createdBy: run.createdBy,
           payload: {
             sourceOrgId,
             targetOrgId,
@@ -649,6 +652,7 @@ export class PipelineOrchestratorService {
           queue: QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT,
           type: 'account_partner_import',
           parentRunId: automationRunId,
+          createdBy: run.createdBy,
           payload: { ...partner, targetOrgId, sourceOrgId, automationRunId },
         });
         await this.queueService.addJob(QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT, 'account_partner_import', {
@@ -968,6 +972,9 @@ export class PipelineOrchestratorService {
       mode === 'custom' && config.customSettings?.exportConfig
         ? config.customSettings.exportConfig
         : loadBundledCustomSettingsExport();
+    if (config.version === 2 && hasInsertOperation(exportConfig)) {
+      throw new Error('V2 resumable custom settings do not support Insert; use Upsert');
+    }
     await this.sfCli.ensureSfdmuPlugin();
 
     const movement = await prisma.dataMovement.create({

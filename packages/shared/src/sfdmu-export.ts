@@ -21,6 +21,10 @@ export const sfdmuExportSchema = z.object({
 export type SfdmuExportObject = z.infer<typeof sfdmuExportObjectSchema>;
 export type SfdmuExportJson = z.infer<typeof sfdmuExportSchema>;
 
+export function hasInsertOperation(exportConfig: SfdmuExportJson | undefined): boolean {
+  return exportConfig?.objects.some((object) => object.operation.toLowerCase() === 'insert') ?? false;
+}
+
 export const customSettingsConfigSchema = z.object({
   enabled: z.boolean().default(true),
   mode: z.enum(['bundled', 'custom']).default('bundled'),
@@ -101,6 +105,13 @@ export const scratchPipelineTemplateConfigSchema =
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'V2 custom settings mode requires exportConfig',
+        path: ['customSettings', 'exportConfig'],
+      });
+    }
+    if (config.version === 2 && hasInsertOperation(config.customSettings?.exportConfig)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'V2 resumable custom settings do not support Insert; use Upsert',
         path: ['customSettings', 'exportConfig'],
       });
     }

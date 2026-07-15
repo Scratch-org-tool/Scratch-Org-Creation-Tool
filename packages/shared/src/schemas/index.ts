@@ -13,6 +13,7 @@ const dataRecordLimitSchema = z
 import {
   customSettingsConfigSchema,
   dataSeedConfigSchema,
+  hasInsertOperation,
   partnerImportConfigSchema,
   pipelineStepsConfigSchema,
   sfdmuExportSchema,
@@ -189,6 +190,13 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'V2 custom settings mode requires exportConfig',
+      path: ['customSettings', 'exportConfig'],
+    });
+  }
+  if (value.version === 2 && hasInsertOperation(value.customSettings?.exportConfig)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'V2 resumable custom settings do not support Insert; use Upsert',
       path: ['customSettings', 'exportConfig'],
     });
   }

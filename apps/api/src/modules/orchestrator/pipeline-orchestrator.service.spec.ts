@@ -13,10 +13,13 @@ vi.mock('@sfcc/db', () => ({ prisma: db, Prisma: {} }));
 
 import { PipelineOrchestratorService } from './pipeline-orchestrator.service';
 
-function createService(): PipelineOrchestratorService {
+function createService(overrides?: {
+  queueService?: Record<string, unknown>;
+  jobsService?: Record<string, unknown>;
+}): PipelineOrchestratorService {
   return new PipelineOrchestratorService(
-    {} as never,
-    {} as never,
+    (overrides?.queueService ?? {}) as never,
+    (overrides?.jobsService ?? {}) as never,
     {} as never,
     {} as never,
     {} as never,
@@ -145,5 +148,62 @@ describe('PipelineOrchestratorService custom-settings transition', () => {
         completedSteps: expect.arrayContaining(['load_custom_settings']),
       }),
     );
+  });
+});
+
+describe('PipelineOrchestratorService V2 job ownership', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sets the automation owner on query-section seed jobs', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'completed',
+      config: {
+        version: 2,
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: {
+          mode: 'query_section',
+          querySection: {
+            name: 'Seed',
+            queries: [{
+              id: 'account',
+              name: 'Account',
+              enabled: true,
+              order: 0,
+              stage: 0,
+              category: 'account',
+              object: 'Account',
+              soql: 'SELECT Name FROM Account',
+              limit: 10,
+              operation: 'upsert',
+              externalIdField: 'Name',
+              variables: {},
+              dependsOn: [],
+            }],
+          },
+        },
+      },
+      checkpoint: {
+        completedSteps: [],
+        resumeFrom: 'load_org_config',
+        targetOrgConnectionId: 'target-1',
+      },
+    });
+    const create = vi.fn().mockResolvedValue({ id: 'seed-job' });
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const service = createService({
+      jobsService: { create },
+      queueService: { addJob },
+    });
+
+    await service.runUserActions('run-1', { actions: ['load_data_seed'] }, 'owner-1');
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'cona_seed',
+      parentRunId: 'run-1',
+      createdBy: 'owner-1',
+    }));
   });
 });

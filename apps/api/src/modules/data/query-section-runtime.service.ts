@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -8,10 +9,13 @@ import {
   buildAccountPartnerRows,
   compileQuerySectionPlan,
   createQueryRuntimeCheckpoint,
+  escapeSoqlLiteral,
   extractFieldsFromSoql,
   pendingQueryIds,
   querySectionSchema,
   replaceOrApplyLimit,
+  selectCompiledSupportQueries,
+  serializeBulkCsv,
   stripIdFromSelect,
   type CompiledQuerySectionPlan,
   type QueryRuntimeCheckpoint,
@@ -22,11 +26,7 @@ import { StreamService } from '../stream/stream.service';
 
 const PREVIEW_LIMIT = 5;
 const BULK_CHUNK_SIZE = 25_000;
-
-function csvEscape(value: unknown): string {
-  const text = value == null ? '' : String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
+const RECONCILIATION_IN_CHUNK_SIZE = 200;
 
 function parseCsv(text: string): Array<Record<string, string>> {
   const rows: string[][] = [];
@@ -61,14 +61,6 @@ function parseCsv(text: string): Array<Record<string, string>> {
     Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
 }
 
-function writeRows(rows: Array<Record<string, unknown>>): string {
-  const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
-  return [
-    headers.map(csvEscape).join(','),
-    ...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(',')),
-  ].join('\n');
-}
-
 @Injectable()
 export class QuerySectionRuntimeService {
   private readonly sfCli = createSfCliClient();
@@ -93,6 +85,7 @@ export class QuerySectionRuntimeService {
     section: unknown;
     variables?: Record<string, string>;
     salesOffices?: string[];
+    salesOfficesByBottler?: Record<string, string[]>;
   }, userId: string) {
     const source = await prisma.orgConnection.findUnique({ where: { id: input.sourceOrgId } });
     assertResourceOwner(source, userId, 'Source org');
@@ -100,6 +93,7 @@ export class QuerySectionRuntimeService {
     const plan = this.compile(input.section, {
       variables: input.variables,
       salesOffices: input.salesOffices,
+      salesOfficesByBottler: input.salesOfficesByBottler,
     });
     const alias = source.username ?? source.alias;
     const queries = [];
@@ -136,11 +130,17 @@ export class QuerySectionRuntimeService {
     const targetAlias = target.username ?? target.alias;
     const errors: string[] = [];
     const checks = [];
+    const describeCache = new Map<string, Awaited<ReturnType<typeof this.sfCli.describeSObject>>>();
     for (const query of plan.queries) {
+      const cacheKey = query.object.toLowerCase();
+      const cachedSource = describeCache.get(`source:${cacheKey}`);
+      const cachedTarget = describeCache.get(`target:${cacheKey}`);
       const [sourceDescribe, targetDescribe] = await Promise.all([
-        this.sfCli.describeSObject(sourceAlias, query.object),
-        this.sfCli.describeSObject(targetAlias, query.object),
+        cachedSource ?? this.sfCli.describeSObject(sourceAlias, query.object),
+        cachedTarget ?? this.sfCli.describeSObject(targetAlias, query.object),
       ]);
+      describeCache.set(`source:${cacheKey}`, sourceDescribe);
+      describeCache.set(`target:${cacheKey}`, targetDescribe);
       const sourceFields = new Map(
         (sourceDescribe.data?.result?.fields ?? []).map((field) => [field.name.toLowerCase(), field]),
       );
@@ -161,12 +161,29 @@ export class QuerySectionRuntimeService {
           }
         }
       }
+      const selectedFields = extractFieldsFromSoql(query.soql);
+      const isRoleLookup = plan.accountPartnerPlan?.roleQueryId === query.sourceQueryId;
+      if (isRoleLookup) {
+        const roleExternalId = query.externalIdField!;
+        if (!sourceFields.has(roleExternalId.toLowerCase())) {
+          errors.push(`${query.id}: source role lookup field ${roleExternalId} is missing`);
+        }
+        if (!selectedFields.some((field) => field.toLowerCase() === roleExternalId.toLowerCase())) {
+          errors.push(`${query.id}: role query must select lookup field ${roleExternalId}`);
+        }
+      }
       if (['upsert', 'update', 'delete'].includes(query.operation)) {
+        const generatesPartnerExternalId =
+          plan.accountPartnerPlan?.accountPartnerQueryId === query.sourceQueryId;
         const sourceExternalId = sourceFields.get(query.externalIdField!.toLowerCase());
         const externalId = targetFields.get(query.externalIdField!.toLowerCase());
-        if (!sourceExternalId) errors.push(`${query.id}: source external ID ${query.externalIdField} is missing`);
+        if (!generatesPartnerExternalId && !sourceExternalId) {
+          errors.push(`${query.id}: source external ID ${query.externalIdField} is missing`);
+        }
         if (
-          !extractFieldsFromSoql(query.soql)
+          !generatesPartnerExternalId
+          &&
+          !selectedFields
             .some((field) => field.toLowerCase() === query.externalIdField!.toLowerCase())
         ) {
           errors.push(`${query.id}: query must select external ID ${query.externalIdField}`);
@@ -181,7 +198,7 @@ export class QuerySectionRuntimeService {
           errors.push(`${query.id}: target external ID ${query.externalIdField} is not writable`);
         }
       }
-      checks.push({ id: query.id, object: query.object, fields: extractFieldsFromSoql(query.soql) });
+      checks.push({ id: query.id, object: query.object, fields: selectedFields });
     }
     return { ok: errors.length === 0, checks, errors };
   }
@@ -223,12 +240,13 @@ export class QuerySectionRuntimeService {
     const workDir = await mkdtemp(join(tmpdir(), `template-v2-query-${input.automationRunId}-`));
     const sourceAlias = source.username ?? source.alias;
     const targetAlias = target.username ?? target.alias;
+    // Compiled IDs include the sales office. Keying by source ID would overwrite variants.
     const sourceRows = new Map<string, Array<Record<string, string>>>();
 
     try {
       for (const query of plan.queries) {
         if (!pendingQueryIds(plan.queries, checkpoint).includes(query.id)) {
-          await this.progress(input, query.id, 'completed', { skipped: true });
+          await this.progress(input, query.id, 'completed', { skipped: true }, run.createdBy);
           continue;
         }
         const previous = checkpoint.queries[query.id];
@@ -238,7 +256,13 @@ export class QuerySectionRuntimeService {
         checkpoint.currentQueryId = query.id;
         checkpoint.queries[query.id] = { ...previous, id: query.id, status: 'running' };
         await this.saveCheckpoint(input.automationRunId, checkpoint);
-        await this.progress(input, query.id, 'running', { object: query.object, limit: query.limit });
+        await this.progress(
+          input,
+          query.id,
+          'running',
+          { object: query.object, limit: query.limit },
+          run.createdBy,
+        );
 
         try {
           const sourceQuery = stripIdFromSelect(query.soql);
@@ -246,35 +270,66 @@ export class QuerySectionRuntimeService {
           const exported = await this.sfCli.exportBulk(sourceQuery, sourceAlias, exportPath, 30, { cwd: workDir });
           if (!exported.success) throw new Error(exported.error ?? `Bulk export failed for ${query.id}`);
           let rows = parseCsv(await readFile(exportPath, 'utf8'));
-          sourceRows.set(query.sourceQueryId, rows);
+          sourceRows.set(query.id, rows);
 
           const partner = plan.accountPartnerPlan;
           if (partner && query.sourceQueryId === partner.accountPartnerQueryId) {
-            const accountRows = sourceRows.get(partner.accountQueryId)
-              ?? await this.exportSupportRows(plan, partner.accountQueryId, sourceAlias, workDir);
-            const employeeRows = sourceRows.get(partner.employeeMasterQueryId)
-              ?? await this.exportSupportRows(plan, partner.employeeMasterQueryId, sourceAlias, workDir);
-            const accountQuery = plan.queries.find(
-              (candidate) => candidate.sourceQueryId === partner.accountQueryId,
+            const accountQueries = selectCompiledSupportQueries(
+              plan.queries,
+              partner.accountQueryId,
+              query.salesOffice,
             );
-            const employeeQuery = plan.queries.find(
-              (candidate) => candidate.sourceQueryId === partner.employeeMasterQueryId,
+            const employeeQueries = selectCompiledSupportQueries(
+              plan.queries,
+              partner.employeeMasterQueryId,
+              query.salesOffice,
             );
+            const roleQueries = partner.roleQueryId
+              ? selectCompiledSupportQueries(plan.queries, partner.roleQueryId, query.salesOffice)
+              : [];
+            const accountQuery = accountQueries[0];
+            const employeeQuery = employeeQueries[0];
             if (!accountQuery || !employeeQuery) throw new Error('Partner support plan is incomplete');
+            const accountRows = await this.supportRows(
+              accountQueries,
+              sourceRows,
+              sourceAlias,
+              workDir,
+            );
+            const employeeRows = await this.supportRows(
+              employeeQueries,
+              sourceRows,
+              sourceAlias,
+              workDir,
+            );
+            const roleRows = roleQueries.length
+              ? await this.supportRows(roleQueries, sourceRows, sourceAlias, workDir)
+              : undefined;
+            if (partner.roleQueryId && !roleQueries[0]?.externalIdField) {
+              throw new Error(`Role query ${partner.roleQueryId} has no deterministic lookup field`);
+            }
+            const accountKeys = new Set(
+              accountRows.map((row) => this.rowValue(row, partner.accountKeyField)).filter(Boolean),
+            );
+            const employeeKeys = new Set(
+              employeeRows.map((row) => this.rowValue(row, partner.employeeKeyField)).filter(Boolean),
+            );
             const [targetAccountKeys, targetEmployeeKeys] = await Promise.all([
-              this.targetKeys(targetAlias, accountQuery.object, partner.accountKeyField),
-              this.targetKeys(targetAlias, employeeQuery.object, partner.employeeKeyField),
+              this.targetKeys(targetAlias, accountQuery.object, partner.accountKeyField, accountKeys),
+              this.targetKeys(targetAlias, employeeQuery.object, partner.employeeKeyField, employeeKeys),
             ]);
             const joined = buildAccountPartnerRows({
               plan: partner,
               accounts: accountRows,
               employees: employeeRows,
               mappings: rows,
+              roles: roleRows,
+              roleKeyField: roleQueries[0]?.externalIdField,
               targetAccountKeys,
               targetEmployeeKeys,
             });
             rows = joined.rows;
-            await this.progress(input, query.id, 'running', { partnerJoin: joined });
+            await this.progress(input, query.id, 'running', { partnerJoin: joined }, run.createdBy);
           }
           checkpoint.queries[query.id] = {
             ...checkpoint.queries[query.id],
@@ -289,6 +344,29 @@ export class QuerySectionRuntimeService {
             targetAlias,
             workDir,
             query.id,
+            checkpoint.queries[query.id],
+            async (chunkIndex, running, fingerprint) => {
+              const entry = checkpoint.queries[query.id];
+              checkpoint.queries[query.id] = running
+                ? {
+                    ...entry,
+                    runningChunkIndex: chunkIndex,
+                    runningChunkFingerprint: fingerprint,
+                  }
+                : {
+                    ...entry,
+                    runningChunkIndex: undefined,
+                    runningChunkFingerprint: undefined,
+                    completedChunkIndexes: [
+                      ...new Set([...(entry.completedChunkIndexes ?? []), chunkIndex]),
+                    ],
+                    completedChunkFingerprints: {
+                      ...(entry.completedChunkFingerprints ?? {}),
+                      [chunkIndex]: fingerprint,
+                    },
+                  };
+              await this.saveCheckpoint(input.automationRunId, checkpoint);
+            },
           );
           checkpoint.queries[query.id] = {
             id: query.id,
@@ -296,11 +374,19 @@ export class QuerySectionRuntimeService {
             exported: rows.length,
             loaded,
             failed: 0,
+            completedChunkIndexes: checkpoint.queries[query.id].completedChunkIndexes,
+            completedChunkFingerprints: checkpoint.queries[query.id].completedChunkFingerprints,
           };
           checkpoint.completedQueryIds = [...new Set([...checkpoint.completedQueryIds, query.id])];
           checkpoint.currentQueryId = undefined;
           await this.saveCheckpoint(input.automationRunId, checkpoint);
-          await this.progress(input, query.id, 'completed', { exported: rows.length, loaded });
+          await this.progress(
+            input,
+            query.id,
+            'completed',
+            { exported: rows.length, loaded },
+            run.createdBy,
+          );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           checkpoint.queries[query.id] = {
@@ -310,7 +396,7 @@ export class QuerySectionRuntimeService {
             error: message,
           };
           await this.saveCheckpoint(input.automationRunId, checkpoint);
-          await this.progress(input, query.id, 'failed', { error: message });
+          await this.progress(input, query.id, 'failed', { error: message }, run.createdBy);
           throw error;
         }
       }
@@ -320,37 +406,56 @@ export class QuerySectionRuntimeService {
     }
   }
 
-  private async exportSupportRows(
-    plan: CompiledQuerySectionPlan,
-    sourceQueryId: string,
+  private async supportRows(
+    queries: CompiledQuerySectionPlan['queries'],
+    cache: Map<string, Array<Record<string, string>>>,
     alias: string,
     workDir: string,
   ) {
-    const query = plan.queries.find((candidate) => candidate.sourceQueryId === sourceQueryId);
-    if (!query) throw new Error(`Partner support query ${sourceQueryId} is missing`);
-    const path = join(workDir, `support-${sourceQueryId}.csv`);
-    const result = await this.sfCli.exportBulk(stripIdFromSelect(query.soql), alias, path, 30, { cwd: workDir });
-    if (!result.success) throw new Error(result.error ?? `Partner support export failed: ${sourceQueryId}`);
-    return parseCsv(await readFile(path, 'utf8'));
+    const rows: Array<Record<string, string>> = [];
+    for (const query of queries) {
+      let variantRows = cache.get(query.id);
+      if (!variantRows) {
+        const safeId = query.id.replace(/[^A-Za-z0-9_.-]/g, '_');
+        const path = join(workDir, `support-${safeId}.csv`);
+        const result = await this.sfCli.exportBulk(
+          stripIdFromSelect(query.soql),
+          alias,
+          path,
+          30,
+          { cwd: workDir },
+        );
+        if (!result.success) throw new Error(result.error ?? `Partner support export failed: ${query.id}`);
+        variantRows = parseCsv(await readFile(path, 'utf8'));
+        cache.set(query.id, variantRows);
+      }
+      rows.push(...variantRows);
+    }
+    return rows;
   }
 
-  private async targetKeys(alias: string, objectName: string, fieldName: string) {
+  private rowValue(record: Record<string, unknown>, path: string): string {
+    if (record[path] != null) return String(record[path]).trim();
+    let value: unknown = record;
+    for (const segment of path.split('.')) {
+      if (!value || typeof value !== 'object') return '';
+      value = (value as Record<string, unknown>)[segment];
+    }
+    return value == null ? '' : String(value).trim();
+  }
+
+  private async targetKeys(
+    alias: string,
+    objectName: string,
+    fieldName: string,
+    requiredKeys: ReadonlySet<string>,
+  ) {
     const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
     if (!identifier.test(objectName) || !identifier.test(fieldName)) {
       throw new Error(`Invalid target distribution key ${objectName}.${fieldName}`);
     }
-    const result = await this.sfCli.query(
-      alias,
-      `SELECT ${fieldName} FROM ${objectName} WHERE ${fieldName} != null LIMIT 100000`,
-    );
-    if (!result.success) {
-      throw new Error(result.error ?? `Target distribution check failed for ${objectName}.${fieldName}`);
-    }
-    return new Set(
-      ((result.data?.result?.records ?? []) as Array<Record<string, unknown>>)
-        .map((record) => String(record[fieldName] ?? '').trim())
-        .filter(Boolean),
-    );
+    const records = await this.queryRequiredRecords(alias, objectName, fieldName, requiredKeys);
+    return new Set(records.map((record) => String(record[fieldName] ?? '').trim()).filter(Boolean));
   }
 
   private async loadChunks(
@@ -361,35 +466,85 @@ export class QuerySectionRuntimeService {
     targetAlias: string,
     workDir: string,
     queryId: string,
+    checkpoint: QueryRuntimeCheckpoint['queries'][string],
+    checkpointChunk: (
+      chunkIndex: number,
+      running: boolean,
+      fingerprint: string,
+    ) => Promise<void>,
   ) {
     if (!['upsert', 'insert', 'update', 'delete'].includes(operation)) {
       throw new Error(`Query ${queryId} operation ${operation} is not supported by Template V2`);
     }
-    let loadRows = rows;
-    if (operation === 'update' || operation === 'delete') {
-      if (!externalIdField) throw new Error(`${operation} query ${queryId} requires externalIdField`);
-      const targetIds = await this.targetRecordIds(targetAlias, objectName, externalIdField);
-      loadRows = rows.map(({ Id: _sourceId, id: _lowerSourceId, ...row }) => {
-        const externalId = String(row[externalIdField] ?? '').trim();
-        const targetId = targetIds.get(externalId);
-        if (!externalId || !targetId) {
+    const completedChunks = new Set(checkpoint.completedChunkIndexes ?? []);
+    const previouslyRunningChunk = checkpoint.runningChunkIndex;
+    const orderedRows = externalIdField
+      ? [...rows].sort((left, right) =>
+          String(left[externalIdField] ?? '').localeCompare(String(right[externalIdField] ?? '')))
+      : rows;
+    let loaded = 0;
+    for (let offset = 0; offset < orderedRows.length; offset += BULK_CHUNK_SIZE) {
+      const chunkIndex = Math.trunc(offset / BULK_CHUNK_SIZE);
+      const sourceChunk = orderedRows.slice(offset, offset + BULK_CHUNK_SIZE);
+      const fingerprint = this.chunkFingerprint(sourceChunk, externalIdField);
+      if (completedChunks.has(chunkIndex)) {
+        if (checkpoint.completedChunkFingerprints?.[chunkIndex] !== fingerprint) {
           throw new Error(
-            `${operation} query ${queryId} cannot reconcile target ${externalIdField}=${externalId || '<empty>'}`,
+            `Query ${queryId} source rows changed after chunk ${chunkIndex} completed; `
+            + 'restart with a reconciled checkpoint',
           );
         }
-        return operation === 'delete' ? { Id: targetId } : { ...row, Id: targetId };
-      });
-    }
-    let loaded = 0;
-    for (let offset = 0; offset < loadRows.length; offset += BULK_CHUNK_SIZE) {
-      const chunk = loadRows.slice(offset, offset + BULK_CHUNK_SIZE)
+        loaded += sourceChunk.length;
+        continue;
+      }
+      if (
+        previouslyRunningChunk === chunkIndex
+        && checkpoint.runningChunkFingerprint !== fingerprint
+      ) {
+        throw new Error(
+          `Query ${queryId} source rows changed while chunk ${chunkIndex} was in progress; `
+          + 'manual reconciliation is required',
+        );
+      }
+      const chunk = sourceChunk
         .map(({ Id: _id, id: _lowerId, ...row }) => row);
-      const records = operation === 'update' || operation === 'delete'
-        ? loadRows.slice(offset, offset + BULK_CHUNK_SIZE)
-        : chunk;
-      if (records.length === 0) continue;
+      let records = chunk;
+      if (operation === 'update' || operation === 'delete') {
+        if (!externalIdField) throw new Error(`${operation} query ${queryId} requires externalIdField`);
+        const requiredKeys = new Set(
+          chunk.map((row) => String(row[externalIdField] ?? '').trim()).filter(Boolean),
+        );
+        if (requiredKeys.size !== chunk.length) {
+          throw new Error(`${operation} query ${queryId} contains an empty or duplicate ${externalIdField}`);
+        }
+        const targetIds = await this.targetRecordIds(
+          targetAlias,
+          objectName,
+          externalIdField,
+          requiredKeys,
+        );
+        records = chunk.flatMap((row) => {
+          const externalId = String(row[externalIdField] ?? '').trim();
+          const targetId = targetIds.get(externalId);
+          if (!targetId) {
+            // A delete chunk recorded as running may have committed before the
+            // process stopped. Missing rows are then the desired end state.
+            if (operation === 'delete' && previouslyRunningChunk === chunkIndex) return [];
+            throw new Error(
+              `${operation} query ${queryId} cannot reconcile target ${externalIdField}=${externalId}`,
+            );
+          }
+          return [operation === 'delete' ? { Id: targetId } : { ...row, Id: targetId }];
+        });
+      }
+      if (records.length === 0) {
+        await checkpointChunk(chunkIndex, false, fingerprint);
+        loaded += sourceChunk.length;
+        continue;
+      }
       const path = join(workDir, `${queryId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${offset}.csv`);
-      await writeFile(path, writeRows(records), 'utf8');
+      await writeFile(path, serializeBulkCsv(records), 'utf8');
+      await checkpointChunk(chunkIndex, true, fingerprint);
       const result = operation === 'upsert'
         ? await this.sfCli.upsertBulk(objectName, path, externalIdField!, targetAlias, 30, { cwd: workDir })
         : operation === 'insert'
@@ -398,25 +553,42 @@ export class QuerySectionRuntimeService {
             ? await this.sfCli.updateBulk(objectName, path, targetAlias, 30, { cwd: workDir })
             : await this.sfCli.deleteBulk(objectName, path, targetAlias, 30, { cwd: workDir });
       if (!result.success) throw new Error(result.error ?? `${operation} failed for ${queryId}`);
-      loaded += records.length;
+      await checkpointChunk(chunkIndex, false, fingerprint);
+      loaded += sourceChunk.length;
     }
     return loaded;
   }
 
-  private async targetRecordIds(alias: string, objectName: string, externalIdField: string) {
+  private chunkFingerprint(
+    rows: Array<Record<string, unknown>>,
+    externalIdField: string | undefined,
+  ): string {
+    const identities = rows.map((row) =>
+      externalIdField
+        ? String(row[externalIdField] ?? '')
+        : JSON.stringify(row, Object.keys(row).sort()));
+    return createHash('sha256').update(identities.join('\u0000')).digest('hex');
+  }
+
+  private async targetRecordIds(
+    alias: string,
+    objectName: string,
+    externalIdField: string,
+    requiredKeys: ReadonlySet<string>,
+  ) {
     const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
     if (!identifier.test(objectName) || !identifier.test(externalIdField)) {
       throw new Error(`Invalid target reconciliation key ${objectName}.${externalIdField}`);
     }
-    const result = await this.sfCli.query(
+    const records = await this.queryRequiredRecords(
       alias,
-      `SELECT Id, ${externalIdField} FROM ${objectName} WHERE ${externalIdField} != null LIMIT 100000`,
+      objectName,
+      externalIdField,
+      requiredKeys,
+      'Id',
     );
-    if (!result.success) {
-      throw new Error(result.error ?? `Target reconciliation failed for ${objectName}`);
-    }
     const ids = new Map<string, string>();
-    for (const record of (result.data?.result?.records ?? []) as Array<Record<string, unknown>>) {
+    for (const record of records) {
       const key = String(record[externalIdField] ?? '').trim();
       const id = String(record.Id ?? '').trim();
       if (!key || !id) continue;
@@ -424,6 +596,33 @@ export class QuerySectionRuntimeService {
       ids.set(key, id);
     }
     return ids;
+  }
+
+  private async queryRequiredRecords(
+    alias: string,
+    objectName: string,
+    keyField: string,
+    requiredKeys: ReadonlySet<string>,
+    additionalField?: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const keys = [...requiredKeys].filter(Boolean);
+    const records: Array<Record<string, unknown>> = [];
+    for (let offset = 0; offset < keys.length; offset += RECONCILIATION_IN_CHUNK_SIZE) {
+      const keyChunk = keys.slice(offset, offset + RECONCILIATION_IN_CHUNK_SIZE);
+      const literals = keyChunk.map((key) => `'${escapeSoqlLiteral(key)}'`).join(', ');
+      const fields = additionalField ? `${additionalField}, ${keyField}` : keyField;
+      const result = await this.sfCli.query(
+        alias,
+        `SELECT ${fields} FROM ${objectName} WHERE ${keyField} IN (${literals})`,
+      );
+      if (!result.success) {
+        throw new Error(result.error ?? `Target reconciliation failed for ${objectName}.${keyField}`);
+      }
+      records.push(
+        ...((result.data?.result?.records ?? []) as Array<Record<string, unknown>>),
+      );
+    }
+    return records;
   }
 
   private async saveCheckpoint(automationRunId: string, querySection: QueryRuntimeCheckpoint) {
@@ -444,6 +643,7 @@ export class QuerySectionRuntimeService {
     queryId: string,
     status: string,
     details: Record<string, unknown>,
+    ownerId: string,
   ) {
     const event = {
       type: 'template_v2_query',
@@ -454,9 +654,13 @@ export class QuerySectionRuntimeService {
       ...details,
     };
     await this.jobsService.addLog(input.dbJobId, status === 'failed' ? 'stderr' : 'stdout', JSON.stringify(event));
-    await this.streamService.publish('job_status', {
-      ...event,
-      eventType: 'query_progress',
-    });
+    await this.streamService.publish(
+      'job_status',
+      {
+        ...event,
+        eventType: 'query_progress',
+      },
+      ownerId,
+    );
   }
 }

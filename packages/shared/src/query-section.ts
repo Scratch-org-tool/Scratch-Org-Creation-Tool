@@ -16,6 +16,13 @@ export const queryOperationSchema = z
   .enum(['insert', 'upsert', 'update', 'delete', 'Insert', 'Upsert', 'Update', 'Delete'])
   .transform((operation) => operation.toLowerCase() as 'insert' | 'upsert' | 'update' | 'delete');
 
+export const DEFAULT_EXTERNAL_ID_FIELDS = Object.freeze({
+  role: 'DeveloperName',
+  account: 'cfs_ob__u_CustomerNumber__c',
+  employee: 'cfs_ob__EmployeeNo__c',
+  partner: 'cfs_ob__AccountPartnerExternalId__c',
+});
+
 export const salesOfficeExpansionSchema = z
   .union([
     z.boolean(),
@@ -143,19 +150,36 @@ export const querySectionSchema = querySectionBaseSchema.superRefine((section, c
       });
     }
   }
+  const mappingQuery = byId.get(section.accountPartnerPlan.accountPartnerQueryId);
+  const mappingExternalId = mappingQuery?.externalIdField
+    ?? (mappingQuery ? defaultExternalIdField(mappingQuery.category, mappingQuery.object) : undefined);
+  if (mappingExternalId && mappingExternalId !== section.accountPartnerPlan.externalIdField) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        `Account partner mapping query external ID ${mappingExternalId} must match `
+        + `accountPartnerPlan.externalIdField ${section.accountPartnerPlan.externalIdField}`,
+      path: ['accountPartnerPlan', 'externalIdField'],
+    });
+  }
+  if (section.accountPartnerPlan.roleQueryId) {
+    const roleQuery = byId.get(section.accountPartnerPlan.roleQueryId);
+    const roleExternalId = roleQuery?.externalIdField
+      ?? (roleQuery ? defaultExternalIdField(roleQuery.category, roleQuery.object) : undefined);
+    if (roleQuery && !roleExternalId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Role query ${roleQuery.id} requires externalIdField for deterministic lookup`,
+        path: ['accountPartnerPlan', 'roleQueryId'],
+      });
+    }
+  }
 });
 
 export type QueryCategory = z.infer<typeof queryCategorySchema>;
 export type QuerySectionQuery = z.infer<typeof querySectionQuerySchema>;
 export type QuerySection = z.infer<typeof querySectionSchema>;
 export type AccountPartnerPlan = z.infer<typeof accountPartnerPlanSchema>;
-
-export const DEFAULT_EXTERNAL_ID_FIELDS = Object.freeze({
-  role: 'DeveloperName',
-  account: 'cfs_ob__u_CustomerNumber__c',
-  employee: 'cfs_ob__EmployeeNo__c',
-  partner: 'cfs_ob__AccountPartnerExternalId__c',
-});
 
 export function defaultExternalIdField(
   category: QueryCategory,
@@ -272,11 +296,6 @@ function topologicallySort(queries: QuerySectionQuery[]): QuerySectionQuery[] {
       if (!dependency) {
         throw new Error(`Missing or disabled dependency ${dependencyId} for query ${query.id}`);
       }
-      if (dependency.stage > query.stage) {
-        throw new Error(
-          `Query ${query.id} at stage ${query.stage} cannot depend on later-stage query ${dependencyId}`,
-        );
-      }
       dependents.set(dependencyId, [...(dependents.get(dependencyId) ?? []), query.id]);
     }
   }
@@ -324,8 +343,21 @@ export function compileQuerySectionPlan(
   options: CompileQuerySectionOptions = {},
 ): CompiledQuerySectionPlan {
   const section = querySectionSchema.parse(input);
-  const enabled = section.queries.filter((query) => query.enabled);
+  let enabled = section.queries.filter((query) => query.enabled);
   if (enabled.length === 0) throw new Error('Query section must contain at least one enabled query');
+
+  if (section.accountPartnerPlan) {
+    const partner = section.accountPartnerPlan;
+    const requiredDependencies = [
+      partner.accountQueryId,
+      partner.employeeMasterQueryId,
+      partner.roleQueryId,
+    ].filter((id): id is string => Boolean(id));
+    enabled = enabled.map((query) =>
+      query.id === partner.accountPartnerQueryId
+        ? { ...query, dependsOn: [...new Set([...query.dependsOn, ...requiredDependencies])] }
+        : query);
+  }
 
   for (const query of enabled) {
     assertSelectOnly(query);

@@ -159,6 +159,7 @@ export class DataController {
       section: unknown;
       variables?: Record<string, string>;
       salesOffices?: string[];
+      salesOfficesByBottler?: Record<string, string[]>;
     },
     @CurrentUser() userId: string,
   ) {
