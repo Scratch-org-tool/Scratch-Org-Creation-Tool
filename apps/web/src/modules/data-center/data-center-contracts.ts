@@ -135,6 +135,20 @@ export function isBatchCancellable(status: string): boolean {
   return ['pending', 'queued', 'planning', 'running', 'paused'].includes(status);
 }
 
+export function rollbackInsertedCount(value: unknown): number {
+  if (!value || typeof value !== 'object') return 0;
+  if (Array.isArray(value)) {
+    return value.reduce<number>((total, item) => total + rollbackInsertedCount(item), 0);
+  }
+  const record = value as Record<string, unknown>;
+  const direct = record.insertedCount;
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+  return Object.values(record).reduce<number>(
+    (total, item) => total + rollbackInsertedCount(item),
+    0,
+  );
+}
+
 export function normalizeTemplates(input: unknown): QueryTemplateApi[] {
   if (!Array.isArray(input)) return [];
   return input.flatMap((value) => {

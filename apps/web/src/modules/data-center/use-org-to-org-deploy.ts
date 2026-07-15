@@ -97,6 +97,9 @@ export function useOrgToOrgDeploy() {
   const objectsRequestRef = useRef(0);
   const metaRequestRef = useRef(new Map<string, number>());
   const previewRequestRef = useRef(new Map<string, number>());
+  const jobPollGenerationRef = useRef(0);
+  const preflightRequestRef = useRef(0);
+  const deployRequestRef = useRef(0);
 
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
@@ -104,15 +107,21 @@ export function useOrgToOrgDeploy() {
 
   useEffect(() => {
     if (jobIds.length === 0) return;
-    let cancelled = false;
-    const poll = setInterval(async () => {
+    const generation = ++jobPollGenerationRef.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
       try {
         const jobs = await Promise.all(
           jobIds.map((id) =>
-            api<{ status: string; error?: string | null; logs?: Array<{ line: string }> }>(`/jobs/${id}`),
+            api<{ status: string; error?: string | null; logs?: Array<{ line: string }> }>(
+              `/jobs/${id}`,
+              { signal: controller?.signal },
+            ),
           ),
         );
-        if (cancelled) return;
+        if (generation !== jobPollGenerationRef.current) return;
         const lines: string[] = [];
         for (const data of jobs) {
           if (data.logs?.length) lines.push(...data.logs.map((l) => l.line));
@@ -121,14 +130,19 @@ export function useOrgToOrgDeploy() {
         setDeployStatus(aggregateJobStatus(jobs.map((j) => j.status)));
         const failed = jobs.find((j) => j.status === 'failed');
         setDeployJobError(failed?.error ?? null);
-        if (jobs.every((j) => TERMINAL_JOB_STATUSES.includes(j.status))) clearInterval(poll);
+        if (jobs.every((j) => TERMINAL_JOB_STATUSES.includes(j.status))) return;
       } catch {
         /* ignore */
       }
-    }, 2000);
+      if (generation === jobPollGenerationRef.current) {
+        timer = setTimeout(() => void poll(), 2000);
+      }
+    };
+    void poll();
     return () => {
-      cancelled = true;
-      clearInterval(poll);
+      jobPollGenerationRef.current += 1;
+      controller?.abort();
+      if (timer) clearTimeout(timer);
     };
   }, [jobIds]);
 
@@ -198,6 +212,8 @@ export function useOrgToOrgDeploy() {
 
   useEffect(() => {
     orgGenerationRef.current += 1;
+    preflightRequestRef.current += 1;
+    deployRequestRef.current += 1;
     objectsRequestRef.current += 1;
     metaRequestRef.current.clear();
     previewRequestRef.current.clear();
@@ -210,6 +226,15 @@ export function useOrgToOrgDeploy() {
     setObjectMetaCache(new Map());
     setSelectedRecordIds(new Map());
     setWizardStep('configure');
+    setPreflightResult(null);
+    setPreflightPayloadKey(null);
+    setConfirmingDeploy(false);
+    setLoadingDeploy(false);
+    setJobIds([]);
+    setBatchResult(null);
+    setDeployStatus(null);
+    setDeployJobError(null);
+    setLogs([]);
     if (orgsReady) void loadObjects();
   }, [form.sourceOrgId, form.targetOrgId, orgsReady, loadObjects]);
 
@@ -638,6 +663,9 @@ export function useOrgToOrgDeploy() {
 
   const prepareDeploy = useCallback(async () => {
     if (!orgsReady || checkedObjects.size === 0 || selectedDependencyError) return;
+    if (loadingDeploy) return;
+    const request = ++preflightRequestRef.current;
+    const generation = orgGenerationRef.current;
     setLoadingDeploy(true);
     setError(null);
     try {
@@ -645,6 +673,10 @@ export function useOrgToOrgDeploy() {
         method: 'POST',
         body: JSON.stringify(buildDeployPayload(true)),
       });
+      if (
+        request !== preflightRequestRef.current
+        || generation !== orgGenerationRef.current
+      ) return;
       setPreflightResult(result);
       setPreflightPayloadKey(currentPayloadKey);
       const safe = Boolean(
@@ -655,22 +687,30 @@ export function useOrgToOrgDeploy() {
       if (safe) setConfirmingDeploy(true);
       else setError('Preflight failed. Resolve all object, field, dependency, and quota issues.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preflight failed');
-      setPreflightResult(null);
-      setPreflightPayloadKey(null);
+      if (request === preflightRequestRef.current && generation === orgGenerationRef.current) {
+        setError(err instanceof Error ? err.message : 'Preflight failed');
+        setPreflightResult(null);
+        setPreflightPayloadKey(null);
+      }
     } finally {
-      setLoadingDeploy(false);
+      if (request === preflightRequestRef.current && generation === orgGenerationRef.current) {
+        setLoadingDeploy(false);
+      }
     }
   }, [
     buildDeployPayload,
     checkedObjects.size,
     currentPayloadKey,
     orgsReady,
+    loadingDeploy,
     selectedDependencyError,
   ]);
 
   const deploy = useCallback(async () => {
     if (!orgsReady || checkedObjects.size === 0) return;
+    if (loadingDeploy) return;
+    const request = ++deployRequestRef.current;
+    const generation = orgGenerationRef.current;
     const safe = preflightPayloadKey === currentPayloadKey
       && preflightResult?.preflight?.every((item) => item.report.ok)
       && preflightResult.quotaSummary?.sufficient;
@@ -691,19 +731,25 @@ export function useOrgToOrgDeploy() {
         method: 'POST',
         body: JSON.stringify(buildDeployPayload(false)),
       });
+      if (request !== deployRequestRef.current || generation !== orgGenerationRef.current) return;
       setBatchResult(result);
       setJobIds(result.deployments.map((d) => d.jobId).filter((id): id is string => Boolean(id)));
       setWizardStep('deploy');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Deploy failed');
+      if (request === deployRequestRef.current && generation === orgGenerationRef.current) {
+        setError(err instanceof Error ? err.message : 'Deploy failed');
+      }
     } finally {
-      setLoadingDeploy(false);
+      if (request === deployRequestRef.current && generation === orgGenerationRef.current) {
+        setLoadingDeploy(false);
+      }
     }
   }, [
     buildDeployPayload,
     checkedObjects.size,
     currentPayloadKey,
     orgsReady,
+    loadingDeploy,
     preflightPayloadKey,
     preflightResult,
   ]);

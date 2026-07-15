@@ -11,6 +11,7 @@ import {
   normalizeTemplates,
   orderDeploymentObjects,
   preflightKey,
+  rollbackInsertedCount,
   templateToQuery,
   type ReplicationQuery,
 } from './data-center-contracts';
@@ -201,6 +202,14 @@ describe('Data Center dependency and recovery safety', () => {
       .toBe(true);
     expect(['completed', 'partial', 'failed', 'cancelled'].some(isBatchCancellable))
       .toBe(false);
+  });
+
+  it('requires a second explicit delete confirmation when rollback reports inserts', () => {
+    expect(rollbackInsertedCount({
+      safe: false,
+      results: [{ insertedCount: 2 }, { nested: { insertedCount: 3 } }],
+    })).toBe(5);
+    expect(rollbackInsertedCount({ safe: true, restored: 4 })).toBe(0);
   });
 });
 

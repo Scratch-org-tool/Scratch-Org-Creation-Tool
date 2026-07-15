@@ -36,6 +36,7 @@ import {
   type ReplicationQuery,
 } from './data-center-contracts';
 import { DataPreflightReportView } from './data-preflight-report';
+import { DataMovementControls } from './data-movement-controls';
 
 interface JobData {
   id: string;
@@ -50,6 +51,11 @@ interface Movement {
   createdAt: string;
   sourceOrg: { alias: string };
   targetOrg: { alias: string };
+  canCancel?: boolean;
+  canRollback?: boolean;
+  batchId?: string | null;
+  rollbackStatus?: string | null;
+  rollbackReport?: unknown;
 }
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
@@ -96,6 +102,13 @@ export function ReplicationPanel() {
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const logBottomRef = useRef<HTMLDivElement>(null);
+  const previewRequestRef = useRef(0);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const jobPollGenerationRef = useRef(0);
+  const movementPollGenerationRef = useRef(0);
+  const movementListRequestRef = useRef(0);
+  const preflightRequestRef = useRef(0);
+  const replicateRequestRef = useRef(0);
   const replicationPayload = buildReplicationPayload({
     ...form,
     queries,
@@ -103,6 +116,8 @@ export function ReplicationPanel() {
     dryRun: false,
   });
   const currentKey = preflightKey(replicationPayload);
+  const currentKeyRef = useRef(currentKey);
+  currentKeyRef.current = currentKey;
   const graphError = dependencyError(queries.map((query, order) => ({
     id: query.id,
     objectName: query.object,
@@ -112,9 +127,10 @@ export function ReplicationPanel() {
   const hasCurrentPreflight = Boolean(preflight && preflightKeyValue === currentKey);
 
   const loadMovements = useCallback(async () => {
+    const request = ++movementListRequestRef.current;
     try {
       const data = await api<Movement[]>('/data/movements?movementType=replication');
-      setMovements(data);
+      if (request === movementListRequestRef.current) setMovements(data);
     } catch {
       /* ignore */
     }
@@ -142,11 +158,20 @@ export function ReplicationPanel() {
 
   useEffect(() => {
     if (preflightKeyValue && preflightKeyValue !== currentKey) {
+      preflightRequestRef.current += 1;
       setPreflight(null);
       setPreflightKeyValue(null);
+      setPreflightLoading(false);
       setConfirming(false);
     }
   }, [currentKey, preflightKeyValue]);
+
+  useEffect(() => {
+    previewRequestRef.current += 1;
+    previewAbortRef.current?.abort();
+    setPreview(null);
+    setPreviewLoading(false);
+  }, [form.sourceOrgId, form.recordLimit, queries]);
 
   useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -154,37 +179,69 @@ export function ReplicationPanel() {
 
   useEffect(() => {
     if (!jobId) return;
-    const poll = setInterval(async () => {
+    const generation = ++jobPollGenerationRef.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
       try {
-        const data = await api<JobData>(`/jobs/${jobId}`);
+        const data = await api<JobData>(`/jobs/${jobId}`, { signal: controller.signal });
+        if (generation !== jobPollGenerationRef.current) return;
         setJob(data);
         if (data.logs?.length) setLogs(data.logs.map((l) => l.line));
         if (TERMINAL_STATUSES.includes(data.status)) {
-          clearInterval(poll);
           void loadMovements();
+          return;
         }
       } catch {
         /* ignore */
       }
-    }, 2000);
-    return () => clearInterval(poll);
+      if (generation === jobPollGenerationRef.current) {
+        timer = setTimeout(() => void poll(), 2000);
+      }
+    };
+    void poll();
+    return () => {
+      jobPollGenerationRef.current += 1;
+      controller?.abort();
+      if (timer) clearTimeout(timer);
+    };
   }, [jobId, loadMovements]);
 
   useEffect(() => {
     if (!movementId) return;
-    const poll = setInterval(async () => {
+    const generation = ++movementPollGenerationRef.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
       try {
-        const data = await api<Movement>(`/data/movements/${movementId}`);
+        const data = await api<Movement>(`/data/movements/${movementId}`, {
+          signal: controller.signal,
+        });
+        if (generation !== movementPollGenerationRef.current) return;
         setMovement(data);
-        if (TERMINAL_STATUSES.includes(data.status)) clearInterval(poll);
+        if (TERMINAL_STATUSES.includes(data.status)) return;
       } catch {
         /* ignore */
       }
-    }, 2000);
-    return () => clearInterval(poll);
+      if (generation === movementPollGenerationRef.current) {
+        timer = setTimeout(() => void poll(), 2000);
+      }
+    };
+    void poll();
+    return () => {
+      movementPollGenerationRef.current += 1;
+      controller?.abort();
+      if (timer) clearTimeout(timer);
+    };
   }, [movementId]);
 
   const handlePreview = async () => {
+    const request = ++previewRequestRef.current;
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
     setPreviewLoading(true);
     setPreview(null);
     try {
@@ -197,20 +254,27 @@ export function ReplicationPanel() {
         `/data/preview?sourceOrgId=${form.sourceOrgId}&soql=${encodeURIComponent(
           replaceOrApplyLimit(queries[0]?.soql ?? '', form.recordLimit),
         )}&recordLimit=${form.recordLimit}`,
+        { signal: controller.signal },
       );
+      if (request !== previewRequestRef.current || controller.signal.aborted) return;
       setPreview(res);
     } catch (err) {
-      setReplicateError(err instanceof Error ? err.message : 'Preview failed');
+      if (request === previewRequestRef.current && !controller.signal.aborted) {
+        setReplicateError(err instanceof Error ? err.message : 'Preview failed');
+      }
     } finally {
-      setPreviewLoading(false);
+      if (request === previewRequestRef.current) setPreviewLoading(false);
     }
   };
 
   const runPreflight = async (openConfirmation: boolean) => {
+    if (preflightLoading || loading) return;
     if (graphError) {
       setReplicateError(graphError);
       return;
     }
+    const request = ++preflightRequestRef.current;
+    const requestedKey = currentKey;
     setPreflightLoading(true);
     setReplicateError(null);
     try {
@@ -222,6 +286,10 @@ export function ReplicationPanel() {
         method: 'POST',
         body: JSON.stringify({ ...replicationPayload, dryRun: true }),
       });
+      if (
+        request !== preflightRequestRef.current
+        || requestedKey !== currentKeyRef.current
+      ) return;
       setPreflight(result);
       setPreflightKeyValue(currentKey);
       const safe = result.preflight.every((item) => item.report.ok) && result.quotaSummary.sufficient;
@@ -230,15 +298,19 @@ export function ReplicationPanel() {
         setReplicateError('Preflight failed. Resolve every query and quota issue before replication.');
       }
     } catch (error) {
-      setReplicateError(error instanceof Error ? error.message : 'Preflight failed');
-      setPreflight(null);
-      setPreflightKeyValue(null);
+      if (request === preflightRequestRef.current) {
+        setReplicateError(error instanceof Error ? error.message : 'Preflight failed');
+        setPreflight(null);
+        setPreflightKeyValue(null);
+      }
     } finally {
-      setPreflightLoading(false);
+      if (request === preflightRequestRef.current) setPreflightLoading(false);
     }
   };
 
   const handleReplicate = async () => {
+    if (loading) return;
+    const request = ++replicateRequestRef.current;
     if (form.sourceOrgId === form.targetOrgId) {
       setReplicateError('Source and target org must differ.');
       return;
@@ -274,6 +346,7 @@ export function ReplicationPanel() {
           dryRun: false,
         }),
       });
+      if (request !== replicateRequestRef.current) return;
       setJobId(res.jobId);
       setMovementId(res.movementId);
       setBatchId(res.batchId ?? null);
@@ -285,9 +358,11 @@ export function ReplicationPanel() {
         `${res.message ?? 'Replication queued'} — SFDMU is copying ~${res.preview?.totalSize?.toLocaleString() ?? 0} record(s).${chunkNote}`,
       );
     } catch (err) {
-      setReplicateError(err instanceof Error ? err.message : 'Replication failed');
+      if (request === replicateRequestRef.current) {
+        setReplicateError(err instanceof Error ? err.message : 'Replication failed');
+      }
     } finally {
-      setLoading(false);
+      if (request === replicateRequestRef.current) setLoading(false);
     }
   };
 
@@ -612,13 +687,19 @@ export function ReplicationPanel() {
         <GlassCard title="Recent replications" description="Past SFDMU replication runs.">
           <ListRowGroup emptyMessage="No replications yet." maxHeight="420px">
             {movements.map((m) => (
-              <ListRow
-                key={m.id}
-                title={`${m.sourceOrg.alias} → ${m.targetOrg.alias}`}
-                subtitle={relativeTime(m.createdAt)}
-                status={m.status}
-                trailing={<StatusBadge status={m.status} />}
-              />
+              <div key={m.id} className="border-b border-border/40 p-2 last:border-0">
+                <ListRow
+                  title={`${m.sourceOrg.alias} → ${m.targetOrg.alias}`}
+                  subtitle={relativeTime(m.createdAt)}
+                  status={m.status}
+                  trailing={<StatusBadge status={m.status} />}
+                />
+                <DataMovementControls
+                  movement={m}
+                  onUpdated={(next) => setMovements((current) => current.map((item) =>
+                    item.id === next.id ? { ...item, ...next } : item))}
+                />
+              </div>
             ))}
           </ListRowGroup>
         </GlassCard>
@@ -656,6 +737,10 @@ export function ReplicationPanel() {
               )}
             </div>
           )}
+          <DataMovementControls
+            movement={movement}
+            onUpdated={(next) => setMovement((current) => current ? { ...current, ...next } : current)}
+          />
         </GlassCard>
       )}
       <ConfirmDialog

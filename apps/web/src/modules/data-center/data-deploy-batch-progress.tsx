@@ -1,10 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, InlineAlert, ListRow, ListRowGroup, StatusBadge } from '@/components/studio';
 import { api } from '@/services/api';
-import { isBatchCancellable, isRetrySafe } from './data-center-contracts';
+import {
+  isBatchCancellable,
+  isRetrySafe,
+  rollbackInsertedCount,
+} from './data-center-contracts';
 
 export interface DataDeployBatchChunk {
   id: string;
@@ -55,18 +59,28 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmRollback, setConfirmRollback] = useState(false);
+  const [confirmDeleteInserted, setConfirmDeleteInserted] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const loadRequest = useRef(0);
+  const loadAbort = useRef<AbortController | null>(null);
 
   const load = useCallback(async (): Promise<boolean> => {
+    const request = ++loadRequest.current;
+    loadAbort.current?.abort();
+    const controller = new AbortController();
+    loadAbort.current = controller;
     try {
-      const data = await api<DataDeployBatch>(`/data/batches/${batchId}`);
+      const data = await api<DataDeployBatch>(`/data/batches/${batchId}`, {
+        signal: controller.signal,
+      });
+      if (request !== loadRequest.current || controller.signal.aborted) return false;
       setBatch(data);
       if (TERMINAL.includes(data.status)) {
         onTerminal?.(data);
         return true;
       }
     } catch (err) {
-      console.error(err);
+      if (!controller.signal.aborted && request === loadRequest.current) console.error(err);
     }
     return false;
   }, [batchId, onTerminal]);
@@ -81,6 +95,8 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
     void poll();
     return () => {
       cancelled = true;
+      loadRequest.current += 1;
+      loadAbort.current?.abort();
       if (timer) clearTimeout(timer);
     };
   }, [load, pollRevision]);
@@ -108,10 +124,12 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
       setPollRevision((value) => value + 1);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Batch action failed');
+      await load();
     } finally {
       setActionLoading(null);
     }
   };
+  const insertedCount = rollbackInsertedCount(batch.rollbackReport);
 
   return (
     <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
@@ -207,6 +225,11 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
             Cancel batch
           </Button>
         )}
+        {rollbackAvailable && insertedCount > 0 && (
+          <Button size="sm" variant="destructive" onClick={() => setConfirmDeleteInserted(true)}>
+            Delete inserted records
+          </Button>
+        )}
       </div>
       {batch.rollbackStatus && (
         <InlineAlert variant={batch.rollbackStatus === 'completed' ? 'success' : 'warning'}>
@@ -229,6 +252,23 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
         onConfirm={() => {
           setConfirmCancel(false);
           void runAction('cancel', `/data/batches/${batch.id}/cancel`);
+        }}
+      />
+      <ConfirmDialog
+        open={confirmDeleteInserted}
+        title="Delete records inserted by this batch?"
+        message={`The rollback report identifies ${insertedCount} inserted record(s). This explicit second rollback action permanently deletes them.`}
+        confirmLabel="Delete inserted records"
+        destructive
+        loading={actionLoading === 'rollback-delete-inserted'}
+        onOpenChange={setConfirmDeleteInserted}
+        onConfirm={() => {
+          setConfirmDeleteInserted(false);
+          void runAction(
+            'rollback-delete-inserted',
+            `/data/batches/${batch.id}/rollback`,
+            { deleteInserted: true },
+          );
         }}
       />
       <ConfirmDialog
