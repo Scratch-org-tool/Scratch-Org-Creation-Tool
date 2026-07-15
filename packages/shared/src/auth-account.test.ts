@@ -6,6 +6,7 @@ import {
   signupSchema,
   updateMeSchema,
 } from './schemas/auth.js';
+import { moduleForPath, ROUTE_MODULE_MAP } from './auth.js';
 
 describe('self-service account contracts', () => {
   it('sanitizes a display name and rejects privilege or identity fields', () => {
@@ -74,5 +75,11 @@ describe('self-service account contracts', () => {
     assert.deepEqual(logoutAllSchema.parse({}), {});
     assert.deepEqual(logoutAllSchema.parse(undefined), {});
     assert.equal(logoutAllSchema.safeParse({ uid: 'another-user' }).success, false);
+  });
+
+  it('registers Account as authenticated-only instead of module-gated', () => {
+    assert.equal(Object.hasOwn(ROUTE_MODULE_MAP, '/account'), true);
+    assert.equal(ROUTE_MODULE_MAP['/account'], null);
+    assert.equal(moduleForPath('/account'), null);
   });
 });

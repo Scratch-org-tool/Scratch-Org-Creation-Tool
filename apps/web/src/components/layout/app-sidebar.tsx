@@ -35,6 +35,7 @@ import {
 } from '@/lib/app-nav';
 import { cn } from '@/utils/cn';
 import { openCopilot } from '@/store';
+import { navigateFromSidebar } from './sidebar-navigation';
 
 export const SIDEBAR_EXPANDED_PX = 260;
 export const SIDEBAR_COLLAPSED_PX = 52;
@@ -80,10 +81,14 @@ function useSidebarNavigate() {
   const { isMobile, setOpenMobile } = useSidebar();
 
   return (href: string) => {
-    if (isMobile) setOpenMobile(false);
-    if (href === pathname) return;
-    startNavigation(href);
-    router.push(href);
+    navigateFromSidebar({
+      href,
+      pathname,
+      isMobile,
+      closeMobile: () => setOpenMobile(false),
+      startNavigation,
+      push: (next) => router.push(next),
+    });
   };
 }
 
@@ -338,13 +343,18 @@ function SidebarPanel({
             />
 
             <NavTooltip
-              label={`${displayName} · ${roleLabel}`}
+              label="Account"
               collapsed={!expanded}
             >
-              <div
+              <button
+                type="button"
+                onClick={() => navigate('/account')}
+                aria-label="Account"
+                aria-current={pathname === '/account' ? 'page' : undefined}
                 className={cn(
-                  'flex items-center rounded-xl transition-colors hover:bg-white/10',
+                  'flex w-full items-center rounded-xl text-left transition-all hover:bg-white/10 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-1 focus-visible:ring-offset-black',
                   expanded ? 'gap-3 px-3 py-2.5' : 'justify-center size-10 mx-auto',
+                  pathname === '/account' && 'bg-white/15 text-white',
                 )}
               >
                 <Avatar className="size-8 shrink-0">
@@ -364,11 +374,14 @@ function SidebarPanel({
                       className="min-w-0 flex-1 overflow-hidden"
                     >
                       <p className="truncate text-sm font-medium text-white">{displayName}</p>
-                      <p className="truncate text-xs capitalize text-white/45">{roleLabel}</p>
+                      <p className="truncate text-xs text-white/45">
+                        Account <span aria-hidden>·</span>{' '}
+                        <span className="capitalize">{roleLabel}</span>
+                      </p>
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </div>
+              </button>
             </NavTooltip>
 
             <NavButton

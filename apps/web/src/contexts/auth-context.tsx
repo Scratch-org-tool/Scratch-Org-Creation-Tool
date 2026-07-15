@@ -28,6 +28,11 @@ import { buildApiUrl } from '@/lib/api-base-url';
 import { setAuthTokenGetter, api } from '@/services/api';
 import type { AppModule, UserAccessProfile } from '@sfcc/shared';
 import { signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  buildDisplayNameRequest,
+  runOptimisticDisplayNameUpdate,
+  type LatestRequestGate,
+} from '@/modules/account/account-actions';
 
 interface MeResponse extends UserAccessProfile {
   effectiveModules: AppModule[];
@@ -57,6 +62,7 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<string>;
   refreshProfile: () => Promise<void>;
+  updateDisplayName: (displayName: string) => Promise<MeResponse | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -141,27 +147,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [profileError, setProfileError] = useState<string | null>(null);
   const profileUserIdRef = useRef<string | null>(null);
+  const profileRef = useRef<MeResponse | null>(null);
+  const displayNameGateRef = useRef<LatestRequestGate>({ current: 0 });
+
+  const replaceProfile = useCallback((next: MeResponse | null) => {
+    profileRef.current = next;
+    setProfile(next);
+  }, []);
 
   const refreshProfile = useCallback(async (firebaseUser?: User | null) => {
     const current = firebaseUser ?? user;
     if (!current) {
       profileUserIdRef.current = null;
-      setProfile(null);
+      replaceProfile(null);
       setProfileError(null);
       return;
     }
     try {
       const me = await loadProfile(current);
       profileUserIdRef.current = current.uid;
-      setProfile(me);
+      replaceProfile(me);
       setProfileError(null);
     } catch {
       // Keep a profile that was already verified for this Firebase user.
       // Transient API failures must not revoke the UI's last known access.
-      if (profileUserIdRef.current !== current.uid) setProfile(null);
+      if (profileUserIdRef.current !== current.uid) replaceProfile(null);
       setProfileError(AUTH_GENERIC_INVALID);
     }
-  }, [user]);
+  }, [replaceProfile, user]);
 
   useEffect(() => {
     const auth = getFirebaseAuth();
@@ -178,21 +191,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser?.uid !== profileUserIdRef.current) {
-        setProfile(null);
+        displayNameGateRef.current.current += 1;
+        replaceProfile(null);
       }
       setUser(firebaseUser);
       if (firebaseUser) {
         await refreshProfile(firebaseUser);
       } else {
         profileUserIdRef.current = null;
-        setProfile(null);
+        replaceProfile(null);
         setProfileError(null);
       }
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [refreshProfile]);
+  }, [refreshProfile, replaceProfile]);
 
   const signIn = useCallback(async (email: string, password: string, adminBootstrapToken?: string) => {
     const auth = getFirebaseAuth();
@@ -207,11 +221,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const credential = result.customToken
       ? await signInWithCustomToken(auth, result.customToken)
       : await signInWithEmailAndPassword(auth, email, password);
-    setProfile(result.profile);
+    replaceProfile(result.profile);
     profileUserIdRef.current = credential.user.uid;
     setProfileError(null);
     setUser(credential.user);
-  }, []);
+  }, [replaceProfile]);
 
   const signUp = useCallback(async (
     email: string,
@@ -232,20 +246,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const credential = result.customToken
       ? await signInWithCustomToken(auth, result.customToken)
       : await signInWithEmailAndPassword(auth, email, password);
-    setProfile(result.profile);
+    replaceProfile(result.profile);
     profileUserIdRef.current = credential.user.uid;
     setProfileError(null);
     setUser(credential.user);
-  }, []);
+  }, [replaceProfile]);
 
   const signOut = useCallback(async () => {
     const auth = getFirebaseAuth();
     if (auth) await firebaseSignOut(auth);
     setUser(null);
     profileUserIdRef.current = null;
-    setProfile(null);
+    displayNameGateRef.current.current += 1;
+    replaceProfile(null);
     setProfileError(null);
-  }, []);
+  }, [replaceProfile]);
 
   const resetPassword = useCallback(async (email: string) => {
     const result = await fetchAuthPublic<{ message: string }>(
@@ -255,6 +270,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
     return result.message ?? AUTH_RESET_SENT;
   }, []);
+
+  const updateDisplayName = useCallback(async (displayName: string) => {
+    const snapshot = profileRef.current;
+    const auth = getFirebaseAuth();
+    const firebaseUser = auth?.currentUser;
+    if (!snapshot || !firebaseUser || profileUserIdRef.current !== firebaseUser.uid) {
+      throw new Error(AUTH_GENERIC_INVALID);
+    }
+
+    const requestBody = buildDisplayNameRequest(displayName);
+    const normalized = requestBody.displayName;
+    const result = await runOptimisticDisplayNameUpdate({
+      gate: displayNameGateRef.current,
+      snapshot,
+      displayName: normalized,
+      setProfile: replaceProfile,
+      request: () => api<MeResponse>('/auth/me', {
+        method: 'PATCH',
+        body: JSON.stringify(requestBody),
+      }),
+    });
+    if (result.status === 'stale') return null;
+    setProfileError(null);
+    return result.profile;
+  }, [replaceProfile]);
 
   const value = useMemo(
     () => ({
@@ -266,9 +306,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       resetPassword,
+      updateDisplayName,
       refreshProfile: () => refreshProfile(),
     }),
-    [user, profile, loading, profileError, signIn, signUp, signOut, resetPassword, refreshProfile],
+    [
+      user,
+      profile,
+      loading,
+      profileError,
+      signIn,
+      signUp,
+      signOut,
+      resetPassword,
+      updateDisplayName,
+      refreshProfile,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
