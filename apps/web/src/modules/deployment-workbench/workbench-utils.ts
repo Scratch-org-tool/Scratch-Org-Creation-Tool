@@ -266,8 +266,7 @@ export function supportsDestructiveAcknowledgement(
   capabilities: WorkbenchCapabilities | null,
 ): boolean {
   return capabilities?.supports.destructiveAcknowledgement === true
-    || capabilities?.supports.destructiveReview === true
-    || capabilities?.supports.destructiveChanges === true;
+    || capabilities?.supports.destructiveReview === true;
 }
 
 export function serverRunActions(status: WorkbenchStatus | null) {

@@ -427,10 +427,9 @@ function ComponentsStep({ w }: { w: DeploymentWorkbenchState }) {
       })}
       {componentCount(w.form.destructiveSelections) > 0 && (
         !w.capabilities?.supports.destructiveChanges
-        || !supportsDestructiveAcknowledgement(w.capabilities)
       ) && (
         <InlineAlert variant="error" title="Destructive plan blocked">
-          The server must advertise destructive changes and hash-bound acknowledgement.
+          The server must advertise destructive changes.
         </InlineAlert>
       )}
       {!w.compareItems.length && w.comparisonStatus !== 'running' && (
@@ -949,6 +948,8 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
     w.destructiveReview?.componentCount ?? 0,
   );
   const dependencies = w.preview?.dependencies;
+  const hashReviewSupported = supportsDestructiveAcknowledgement(w.capabilities)
+    || Boolean(w.preview?.sourceResolution?.digest);
   const estimatedBatches = Number(dependencies?.batchEstimate.batchCount ?? 1);
   const resolvedComponents = Number(
     dependencies?.summary.resolved ?? componentCount(w.form.components),
@@ -1014,7 +1015,7 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
           title="Destructive manifest acknowledgement"
           description="The acknowledgement is bound to the exact server-generated manifest hash."
         >
-          {!supportsDestructiveAcknowledgement(w.capabilities) ? (
+          {!hashReviewSupported ? (
             <InlineAlert variant="error" title="Destructive execution blocked">
               This backend does not advertise hash-bound destructive acknowledgement support.
             </InlineAlert>
@@ -1573,10 +1574,15 @@ function WizardFooter({ w }: { w: DeploymentWorkbenchState }) {
     componentCount(w.form.destructiveSelections),
     w.destructiveReview?.componentCount ?? 0,
   );
-  const destructiveSupported = destructiveCount === 0
+  const destructivePreviewSupported = destructiveCount === 0
+    || w.capabilities?.supports.destructiveChanges === true;
+  const destructiveExecutionSupported = destructiveCount === 0
     || (
       w.capabilities?.supports.destructiveChanges === true
-      && supportsDestructiveAcknowledgement(w.capabilities)
+      && (
+        supportsDestructiveAcknowledgement(w.capabilities)
+        || Boolean(w.preview?.sourceResolution?.digest)
+      )
       && (
         deployableCount > 0
         || w.capabilities?.supports.destructiveOnly === true
@@ -1593,7 +1599,7 @@ function WizardFooter({ w }: { w: DeploymentWorkbenchState }) {
   const nextBlocked =
     (w.step === 0 && sourceBlocked)
     || (w.step === 1 && componentBlocked)
-    || (w.step === 3 && (w.validation.blockers.length > 0 || !destructiveSupported));
+    || (w.step === 3 && (w.validation.blockers.length > 0 || !destructivePreviewSupported));
 
   const next = async () => {
     if (w.step === 3) {
@@ -1615,7 +1621,7 @@ function WizardFooter({ w }: { w: DeploymentWorkbenchState }) {
             disabled={
               w.validation.blockers.length > 0
               || !w.preview?.executionAvailable
-              || !destructiveSupported
+              || !destructiveExecutionSupported
               || w.destructiveReviewLoading
             }
             onClick={() => void w.createRun()}
