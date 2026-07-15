@@ -58,8 +58,8 @@ export const APP_NAV: NavItem[] = [
     ],
   },
   {
-    href: '/metadata-deployment',
-    label: 'Metadata Deployment',
+    href: '/deployment-workbench',
+    label: 'Deployment Workbench',
     icon: Layers,
     module: 'deployment',
     activePrefixes: ['/metadata-deployment'],
