@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import {
   FormSection,
+  ConfirmDialog,
   InlineAlert,
   ListRow,
   ListRowGroup,
@@ -69,6 +70,7 @@ export function GenericDeployPanel() {
   const [logs, setLogs] = useState<string[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]);
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [confirmingDeploy, setConfirmingDeploy] = useState(false);
   const logBottomRef = useRef<HTMLDivElement>(null);
 
   const loadMovements = useCallback(() => {
@@ -173,6 +175,7 @@ export function GenericDeployPanel() {
   };
 
   const handleDeploy = async () => {
+    setConfirmingDeploy(false);
     setLoading(true);
     setLogs([]);
     setJob(null);
@@ -219,8 +222,8 @@ export function GenericDeployPanel() {
         <FormSection title="Job configuration">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <Label>Source Org</Label>
-              <Select value={form.sourceOrgId} onChange={(e) => setForm({ ...form, sourceOrgId: e.target.value })}>
+              <Label htmlFor="generic-deploy-source-org">Source Org</Label>
+              <Select id="generic-deploy-source-org" value={form.sourceOrgId} onChange={(e) => setForm({ ...form, sourceOrgId: e.target.value })}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>
@@ -230,8 +233,8 @@ export function GenericDeployPanel() {
               </Select>
             </div>
             <div>
-              <Label>Target Org</Label>
-              <Select value={form.targetOrgId} onChange={(e) => setForm({ ...form, targetOrgId: e.target.value })}>
+              <Label htmlFor="generic-deploy-target-org">Target Org</Label>
+              <Select id="generic-deploy-target-org" value={form.targetOrgId} onChange={(e) => setForm({ ...form, targetOrgId: e.target.value })}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>
@@ -242,13 +245,14 @@ export function GenericDeployPanel() {
             </div>
           </div>
           <div>
-            <Label>Object</Label>
-            <Input value={form.objectName} onChange={(e) => setForm({ ...form, objectName: e.target.value })} />
+            <Label htmlFor="generic-deploy-object">Object</Label>
+            <Input id="generic-deploy-object" value={form.objectName} onChange={(e) => setForm({ ...form, objectName: e.target.value })} />
           </div>
           <div>
-            <Label>Maximum records to deploy</Label>
+            <Label htmlFor="generic-deploy-record-limit">Maximum records to deploy</Label>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <Input
+                id="generic-deploy-record-limit"
                 type="number"
                 min={1}
                 max={ORG_TO_ORG_RECORD_LIMIT_MAX}
@@ -289,8 +293,9 @@ export function GenericDeployPanel() {
             )}
           </div>
           <div>
-            <Label>SOQL (optional)</Label>
+            <Label htmlFor="generic-deploy-soql">SOQL (optional)</Label>
             <Textarea
+              id="generic-deploy-soql"
               value={form.soql}
               onChange={(e) => {
                 const soql = e.target.value;
@@ -312,7 +317,7 @@ export function GenericDeployPanel() {
               Preview Data
             </Button>
             <Button
-              onClick={() => void handleDeploy()}
+              onClick={() => setConfirmingDeploy(true)}
               loading={loading}
               disabled={isRunning || !form.sourceOrgId || !form.targetOrgId}
             >
@@ -379,6 +384,15 @@ export function GenericDeployPanel() {
           ))}
         </ListRowGroup>
       </FormSection>
+      <ConfirmDialog
+        open={confirmingDeploy}
+        title="Deploy data to the target org?"
+        message={`Deploy up to ${form.recordLimit.toLocaleString()} ${form.objectName} records from the selected source org to the selected target org. This can overwrite matching target data.`}
+        confirmLabel="Deploy data"
+        loading={loading}
+        onConfirm={() => void handleDeploy()}
+        onOpenChange={setConfirmingDeploy}
+      />
     </div>
   );
 }

@@ -42,6 +42,10 @@ export function CopilotPanel() {
   const [elapsedSec, setElapsedSec] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const wasOpenRef = useRef(false);
 
   const isBusy = isLoading || streamStatus === 'connecting' || streamStatus === 'streaming';
   const showThinkingBubble =
@@ -52,6 +56,18 @@ export function CopilotPanel() {
     if (!isOpen) return;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isOpen, streamStatus]);
+
+  useEffect(() => {
+    if (isOpen) {
+      wasOpenRef.current = true;
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false;
+      launcherRef.current?.focus();
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isBusy || !streamStartedAt) {
@@ -163,6 +179,33 @@ export function CopilotPanel() {
       )}
 
       <div
+        id="ai-copilot-panel"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ai-copilot-title"
+        inert={!isOpen}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            setOpen(false);
+            return;
+          }
+          if (event.key !== 'Tab') return;
+          const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+          );
+          if (!focusable?.length) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}
         className={cn(
           'fixed z-[60] flex flex-col pointer-events-none',
           'bottom-20 right-5 sm:right-8 sm:bottom-24',
@@ -180,7 +223,7 @@ export function CopilotPanel() {
             <div className="flex items-center gap-2 min-w-0">
               <Bot className="w-5 h-5 text-purple-400 shrink-0" />
               <div className="min-w-0">
-                <span className="font-semibold text-sm block">AI Copilot</span>
+                <span id="ai-copilot-title" className="font-semibold text-sm block">AI Copilot</span>
                 <span className="text-[10px] text-muted-foreground truncate block">
                   {copilotContext.pageTitle}
                 </span>
@@ -254,6 +297,8 @@ export function CopilotPanel() {
                             setExpandedReasoning((s) => ({ ...s, [msg.id]: !s[msg.id] }))
                           }
                           className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100"
+                          aria-expanded={Boolean(expandedReasoning[msg.id])}
+                          aria-controls={`copilot-reasoning-${msg.id}`}
                         >
                           {expandedReasoning[msg.id] ? (
                             <ChevronUp className="w-3 h-3" />
@@ -263,7 +308,12 @@ export function CopilotPanel() {
                           Thinking
                         </button>
                         {expandedReasoning[msg.id] && (
-                          <pre className="mt-1 text-xs opacity-70 whitespace-pre-wrap">{msg.reasoning}</pre>
+                          <pre
+                            id={`copilot-reasoning-${msg.id}`}
+                            className="mt-1 text-xs opacity-70 whitespace-pre-wrap"
+                          >
+                            {msg.reasoning}
+                          </pre>
                         )}
                       </div>
                     )}
@@ -300,6 +350,7 @@ export function CopilotPanel() {
           <div className="p-3 border-t border-border shrink-0 bg-card/95">
             <div className="flex gap-2">
               <Textarea
+                ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -311,12 +362,14 @@ export function CopilotPanel() {
                 placeholder="Ask how to use this app..."
                 className="min-h-[52px] resize-none text-sm"
                 disabled={!isOpen}
+                aria-label="Message AI Copilot"
               />
               <Button
                 onClick={() => void send()}
                 disabled={!isOpen || isBusy || !input.trim()}
                 size="sm"
                 className="self-end shrink-0"
+                aria-label="Send message"
               >
                 <Send className="w-4 h-4" />
               </Button>
@@ -326,6 +379,7 @@ export function CopilotPanel() {
       </div>
 
       <button
+        ref={launcherRef}
         type="button"
         onClick={() => toggle()}
         className={cn(
@@ -338,6 +392,7 @@ export function CopilotPanel() {
         )}
         aria-label={isOpen ? 'Close AI Copilot' : 'Open AI Copilot'}
         aria-expanded={isOpen}
+        aria-controls="ai-copilot-panel"
         title={isOpen ? 'Close AI Copilot' : 'Ask AI Copilot'}
       >
         {isOpen ? <X className="w-5 h-5" /> : <Bot className="w-5 h-5" />}

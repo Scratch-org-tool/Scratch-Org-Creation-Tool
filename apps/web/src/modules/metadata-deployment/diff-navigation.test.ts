@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildDiffHunks, extractHunkContent } from './diff-navigation';
+import { buildDiffHunks, extractHunkContent, getDiffWindowRange } from './diff-navigation';
 
 const diffLines = [
   { value: 'line1\n' },
@@ -36,5 +36,12 @@ const removeOnly = extractHunkContent(
 assert.equal(removeOnly.kind, 'remove');
 assert.equal(removeOnly.sourceText, '');
 assert.equal(removeOnly.targetText, 'gone\n');
+
+assert.equal(getDiffWindowRange(800, [400]), null);
+assert.deepEqual(getDiffWindowRange(2_000, []), { start: 0, end: 800 });
+assert.deepEqual(getDiffWindowRange(2_000, [900, 901]), { start: 750, end: 1052 });
+assert.deepEqual(getDiffWindowRange(2_000, [20]), { start: 0, end: 171 });
+assert.deepEqual(getDiffWindowRange(2_000, [1_950]), { start: 1_800, end: 2_000 });
+assert.deepEqual(getDiffWindowRange(5_000, [1_000, 3_000]), { start: 850, end: 1_650 });
 
 console.log('diff-navigation tests passed');

@@ -31,8 +31,9 @@ export function SalesforceIntegrationPanel({ w }: SalesforceIntegrationPanelProp
           />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <Label>Alias</Label>
+              <Label htmlFor="salesforce-org-alias">Alias</Label>
               <Input
+                id="salesforce-org-alias"
                 value={w.sfForm.alias}
                 onChange={(e) => w.setSfForm({ ...w.sfForm, alias: e.target.value })}
                 placeholder="NE-DEVHUB"
@@ -40,8 +41,9 @@ export function SalesforceIntegrationPanel({ w }: SalesforceIntegrationPanelProp
               />
             </div>
             <div>
-              <Label>Instance URL</Label>
+              <Label htmlFor="salesforce-instance-url">Instance URL</Label>
               <Input
+                id="salesforce-instance-url"
                 value={w.sfForm.instanceUrl}
                 onChange={(e) => w.setSfForm({ ...w.sfForm, instanceUrl: e.target.value, orgType: 'custom' })}
                 disabled={w.authorizing || w.sfForm.orgType !== 'custom'}

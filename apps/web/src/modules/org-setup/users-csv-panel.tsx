@@ -14,8 +14,8 @@ export function UsersCsvPanel({ w }: UsersCsvPanelProps) {
     <>
       <FormSection title="CSV import">
         <div>
-          <Label>Target Org</Label>
-          <Select value={w.csvOrgId} onChange={(e) => w.setCsvOrgId(e.target.value)}>
+          <Label htmlFor="users-csv-target-org">Target Org</Label>
+          <Select id="users-csv-target-org" value={w.csvOrgId} onChange={(e) => w.setCsvOrgId(e.target.value)}>
             <option value="">Select…</option>
             {w.orgs.map((o) => (
               <option key={o.id} value={o.id}>
@@ -25,8 +25,9 @@ export function UsersCsvPanel({ w }: UsersCsvPanelProps) {
           </Select>
         </div>
         <div>
-          <Label>CSV Data</Label>
+          <Label htmlFor="users-csv-data">CSV Data</Label>
           <Textarea
+            id="users-csv-data"
             value={w.csv}
             onChange={(e) => w.setCsv(e.target.value)}
             className="font-mono text-xs h-52 studio-console overflow-y-auto resize-none"

@@ -85,15 +85,15 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
           ) : (
             <>
               <div>
-                <Label>Target Org</Label>
-                <Select value={form.targetOrgId} onChange={(e) => setForm({ ...form, targetOrgId: e.target.value })}>
+                <Label htmlFor="deployment-target-org">Target Org</Label>
+                <Select id="deployment-target-org" value={form.targetOrgId} onChange={(e) => setForm({ ...form, targetOrgId: e.target.value })}>
                   <option value="">Select...</option>
                   {orgs.map((o) => <option key={o.id} value={o.id}>{o.alias}</option>)}
                 </Select>
               </div>
               <div>
-                <Label>Repository</Label>
-                <Select value={form.repo} onChange={(e) => { setForm({ ...form, repo: e.target.value }); loadBranches(e.target.value); }}>
+                <Label htmlFor="deployment-repository">Repository</Label>
+                <Select id="deployment-repository" value={form.repo} onChange={(e) => { setForm({ ...form, repo: e.target.value }); loadBranches(e.target.value); }}>
                   <option value="">Select...</option>
                   {repos.map((r) => (
                     <option key={r.id} value={r.name}>
@@ -103,8 +103,8 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
                 </Select>
               </div>
               <div>
-                <Label>Branch</Label>
-                <Select value={form.branch} onChange={(e) => setForm({ ...form, branch: e.target.value })}>
+                <Label htmlFor="deployment-branch">Branch</Label>
+                <Select id="deployment-branch" value={form.branch} onChange={(e) => setForm({ ...form, branch: e.target.value })}>
                   <option value="">Select...</option>
                   {branches.map((b) => <option key={b} value={b}>{b}</option>)}
                 </Select>

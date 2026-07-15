@@ -113,8 +113,8 @@ export function ProvisioningWorkspace() {
         <GlassCard title="CSV bulk upload" description="Import users from a CSV file with profiles and permission sets.">
           <FormSection title="CSV import">
             <div>
-              <Label>Target Org</Label>
-              <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+              <Label htmlFor="provisioning-csv-target-org">Target Org</Label>
+              <Select id="provisioning-csv-target-org" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 <option value="">Select…</option>
                 {orgs.map((o) => (
                   <option key={o.id} value={o.id}>
@@ -124,8 +124,9 @@ export function ProvisioningWorkspace() {
               </Select>
             </div>
             <div>
-              <Label>CSV Data</Label>
+              <Label htmlFor="provisioning-csv-data">CSV Data</Label>
               <Textarea
+                id="provisioning-csv-data"
                 value={csv}
                 onChange={(e) => setCsv(e.target.value)}
                 className="font-mono text-xs h-52 studio-console overflow-y-auto resize-none"

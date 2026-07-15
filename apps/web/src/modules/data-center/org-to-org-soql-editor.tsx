@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Label, Textarea } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/input';
 import {
   OrgToOrgSoqlParseError,
   parseOrgToOrgSoql,
@@ -68,7 +68,7 @@ export function OrgToOrgSoqlEditor({
   return (
     <div className="space-y-3 min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Label>Record selection</Label>
+        <p className="text-sm font-medium leading-none">Record selection</p>
         <div className="flex rounded-md border border-border/60 overflow-hidden text-xs">
           <button
             type="button"
@@ -94,6 +94,7 @@ export function OrgToOrgSoqlEditor({
       {isSoqlMode && (
         <>
           <Textarea
+            aria-label={`Custom SOQL query for ${objectName}`}
             value={draft}
             onChange={(e) => {
               setDraft(e.target.value);

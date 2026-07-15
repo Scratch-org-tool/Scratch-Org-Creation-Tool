@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input, Label, Select } from '@/components/ui/input';
+import { Input, Select } from '@/components/ui/input';
 import type { OrgToOrgFilterRow, OrgToOrgObjectMeta } from './types';
 import { FILTER_OPERATORS } from './types';
 
@@ -60,7 +60,7 @@ export function OrgToOrgFilterBuilder({
   return (
     <div className="space-y-3 min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Label>Configure filters</Label>
+        <p className="text-sm font-medium leading-none">Configure filters</p>
         <span className="text-xs text-muted-foreground">
           {loading ? 'Counting…' : `${matchCount ?? '—'} records match this filter`}
         </span>
@@ -73,6 +73,7 @@ export function OrgToOrgFilterBuilder({
       ) : (
         <>
           <Input
+            aria-label="Search filter fields"
             value={fieldSearch}
             onChange={(e) => setFieldSearch(e.target.value)}
             placeholder="Search fields by API name or label…"
@@ -95,6 +96,7 @@ export function OrgToOrgFilterBuilder({
                         Field
                       </span>
                       <Select
+                        aria-label={`Filter ${index + 1} field`}
                         value={row.field}
                         onChange={(e) => updateRow(index, { field: e.target.value })}
                         className="font-mono text-xs h-9"
@@ -118,6 +120,7 @@ export function OrgToOrgFilterBuilder({
                         Operator
                       </span>
                       <Select
+                        aria-label={`Filter ${index + 1} operator`}
                         value={row.operator}
                         onChange={(e) =>
                           updateRow(index, {
@@ -139,6 +142,7 @@ export function OrgToOrgFilterBuilder({
                         Value
                       </span>
                       <Input
+                        aria-label={`Filter ${index + 1} value`}
                         value={row.value ?? ''}
                         disabled={valueDisabled}
                         onChange={(e) => updateRow(index, { value: e.target.value })}
@@ -153,7 +157,7 @@ export function OrgToOrgFilterBuilder({
                       size="sm"
                       onClick={() => removeRow(index)}
                       className="h-9 w-9 p-0 text-muted-foreground hover:text-destructive shrink-0 justify-self-end sm:justify-self-start"
-                      aria-label="Remove filter"
+                      aria-label={`Remove filter ${index + 1}`}
                     >
                       <X className="h-4 w-4" />
                     </Button>

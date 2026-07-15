@@ -89,8 +89,8 @@ export function DataSeedSection({
   return (
     <div className="space-y-6">
       <div className="max-w-md">
-        <Label>Seed mode</Label>
-        <Select value={mode} onChange={(e) => onModeChange(e.target.value as DataSeedMode)}>
+        <Label htmlFor="data-seed-mode">Seed mode</Label>
+        <Select id="data-seed-mode" value={mode} onChange={(e) => onModeChange(e.target.value as DataSeedMode)}>
           <option value="hybrid">Hybrid (automatic + query JSON)</option>
           <option value="automatic">Automatic CONA datasets only</option>
           <option value="query_json">Query JSON only</option>
@@ -99,7 +99,7 @@ export function DataSeedSection({
 
       {showQueryJson && (
         <div className="space-y-2">
-          <Label>Data seed query JSON</Label>
+          <p className="text-sm font-medium leading-none">Data seed query JSON</p>
           <p className="text-xs text-muted-foreground">
             Upload queries for related objects and account rules with per-office limits.
           </p>
@@ -123,7 +123,7 @@ export function DataSeedSection({
       {showAutomatic && (
         <>
           <div>
-            <Label className="mb-2 block">CONA datasets to seed</Label>
+            <p className="mb-2 block text-sm font-medium leading-none">CONA datasets to seed</p>
             <div className="flex flex-wrap gap-3">
               {DATASETS.map((d) => (
                 <label key={d} className="flex items-center gap-2 text-sm">
@@ -140,7 +140,7 @@ export function DataSeedSection({
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <Label>Account limits</Label>
+              <p className="text-sm font-medium leading-none">Account limits</p>
               <Button
                 type="button"
                 size="sm"
@@ -158,8 +158,9 @@ export function DataSeedSection({
                   className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end rounded-lg border border-border/60 p-3"
                 >
                   <div>
-                    <Label className="text-xs">Group</Label>
+                    <Label htmlFor={`template-seed-${i}-group`} className="text-xs">Group</Label>
                     <Select
+                      id={`template-seed-${i}-group`}
                       value={row.accountGroup}
                       onChange={(e) =>
                         updateRow(i, { accountGroup: e.target.value as AccountSeedRow['accountGroup'] })
@@ -171,8 +172,9 @@ export function DataSeedSection({
                     </Select>
                   </div>
                   <div>
-                    <Label className="text-xs">Bottler</Label>
+                    <Label htmlFor={`template-seed-${i}-bottler`} className="text-xs">Bottler</Label>
                     <Select
+                      id={`template-seed-${i}-bottler`}
                       value={row.bottler}
                       onChange={(e) => updateRow(i, { bottler: e.target.value as AccountSeedRow['bottler'] })}
                     >
@@ -182,8 +184,9 @@ export function DataSeedSection({
                     </Select>
                   </div>
                   <div>
-                    <Label className="text-xs">Channel</Label>
+                    <Label htmlFor={`template-seed-${i}-channel`} className="text-xs">Channel</Label>
                     <Select
+                      id={`template-seed-${i}-channel`}
                       value={row.distributionChannel}
                       onChange={(e) =>
                         updateRow(i, {
@@ -196,8 +199,9 @@ export function DataSeedSection({
                     </Select>
                   </div>
                   <div>
-                    <Label className="text-xs">Limit</Label>
+                    <Label htmlFor={`template-seed-${i}-limit`} className="text-xs">Limit</Label>
                     <Input
+                      id={`template-seed-${i}-limit`}
                       type="number"
                       min={1}
                       value={row.limit}
@@ -211,6 +215,7 @@ export function DataSeedSection({
                         size="sm"
                         variant="ghost"
                         onClick={() => onAccountRowsChange(accountRows.filter((_, idx) => idx !== i))}
+                        aria-label={`Remove account limit row ${i + 1}`}
                       >
                         <Trash2 className="w-4 h-4 text-destructive" />
                       </Button>

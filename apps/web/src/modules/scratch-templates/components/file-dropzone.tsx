@@ -70,7 +70,7 @@ export function FileDropzone({
             type="button"
             onClick={() => pick(null)}
             className="shrink-0 p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-            aria-label="Remove file"
+            aria-label={`Remove ${file.name}`}
           >
             <X className="w-4 h-4" />
           </button>

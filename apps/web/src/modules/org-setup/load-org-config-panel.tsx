@@ -30,8 +30,8 @@ export function LoadOrgConfigPanel({ w }: LoadOrgConfigPanelProps) {
 
       <FormSection title="Manual load">
         <div>
-          <Label>Target Org</Label>
-          <Select value={w.orgId} onChange={(e) => w.setOrgId(e.target.value)}>
+          <Label htmlFor="org-config-target-org">Target Org</Label>
+          <Select id="org-config-target-org" value={w.orgId} onChange={(e) => w.setOrgId(e.target.value)}>
             <option value="">Select…</option>
             {w.orgs.map((o) => (
               <option key={o.id} value={o.id}>

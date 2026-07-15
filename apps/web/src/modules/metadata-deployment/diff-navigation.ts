@@ -15,6 +15,28 @@ export interface HunkContent {
   kind: HunkContentKind;
 }
 
+export interface DiffWindowRange {
+  start: number;
+  end: number;
+}
+
+export function getDiffWindowRange(
+  totalLines: number,
+  activeChunkIndices: number[],
+  maxRenderedLines = 800,
+  contextLines = 150,
+): DiffWindowRange | null {
+  if (totalLines <= maxRenderedLines) return null;
+  if (!activeChunkIndices.length) return { start: 0, end: maxRenderedLines };
+
+  const start = Math.max(0, Math.min(...activeChunkIndices) - contextLines);
+  const desiredEnd = Math.min(totalLines, Math.max(...activeChunkIndices) + contextLines + 1);
+  return {
+    start,
+    end: Math.min(desiredEnd, start + maxRenderedLines),
+  };
+}
+
 export function buildDiffHunks(diffLines: DiffLine[]): DiffHunk[] {
   const hunks: DiffHunk[] = [];
 

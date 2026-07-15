@@ -203,8 +203,9 @@ export function UserAccessUsersTable({
         <span>
           Showing {start} to {end} of {allCount} users
         </span>
-        <div className="flex items-center gap-2">
+        <nav className="flex items-center gap-2" aria-label="Users pagination">
           <Select
+            aria-label="Users per page"
             value={String(pageSize)}
             onChange={(e) => onPageSizeChange(Number(e.target.value))}
             className="h-8 text-xs w-[90px]"
@@ -219,6 +220,7 @@ export function UserAccessUsersTable({
             className="h-8 w-8 p-0"
             disabled={page <= 1}
             onClick={() => onPageChange(page - 1)}
+            aria-label="Previous users page"
           >
             ‹
           </Button>
@@ -229,6 +231,8 @@ export function UserAccessUsersTable({
               size="sm"
               className="h-8 w-8 p-0 text-xs"
               onClick={() => onPageChange(p)}
+              aria-label={`Go to users page ${p}`}
+              aria-current={p === page ? 'page' : undefined}
             >
               {p}
             </Button>
@@ -239,10 +243,11 @@ export function UserAccessUsersTable({
             className="h-8 w-8 p-0"
             disabled={page >= totalPages}
             onClick={() => onPageChange(page + 1)}
+            aria-label="Next users page"
           >
             ›
           </Button>
-        </div>
+        </nav>
       </div>
     </GlassCard>
   );

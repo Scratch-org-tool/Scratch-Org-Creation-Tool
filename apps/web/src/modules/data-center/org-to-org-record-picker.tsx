@@ -53,8 +53,9 @@ export function OrgToOrgRecordPicker({
           </p>
         </div>
         <div className="w-36">
-          <Label>Load limit</Label>
+          <Label htmlFor="record-picker-load-limit">Load limit</Label>
           <Input
+            id="record-picker-load-limit"
             type="number"
             min={1}
             max={ORG_TO_ORG_RECORD_LIMIT_MAX}
@@ -125,8 +126,8 @@ export function OrgToOrgRecordPicker({
       </div>
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>
+        <nav className="flex items-center justify-between text-xs text-muted-foreground" aria-label="Records pagination">
+          <span aria-current="page">
             Page {page} of {totalPages}
           </span>
           <div className="flex gap-2">
@@ -134,6 +135,7 @@ export function OrgToOrgRecordPicker({
               type="button"
               disabled={page <= 1 || loading}
               onClick={() => onPageChange(page - 1)}
+              aria-label="Previous records page"
               className="px-2 py-1 rounded border border-border disabled:opacity-40"
             >
               Previous
@@ -142,12 +144,13 @@ export function OrgToOrgRecordPicker({
               type="button"
               disabled={page >= totalPages || loading}
               onClick={() => onPageChange(page + 1)}
+              aria-label="Next records page"
               className="px-2 py-1 rounded border border-border disabled:opacity-40"
             >
               Next
             </button>
           </div>
-        </div>
+        </nav>
       )}
     </div>
   );

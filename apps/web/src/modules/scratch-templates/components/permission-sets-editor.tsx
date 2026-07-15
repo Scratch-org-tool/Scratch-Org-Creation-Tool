@@ -10,8 +10,9 @@ interface PermissionSetsEditorProps {
 export function PermissionSetsEditor({ value, onChange }: PermissionSetsEditorProps) {
   return (
     <div className="space-y-2">
-      <Label>Permission sets to assign</Label>
+      <Label htmlFor="template-permission-sets">Permission sets to assign</Label>
       <Input
+        id="template-permission-sets"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="System_Admin_Extension, Onboarding_Admin_Extension"

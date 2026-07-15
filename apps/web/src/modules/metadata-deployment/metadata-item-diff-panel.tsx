@@ -3,16 +3,32 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronUp, Expand, GitCompare, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { GlassCard, InlineAlert } from '@/components/studio';
 import {
   buildDiffHunks,
   extractHunkContent,
+  getDiffWindowRange,
   hunkElementId,
   scrollToHunk,
   type DiffLine,
   type HunkContent,
 } from './diff-navigation';
 import type { MetadataCompareHook } from './use-metadata-compare';
+
+const MAX_RENDERED_DIFF_LINES = 800;
+const MAX_HUNK_SUMMARY_CHARS = 20_000;
+
+function collapseLongDiffText(text: string): string {
+  if (text.length <= MAX_HUNK_SUMMARY_CHARS) return text;
+  return `${text.slice(0, MAX_HUNK_SUMMARY_CHARS)}\n\n… remaining change content collapsed for performance …`;
+}
 
 export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
   const [expanded, setExpanded] = useState(false);
@@ -218,6 +234,10 @@ function DiffView({
     () => (activeHunk && diffLines?.length ? extractHunkContent(diffLines, activeHunk) : null),
     [activeHunk, diffLines],
   );
+  const visibleRange = useMemo(() => {
+    if (!diffLines) return null;
+    return getDiffWindowRange(diffLines.length, activeHunk?.chunkIndices ?? []);
+  }, [activeHunk, diffLines]);
 
   return (
     <div className={`rounded-md border border-border overflow-hidden flex flex-col ${heightClass}`}>
@@ -268,6 +288,7 @@ function DiffView({
           activeChunkIndices={activeChunkIndices}
           allChangeChunkIndices={allChangeChunkIndices}
           focusMode={hunks.length > 0}
+          visibleRange={visibleRange}
         />
         <DiffPane
           label={targetLabel}
@@ -277,6 +298,7 @@ function DiffView({
           activeChunkIndices={activeChunkIndices}
           allChangeChunkIndices={allChangeChunkIndices}
           focusMode={hunks.length > 0}
+          visibleRange={visibleRange}
         />
       </div>
     </div>
@@ -293,10 +315,10 @@ function HunkChangeSummary({
   content: HunkContent;
 }) {
   const sourceBody = content.sourceText.trim()
-    ? content.sourceText
+    ? collapseLongDiffText(content.sourceText)
     : null;
   const targetBody = content.targetText.trim()
-    ? content.targetText
+    ? collapseLongDiffText(content.targetText)
     : null;
 
   return (
@@ -351,17 +373,23 @@ function DiffFullscreen({
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm p-4 md:p-6">
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="!inset-0 !left-0 !top-0 !h-dvh !w-screen !max-w-none !max-h-none !translate-x-0 !translate-y-0 rounded-none flex flex-col gap-0 bg-background/95 backdrop-blur-sm p-4 md:p-6 [&>button:last-child]:hidden">
       <div className="flex items-center justify-between gap-3 mb-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <GitCompare className="w-4 h-4 text-primary shrink-0" />
-          <h2 className="text-sm font-mono font-medium truncate">{title}</h2>
+          <DialogTitle className="text-sm font-mono font-medium truncate">{title}</DialogTitle>
+          <DialogDescription className="sr-only">
+            Full-screen source and target metadata comparison
+          </DialogDescription>
           {statusBadge}
         </div>
-        <Button type="button" variant="outline" size="sm" onClick={onClose}>
-          <X className="w-4 h-4 mr-1" />
-          Close
-        </Button>
+        <DialogClose asChild>
+          <Button type="button" variant="outline" size="sm">
+            <X className="w-4 h-4 mr-1" />
+            Close
+          </Button>
+        </DialogClose>
       </div>
       <div className="flex-1 min-h-0">
         <DiffView
@@ -374,7 +402,8 @@ function DiffFullscreen({
           heightClass="h-full"
         />
       </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -386,6 +415,7 @@ function DiffPane({
   activeChunkIndices,
   allChangeChunkIndices,
   focusMode,
+  visibleRange,
 }: {
   label: string;
   xml: string;
@@ -394,9 +424,11 @@ function DiffPane({
   activeChunkIndices: Set<number>;
   allChangeChunkIndices: Set<number>;
   focusMode: boolean;
+  visibleRange: { start: number; end: number } | null;
 }) {
   const rendered = diffLines?.length
-    ? diffLines.map((line, i) => {
+    ? diffLines.slice(visibleRange?.start ?? 0, visibleRange?.end).map((line, offset) => {
+        const i = offset + (visibleRange?.start ?? 0);
         const show =
           (side === 'source' && (line.added || (!line.added && !line.removed))) ||
           (side === 'target' && (line.removed || (!line.added && !line.removed)));
@@ -430,6 +462,13 @@ function DiffPane({
     : null;
 
   const hasRendered = rendered?.some(Boolean);
+  let plainXml = xml;
+  if (!diffLines?.length) {
+    const xmlLines = xml.split('\n');
+    if (xmlLines.length > MAX_RENDERED_DIFF_LINES) {
+      plainXml = `${xmlLines.slice(0, MAX_RENDERED_DIFF_LINES).join('\n')}\n\n… remaining lines collapsed for performance …`;
+    }
+  }
 
   return (
     <div className="border-r border-border last:border-r-0 flex flex-col min-h-0 h-full overflow-hidden">
@@ -437,7 +476,17 @@ function DiffPane({
         {label}
       </div>
       <pre className="flex-1 min-h-0 overflow-y-auto overflow-x-auto p-3 text-[11px] font-mono leading-relaxed m-0">
-        {hasRendered ? rendered : (xml || <span className="text-muted-foreground italic">No content</span>)}
+        {visibleRange?.start ? (
+          <span className="block text-muted-foreground italic">
+            … {visibleRange.start.toLocaleString()} lines collapsed above …{'\n'}
+          </span>
+        ) : null}
+        {hasRendered ? rendered : (plainXml || <span className="text-muted-foreground italic">No content</span>)}
+        {visibleRange && diffLines && visibleRange.end < diffLines.length ? (
+          <span className="block text-muted-foreground italic">
+            {'\n'}… {(diffLines.length - visibleRange.end).toLocaleString()} lines collapsed below …
+          </span>
+        ) : null}
       </pre>
     </div>
   );

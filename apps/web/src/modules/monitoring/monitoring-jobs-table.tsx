@@ -84,6 +84,7 @@ export function MonitoringJobsTable({
       description="Live queue activity and job status"
       headerAction={
         <Select
+          aria-label="Filter jobs by status"
           value={statusFilter}
           onChange={(e) => onStatusFilterChange(e.target.value as JobStatusFilter)}
           className="h-8 text-xs w-[130px]"
@@ -103,7 +104,7 @@ export function MonitoringJobsTable({
           <IntegrationsTh>Duration</IntegrationsTh>
           <IntegrationsTh className="hidden md:table-cell">Completed at</IntegrationsTh>
           <IntegrationsTh className="hidden lg:table-cell">Triggered by</IntegrationsTh>
-          <IntegrationsTh className="w-8"><span className="sr-only">Selected</span></IntegrationsTh>
+          <IntegrationsTh className="w-8"><span className="sr-only">Actions</span></IntegrationsTh>
         </IntegrationsTableHead>
         <tbody>
           {jobs.length === 0 && (
@@ -120,17 +121,8 @@ export function MonitoringJobsTable({
             return (
               <tr
                 key={job.id}
-                onClick={() => handleRowClick(job)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleRowClick(job);
-                  }
-                }}
-                role="button"
-                tabIndex={0}
                 className={cn(
-                  'border-b border-border/40 last:border-0 hover:bg-muted/20 transition-colors cursor-pointer',
+                  'border-b border-border/40 last:border-0 hover:bg-muted/20 transition-colors',
                   selected && !workspaceHref && 'border-l-2 border-l-primary bg-primary/5',
                 )}
               >
@@ -156,13 +148,24 @@ export function MonitoringJobsTable({
                   {job.triggeredBy}
                 </IntegrationsTd>
                 <IntegrationsTd className="w-8 text-right">
-                  {workspaceHref ? (
-                    <ExternalLink className="w-3.5 h-3.5 text-primary inline-block" aria-hidden />
-                  ) : (
-                    selected && (
-                      <Eye className="w-3.5 h-3.5 text-primary inline-block" aria-hidden />
-                    )
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    onClick={() => handleRowClick(job)}
+                    aria-label={
+                      workspaceHref
+                        ? `Open workspace for ${job.displayName}`
+                        : `${selected ? 'Hide' : 'View'} details for ${job.displayName}`
+                    }
+                    aria-pressed={workspaceHref ? undefined : selected}
+                  >
+                    {workspaceHref ? (
+                      <ExternalLink className="w-3.5 h-3.5 text-primary" aria-hidden />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5 text-primary" aria-hidden />
+                    )}
+                  </Button>
                 </IntegrationsTd>
               </tr>
             );
@@ -210,8 +213,8 @@ export function MonitoringJobsTable({
         <span>
           Showing {start} to {end} of {allJobsCount} jobs
         </span>
-        <div className="flex items-center gap-2">
-          <span className="tabular-nums">
+        <nav className="flex items-center gap-2" aria-label="Jobs pagination">
+          <span className="tabular-nums" aria-current="page">
             Page {page} of {totalPages}
           </span>
           <Button
@@ -220,6 +223,7 @@ export function MonitoringJobsTable({
             className="h-8 w-8 p-0"
             disabled={page <= 1}
             onClick={() => onPageChange(page - 1)}
+            aria-label="Previous jobs page"
           >
             ‹
           </Button>
@@ -229,10 +233,11 @@ export function MonitoringJobsTable({
             className="h-8 w-8 p-0"
             disabled={page >= totalPages}
             onClick={() => onPageChange(page + 1)}
+            aria-label="Next jobs page"
           >
             ›
           </Button>
-        </div>
+        </nav>
       </div>
     </GlassCard>
   );

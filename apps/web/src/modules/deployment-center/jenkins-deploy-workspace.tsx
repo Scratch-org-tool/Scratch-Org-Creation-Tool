@@ -117,8 +117,9 @@ export function JenkinsDeployWorkspace() {
         <GlassCard title="New Deployment" description="Select target org, job repo, and branch.">
           <FormSection title="Deployment target">
             <div>
-              <Label>Target Org</Label>
+              <Label htmlFor="jenkins-target-org">Target Org</Label>
               <Select
+                id="jenkins-target-org"
                 value={form.targetOrgId}
                 onChange={(e) => setForm({ ...form, targetOrgId: e.target.value })}
               >
@@ -131,8 +132,9 @@ export function JenkinsDeployWorkspace() {
               </Select>
             </div>
             <div>
-              <Label>Repository</Label>
+              <Label htmlFor="jenkins-repository">Repository</Label>
               <Select
+                id="jenkins-repository"
                 value={form.repo}
                 onChange={(e) => {
                   setForm({ ...form, repo: e.target.value });
@@ -148,8 +150,9 @@ export function JenkinsDeployWorkspace() {
               </Select>
             </div>
             <div>
-              <Label>Branch</Label>
+              <Label htmlFor="jenkins-branch">Branch</Label>
               <Select
+                id="jenkins-branch"
                 value={form.branch}
                 onChange={(e) => setForm({ ...form, branch: e.target.value })}
               >
