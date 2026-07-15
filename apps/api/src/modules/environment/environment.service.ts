@@ -456,12 +456,12 @@ export class EnvironmentService {
     return this.azureIntegration.connect(body, connectedBy);
   }
 
-  verifyAzureConnection() {
-    return this.azureIntegration.verify();
+  verifyAzureConnection(connectionId?: string) {
+    return this.azureIntegration.verify(connectionId);
   }
 
-  disconnectAzureDevOps() {
-    return this.azureIntegration.disconnect();
+  disconnectAzureDevOps(connectionId?: string) {
+    return this.azureIntegration.disconnect(connectionId);
   }
 
   getScmConnection(provider: ScmProvider, connectionId?: string) {
@@ -502,13 +502,13 @@ export class EnvironmentService {
   }
 
   verifyScm(provider: ScmProvider, connectionId?: string) {
-    if (provider === 'azure_devops') return this.verifyAzureConnection();
+    if (provider === 'azure_devops') return this.verifyAzureConnection(connectionId);
     if (!connectionId) throw new BadRequestException('connectionId is required');
     return this.integrationAdmin.verifyScm(provider, connectionId);
   }
 
   disconnectScm(provider: ScmProvider, connectionId?: string) {
-    if (provider === 'azure_devops') return this.disconnectAzureDevOps();
+    if (provider === 'azure_devops') return this.disconnectAzureDevOps(connectionId);
     if (!connectionId) throw new BadRequestException('connectionId is required');
     return this.integrationAdmin.disconnectScm(provider, connectionId);
   }

@@ -83,6 +83,22 @@ describe('ScmSourceService', () => {
     expect(github.checkout).not.toHaveBeenCalled();
   });
 
+  it('allows the environment-backed Azure sentinel without a database lookup', async () => {
+    const azure = adapter('azure_devops');
+    const service = new ScmSourceService(new ScmAdapterRegistry([azure]));
+
+    await expect(service.resolve({
+      provider: 'azure_devops',
+      connectionId: 'environment-azure-devops',
+      project: 'Core',
+      repo: 'metadata',
+      branch: 'main',
+    })).resolves.toMatchObject({
+      connectionId: 'environment-azure-devops',
+    });
+    expect(db.scmConnection.findUnique).not.toHaveBeenCalled();
+  });
+
   it('enforces binding provider, connection, and repository boundaries', async () => {
     const bitbucket = adapter('bitbucket');
     db.projectBinding.findUnique.mockResolvedValue({

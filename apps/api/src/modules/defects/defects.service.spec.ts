@@ -31,10 +31,18 @@ import { DefectsService } from './defects.service';
 const capabilities = {
   read: true,
   write: true,
+  create: true,
+  update: true,
+  comments: true,
   webhooks: true,
   attachments: true,
+  attachmentUploads: true,
   history: true,
   stateTransitions: true,
+  issueTypes: true,
+  users: true,
+  labels: true,
+  subIssues: true,
 };
 
 function item(
@@ -99,6 +107,7 @@ function adapter(provider: 'azure_boards' | 'github_issues' | 'jira'): WorkItemA
     addComment: vi.fn(),
     updateState: vi.fn(),
     uploadAttachment: vi.fn(),
+    deleteAttachment: vi.fn(),
     listIssueTypes: vi.fn().mockResolvedValue(['Bug']),
     listUsers: vi.fn().mockResolvedValue([]),
     listSubIssues: vi.fn().mockResolvedValue([]),
@@ -126,6 +135,7 @@ describe('DefectsService provider authorization', () => {
       Promise.resolve({ id: `${where.provider}-connection` }));
     db.externalIdentityBinding.findFirst.mockResolvedValue({
       externalUserId: 'provider-user-1',
+      externalLogin: 'provider-login',
       externalEmail: 'developer@example.test',
     });
     db.workItemSnapshot.upsert.mockResolvedValue({});
@@ -167,7 +177,7 @@ describe('DefectsService provider authorization', () => {
         workItemConnectionId: `${provider}-connection`,
         appUserId: 'app-user',
       },
-      select: { externalUserId: true, externalEmail: true },
+      select: { externalUserId: true, externalLogin: true, externalEmail: true },
     });
   });
 
@@ -223,6 +233,48 @@ describe('DefectsService provider authorization', () => {
     expect(jira.getAttachmentContent).not.toHaveBeenCalled();
   });
 
+  it('passes multipart bytes through without JSON/base64 expansion and authorizes deletion', async () => {
+    vi.mocked(github.getWorkItem).mockResolvedValue(
+      item('github_issues', 'acme/repo#8', 'provider-user-1'),
+    );
+    vi.mocked(github.uploadAttachment!).mockResolvedValue({
+      id: 'attachment-1',
+      name: 'proof.txt',
+      sizeBytes: 5,
+      url: '',
+      contentType: 'text/plain',
+      createdAt: null,
+      author: null,
+    });
+    const buffer = Buffer.from('proof');
+    await service.uploadAttachment(
+      'app-user',
+      false,
+      'acme/repo#8',
+      { fileName: 'proof.txt', contentType: 'text/plain', buffer },
+      { provider: 'github_issues', project: 'acme/repo' },
+    );
+    expect(github.uploadAttachment).toHaveBeenCalledWith(
+      'acme/repo#8',
+      { fileName: 'proof.txt', contentType: 'text/plain', buffer },
+      'acme/repo',
+      { connectionId: 'github_issues-connection', actorId: 'app-user', isAdmin: undefined },
+    );
+    await service.deleteAttachment(
+      'app-user',
+      true,
+      'acme/repo#8',
+      'attachment-1',
+      { provider: 'github_issues', project: 'acme/repo' },
+    );
+    expect(github.deleteAttachment).toHaveBeenCalledWith(
+      'acme/repo#8',
+      'attachment-1',
+      'acme/repo',
+      { connectionId: 'github_issues-connection', actorId: 'app-user', isAdmin: true },
+    );
+  });
+
   it('preserves the legacy Azure list shape and assignment behavior', async () => {
     vi.mocked(azure.queryWorkItems).mockResolvedValue([
       item('azure_boards', '42', 'developer@example.test'),
@@ -269,6 +321,74 @@ describe('DefectsService provider authorization', () => {
           externalItemId: 'CORE-12',
         },
       },
+    }));
+  });
+
+  it('uses a GitHub immutable id for authorization and its login for API operations', async () => {
+    db.externalIdentityBinding.findFirst.mockResolvedValue({
+      externalUserId: '42',
+      externalLogin: 'octocat',
+      externalEmail: 'ignored@example.test',
+    });
+    vi.mocked(github.queryWorkItems).mockResolvedValue([
+      {
+        ...item('github_issues', 'acme/repo#1', '42'),
+        assignee: {
+          id: '42',
+          displayName: 'octocat',
+          email: null,
+          avatarUrl: null,
+        },
+      },
+    ]);
+
+    await service.listWorkItems('app-user', false, {
+      provider: 'github_issues',
+      connectionId: 'github-connection',
+      project: 'acme/repo',
+    });
+
+    expect(github.queryWorkItems).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: 'github-connection',
+      assigneeId: '42',
+      assigneeLogin: 'octocat',
+      assigneeEmail: undefined,
+    }));
+  });
+
+  it('rejects binding connection and project mismatches before provider access', async () => {
+    db.projectBinding.findUnique.mockResolvedValue({
+      id: 'binding-1',
+      externalProjectId: '10001',
+      projectKey: 'CORE',
+      workItemConnectionId: 'jira-special',
+      workItemConnection: { provider: 'jira' },
+    });
+
+    await expect(service.getWorkItem('app-user', true, 'CORE-1', {
+      provider: 'jira',
+      bindingId: 'binding-1',
+      connectionId: 'jira-other',
+    })).rejects.toThrow('connectionId does not match');
+    await expect(service.getWorkItem('app-user', true, 'CORE-1', {
+      provider: 'jira',
+      bindingId: 'binding-1',
+      project: 'OTHER',
+    })).rejects.toThrow('project does not match');
+    expect(jira.getWorkItem).not.toHaveBeenCalled();
+  });
+
+  it('constrains implicit project binding lookup to the selected connection', async () => {
+    await service.listWorkItems('app-user', true, {
+      provider: 'jira',
+      connectionId: 'jira-selected',
+      project: 'CORE',
+    });
+
+    expect(db.projectBinding.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        workItemConnectionId: 'jira-selected',
+      }),
     }));
   });
 });

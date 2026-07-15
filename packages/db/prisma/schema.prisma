@@ -557,6 +557,7 @@ model ExternalIdentityBinding {
   workItemConnection   WorkItemConnection @relation(fields: [workItemConnectionId], references: [id], onDelete: Cascade)
   appUserId            String?
   externalUserId       String
+  externalLogin        String?
   externalEmail        String?
   displayName          String?
   createdAt            DateTime           @default(now())

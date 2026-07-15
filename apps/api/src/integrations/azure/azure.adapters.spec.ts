@@ -50,7 +50,7 @@ describe('AzureScmAdapter compatibility', () => {
       repo: 'metadata',
       branch: 'main',
     })).toEqual(['main']);
-    expect(azure.listBranches).toHaveBeenCalledWith('Core', 'metadata');
+    expect(azure.listBranches).toHaveBeenCalledWith('Core', 'metadata', undefined);
   });
 });
 
@@ -72,6 +72,20 @@ describe('AzureWorkItemAdapter compatibility', () => {
       }]),
     } as unknown as AzureWorkItemsService;
     const adapter = new AzureWorkItemAdapter(azure);
+    expect(adapter.capabilities).toMatchObject({
+      create: true,
+      update: true,
+      comments: true,
+      attachmentUploads: true,
+      issueTypes: true,
+      users: false,
+      labels: false,
+      subIssues: false,
+    });
+    expect(adapter.createWorkItem).toBeTypeOf('function');
+    expect(adapter.updateWorkItem).toBeTypeOf('function');
+    expect(adapter.addComment).toBeTypeOf('function');
+    expect(adapter.uploadAttachment).toBeTypeOf('function');
 
     const items = await adapter.queryWorkItems({ project: 'Core' });
     expect(items[0]).toMatchObject({
@@ -85,6 +99,7 @@ describe('AzureWorkItemAdapter compatibility', () => {
       project: 'Core',
       assigneeEmail: undefined,
       types: undefined,
+      connectionId: undefined,
     });
   });
 
@@ -114,9 +129,50 @@ describe('AzureWorkItemAdapter compatibility', () => {
     const adapter = new AzureWorkItemAdapter(azure);
 
     await expect(adapter.getWorkItem('42', 'Core')).resolves.toMatchObject({ id: '42' });
-    expect(azure.getWorkItem).toHaveBeenCalledWith(42, 'Core');
+    expect(azure.getWorkItem).toHaveBeenCalledWith(42, 'Core', undefined);
     await expect(adapter.getWorkItem('CORE-42')).rejects.toThrow(
       'Invalid Azure Boards work item id',
     );
+  });
+
+  it('passes selected provider-neutral connection ids to every Azure service call', async () => {
+    const azure = {
+      getConnectionInfo: vi.fn().mockResolvedValue({
+        id: 'wi-2',
+        orgSlug: 'second-org',
+        defaultProject: 'Second',
+        source: 'database',
+      }),
+      getWorkItem: vi.fn().mockResolvedValue({
+        id: 42,
+        title: 'Fix deploy',
+        type: 'Bug',
+        state: 'Active',
+        priority: 1,
+        assignedTo: null,
+        changedDate: '',
+        createdDate: '',
+        tags: [],
+        webUrl: '',
+        project: 'Second',
+        description: null,
+        reproSteps: null,
+        acceptanceCriteria: null,
+        areaPath: null,
+        iterationPath: null,
+        severity: null,
+        relations: [],
+      }),
+      getComments: vi.fn().mockResolvedValue([]),
+    } as unknown as AzureWorkItemsService;
+    const adapter = new AzureWorkItemAdapter(azure);
+
+    await adapter.getConnectionStatus({ connectionId: 'wi-2' });
+    await adapter.getWorkItem('42', 'Second', { connectionId: 'wi-2' });
+    await adapter.getComments('42', 'Second', { connectionId: 'wi-2' });
+
+    expect(azure.getConnectionInfo).toHaveBeenCalledWith('wi-2');
+    expect(azure.getWorkItem).toHaveBeenCalledWith(42, 'Second', 'wi-2');
+    expect(azure.getComments).toHaveBeenCalledWith(42, 'Second', 'wi-2');
   });
 });

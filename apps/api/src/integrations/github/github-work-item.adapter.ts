@@ -41,10 +41,18 @@ import {
 const CAPABILITIES = {
   read: true,
   write: true,
+  create: true,
+  update: true,
+  comments: true,
   webhooks: true,
   attachments: true,
+  attachmentUploads: true,
   history: true,
   stateTransitions: true,
+  issueTypes: true,
+  users: true,
+  labels: true,
+  subIssues: true,
 } as const;
 
 interface GitHubUser {
@@ -104,7 +112,10 @@ interface ProjectField {
 @Injectable()
 export class GitHubWorkItemAdapter implements WorkItemAdapter {
   readonly provider = 'github_issues' as const;
-  readonly capabilities = CAPABILITIES;
+  get capabilities() {
+    const available = this.attachments.available;
+    return { ...CAPABILITIES, attachments: available, attachmentUploads: available };
+  }
 
   constructor(
     private readonly integration: GitHubIntegrationService,
@@ -134,10 +145,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       error: null,
       connectedAt: row?.createdAt.toISOString(),
       lastVerifiedAt: row?.lastVerifiedAt?.toISOString(),
-      capabilities: {
-        ...this.capabilities,
-        attachments: (this.attachments as GitHubAttachmentStore).available,
-      },
+      capabilities: this.capabilities,
     };
   }
 
@@ -151,14 +159,11 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       html_url: string;
     }>(credentials, '/installation/repositories');
     const projects: WorkItemProject[] = [];
-    const owners = [
-      ...new Set(repositories.map((repository) => repository.full_name.split('/')[0])),
-    ];
-    for (const owner of owners) {
-      projects.push(...(await this.ownerProjects(credentials, owner)));
-    }
+    // A Projects v2 node can only be queried safely when its owner/repository
+    // context is persisted in a binding. Do not expose arbitrary owner projects
+    // that later metadata calls cannot resolve.
     projects.push(
-      ...bindings.map((binding) => ({
+      ...bindings.filter((binding) => binding.repository).map((binding) => ({
         id: binding.projectId,
         key: binding.projectId,
         name: binding.repository
@@ -245,8 +250,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       .filter(
         (item) =>
           !query.assigneeId ||
-          item.assignee?.id === query.assigneeId ||
-          item.assignee?.displayName.toLowerCase() === query.assigneeId.toLowerCase(),
+          item.assignee?.id === query.assigneeId,
       )
       .filter(
         (item) =>
@@ -476,7 +480,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
 
   async listIssueTypes(project: string, context: AdapterContext = {}): Promise<string[]> {
     const credentials = await this.requireCredentials(context.connectionId);
-    const owner = this.repositoryForInput(project).split('/')[0];
+    const owner = (await this.metadataRepository(project, context.connectionId)).owner;
     const data = await this.api.graphql<{
       organization: { issueTypes?: { nodes?: Array<{ name: string }> } } | null;
     }>(
@@ -491,7 +495,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
 
   async listAssignees(project: string, context: AdapterContext = {}): Promise<WorkItemUser[]> {
     const credentials = await this.requireCredentials(context.connectionId);
-    const ref = this.repositoryRef(this.repositoryForInput(project));
+    const ref = await this.metadataRepository(project, context.connectionId);
     const users = await this.api.paginate<GitHubUser>(
       credentials,
       `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/assignees`,
@@ -501,7 +505,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
 
   async listLabels(project: string, context: AdapterContext = {}): Promise<string[]> {
     const credentials = await this.requireCredentials(context.connectionId);
-    const ref = this.repositoryRef(this.repositoryForInput(project));
+    const ref = await this.metadataRepository(project, context.connectionId);
     const labels = await this.api.paginate<GitHubLabel>(
       credentials,
       `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/labels`,
@@ -1098,6 +1102,24 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       'Creating a GitHub issue requires an owner/repository project',
       { provider: this.provider },
     );
+  }
+
+  private async metadataRepository(
+    project: string,
+    connectionId?: string,
+  ): Promise<{ owner: string; repo: string }> {
+    if (/^[^/\s]+\/[^/\s]+$/.test(project)) return this.repositoryRef(project);
+    const binding = (await this.integration.listProjectBindings(connectionId)).find(
+      (candidate) => candidate.projectId === project,
+    );
+    if (!binding?.repository) {
+      throw new IntegrationError(
+        'invalid_request',
+        'GitHub Projects v2 metadata requires a bound owner/repository',
+        { provider: this.provider },
+      );
+    }
+    return { owner: binding.owner, repo: binding.repository };
   }
 
   private async attachmentScope(

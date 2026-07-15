@@ -13,10 +13,18 @@ const nullableString = z.string().nullable().default(null);
 export const integrationCapabilitiesSchema = z.object({
   read: z.boolean(),
   write: z.boolean().default(false),
+  create: z.boolean().default(false),
+  update: z.boolean().default(false),
+  comments: z.boolean().default(false),
   webhooks: z.boolean().default(false),
   attachments: z.boolean().default(false),
+  attachmentUploads: z.boolean().default(false),
   history: z.boolean().default(false),
   stateTransitions: z.boolean().default(false),
+  issueTypes: z.boolean().default(false),
+  users: z.boolean().default(false),
+  labels: z.boolean().default(false),
+  subIssues: z.boolean().default(false),
 });
 
 export const scmCapabilitiesSchema = z.object({

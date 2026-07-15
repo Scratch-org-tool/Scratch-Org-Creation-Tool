@@ -5,6 +5,7 @@ import {
   type GitSourceConfig,
   type ScmProvider,
 } from '@sfcc/shared';
+import { AZURE_ENV_SCM_CONNECTION_ID } from '../../modules/integrations/azure-integration.service';
 import { ScmAdapterRegistry } from './adapter.registry';
 
 @Injectable()
@@ -48,7 +49,7 @@ export class ScmSourceService {
       };
     }
 
-    if (resolved.connectionId) {
+    if (resolved.connectionId && resolved.connectionId !== AZURE_ENV_SCM_CONNECTION_ID) {
       const connection = await prisma.scmConnection.findUnique({
         where: { id: resolved.connectionId },
         select: { provider: true, status: true },

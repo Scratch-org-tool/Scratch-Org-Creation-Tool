@@ -21,7 +21,10 @@ import {
   type RepositoryQuery,
   type ScmAdapter,
   type WorkItemAdapter,
+  type WorkItemCreateInput,
   type WorkItemQuery,
+  type WorkItemUpdateInput,
+  type WorkItemUpload,
 } from '../foundation/adapter.contracts';
 import { IntegrationError } from '../foundation/adapter.errors';
 import { AzureService, type AzurePipelineVariables } from './azure.service';
@@ -39,10 +42,18 @@ const AZURE_SCM_CAPABILITIES = {
 const AZURE_WORK_ITEM_CAPABILITIES = {
   read: true,
   write: true,
+  create: true,
+  update: true,
+  comments: true,
   webhooks: false,
   attachments: true,
+  attachmentUploads: true,
   history: true,
   stateTransitions: true,
+  issueTypes: true,
+  users: false,
+  labels: false,
+  subIssues: false,
 } as const;
 
 @Injectable()
@@ -55,9 +66,10 @@ export class AzureScmAdapter implements ScmAdapter {
     private readonly integration: AzureIntegrationService,
   ) {}
 
-  async getConnectionStatus(_context?: AdapterContext): Promise<ScmConnectionStatus> {
-    const status = await this.integration.getStatus();
+  async getConnectionStatus(context: AdapterContext = {}): Promise<ScmConnectionStatus> {
+    const status = await this.integration.getStatus(context.connectionId);
     return {
+      ...('connectionId' in status && status.connectionId ? { id: status.connectionId } : {}),
       provider: this.provider,
       state: status.connected ? 'connected' : 'disconnected',
       connected: status.connected,
@@ -70,8 +82,8 @@ export class AzureScmAdapter implements ScmAdapter {
     };
   }
 
-  async listNamespaces(_context?: AdapterContext): Promise<Namespace[]> {
-    const repositories = await this.azure.listRepos();
+  async listNamespaces(context: AdapterContext = {}): Promise<Namespace[]> {
+    const repositories = await this.azure.listRepos(undefined, context.connectionId);
     const projects = [...new Set(repositories.map((repository) => repository.project).filter(Boolean))];
     return projects.map((project) => ({
       id: project,
@@ -83,7 +95,7 @@ export class AzureScmAdapter implements ScmAdapter {
 
   async listRepositories(query: RepositoryQuery = {}): Promise<Repository[]> {
     const project = query.project ?? query.namespace;
-    const repositories = await this.azure.listRepos(project);
+    const repositories = await this.azure.listRepos(project, query.connectionId);
     return repositories.map((repository) => ({
       id: repository.id,
       name: repository.name,
@@ -99,7 +111,11 @@ export class AzureScmAdapter implements ScmAdapter {
 
   listBranches(source: GitSourceConfig): Promise<string[]> {
     this.assertAzureSource(source);
-    return this.azure.listBranches(source.project ?? source.namespace, source.repositoryId ?? source.repo);
+    return this.azure.listBranches(
+      source.project ?? source.namespace,
+      source.repositoryId ?? source.repo,
+      source.connectionId,
+    );
   }
 
   checkout(source: GitSourceConfig) {
@@ -110,7 +126,12 @@ export class AzureScmAdapter implements ScmAdapter {
         provider: this.provider,
       });
     }
-    return this.azure.checkoutRepo(project, source.repositoryId ?? source.repo, source.branch);
+    return this.azure.checkoutRepo(
+      project,
+      source.repositoryId ?? source.repo,
+      source.branch,
+      source.connectionId,
+    );
   }
 
   triggerPipeline(source: GitSourceConfig, variables?: Record<string, string>) {
@@ -128,6 +149,7 @@ export class AzureScmAdapter implements ScmAdapter {
       source.repositoryId ?? source.repo,
       source.branch,
       azureVariables,
+      source.connectionId,
     );
   }
 
@@ -149,14 +171,14 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
 
   constructor(private readonly azure: AzureWorkItemsService) {}
 
-  async getConnectionStatus(_context?: AdapterContext): Promise<WorkItemConnectionStatus> {
-    const info = await this.azure.getConnectionInfo();
+  async getConnectionStatus(context: AdapterContext = {}): Promise<WorkItemConnectionStatus> {
+    const info = await this.azure.getConnectionInfo(context.connectionId);
     return {
+      id: info?.id,
       provider: this.provider,
       state: info ? 'connected' : 'disconnected',
       connected: Boolean(info),
-      // AzureWorkItemsService intentionally exposes no credential-source detail.
-      source: null,
+      source: info?.source ?? null,
       displayName: info?.orgSlug ?? null,
       namespace: info?.orgSlug ?? null,
       error: null,
@@ -164,10 +186,10 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
     };
   }
 
-  async listProjects(_context?: AdapterContext): Promise<WorkItemProject[]> {
+  async listProjects(context: AdapterContext = {}): Promise<WorkItemProject[]> {
     const [projects, info] = await Promise.all([
-      this.azure.listProjects(),
-      this.azure.getConnectionInfo(),
+      this.azure.listProjects(context.connectionId),
+      this.azure.getConnectionInfo(context.connectionId),
     ]);
     return projects.map((project) => ({
       id: project.id,
@@ -185,6 +207,7 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
       project: query.project,
       assigneeEmail: query.assigneeEmail,
       types: query.types,
+      connectionId: query.connectionId,
     });
     return items
       .filter((item) => !query.state || item.state.toLowerCase() === query.state.toLowerCase())
@@ -192,12 +215,67 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
       .map((item) => this.toSummary(item));
   }
 
-  async getWorkItem(id: string, project?: string): Promise<WorkItemDetail> {
-    return this.toDetail(await this.azure.getWorkItem(this.numericId(id), project));
+  async createWorkItem(input: WorkItemCreateInput): Promise<WorkItemDetail> {
+    return this.toDetail(await this.azure.createWorkItem({
+      project: input.project,
+      title: input.title,
+      type: input.type ?? 'Bug',
+      description: input.description,
+      assigneeId: input.assigneeId,
+      priority: input.priority,
+      severity: input.severity,
+      area: input.area,
+      iteration: input.iteration,
+      labels: input.labels,
+      state: input.state,
+      customFields: input.customFields,
+    }, input.connectionId));
   }
 
-  async getComments(id: string, project?: string): Promise<WorkItemComment[]> {
-    const comments = await this.azure.getComments(this.numericId(id), project);
+  async updateWorkItem(id: string, input: WorkItemUpdateInput): Promise<WorkItemDetail> {
+    return this.toDetail(await this.azure.updateWorkItem(
+      this.numericId(id),
+      {
+        title: input.title,
+        description: input.description,
+        assigneeId: input.assigneeId,
+        priority: input.priority,
+        severity: input.severity,
+        area: input.area,
+        iteration: input.iteration,
+        labels: input.labels,
+        state: input.state,
+        customFields: input.customFields,
+      },
+      input.project,
+      input.connectionId,
+    ));
+  }
+
+  async listIssueTypes(project: string, context: AdapterContext = {}): Promise<string[]> {
+    return this.azure.listWorkItemTypes(project, context.connectionId);
+  }
+
+  async getWorkItem(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemDetail> {
+    return this.toDetail(
+      await this.azure.getWorkItem(this.numericId(id), project, context.connectionId),
+    );
+  }
+
+  async getComments(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemComment[]> {
+    const comments = await this.azure.getComments(
+      this.numericId(id),
+      project,
+      context.connectionId,
+    );
     return comments.map((comment) => ({
       id: String(comment.id),
       body: comment.text,
@@ -207,14 +285,55 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
     }));
   }
 
-  async getStateOptions(id: string, project?: string): Promise<WorkItemState[]> {
-    const item = await this.azure.getWorkItem(this.numericId(id), project);
-    const states = await this.azure.getStateOptions(item.type, item.project);
+  async addComment(
+    id: string,
+    body: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemComment> {
+    const comment = await this.azure.addComment(
+      this.numericId(id),
+      body,
+      project,
+      context.connectionId,
+    );
+    return {
+      id: String(comment.id),
+      body: comment.text,
+      author: this.user(comment.author),
+      createdAt: comment.createdDate,
+      updatedAt: comment.modifiedDate,
+    };
+  }
+
+  async getStateOptions(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemState[]> {
+    const item = await this.azure.getWorkItem(
+      this.numericId(id),
+      project,
+      context.connectionId,
+    );
+    const states = await this.azure.getStateOptions(
+      item.type,
+      item.project,
+      context.connectionId,
+    );
     return states.map((state) => this.state(state.name, state.category));
   }
 
-  async getHistory(id: string, project?: string): Promise<WorkItemHistoryEvent[]> {
-    const history = await this.azure.getHistory(this.numericId(id), project);
+  async getHistory(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemHistoryEvent[]> {
+    const history = await this.azure.getHistory(
+      this.numericId(id),
+      project,
+      context.connectionId,
+    );
     return history.events.map((event) => ({
       id: event.id,
       kind: event.kind,
@@ -232,8 +351,16 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
     }));
   }
 
-  async listAttachments(id: string, project?: string): Promise<WorkItemAttachment[]> {
-    const attachments = await this.azure.listAttachments(this.numericId(id), project);
+  async listAttachments(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemAttachment[]> {
+    const attachments = await this.azure.listAttachments(
+      this.numericId(id),
+      project,
+      context.connectionId,
+    );
     return attachments.map((attachment) => ({
       id: attachment.id,
       name: attachment.name,
@@ -249,15 +376,42 @@ export class AzureWorkItemAdapter implements WorkItemAdapter {
     id: string,
     attachmentId: string,
     project?: string,
+    context: AdapterContext = {},
   ): Promise<AttachmentContent> {
-    const context = await this.azure.resolveProject(project);
+    const resolved = await this.azure.resolveProject(project, context.connectionId);
     // Resolve the item first to preserve the legacy route's project/access semantics.
-    await this.azure.getWorkItem(this.numericId(id), context.project);
-    return this.azure.getAttachmentContent(context.orgSlug, attachmentId, context.pat);
+    await this.azure.getWorkItem(this.numericId(id), resolved.project, context.connectionId);
+    return this.azure.getAttachmentContent(resolved.orgSlug, attachmentId, resolved.pat);
   }
 
-  async updateState(id: string, state: string, project?: string): Promise<WorkItemDetail> {
-    return this.toDetail(await this.azure.updateState(this.numericId(id), state, project));
+  async uploadAttachment(
+    id: string,
+    upload: WorkItemUpload,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemAttachment> {
+    const attachment = await this.azure.uploadAttachment(
+      this.numericId(id),
+      upload,
+      project,
+      context.connectionId,
+    );
+    return {
+      ...attachment,
+      createdAt: null,
+      author: null,
+    };
+  }
+
+  async updateState(
+    id: string,
+    state: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemDetail> {
+    return this.toDetail(
+      await this.azure.updateState(this.numericId(id), state, project, context.connectionId),
+    );
   }
 
   private numericId(id: string): number {

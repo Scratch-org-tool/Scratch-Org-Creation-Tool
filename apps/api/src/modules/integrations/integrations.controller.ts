@@ -92,9 +92,13 @@ export class IntegrationsController {
   }
 
   @Get('work-items/:provider/overview')
-  overview(@Param('provider') provider: string, @Query('project') project: string) {
+  overview(
+    @Param('provider') provider: string,
+    @Query('project') project: string,
+    @Query('connectionId') connectionId?: string,
+  ) {
     if (!project) throw new BadRequestException('project is required');
-    return this.service.overview(provider, project);
+    return this.service.overview(provider, project, connectionId);
   }
 
   @Get('work-items/:provider/items')
@@ -117,8 +121,12 @@ export class IntegrationsController {
   }
 
   @Post('work-items/:provider/items')
-  create(@Param('provider') provider: string, @Body() body: WorkItemCreateInput) {
-    return this.service.create(provider, body);
+  create(
+    @Param('provider') provider: string,
+    @Body() body: WorkItemCreateInput,
+    @Query('connectionId') connectionId?: string,
+  ) {
+    return this.service.create(provider, { ...body, connectionId: connectionId ?? body.connectionId });
   }
 
   @Get('work-items/:provider/items/:id')
@@ -126,8 +134,9 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.detail(provider, id, project);
+    return this.service.detail(provider, id, project, connectionId);
   }
 
   @Patch('work-items/:provider/items/:id')
@@ -135,8 +144,12 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Body() body: WorkItemUpdateInput,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.update(provider, id, body);
+    return this.service.update(provider, id, {
+      ...body,
+      connectionId: connectionId ?? body.connectionId,
+    });
   }
 
   @Get('work-items/:provider/items/:id/comments')
@@ -144,8 +157,9 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.comments(provider, id, project);
+    return this.service.comments(provider, id, project, connectionId);
   }
 
   @Post('work-items/:provider/items/:id/comments')
@@ -154,9 +168,10 @@ export class IntegrationsController {
     @Param('id') id: string,
     @Body() body: { body?: string },
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
     if (!body.body?.trim()) throw new BadRequestException('body is required');
-    return this.service.addComment(provider, id, body.body, project);
+    return this.service.addComment(provider, id, body.body, project, connectionId);
   }
 
   @Get('work-items/:provider/items/:id/states')
@@ -164,8 +179,9 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.states(provider, id, project);
+    return this.service.states(provider, id, project, connectionId);
   }
 
   @Patch('work-items/:provider/items/:id/state')
@@ -174,21 +190,30 @@ export class IntegrationsController {
     @Param('id') id: string,
     @Body() body: { state?: string },
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
     if (!body.state?.trim()) throw new BadRequestException('state is required');
-    return this.service.updateState(provider, id, body.state, project);
+    return this.service.updateState(provider, id, body.state, project, connectionId);
   }
 
   @Get('work-items/:provider/issue-types')
-  issueTypes(@Param('provider') provider: string, @Query('project') project: string) {
+  issueTypes(
+    @Param('provider') provider: string,
+    @Query('project') project: string,
+    @Query('connectionId') connectionId?: string,
+  ) {
     if (!project) throw new BadRequestException('project is required');
-    return this.service.issueTypes(provider, project);
+    return this.service.issueTypes(provider, project, connectionId);
   }
 
   @Get('work-items/:provider/labels')
-  labels(@Param('provider') provider: string, @Query('project') project: string) {
+  labels(
+    @Param('provider') provider: string,
+    @Query('project') project: string,
+    @Query('connectionId') connectionId?: string,
+  ) {
     if (!project) throw new BadRequestException('project is required');
-    return this.service.labels(provider, project);
+    return this.service.labels(provider, project, connectionId);
   }
 
   @Get('work-items/:provider/users')
@@ -196,8 +221,9 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Query('project') project?: string,
     @Query('query') query?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.users(provider, project, query);
+    return this.service.users(provider, project, query, connectionId);
   }
 
   @Get('work-items/:provider/items/:id/history')
@@ -205,8 +231,9 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.history(provider, id, project);
+    return this.service.history(provider, id, project, connectionId);
   }
 
   @Get('work-items/:provider/items/:id/subissues')
@@ -214,8 +241,9 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.subIssues(provider, id, project);
+    return this.service.subIssues(provider, id, project, connectionId);
   }
 
   @Post('work-items/:provider/items/:id/subissues')
@@ -224,9 +252,10 @@ export class IntegrationsController {
     @Param('id') id: string,
     @Body() body: { subIssueId?: string },
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
     if (!body.subIssueId?.trim()) throw new BadRequestException('subIssueId is required');
-    return this.service.addSubIssue(provider, id, body.subIssueId, project);
+    return this.service.addSubIssue(provider, id, body.subIssueId, project, connectionId);
   }
 
   @Get('work-items/:provider/items/:id/attachments')
@@ -234,8 +263,9 @@ export class IntegrationsController {
     @Param('provider') provider: string,
     @Param('id') id: string,
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.attachments(provider, id, project);
+    return this.service.attachments(provider, id, project, connectionId);
   }
 
   @Post('work-items/:provider/items/:id/attachments')
@@ -244,8 +274,9 @@ export class IntegrationsController {
     @Param('id') id: string,
     @Body() body: { fileName: string; contentType: string; base64: string },
     @Query('project') project?: string,
+    @Query('connectionId') connectionId?: string,
   ) {
-    return this.service.uploadAttachment(provider, id, body, project);
+    return this.service.uploadAttachment(provider, id, body, project, connectionId);
   }
 
   @Get('work-items/:provider/items/:id/attachments/:attachmentId/content')
@@ -254,6 +285,7 @@ export class IntegrationsController {
     @Param('id') id: string,
     @Param('attachmentId') attachmentId: string,
     @Query('project') project: string | undefined,
+    @Query('connectionId') connectionId: string | undefined,
     @Res() response: Response,
   ) {
     const content = await this.service.attachmentContent(
@@ -261,6 +293,7 @@ export class IntegrationsController {
       id,
       attachmentId,
       project,
+      connectionId,
     );
     response.setHeader('Content-Type', content.contentType);
     response.setHeader(

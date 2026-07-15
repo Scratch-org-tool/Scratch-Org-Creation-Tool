@@ -47,10 +47,18 @@ const SCM_CAPABILITIES = {
 const WORK_ITEM_CAPABILITIES = {
   read: true,
   write: true,
+  create: true,
+  update: true,
+  comments: true,
   webhooks: true,
   attachments: true,
+  attachmentUploads: true,
   history: true,
   stateTransitions: true,
+  issueTypes: true,
+  users: true,
+  labels: true,
+  subIssues: true,
 } as const;
 
 interface ConnectionRow {

@@ -172,8 +172,16 @@ export const DEFAULT_SCM_CAPABILITIES: ScmCapabilities = {
 export const DEFAULT_WORK_ITEM_CAPABILITIES: IntegrationCapabilities = {
   read: true,
   write: false,
+  create: false,
+  update: false,
+  comments: false,
   webhooks: false,
   attachments: false,
+  attachmentUploads: false,
   history: false,
   stateTransitions: false,
+  issueTypes: false,
+  users: false,
+  labels: false,
+  subIssues: false,
 };

@@ -14,26 +14,36 @@ export interface AzureCredentials {
   project?: string;
 }
 
+export const AZURE_ENV_SCM_CONNECTION_ID = 'environment-azure-devops';
+export const AZURE_ENV_WORK_ITEM_CONNECTION_ID = 'environment-azure-boards';
+
 @Injectable()
 export class AzureIntegrationService {
-  async getStatus() {
+  async getStatus(connectionId?: string) {
+    if (connectionId && !this.isEnvironmentConnection(connectionId)) {
+      const neutral = await this.findNeutralConnection(connectionId);
+      if (!neutral) {
+        return { connected: false, source: null, orgSlug: null, project: null, status: null };
+      }
+      const metadata = this.metadata(neutral.metadata);
+      return {
+        connected: neutral.status === 'connected' || neutral.status === 'degraded',
+        source: 'database' as const,
+        connectionId: neutral.id,
+        orgSlug: neutral.namespace ?? neutral.externalAccountId ?? neutral.displayName,
+        project: this.optionalMetadataString(metadata.defaultProject),
+        status: neutral.status,
+        connectedAt: neutral.createdAt.toISOString(),
+      };
+    }
+    if (connectionId) return this.environmentStatus();
+
     const row = await prisma.azureDevOpsConnection.findFirst({
       where: { status: 'active' },
       orderBy: { updatedAt: 'desc' },
     });
     if (!row) {
-      const envOrg = process.env.AZURE_DEVOPS_ORG;
-      const envPat = process.env.AZURE_DEVOPS_PAT;
-      if (envOrg && envPat) {
-        return {
-          connected: true,
-          source: 'environment' as const,
-          orgSlug: envOrg,
-          project: process.env.AZURE_DEFAULT_PROJECT ?? null,
-          status: 'active',
-        };
-      }
-      return { connected: false, source: null, orgSlug: null, project: null, status: null };
+      return this.environmentStatus();
     }
     return {
       connected: true,
@@ -45,7 +55,19 @@ export class AzureIntegrationService {
     };
   }
 
-  async getCredentials(): Promise<AzureCredentials | null> {
+  async getCredentials(connectionId?: string): Promise<AzureCredentials | null> {
+    if (connectionId && !this.isEnvironmentConnection(connectionId)) {
+      const neutral = await this.findNeutralConnection(connectionId);
+      if (!neutral || !['connected', 'degraded'].includes(neutral.status)) return null;
+      const metadata = this.metadata(neutral.metadata);
+      return {
+        orgSlug: neutral.namespace ?? neutral.externalAccountId ?? neutral.displayName,
+        pat: decrypt(neutral.encryptedCredentials),
+        project: this.optionalMetadataString(metadata.defaultProject) ?? undefined,
+      };
+    }
+    if (connectionId) return this.environmentCredentials();
+
     const row = await prisma.azureDevOpsConnection.findFirst({
       where: { status: 'active' },
       orderBy: { updatedAt: 'desc' },
@@ -57,16 +79,7 @@ export class AzureIntegrationService {
         project: row.project ?? undefined,
       };
     }
-    const orgSlug = process.env.AZURE_DEVOPS_ORG;
-    const pat = process.env.AZURE_DEVOPS_PAT;
-    if (orgSlug && pat) {
-      return {
-        orgSlug,
-        pat,
-        project: process.env.AZURE_DEFAULT_PROJECT ?? undefined,
-      };
-    }
-    return null;
+    return this.environmentCredentials();
   }
 
   async connect(body: unknown, connectedBy?: string) {
@@ -134,10 +147,18 @@ export class AzureIntegrationService {
             capabilities: {
               read: true,
               write: true,
+              create: true,
+              update: true,
+              comments: true,
               webhooks: false,
               attachments: true,
+              attachmentUploads: true,
               history: true,
               stateTransitions: true,
+              issueTypes: true,
+              users: false,
+              labels: false,
+              subIssues: false,
             },
             legacyAzureDevOpsConnectionId: legacy.id,
           },
@@ -155,14 +176,68 @@ export class AzureIntegrationService {
     };
   }
 
-  async verify() {
-    const creds = await this.getCredentials();
+  async verify(connectionId?: string) {
+    const creds = await this.getCredentials(connectionId);
     if (!creds) throw new NotFoundException('No Azure DevOps connection configured');
     await this.verifyPat(creds.orgSlug, creds.pat, creds.project);
-    return { verified: true, orgSlug: creds.orgSlug, project: creds.project ?? null };
+    if (connectionId && !this.isEnvironmentConnection(connectionId)) {
+      const neutral = await this.findNeutralConnection(connectionId);
+      if (!neutral) throw new NotFoundException('Azure DevOps connection not found');
+      const verifiedAt = new Date();
+      const pair = neutral.legacyAzureDevOpsConnectionId
+        ? { legacyAzureDevOpsConnectionId: neutral.legacyAzureDevOpsConnectionId }
+        : { id: neutral.id };
+      await prisma.$transaction([
+        prisma.scmConnection.updateMany({
+          where: { provider: 'azure_devops', ...pair },
+          data: { status: 'connected', lastVerifiedAt: verifiedAt },
+        }),
+        prisma.workItemConnection.updateMany({
+          where: { provider: 'azure_boards', ...pair },
+          data: { status: 'connected', lastVerifiedAt: verifiedAt },
+        }),
+      ]);
+    }
+    return {
+      verified: true,
+      connectionId: connectionId ?? null,
+      orgSlug: creds.orgSlug,
+      project: creds.project ?? null,
+    };
   }
 
-  async disconnect() {
+  async disconnect(connectionId?: string) {
+    if (connectionId) {
+      if (this.isEnvironmentConnection(connectionId)) {
+        throw new BadRequestException(
+          'Environment-backed Azure DevOps connections must be removed from server configuration',
+        );
+      }
+      const neutral = await this.findNeutralConnection(connectionId);
+      if (!neutral) throw new NotFoundException('Azure DevOps connection not found');
+      const deleted = await prisma.$transaction(async (tx) => {
+        if (neutral.legacyAzureDevOpsConnectionId) {
+          const pair = { legacyAzureDevOpsConnectionId: neutral.legacyAzureDevOpsConnectionId };
+          const [scm, workItems, legacy] = await Promise.all([
+            tx.scmConnection.deleteMany({ where: { provider: 'azure_devops', ...pair } }),
+            tx.workItemConnection.deleteMany({ where: { provider: 'azure_boards', ...pair } }),
+            tx.azureDevOpsConnection.deleteMany({
+              where: { id: neutral.legacyAzureDevOpsConnectionId },
+            }),
+          ]);
+          return scm.count + workItems.count + legacy.count;
+        }
+        if (neutral.kind === 'scm') {
+          return (await tx.scmConnection.deleteMany({
+            where: { id: neutral.id, provider: 'azure_devops' },
+          })).count;
+        }
+        return (await tx.workItemConnection.deleteMany({
+          where: { id: neutral.id, provider: 'azure_boards' },
+        })).count;
+      });
+      return { disconnected: true, connectionId, count: deleted };
+    }
     const deleted = await prisma.$transaction(async (tx) => {
       await tx.scmConnection.deleteMany({
         where: { legacyAzureDevOpsConnectionId: { not: null } },
@@ -173,6 +248,62 @@ export class AzureIntegrationService {
       return tx.azureDevOpsConnection.deleteMany({});
     });
     return { disconnected: true, count: deleted.count };
+  }
+
+  private async findNeutralConnection(connectionId: string) {
+    const [scm, workItems] = await Promise.all([
+      prisma.scmConnection.findFirst({
+        where: { id: connectionId, provider: 'azure_devops' },
+      }),
+      prisma.workItemConnection.findFirst({
+        where: { id: connectionId, provider: 'azure_boards' },
+      }),
+    ]);
+    return scm
+      ? { ...scm, kind: 'scm' as const }
+      : workItems
+        ? { ...workItems, kind: 'workItems' as const }
+        : null;
+  }
+
+  private isEnvironmentConnection(connectionId: string): boolean {
+    return connectionId === AZURE_ENV_SCM_CONNECTION_ID ||
+      connectionId === AZURE_ENV_WORK_ITEM_CONNECTION_ID;
+  }
+
+  private environmentCredentials(): AzureCredentials | null {
+    const orgSlug = process.env.AZURE_DEVOPS_ORG;
+    const pat = process.env.AZURE_DEVOPS_PAT;
+    return orgSlug && pat
+      ? {
+          orgSlug,
+          pat,
+          project: process.env.AZURE_DEFAULT_PROJECT ?? undefined,
+        }
+      : null;
+  }
+
+  private environmentStatus() {
+    const credentials = this.environmentCredentials();
+    return credentials
+      ? {
+          connected: true,
+          source: 'environment' as const,
+          orgSlug: credentials.orgSlug,
+          project: credentials.project ?? null,
+          status: 'active',
+        }
+      : { connected: false, source: null, orgSlug: null, project: null, status: null };
+  }
+
+  private metadata(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  private optionalMetadataString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 
   private async verifyPat(orgSlug: string, pat: string, project?: string) {

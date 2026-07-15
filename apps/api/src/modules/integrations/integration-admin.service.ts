@@ -15,7 +15,11 @@ import {
 import { BitbucketScmAdapter } from '../../integrations/bitbucket/bitbucket.adapter';
 import { JiraWorkItemAdapter } from '../../integrations/jira/jira.adapter';
 import { GitHubIntegrationService } from '../../integrations/github/github-integration.service';
-import { AzureIntegrationService } from './azure-integration.service';
+import {
+  AZURE_ENV_SCM_CONNECTION_ID,
+  AZURE_ENV_WORK_ITEM_CONNECTION_ID,
+  AzureIntegrationService,
+} from './azure-integration.service';
 
 const BITBUCKET_API = 'https://api.bitbucket.org/2.0';
 const BITBUCKET_GIT = 'https://bitbucket.org';
@@ -39,7 +43,7 @@ export class IntegrationAdminService {
     ]);
     if (azure.connected && azure.source === 'environment') {
       const base = {
-        id: 'environment-azure-devops',
+        id: AZURE_ENV_SCM_CONNECTION_ID,
         externalAccountId: azure.orgSlug,
         displayName: azure.orgSlug ?? 'Azure DevOps',
         namespace: azure.orgSlug,
@@ -66,15 +70,23 @@ export class IntegrationAdminService {
       if (!connections.workItems.some((connection) => connection.provider === 'azure_boards')) {
         connections.workItems.unshift({
           ...base,
-          id: 'environment-azure-boards',
+          id: AZURE_ENV_WORK_ITEM_CONNECTION_ID,
           provider: 'azure_boards',
           capabilities: {
             read: true,
             write: true,
+            create: true,
+            update: true,
+            comments: true,
             webhooks: false,
             attachments: true,
+            attachmentUploads: true,
             history: true,
             stateTransitions: true,
+            issueTypes: true,
+            users: false,
+            labels: false,
+            subIssues: false,
           },
         });
       }
@@ -138,6 +150,9 @@ export class IntegrationAdminService {
   }
 
   async connectWorkItems(provider: string, body: unknown, connectedBy?: string) {
+    if (provider === 'azure_boards') {
+      return this.azure.connect(body, connectedBy);
+    }
     if (provider === 'github_issues') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.connect(body, connectedBy);
@@ -200,7 +215,7 @@ export class IntegrationAdminService {
   }
 
   async verifyScm(provider: string, connectionId: string) {
-    if (provider === 'azure_devops') return this.azure.verify();
+    if (provider === 'azure_devops') return this.azure.verify(connectionId);
     if (provider === 'github') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.verify(connectionId);
@@ -220,6 +235,7 @@ export class IntegrationAdminService {
   }
 
   async verifyWorkItems(provider: string, connectionId: string) {
+    if (provider === 'azure_boards') return this.azure.verify(connectionId);
     if (provider === 'github_issues') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.verifyWorkItem(connectionId);
@@ -239,7 +255,7 @@ export class IntegrationAdminService {
   }
 
   async disconnectScm(provider: string, connectionId: string) {
-    if (provider === 'azure_devops') return this.azure.disconnect();
+    if (provider === 'azure_devops') return this.azure.disconnect(connectionId);
     if (provider === 'github') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.disconnect(connectionId);
@@ -250,6 +266,7 @@ export class IntegrationAdminService {
   }
 
   async disconnectWorkItems(provider: string, connectionId: string) {
+    if (provider === 'azure_boards') return this.azure.disconnect(connectionId);
     if (provider === 'github_issues') {
       if (!this.github) throw new BadRequestException('GitHub integration is unavailable');
       return this.github.disconnectWorkItem(connectionId);
@@ -391,6 +408,13 @@ export class IntegrationAdminService {
     if (!connection || !['jira', 'github_issues'].includes(connection.provider)) {
       throw new BadRequestException('Identity mapping connection must be Jira or GitHub Issues');
     }
+    const displayName = this.optionalString(input.displayName);
+    const externalLogin =
+      this.optionalString(input.externalLogin) ??
+      (connection.provider === 'github_issues' ? displayName : null);
+    if (connection.provider === 'github_issues' && !externalLogin) {
+      throw new BadRequestException('externalLogin is required for GitHub identity mappings');
+    }
     return prisma.externalIdentityBinding.upsert({
       where: {
         workItemConnectionId_externalUserId: { workItemConnectionId, externalUserId },
@@ -399,13 +423,15 @@ export class IntegrationAdminService {
         workItemConnectionId,
         externalUserId,
         appUserId: this.optionalString(input.appUserId),
+        externalLogin,
         externalEmail: this.optionalString(input.externalEmail),
-        displayName: this.optionalString(input.displayName),
+        displayName,
       },
       update: {
         appUserId: this.optionalString(input.appUserId),
+        externalLogin,
         externalEmail: this.optionalString(input.externalEmail),
-        displayName: this.optionalString(input.displayName),
+        displayName,
       },
     });
   }

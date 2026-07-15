@@ -92,6 +92,17 @@ export function azureWorkItemUrl(
   return `https://dev.azure.com/${org}/${proj}/_apis/wit/workitems/${id}?${query}`;
 }
 
+export function azureWorkItemCreateUrl(
+  orgSlug: string,
+  project: string,
+  workItemType: string,
+  query = 'api-version=7.0',
+): string {
+  const org = encodeURIComponent(normalizeAzureOrgSlug(orgSlug));
+  const proj = encodeURIComponent(normalizeAzureProject(project) ?? project);
+  return `https://dev.azure.com/${org}/${proj}/_apis/wit/workitems/$${encodeURIComponent(workItemType)}?${query}`;
+}
+
 export function azureWorkItemCommentsUrl(
   orgSlug: string,
   project: string,
@@ -113,6 +124,16 @@ export function azureWorkItemTypesStatesUrl(
   const proj = encodeURIComponent(normalizeAzureProject(project) ?? project);
   const type = encodeURIComponent(workItemType);
   return `https://dev.azure.com/${org}/${proj}/_apis/wit/workitemtypes/${type}/states?${query}`;
+}
+
+export function azureWorkItemTypesUrl(
+  orgSlug: string,
+  project: string,
+  query = 'api-version=7.0',
+): string {
+  const org = encodeURIComponent(normalizeAzureOrgSlug(orgSlug));
+  const proj = encodeURIComponent(normalizeAzureProject(project) ?? project);
+  return `https://dev.azure.com/${org}/${proj}/_apis/wit/workitemtypes?${query}`;
 }
 
 export function azureWorkItemWebUrl(orgSlug: string, project: string, id: number): string {
@@ -140,4 +161,13 @@ export function azureWitAttachmentUrl(
   const org = encodeURIComponent(normalizeAzureOrgSlug(orgSlug));
   const guid = encodeURIComponent(attachmentGuid);
   return `https://dev.azure.com/${org}/_apis/wit/attachments/${guid}?${query}`;
+}
+
+export function azureWitAttachmentsUrl(
+  orgSlug: string,
+  fileName: string,
+  query = 'api-version=7.0',
+): string {
+  const org = encodeURIComponent(normalizeAzureOrgSlug(orgSlug));
+  return `https://dev.azure.com/${org}/_apis/wit/attachments?fileName=${encodeURIComponent(fileName)}&${query}`;
 }

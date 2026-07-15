@@ -38,10 +38,18 @@ import {
 const JIRA_CAPABILITIES = {
   read: true,
   write: true,
+  create: true,
+  update: true,
+  comments: true,
   webhooks: true,
   attachments: true,
+  attachmentUploads: true,
   history: true,
   stateTransitions: true,
+  issueTypes: true,
+  users: true,
+  labels: false,
+  subIssues: false,
 } as const;
 
 export interface JiraSite {

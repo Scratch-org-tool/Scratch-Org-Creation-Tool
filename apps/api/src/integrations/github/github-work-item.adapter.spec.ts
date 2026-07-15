@@ -133,12 +133,57 @@ describe('GitHubWorkItemAdapter', () => {
     );
     const byId = await adapter.queryWorkItems({ project: 'acme/repo', assigneeId: '42' });
     expect(byId.map((item) => item.id)).toEqual(['acme/repo#1']);
+    await expect(adapter.queryWorkItems({
+      project: 'acme/repo',
+      assigneeId: 'ada',
+    })).resolves.toEqual([]);
     const byLogin = await adapter.queryWorkItems({
       project: 'acme/repo',
       assigneeLogin: 'ada',
     });
     expect(byLogin.map((item) => item.id)).toEqual(['acme/repo#1']);
     expect(byLogin[0].assignee?.email).toBeNull();
+  });
+
+  it('lists only bound Projects v2 nodes and resolves their metadata through owner/repo', async () => {
+    const integration = {
+      getWorkItemCredentials: vi.fn().mockResolvedValue(credentials),
+      listProjectBindings: vi.fn().mockResolvedValue([{
+        projectId: 'PVT_bound',
+        owner: 'acme',
+        repository: 'repo',
+        fieldMapping: {},
+      }]),
+    } as unknown as GitHubIntegrationService;
+    const api = {
+      graphql: vi.fn(),
+      paginate: vi.fn()
+        .mockResolvedValueOnce([{
+          id: 1,
+          full_name: 'acme/repo',
+          description: null,
+          html_url: 'https://github.com/acme/repo',
+        }])
+        .mockResolvedValueOnce([{ id: 1, name: 'bug' }]),
+    } as unknown as GitHubApiClient;
+    const adapter = new GitHubWorkItemAdapter(
+      integration,
+      api,
+      new DisabledGitHubAttachmentStore(),
+    );
+
+    const projects = await adapter.listProjects({ connectionId: 'github-work-items-1' });
+    expect(projects.map((project) => project.id)).toEqual(['PVT_bound', 'acme/repo']);
+    expect(api.graphql).not.toHaveBeenCalled();
+
+    await expect(adapter.listLabels(
+      'PVT_bound',
+      { connectionId: 'github-work-items-1' },
+    )).resolves.toEqual(['bug']);
+    expect(api.paginate).toHaveBeenLastCalledWith(
+      credentials,
+      '/repos/acme/repo/labels',
+    );
   });
 
   it('clearly advertises unavailable attachment storage', async () => {
