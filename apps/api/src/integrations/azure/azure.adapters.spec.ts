@@ -87,4 +87,36 @@ describe('AzureWorkItemAdapter compatibility', () => {
       types: undefined,
     });
   });
+
+  it('keeps numeric URL compatibility while rejecting non-Azure opaque ids at the boundary', async () => {
+    const azure = {
+      getWorkItem: vi.fn().mockResolvedValue({
+        id: 42,
+        title: 'Fix deploy',
+        type: 'Bug',
+        state: 'Active',
+        priority: 1,
+        assignedTo: null,
+        changedDate: '2026-01-02T00:00:00.000Z',
+        createdDate: '2026-01-01T00:00:00.000Z',
+        tags: [],
+        webUrl: 'https://dev.azure.test/items/42',
+        project: 'Core',
+        description: null,
+        reproSteps: null,
+        acceptanceCriteria: null,
+        areaPath: null,
+        iterationPath: null,
+        severity: null,
+        relations: [],
+      }),
+    } as unknown as AzureWorkItemsService;
+    const adapter = new AzureWorkItemAdapter(azure);
+
+    await expect(adapter.getWorkItem('42', 'Core')).resolves.toMatchObject({ id: '42' });
+    expect(azure.getWorkItem).toHaveBeenCalledWith(42, 'Core');
+    await expect(adapter.getWorkItem('CORE-42')).rejects.toThrow(
+      'Invalid Azure Boards work item id',
+    );
+  });
 });

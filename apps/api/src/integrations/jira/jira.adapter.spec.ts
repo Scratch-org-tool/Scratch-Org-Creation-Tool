@@ -204,14 +204,20 @@ describe('JiraWorkItemAdapter', () => {
       }
       throw new Error(`Unexpected URL ${url}`);
     });
-    const adapter = new JiraWorkItemAdapter(store(), fetch);
+    const connectionStore = store();
+    const adapter = new JiraWorkItemAdapter(connectionStore, fetch);
 
-    await expect(adapter.getWorkItem('ABC-1', 'ABC')).resolves.toMatchObject({
+    await expect(adapter.getWorkItem(
+      'ABC-1',
+      'ABC',
+      { connectionId: 'selected-jira-connection' },
+    )).resolves.toMatchObject({
       description: 'Steps here\n',
       severity: 'Critical',
       areaPath: 'Platform',
       iterationPath: 'Sprint 12',
     });
+    expect(connectionStore.getJira).toHaveBeenCalledWith('selected-jira-connection');
     await expect(adapter.getComments('ABC-1')).resolves.toEqual([
       expect.objectContaining({ id: 'comment-1', body: 'Fixed\n', author: { id: 'acct-8', displayName: 'Grace', email: null, avatarUrl: null } }),
     ]);

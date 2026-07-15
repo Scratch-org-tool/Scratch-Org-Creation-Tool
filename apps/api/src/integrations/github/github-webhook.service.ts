@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { GitHubIntegrationService } from './github-integration.service';
 import { githubIssueId } from './github.types';
+import { GitHubWorkItemAdapter } from './github-work-item.adapter';
 
 interface GitHubWebhookPayload {
   action?: string;
@@ -43,7 +45,10 @@ export function verifyGitHubWebhookSignature(
 
 @Injectable()
 export class GitHubWebhookService {
-  constructor(private readonly integration: GitHubIntegrationService) {}
+  constructor(
+    private readonly integration: GitHubIntegrationService,
+    @Optional() private readonly workItems?: GitHubWorkItemAdapter,
+  ) {}
 
   async receive(input: {
     rawBody: Buffer;
@@ -163,6 +168,13 @@ export class GitHubWebhookService {
         repo,
         number: payload.issue.number,
       });
+      const detail = this.workItems
+        ? await this.workItems.getWorkItem(
+            externalItemId,
+            payload.repository.full_name,
+            { connectionId },
+          )
+        : null;
       await prisma.workItemSnapshot.upsert({
         where: {
           workItemConnectionId_externalProjectId_externalItemId: {
@@ -176,14 +188,14 @@ export class GitHubWebhookService {
           externalProjectId: payload.repository.full_name,
           externalItemId,
           version: payload.issue.updated_at ?? null,
-          state: payload.issue.state ?? null,
-          payload: payload as object,
+          state: detail?.state.name ?? payload.issue.state ?? null,
+          payload: (detail ?? payload) as object,
           providerUpdatedAt: this.date(payload.issue.updated_at),
         },
         update: {
           version: payload.issue.updated_at ?? null,
-          state: payload.issue.state ?? null,
-          payload: payload as object,
+          state: detail?.state.name ?? payload.issue.state ?? null,
+          payload: (detail ?? payload) as object,
           providerUpdatedAt: this.date(payload.issue.updated_at),
           capturedAt: new Date(),
         },

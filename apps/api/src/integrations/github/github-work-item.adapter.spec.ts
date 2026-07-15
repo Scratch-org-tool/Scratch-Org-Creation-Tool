@@ -94,7 +94,11 @@ describe('GitHubWorkItemAdapter', () => {
       api,
       new DisabledGitHubAttachmentStore(),
     );
-    const detail = await adapter.getWorkItem('acme/repo#7');
+    const detail = await adapter.getWorkItem(
+      'acme/repo#7',
+      undefined,
+      { connectionId: 'github-work-items-1' },
+    );
     expect(detail).toMatchObject({
       id: 'acme/repo#7',
       state: { name: 'In Progress', category: 'in_progress' },
@@ -104,6 +108,8 @@ describe('GitHubWorkItemAdapter', () => {
       iterationPath: 'Sprint 12',
       assignee: { id: '42', displayName: 'octocat', email: null },
     });
+    expect(integration.getWorkItemCredentials).toHaveBeenCalledWith('github-work-items-1');
+    expect(integration.listProjectBindings).toHaveBeenCalledWith('github-work-items-1');
   });
 
   it('matches assignees only by exact GitHub id/login, never email substring', async () => {

@@ -101,6 +101,9 @@ export const workItemProjectSchema = z.object({
   name: z.string(),
   description: z.string().nullable().default(null),
   url: z.string().nullable().default(null),
+  externalUrl: z.string().nullable().optional(),
+  provider: workItemProviderSchema.optional(),
+  capabilities: integrationCapabilitiesSchema.optional(),
 });
 
 export const workItemStateSchema = z.object({
@@ -113,6 +116,7 @@ export const workItemStateSchema = z.object({
 export const workItemSummarySchema = z.object({
   id: z.string(),
   provider: workItemProviderSchema,
+  capabilities: integrationCapabilitiesSchema.optional(),
   project: workItemProjectSchema,
   title: z.string(),
   type: z.string(),
@@ -124,6 +128,7 @@ export const workItemSummarySchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   url: z.string(),
+  externalUrl: z.string().optional(),
 });
 
 export const workItemRelationSchema = z.object({

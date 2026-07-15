@@ -127,33 +127,35 @@ export interface WorkItemAdapter {
   readonly capabilities: IntegrationCapabilities;
   getConnectionStatus(context?: AdapterContext): Promise<WorkItemConnectionStatus>;
   listProjects(context?: AdapterContext): Promise<WorkItemProject[]>;
-  getOverview?(project: string): Promise<WorkItemOverview>;
+  getOverview?(project: string, context?: AdapterContext): Promise<WorkItemOverview>;
   queryWorkItems(query: WorkItemQuery): Promise<WorkItemSummary[]>;
-  getWorkItem(id: string, project?: string): Promise<WorkItemDetail>;
-  getComments(id: string, project?: string): Promise<WorkItemComment[]>;
-  getStateOptions(id: string, project?: string): Promise<WorkItemState[]>;
-  getHistory(id: string, project?: string): Promise<WorkItemHistoryEvent[]>;
-  listAttachments(id: string, project?: string): Promise<WorkItemAttachment[]>;
+  getWorkItem(id: string, project?: string, context?: AdapterContext): Promise<WorkItemDetail>;
+  getComments(id: string, project?: string, context?: AdapterContext): Promise<WorkItemComment[]>;
+  getStateOptions(id: string, project?: string, context?: AdapterContext): Promise<WorkItemState[]>;
+  getHistory(id: string, project?: string, context?: AdapterContext): Promise<WorkItemHistoryEvent[]>;
+  listAttachments(id: string, project?: string, context?: AdapterContext): Promise<WorkItemAttachment[]>;
   getAttachmentContent?(
     id: string,
     attachmentId: string,
     project?: string,
+    context?: AdapterContext,
   ): Promise<AttachmentContent>;
   createWorkItem?(input: WorkItemCreateInput): Promise<WorkItemDetail>;
   updateWorkItem?(id: string, input: WorkItemUpdateInput): Promise<WorkItemDetail>;
-  addComment?(id: string, body: string, project?: string): Promise<WorkItemComment>;
-  listIssueTypes?(project: string): Promise<string[]>;
-  listAssignees?(project: string): Promise<import('@sfcc/shared').WorkItemUser[]>;
-  listUsers?(project?: string, query?: string): Promise<import('@sfcc/shared').WorkItemUser[]>;
+  addComment?(id: string, body: string, project?: string, context?: AdapterContext): Promise<WorkItemComment>;
+  listIssueTypes?(project: string, context?: AdapterContext): Promise<string[]>;
+  listAssignees?(project: string, context?: AdapterContext): Promise<import('@sfcc/shared').WorkItemUser[]>;
+  listUsers?(project?: string, query?: string, context?: AdapterContext): Promise<import('@sfcc/shared').WorkItemUser[]>;
   uploadAttachment?(
     id: string,
     upload: WorkItemUpload,
     project?: string,
+    context?: AdapterContext,
   ): Promise<WorkItemAttachment>;
-  listLabels?(project: string): Promise<string[]>;
-  listSubIssues?(id: string, project?: string): Promise<WorkItemSummary[]>;
-  addSubIssue?(id: string, subIssueId: string, project?: string): Promise<WorkItemMutationResult>;
-  updateState?(id: string, state: string, project?: string): Promise<WorkItemDetail>;
+  listLabels?(project: string, context?: AdapterContext): Promise<string[]>;
+  listSubIssues?(id: string, project?: string, context?: AdapterContext): Promise<WorkItemSummary[]>;
+  addSubIssue?(id: string, subIssueId: string, project?: string, context?: AdapterContext): Promise<WorkItemMutationResult>;
+  updateState?(id: string, state: string, project?: string, context?: AdapterContext): Promise<WorkItemDetail>;
 }
 
 export const DEFAULT_SCM_CAPABILITIES: ScmCapabilities = {

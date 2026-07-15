@@ -209,8 +209,26 @@ export class IntegrationAdminService {
     return { disconnected: true, id: connectionId, provider };
   }
 
-  listBindings() {
-    return prisma.projectBinding.findMany({ orderBy: { updatedAt: 'desc' } });
+  listBindings(connectionId?: string) {
+    return prisma.projectBinding.findMany({
+      where: connectionId
+        ? {
+            OR: [
+              { scmConnectionId: connectionId },
+              { workItemConnectionId: connectionId },
+            ],
+          }
+        : {},
+      include: {
+        scmConnection: {
+          select: { id: true, provider: true, displayName: true, status: true },
+        },
+        workItemConnection: {
+          select: { id: true, provider: true, displayName: true, status: true },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
   }
 
   async saveBinding(body: unknown, createdBy: string) {
@@ -221,29 +239,54 @@ export class IntegrationAdminService {
     const projectKey = this.optionalString(input.projectKey);
     const repositoryId = this.optionalString(input.repositoryId);
     const repositoryName = this.optionalString(input.repositoryName);
-    if (!scmConnectionId || !workItemConnectionId) {
-      throw new BadRequestException(
-        'Both scmConnectionId and workItemConnectionId are required for a Bitbucket/Jira binding',
-      );
+    if (!scmConnectionId && !workItemConnectionId) {
+      throw new BadRequestException('scmConnectionId or workItemConnectionId is required');
     }
     const [scm, workItems] = await Promise.all([
-      prisma.scmConnection.findUnique({ where: { id: scmConnectionId } }),
-      prisma.workItemConnection.findUnique({ where: { id: workItemConnectionId } }),
+      scmConnectionId
+        ? prisma.scmConnection.findUnique({ where: { id: scmConnectionId } })
+        : null,
+      workItemConnectionId
+        ? prisma.workItemConnection.findUnique({ where: { id: workItemConnectionId } })
+        : null,
     ]);
-    if (!scm || scm.provider !== 'bitbucket') {
-      throw new BadRequestException('Binding SCM connection must be Bitbucket');
+    if (scmConnectionId && !scm) {
+      throw new BadRequestException('Binding SCM connection was not found');
     }
-    if (!workItems || workItems.provider !== 'jira') {
-      throw new BadRequestException('Binding work-item connection must be Jira');
+    if (workItemConnectionId && !workItems) {
+      throw new BadRequestException('Binding work-item connection was not found');
+    }
+    const compatibleScm = {
+      azure_boards: 'azure_devops',
+      github_issues: 'github',
+      jira: 'bitbucket',
+    } as const;
+    if (scm && workItems && scm.provider !== compatibleScm[workItems.provider]) {
+      throw new BadRequestException(
+        `${workItems.provider} bindings require ${compatibleScm[workItems.provider]} SCM`,
+      );
+    }
+    if (scm && scm.status !== 'connected') {
+      throw new BadRequestException('Binding SCM connection is not active');
+    }
+    if (workItems && workItems.status !== 'connected') {
+      throw new BadRequestException('Binding work-item connection is not active');
     }
     const metadata = {
-      workspace: this.optionalString(input.workspace) ?? scm.namespace,
-      jiraSiteId: this.optionalString(input.jiraSiteId) ?? workItems.externalAccountId,
+      workspace: this.optionalString(input.workspace) ?? scm?.namespace ?? null,
+      jiraSiteId: this.optionalString(input.jiraSiteId) ?? workItems?.externalAccountId ?? null,
       fieldMappings: this.jsonObject(input.fieldMappings),
+      fieldMapping: this.jsonObject(input.fieldMapping),
       workflowMappings: this.jsonObject(input.workflowMappings),
+      ...this.jsonObject(input.metadata),
     };
     const existing = await prisma.projectBinding.findFirst({
-      where: { scmConnectionId, workItemConnectionId, externalProjectId, repositoryId },
+      where: {
+        scmConnectionId: scmConnectionId ?? null,
+        workItemConnectionId: workItemConnectionId ?? null,
+        externalProjectId,
+        repositoryId,
+      },
     });
     if (existing) {
       return prisma.projectBinding.update({
@@ -257,8 +300,8 @@ export class IntegrationAdminService {
     }
     return prisma.projectBinding.create({
       data: {
-        scmConnectionId,
-        workItemConnectionId,
+        scmConnectionId: scmConnectionId ?? null,
+        workItemConnectionId: workItemConnectionId ?? null,
         externalProjectId,
         projectKey,
         repositoryId,
@@ -292,8 +335,8 @@ export class IntegrationAdminService {
     const connection = await prisma.workItemConnection.findUnique({
       where: { id: workItemConnectionId },
     });
-    if (!connection || connection.provider !== 'jira') {
-      throw new BadRequestException('Identity mapping connection must be Jira');
+    if (!connection || !['jira', 'github_issues'].includes(connection.provider)) {
+      throw new BadRequestException('Identity mapping connection must be Jira or GitHub Issues');
     }
     return prisma.externalIdentityBinding.upsert({
       where: {

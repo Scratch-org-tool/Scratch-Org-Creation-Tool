@@ -1,245 +1,822 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { prisma, type Prisma } from '@sfcc/db';
 import {
-  defectsProjectQuerySchema,
-  defectsWorkItemsQuerySchema,
-  updateWorkItemStateSchema,
-  type DefectsOverview,
-  type DefectsProjectsResponse,
-  type DefectsWorkItemsResponse,
+  resolveCopilotTiers,
+  workItemProviderSchema,
+  type IntegrationCapabilities,
+  type WorkItemComment,
+  type WorkItemDetail,
+  type WorkItemHistoryEvent,
+  type WorkItemProject,
+  type WorkItemProvider,
+  type WorkItemSummary,
 } from '@sfcc/shared';
-import { AzureWorkItemsService } from '../../integrations/azure/azure-work-items.service';
+import type {
+  AdapterContext,
+  WorkItemAdapter,
+  WorkItemCreateInput,
+  WorkItemUpdateInput,
+} from '../../integrations/foundation/adapter.contracts';
+import { IntegrationError } from '../../integrations/foundation/adapter.errors';
+import { WorkItemAdapterRegistry } from '../../integrations/foundation/adapter.registry';
 import { getAppUser } from '../auth/app-user.service';
 import { DefectInvestigationAgent } from '../agents/defect-investigation.agent';
-import { resolveCopilotTiers } from '@sfcc/shared';
 
-const RESOLVED_STATES = new Set(['Done', 'Closed', 'Resolved', 'Completed', 'Removed']);
-const IN_PROGRESS_STATES = new Set([
-  'Active',
-  'In Progress',
-  'Committed',
-  'In Review',
-  'In Test',
-  'Testing',
-]);
+type Query = Record<string, string | undefined>;
+
+interface ResolvedProvider {
+  provider: WorkItemProvider;
+  adapter: WorkItemAdapter;
+  bindingId: string | null;
+  connectionId: string | null;
+  project: string | undefined;
+  legacy: boolean;
+}
+
+interface AccessIdentity {
+  externalUserId: string;
+  email: string | null;
+}
+
+interface BindingRow {
+  id: string;
+  externalProjectId: string;
+  projectKey: string | null;
+  workItemConnectionId: string | null;
+  workItemConnection: { provider: WorkItemProvider } | null;
+}
 
 @Injectable()
 export class DefectsService {
-  // FUTURE: Email alerts when assigned work items change — see docs/developer-board-email-alerts.md
-  // Planned: ADO service hook or polling + NotificationService; not wired in v1.
-
   constructor(
-    private readonly azureWorkItems: AzureWorkItemsService,
+    private readonly adapters: WorkItemAdapterRegistry,
     private readonly defectInvestigationAgent: DefectInvestigationAgent,
   ) {}
 
-  async listProjects(): Promise<DefectsProjectsResponse> {
-    try {
-      const creds = await this.azureWorkItems.getConnectionInfo();
-      if (!creds) {
-        return { projects: [], defaultProject: null, connected: false, orgSlug: null };
-      }
-
-      const [projects, defaultProject] = await Promise.all([
-        this.azureWorkItems.listProjects(),
-        this.azureWorkItems.resolveDefaultProject(),
-      ]);
-
+  async listProjects(userId: string, isAdmin: boolean, query: Query = {}) {
+    const user = await this.requireUser(userId);
+    const resolved = await this.resolveProvider(query);
+    await this.identityFor(user.id, user.email, isAdmin, resolved);
+    const context = this.context(resolved);
+    const status = await resolved.adapter.getConnectionStatus(context);
+    const projects = status.connected || status.state === 'degraded'
+      ? await resolved.adapter.listProjects(context)
+      : [];
+    const canonicalProjects = projects.map((project) => this.projectDto(project, resolved));
+    if (resolved.legacy) {
       return {
-        projects,
-        defaultProject: defaultProject ?? projects[0]?.name ?? null,
-        connected: true,
-        orgSlug: creds.orgSlug,
+        projects: projects.map(({ id, name, description }) => ({ id, name, description })),
+        defaultProject: resolved.project ?? projects[0]?.name ?? null,
+        connected: status.connected,
+        orgSlug: status.namespace,
       };
-    } catch (err) {
-      if (this.isAzureNotConnected(err)) {
-        return { projects: [], defaultProject: null, connected: false, orgSlug: null };
-      }
-      if (err instanceof ForbiddenException || err instanceof UnprocessableEntityException) {
-        const creds = await this.azureWorkItems.getConnectionInfo().catch(() => null);
-        return {
-          projects: [],
-          defaultProject: null,
-          connected: Boolean(creds),
-          orgSlug: creds?.orgSlug ?? null,
-        };
-      }
-      throw err;
     }
+    return {
+      projects: canonicalProjects,
+      defaultProject: resolved.project ?? projects[0]?.key ?? projects[0]?.id ?? null,
+      connected: status.connected,
+      provider: resolved.provider,
+      capabilities: resolved.adapter.capabilities,
+      bindingId: resolved.bindingId,
+      connectionId: resolved.connectionId,
+    };
   }
 
-  async getOverview(userId: string, isAdmin: boolean, projectQuery?: unknown): Promise<DefectsOverview> {
+  async getOverview(userId: string, isAdmin: boolean, query: Query = {}) {
     const user = await this.requireUser(userId);
-    const { project: projectParam } = defectsProjectQuerySchema.parse(projectQuery ?? {});
-    let connected = true;
-    let orgSlug: string | null = null;
-    let project: string | null = null;
-    let items: Awaited<ReturnType<AzureWorkItemsService['queryWorkItems']>> = [];
-
-    try {
-      const ctx = await this.azureWorkItems.resolveProject(projectParam);
-      orgSlug = ctx.orgSlug;
-      project = ctx.project;
-      items = await this.azureWorkItems.queryWorkItems({
-        project: projectParam,
-        assigneeEmail: isAdmin ? undefined : user.email,
-      });
-    } catch (err) {
-      if (this.isAzureNotConnected(err) || this.isProjectRequired(err)) {
-        connected = !this.isAzureNotConnected(err);
-      } else {
-        throw err;
-      }
+    const resolved = await this.resolveProvider(query);
+    const identity = await this.identityFor(user.id, user.email, isAdmin, resolved);
+    const status = await resolved.adapter.getConnectionStatus(this.context(resolved));
+    const items = status.connected || status.state === 'degraded'
+      ? await this.authorizedQuery(resolved, identity, isAdmin, query)
+      : [];
+    const counts = this.overviewCounts(items);
+    if (resolved.legacy) {
+      return {
+        ...counts,
+        connected: status.connected,
+        orgSlug: status.namespace,
+        project: resolved.project ?? items[0]?.project.name ?? null,
+        assigneeEmail: user.email,
+        isAdminView: isAdmin,
+      };
     }
-
     return {
-      open: items.filter((i) => !RESOLVED_STATES.has(i.state) && !IN_PROGRESS_STATES.has(i.state)).length,
-      inProgress: items.filter((i) => IN_PROGRESS_STATES.has(i.state)).length,
-      resolved: items.filter((i) => RESOLVED_STATES.has(i.state)).length,
-      critical: items.filter((i) => (i.priority ?? 99) <= 1).length,
-      total: items.length,
-      connected,
-      orgSlug,
-      project,
-      assigneeEmail: user.email,
+      ...counts,
+      provider: resolved.provider,
+      capabilities: resolved.adapter.capabilities,
+      bindingId: resolved.bindingId,
+      connectionId: resolved.connectionId,
+      project: resolved.project ?? null,
+      assigneeExternalId: identity?.externalUserId ?? null,
       isAdminView: isAdmin,
     };
   }
 
-  async listWorkItems(
-    userId: string,
-    isAdmin: boolean,
-    query: unknown,
-  ): Promise<DefectsWorkItemsResponse> {
+  async listWorkItems(userId: string, isAdmin: boolean, query: Query) {
     const user = await this.requireUser(userId);
-    const parsed = defectsWorkItemsQuerySchema.parse(query);
+    const resolved = await this.resolveProvider(query);
+    const identity = await this.identityFor(user.id, user.email, isAdmin, resolved);
+    let items = await this.authorizedQuery(resolved, identity, isAdmin, query);
 
-    let items = await this.azureWorkItems.queryWorkItems({
-      project: parsed.project,
-      assigneeEmail: isAdmin ? undefined : user.email,
-      types: parsed.type ? [parsed.type] : undefined,
-    });
-
-    if (parsed.state && parsed.state !== 'all') {
-      if (parsed.state === 'resolved') {
-        items = items.filter((i) => RESOLVED_STATES.has(i.state));
-      } else if (parsed.state === 'active') {
-        items = items.filter((i) => IN_PROGRESS_STATES.has(i.state));
-      } else if (parsed.state === 'open') {
-        items = items.filter(
-          (i) => !RESOLVED_STATES.has(i.state) && !IN_PROGRESS_STATES.has(i.state),
-        );
-      } else {
-        items = items.filter((i) => i.state.toLowerCase() === parsed.state!.toLowerCase());
-      }
+    const state = query.state?.trim().toLowerCase();
+    if (state && state !== 'all') {
+      items = items.filter((item) =>
+        item.state.name.toLowerCase() === state || item.state.category === state);
+    }
+    const text = (query.q ?? query.text)?.trim().toLowerCase();
+    if (text) {
+      items = items.filter((item) =>
+        item.title.toLowerCase().includes(text) ||
+        item.id.toLowerCase().includes(text) ||
+        item.labels.some((label) => label.toLowerCase().includes(text)));
     }
 
-    if (parsed.q?.trim()) {
-      const q = parsed.q.trim().toLowerCase();
-      items = items.filter(
-        (i) =>
-          i.title.toLowerCase().includes(q) ||
-          String(i.id).includes(q) ||
-          i.tags.some((t) => t.toLowerCase().includes(q)),
-      );
-    }
-
+    const page = this.positiveInt(query.page, 1);
+    const pageSize = Math.min(100, this.positiveInt(query.pageSize, 20));
     const total = items.length;
-    const start = (parsed.page - 1) * parsed.pageSize;
-    const pageItems = items.slice(start, start + parsed.pageSize);
-
+    items = items.slice((page - 1) * pageSize, page * pageSize);
     return {
-      items: pageItems,
+      items: resolved.legacy
+        ? items.map((item) => this.legacySummary(item))
+        : items.map((item) => this.itemDto(item, resolved)),
       total,
-      page: parsed.page,
-      pageSize: parsed.pageSize,
+      page,
+      pageSize,
+      ...(resolved.legacy
+        ? {}
+        : {
+            provider: resolved.provider,
+            capabilities: resolved.adapter.capabilities,
+            bindingId: resolved.bindingId,
+            connectionId: resolved.connectionId,
+          }),
     };
   }
 
-  async getWorkItem(userId: string, isAdmin: boolean, id: number, project?: string) {
+  async getWorkItem(
+    userId: string,
+    isAdmin: boolean,
+    id: string,
+    query: Query = {},
+  ) {
+    const { item, resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    return resolved.legacy ? this.legacyDetail(item) : this.itemDto(item, resolved);
+  }
+
+  async createWorkItem(userId: string, isAdmin: boolean, body: unknown, query: Query = {}) {
     const user = await this.requireUser(userId);
-    const item = await this.azureWorkItems.getWorkItem(id, project);
-    this.assertCanAccess(user.email, isAdmin, item.assignedTo);
-    return item;
+    const input = this.object(body);
+    const resolved = await this.resolveProvider({ ...query, project: query.project ?? this.string(input.project) });
+    this.capability(resolved, 'write', resolved.adapter.createWorkItem, 'Creating work items');
+    const identity = await this.identityFor(user.id, user.email, isAdmin, resolved);
+    const title = this.string(input.title);
+    const project = resolved.project ?? this.string(input.project);
+    if (!title || !project) throw new BadRequestException('title and project are required');
+    const createInput: WorkItemCreateInput = {
+      ...(input as unknown as WorkItemCreateInput),
+      title,
+      project,
+      connectionId: resolved.connectionId ?? undefined,
+    };
+    if (!isAdmin && identity) {
+      createInput.assigneeId = identity.externalUserId;
+      createInput.assigneeLogins = [identity.externalUserId];
+    }
+    const item = await resolved.adapter.createWorkItem!(createInput);
+    this.assertAccess(item, identity, isAdmin, resolved);
+    await this.captureSnapshot(item, resolved);
+    return resolved.legacy ? this.legacyDetail(item) : this.itemDto(item, resolved);
   }
 
-  async getComments(userId: string, isAdmin: boolean, id: number, project?: string) {
-    const item = await this.getWorkItem(userId, isAdmin, id, project);
-    return this.azureWorkItems.getComments(id, item.project);
+  async updateWorkItem(
+    userId: string,
+    isAdmin: boolean,
+    id: string,
+    body: unknown,
+    query: Query = {},
+  ) {
+    const authorized = await this.authorizedItem(userId, isAdmin, id, query);
+    const { resolved, identity } = authorized;
+    this.capability(resolved, 'write', resolved.adapter.updateWorkItem, 'Updating work items');
+    const input = this.object(body) as unknown as WorkItemUpdateInput;
+    if (!isAdmin && identity) {
+      const requested = input.assigneeId ?? input.assigneeLogins?.[0];
+      if (requested !== undefined && requested !== identity.externalUserId) {
+        throw new ForbiddenException('You cannot assign a work item to another provider identity.');
+      }
+    }
+    const item = await resolved.adapter.updateWorkItem!(id, {
+      ...input,
+      project: resolved.project,
+      connectionId: resolved.connectionId ?? undefined,
+    });
+    this.assertAccess(item, identity, isAdmin, resolved);
+    await this.captureSnapshot(item, resolved);
+    return resolved.legacy ? this.legacyDetail(item) : this.itemDto(item, resolved);
   }
 
-  async getStates(userId: string, isAdmin: boolean, id: number, project?: string) {
-    const item = await this.getWorkItem(userId, isAdmin, id, project);
-    return this.azureWorkItems.getStateOptions(item.type, item.project);
+  async getComments(userId: string, isAdmin: boolean, id: string, query: Query = {}) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    const comments = await resolved.adapter.getComments(
+      id,
+      resolved.project,
+      this.context(resolved),
+    );
+    return resolved.legacy
+      ? comments.map((comment) => this.legacyComment(comment))
+      : comments;
   }
 
-  async getHistory(userId: string, isAdmin: boolean, id: number, project?: string) {
-    const item = await this.getWorkItem(userId, isAdmin, id, project);
-    return this.azureWorkItems.getHistory(id, item.project);
+  async addComment(
+    userId: string,
+    isAdmin: boolean,
+    id: string,
+    body: unknown,
+    query: Query = {},
+  ) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(resolved, 'write', resolved.adapter.addComment, 'Adding comments');
+    const text = this.string(this.object(body).body);
+    if (!text) throw new BadRequestException('body is required');
+    const comment = await resolved.adapter.addComment!(
+      id,
+      text,
+      resolved.project,
+      this.context(resolved),
+    );
+    await this.refreshSnapshot(id, resolved);
+    return comment;
   }
 
-  async getAttachments(userId: string, isAdmin: boolean, id: number, project?: string) {
-    const item = await this.getWorkItem(userId, isAdmin, id, project);
-    const attachments = await this.azureWorkItems.listAttachments(id, item.project);
-    return { attachments };
+  async getStates(userId: string, isAdmin: boolean, id: string, query: Query = {}) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    return resolved.adapter.getStateOptions(id, resolved.project, this.context(resolved));
+  }
+
+  async updateState(
+    userId: string,
+    isAdmin: boolean,
+    id: string,
+    body: unknown,
+    query: Query = {},
+  ) {
+    const { resolved, identity } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(resolved, 'stateTransitions', resolved.adapter.updateState, 'State transitions');
+    const state = this.string(this.object(body).state);
+    if (!state) throw new BadRequestException('state is required');
+    const item = await resolved.adapter.updateState!(
+      id,
+      state,
+      resolved.project,
+      this.context(resolved),
+    );
+    this.assertAccess(item, identity, isAdmin, resolved);
+    await this.captureSnapshot(item, resolved);
+    return resolved.legacy ? this.legacyDetail(item) : this.itemDto(item, resolved);
+  }
+
+  async getHistory(userId: string, isAdmin: boolean, id: string, query: Query = {}) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(resolved, 'history', true, 'History');
+    const events = await resolved.adapter.getHistory(id, resolved.project, this.context(resolved));
+    return resolved.legacy ? { events: events.map((event) => this.legacyHistory(event)) } : events;
+  }
+
+  async getAttachments(userId: string, isAdmin: boolean, id: string, query: Query = {}) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(resolved, 'attachments', true, 'Attachments');
+    const attachments = await resolved.adapter.listAttachments(
+      id,
+      resolved.project,
+      this.context(resolved),
+    );
+    return {
+      attachments,
+      ...(resolved.legacy
+        ? {}
+        : { provider: resolved.provider, capabilities: resolved.adapter.capabilities }),
+    };
   }
 
   async getAttachmentContent(
     userId: string,
     isAdmin: boolean,
-    id: number,
+    id: string,
     attachmentId: string,
-    project?: string,
+    query: Query = {},
   ) {
-    const item = await this.getWorkItem(userId, isAdmin, id, project);
-    const { orgSlug, pat } = await this.azureWorkItems.resolveProject(item.project);
-    return this.azureWorkItems.getAttachmentContent(orgSlug, attachmentId, pat);
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(
+      resolved,
+      'attachments',
+      resolved.adapter.getAttachmentContent,
+      'Attachment downloads',
+    );
+    const attachments = await resolved.adapter.listAttachments(
+      id,
+      resolved.project,
+      this.context(resolved),
+    );
+    if (!attachments.some((attachment) => attachment.id === attachmentId)) {
+      throw new NotFoundException('Attachment does not belong to this work item');
+    }
+    return resolved.adapter.getAttachmentContent!(
+      id,
+      attachmentId,
+      resolved.project,
+      this.context(resolved),
+    );
   }
 
-  async updateState(userId: string, isAdmin: boolean, id: number, body: unknown, project?: string) {
-    const user = await this.requireUser(userId);
-    const parsed = updateWorkItemStateSchema.parse(body);
-    const item = await this.azureWorkItems.getWorkItem(id, project);
-    this.assertCanAccess(user.email, isAdmin, item.assignedTo);
-    return this.azureWorkItems.updateState(id, parsed.state, item.project);
+  async uploadAttachment(
+    userId: string,
+    isAdmin: boolean,
+    id: string,
+    body: unknown,
+    query: Query = {},
+  ) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(
+      resolved,
+      'attachments',
+      resolved.adapter.uploadAttachment,
+      'Attachment uploads',
+    );
+    const input = this.object(body);
+    const fileName = this.string(input.fileName);
+    const contentType = this.string(input.contentType);
+    const base64 = this.string(input.base64);
+    if (!fileName || !contentType || !base64) {
+      throw new BadRequestException('fileName, contentType, and base64 are required');
+    }
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length || buffer.length > 25 * 1024 * 1024) {
+      throw new BadRequestException('Attachment must be between 1 byte and 25 MB');
+    }
+    const attachment = await resolved.adapter.uploadAttachment!(
+      id,
+      { fileName, contentType, buffer },
+      resolved.project,
+      this.context(resolved),
+    );
+    await this.refreshSnapshot(id, resolved);
+    return attachment;
   }
 
-  async investigate(userId: string, isAdmin: boolean, id: number, project?: string) {
-    const user = await this.requireUser(userId);
+  async listTypes(userId: string, isAdmin: boolean, query: Query = {}) {
+    const { resolved } = await this.authorizedProject(userId, isAdmin, query);
+    this.capability(resolved, 'read', resolved.adapter.listIssueTypes, 'Issue types');
+    const types = await resolved.adapter.listIssueTypes!(
+      resolved.project!,
+      this.context(resolved),
+    );
+    return { types, provider: resolved.provider, capabilities: resolved.adapter.capabilities };
+  }
+
+  async listUsers(userId: string, isAdmin: boolean, query: Query = {}) {
+    const { resolved } = await this.authorizedProject(userId, isAdmin, query);
+    const context = this.context(resolved);
+    const users = resolved.adapter.listUsers
+      ? await resolved.adapter.listUsers(resolved.project, query.q ?? query.query, context)
+      : resolved.adapter.listAssignees
+        ? await resolved.adapter.listAssignees(resolved.project!, context)
+        : this.unsupported(resolved, 'Users');
+    return { users, provider: resolved.provider, capabilities: resolved.adapter.capabilities };
+  }
+
+  async listSubIssues(userId: string, isAdmin: boolean, id: string, query: Query = {}) {
+    const { resolved, identity } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(resolved, 'read', resolved.adapter.listSubIssues, 'Subissues');
+    const items = await resolved.adapter.listSubIssues!(
+      id,
+      resolved.project,
+      this.context(resolved),
+    );
+    const authorized = isAdmin
+      ? items
+      : items.filter((item) => this.canAccess(item, identity, resolved));
+    return {
+      items: authorized.map((item) => this.itemDto(item, resolved)),
+      provider: resolved.provider,
+      capabilities: resolved.adapter.capabilities,
+    };
+  }
+
+  async addSubIssue(
+    userId: string,
+    isAdmin: boolean,
+    id: string,
+    body: unknown,
+    query: Query = {},
+  ) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(resolved, 'write', resolved.adapter.addSubIssue, 'Subissues');
+    const subIssueId = this.string(this.object(body).subIssueId);
+    if (!subIssueId) throw new BadRequestException('subIssueId is required');
+    await this.authorizedItem(userId, isAdmin, subIssueId, {
+      ...query,
+      provider: resolved.provider,
+      bindingId: resolved.bindingId ?? undefined,
+      project: resolved.project,
+    });
+    const result = await resolved.adapter.addSubIssue!(
+      id,
+      subIssueId,
+      resolved.project,
+      this.context(resolved),
+    );
+    await this.refreshSnapshot(id, resolved);
+    return result;
+  }
+
+  async investigate(userId: string, isAdmin: boolean, id: string, query: Query = {}) {
     const profile = await getAppUser(userId);
-    const item = await this.azureWorkItems.getWorkItem(id, project);
-    this.assertCanAccess(user.email, isAdmin, item.assignedTo);
-
-    const query = [
-      `Defect #${item.id}: ${item.title}`,
+    const { item } = await this.authorizedItem(userId, isAdmin, id, query);
+    const prompt = [
+      `${item.type} ${item.id}: ${item.title}`,
       item.description ? `Description: ${this.stripHtml(item.description)}` : '',
       item.reproSteps ? `Repro steps: ${this.stripHtml(item.reproSteps)}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-
+    ].filter(Boolean).join('\n\n');
     const tiers = resolveCopilotTiers(profile ?? { role: 'user', grantedModules: [] });
     const result = await this.defectInvestigationAgent.run(
-      query,
+      prompt,
       {
         workItemId: item.id,
         type: item.type,
-        state: item.state,
+        state: item.state.name,
         severity: item.severity,
-        project: item.project,
+        project: item.project.key,
       },
       { tiers, mode: 'action' },
     );
+    return { workItemId: item.id, ...result };
+  }
 
+  private async authorizedProject(userId: string, isAdmin: boolean, query: Query) {
+    const user = await this.requireUser(userId);
+    const resolved = await this.resolveProvider(query);
+    if (!resolved.project) throw new BadRequestException('project or bindingId is required');
+    const identity = await this.identityFor(user.id, user.email, isAdmin, resolved);
+    return { user, resolved, identity };
+  }
+
+  private async authorizedItem(userId: string, isAdmin: boolean, id: string, query: Query) {
+    const user = await this.requireUser(userId);
+    const resolved = await this.resolveProvider(query);
+    const identity = await this.identityFor(user.id, user.email, isAdmin, resolved);
+    const liveItem = await resolved.adapter.getWorkItem(
+      id,
+      resolved.project,
+      this.context(resolved),
+    );
+    this.assertAccess(liveItem, identity, isAdmin, resolved);
+    const cached = query.cache === 'true' ? await this.cachedItem(id, resolved) : null;
+    const item = cached ?? liveItem;
+    await this.captureSnapshot(liveItem, resolved);
+    return { user, item, resolved, identity };
+  }
+
+  private async authorizedQuery(
+    resolved: ResolvedProvider,
+    identity: AccessIdentity | null,
+    isAdmin: boolean,
+    query: Query,
+  ): Promise<WorkItemSummary[]> {
+    const type = query.type?.trim();
+    const items = await resolved.adapter.queryWorkItems({
+      connectionId: resolved.connectionId ?? undefined,
+      project: resolved.project,
+      assigneeEmail:
+        !isAdmin && resolved.provider === 'azure_boards' ? identity?.email ?? undefined : undefined,
+      assigneeId:
+        !isAdmin && resolved.provider !== 'azure_boards'
+          ? identity?.externalUserId
+          : undefined,
+      assigneeLogin:
+        !isAdmin && resolved.provider === 'github_issues'
+          ? identity?.externalUserId
+          : undefined,
+      types: type ? [type] : undefined,
+      text: query.q ?? query.text,
+      pageSize: 100,
+    });
+    return isAdmin
+      ? items
+      : items.filter((item) => this.canAccess(item, identity, resolved));
+  }
+
+  private async resolveProvider(query: Query): Promise<ResolvedProvider> {
+    const bindingId = query.bindingId?.trim();
+    let binding: BindingRow | null = null;
+    if (bindingId) {
+      binding = await prisma.projectBinding.findUnique({
+        where: { id: bindingId },
+        include: { workItemConnection: { select: { provider: true } } },
+      }) as BindingRow | null;
+      if (!binding?.workItemConnectionId || !binding.workItemConnection) {
+        throw new NotFoundException('Work-item project binding not found');
+      }
+    }
+
+    const requested = query.provider?.trim();
+    const inferred = binding?.workItemConnection?.provider;
+    const parsed = workItemProviderSchema.safeParse(requested || inferred || 'azure_boards');
+    if (!parsed.success) throw new BadRequestException(`Unsupported work-item provider "${requested}"`);
+    if (inferred && requested && inferred !== parsed.data) {
+      throw new BadRequestException('provider does not match bindingId');
+    }
+    const provider = parsed.data;
+    let connectionId = binding?.workItemConnectionId ?? query.connectionId?.trim() ?? null;
+    let project =
+      query.project?.trim() ||
+      (provider === 'github_issues'
+        ? binding?.externalProjectId
+        : binding?.projectKey || binding?.externalProjectId) ||
+      undefined;
+
+    if (provider !== 'azure_boards' && !binding && project) {
+      const found = await prisma.projectBinding.findFirst({
+        where: {
+          OR: [{ externalProjectId: project }, { projectKey: project }],
+          workItemConnection: { provider },
+        },
+        include: { workItemConnection: { select: { provider: true } } },
+        orderBy: { updatedAt: 'desc' },
+      }) as BindingRow | null;
+      if (found) {
+        binding = found;
+        connectionId = found.workItemConnectionId;
+        project = provider === 'github_issues'
+          ? found.externalProjectId
+          : found.projectKey || found.externalProjectId;
+      }
+    }
+    if (provider !== 'azure_boards' && !connectionId) {
+      const connection = await prisma.workItemConnection.findFirst({
+        where: { provider, status: { in: ['connected', 'degraded'] } },
+        select: { id: true },
+        orderBy: { updatedAt: 'desc' },
+      });
+      connectionId = connection?.id ?? null;
+    }
+    if (provider !== 'azure_boards' && !connectionId) {
+      throw new UnprocessableEntityException({
+        code: 'WORK_ITEM_BINDING_REQUIRED',
+        message: `A connected ${provider} ProjectBinding or connectionId is required`,
+        provider,
+      });
+    }
     return {
-      workItemId: item.id,
-      content: result.content,
-      reasoning: result.reasoning,
-      action: result.action,
+      provider,
+      adapter: this.adapters.get(provider),
+      bindingId: binding?.id ?? null,
+      connectionId,
+      project,
+      legacy: provider === 'azure_boards' && (query.legacy === 'true' || !requested),
+    };
+  }
+
+  private async identityFor(
+    userId: string,
+    email: string,
+    isAdmin: boolean,
+    resolved: ResolvedProvider,
+  ): Promise<AccessIdentity | null> {
+    if (isAdmin) return null;
+    if (resolved.provider === 'azure_boards') {
+      return { externalUserId: email, email };
+    }
+    const binding = await prisma.externalIdentityBinding.findFirst({
+      where: {
+        workItemConnectionId: resolved.connectionId!,
+        appUserId: userId,
+      },
+      select: { externalUserId: true, externalEmail: true },
+    });
+    if (!binding) {
+      throw new ForbiddenException({
+        code: 'EXTERNAL_IDENTITY_NOT_BOUND',
+        message: `Your account is not bound to a ${resolved.provider} identity`,
+        provider: resolved.provider,
+      });
+    }
+    return { externalUserId: binding.externalUserId, email: binding.externalEmail };
+  }
+
+  private assertAccess(
+    item: WorkItemSummary,
+    identity: AccessIdentity | null,
+    isAdmin: boolean,
+    resolved: ResolvedProvider,
+  ): void {
+    if (!isAdmin && !this.canAccess(item, identity, resolved)) {
+      throw new ForbiddenException('You can only access work items assigned to your bound identity.');
+    }
+  }
+
+  private canAccess(
+    item: WorkItemSummary,
+    identity: AccessIdentity | null,
+    resolved: ResolvedProvider,
+  ): boolean {
+    if (!identity || !item.assignee) return false;
+    if (resolved.provider === 'azure_boards') {
+      const email = identity.email?.toLowerCase();
+      return Boolean(
+        email &&
+        (item.assignee.email?.toLowerCase() === email ||
+          item.assignee.displayName.toLowerCase().includes(`<${email}>`)),
+      );
+    }
+    return item.assignee.id === identity.externalUserId ||
+      (resolved.provider === 'github_issues' &&
+        item.assignee.displayName.toLowerCase() === identity.externalUserId.toLowerCase());
+  }
+
+  private capability(
+    resolved: ResolvedProvider,
+    capability: keyof IntegrationCapabilities,
+    implemented: unknown,
+    operation: string,
+  ): void {
+    if (!resolved.adapter.capabilities[capability] || !implemented) {
+      this.unsupported(resolved, operation);
+    }
+  }
+
+  private unsupported(resolved: ResolvedProvider, operation: string): never {
+    throw new IntegrationError(
+      'unsupported_capability',
+      `${operation} are not supported by ${resolved.provider}`,
+      { provider: resolved.provider, retryable: false },
+    );
+  }
+
+  private context(resolved: ResolvedProvider): AdapterContext {
+    return { connectionId: resolved.connectionId ?? undefined };
+  }
+
+  private itemDto<T extends WorkItemSummary>(item: T, resolved: ResolvedProvider): T & {
+    externalUrl: string;
+    capabilities: IntegrationCapabilities;
+  } {
+    return {
+      ...item,
+      provider: resolved.provider,
+      capabilities: resolved.adapter.capabilities,
+      externalUrl: item.url,
+      project: this.projectDto(item.project, resolved),
+    };
+  }
+
+  private projectDto(project: WorkItemProject, resolved: ResolvedProvider) {
+    return {
+      ...project,
+      provider: resolved.provider,
+      capabilities: resolved.adapter.capabilities,
+      externalUrl: project.url,
+    };
+  }
+
+  private async captureSnapshot(item: WorkItemSummary, resolved: ResolvedProvider): Promise<void> {
+    if (!resolved.connectionId) return;
+    await prisma.workItemSnapshot.upsert({
+      where: {
+        workItemConnectionId_externalProjectId_externalItemId: {
+          workItemConnectionId: resolved.connectionId,
+          externalProjectId: item.project.id,
+          externalItemId: item.id,
+        },
+      },
+      create: {
+        workItemConnectionId: resolved.connectionId,
+        externalProjectId: item.project.id,
+        externalItemId: item.id,
+        version: item.updatedAt,
+        state: item.state.name,
+        payload: JSON.parse(JSON.stringify(item)) as Prisma.InputJsonValue,
+        providerUpdatedAt: this.date(item.updatedAt),
+      },
+      update: {
+        version: item.updatedAt,
+        state: item.state.name,
+        payload: JSON.parse(JSON.stringify(item)) as Prisma.InputJsonValue,
+        providerUpdatedAt: this.date(item.updatedAt),
+        capturedAt: new Date(),
+      },
+    });
+  }
+
+  private async refreshSnapshot(id: string, resolved: ResolvedProvider): Promise<void> {
+    if (!resolved.connectionId) return;
+    const item = await resolved.adapter.getWorkItem(
+      id,
+      resolved.project,
+      this.context(resolved),
+    );
+    await this.captureSnapshot(item, resolved);
+  }
+
+  private async cachedItem(id: string, resolved: ResolvedProvider): Promise<WorkItemDetail | null> {
+    if (!resolved.connectionId) return null;
+    const snapshot = await prisma.workItemSnapshot.findFirst({
+      where: {
+        workItemConnectionId: resolved.connectionId,
+        externalItemId: id,
+      },
+      orderBy: { capturedAt: 'desc' },
+      select: { payload: true },
+    });
+    if (!snapshot?.payload || typeof snapshot.payload !== 'object' || Array.isArray(snapshot.payload)) {
+      return null;
+    }
+    const payload = snapshot.payload as Record<string, unknown>;
+    return typeof payload.id === 'string' &&
+      typeof payload.title === 'string' &&
+      payload.state !== null &&
+      typeof payload.state === 'object' &&
+      payload.project !== null &&
+      typeof payload.project === 'object'
+      ? payload as unknown as WorkItemDetail
+      : null;
+  }
+
+  private overviewCounts(items: WorkItemSummary[]) {
+    return {
+      open: items.filter((item) => item.state.category === 'new' || item.state.category === 'unknown').length,
+      inProgress: items.filter((item) => item.state.category === 'in_progress').length,
+      resolved: items.filter((item) =>
+        ['resolved', 'closed', 'removed'].includes(item.state.category)).length,
+      critical: items.filter((item) => (item.priority ?? 99) <= 1).length,
+      total: items.length,
+    };
+  }
+
+  private legacySummary(item: WorkItemSummary) {
+    return {
+      id: Number(item.id),
+      title: item.title,
+      type: item.type,
+      state: item.state.name,
+      priority: item.priority,
+      assignedTo: item.assignee
+        ? item.assignee.email
+          ? `${item.assignee.displayName} <${item.assignee.email}>`
+          : item.assignee.displayName
+        : null,
+      changedDate: item.updatedAt,
+      createdDate: item.createdAt,
+      tags: item.labels,
+      webUrl: item.url,
+      project: item.project.name,
+    };
+  }
+
+  private legacyDetail(item: WorkItemDetail) {
+    const { project: _project, state: _state, ...detail } = item;
+    return {
+      ...this.legacySummary(item),
+      description: detail.description,
+      reproSteps: detail.reproSteps,
+      acceptanceCriteria: detail.acceptanceCriteria,
+      areaPath: detail.areaPath,
+      iterationPath: detail.iterationPath,
+      severity: detail.severity,
+      relations: detail.relations,
+    };
+  }
+
+  private legacyHistory(event: WorkItemHistoryEvent) {
+    return {
+      id: event.id,
+      kind: event.kind,
+      rev: event.version,
+      revisedBy: event.actor.email
+        ? `${event.actor.displayName} <${event.actor.email}>`
+        : event.actor.displayName,
+      revisedDate: event.occurredAt,
+      summary: event.summary,
+      changes: event.changes,
+      body: event.body,
+    };
+  }
+
+  private legacyComment(comment: WorkItemComment) {
+    return {
+      id: Number(comment.id),
+      text: comment.body,
+      author: comment.author.email
+        ? `${comment.author.displayName} <${comment.author.email}>`
+        : comment.author.displayName,
+      createdDate: comment.createdAt,
+      modifiedDate: comment.updatedAt,
     };
   }
 
@@ -249,31 +826,25 @@ export class DefectsService {
     return user;
   }
 
-  private assertCanAccess(email: string, isAdmin: boolean, assignedTo: string | null) {
-    if (isAdmin) return;
-    if (!this.azureWorkItems.isAssignedToEmail(assignedTo, email)) {
-      throw new ForbiddenException('You can only access work items assigned to you.');
+  private object(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new BadRequestException('Request body must be an object');
     }
+    return value as Record<string, unknown>;
   }
 
-  private isAzureNotConnected(err: unknown): boolean {
-    if (err instanceof NotFoundException) {
-      const response = err.getResponse();
-      if (typeof response === 'object' && response !== null && 'code' in response) {
-        return (response as { code: string }).code === 'AZURE_NOT_CONNECTED';
-      }
-    }
-    return false;
+  private string(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
   }
 
-  private isProjectRequired(err: unknown): boolean {
-    if (err instanceof UnprocessableEntityException) {
-      const response = err.getResponse();
-      if (typeof response === 'object' && response !== null && 'code' in response) {
-        return (response as { code: string }).code === 'AZURE_PROJECT_REQUIRED';
-      }
-    }
-    return false;
+  private positiveInt(value: string | undefined, fallback: number): number {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private date(value: string): Date | null {
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? new Date(timestamp) : null;
   }
 
   private stripHtml(html: string): string {

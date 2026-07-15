@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard } from '../../common/auth.guard';
+import { RequireRole, RoleGuard } from '../../common/role.guard';
 import type {
   WorkItemCreateInput,
   WorkItemUpdateInput,
@@ -19,7 +20,8 @@ import type {
 import { IntegrationsService } from './integrations.service';
 
 @Controller('integrations')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, RoleGuard)
+@RequireRole('admin')
 export class IntegrationsController {
   constructor(private readonly service: IntegrationsService) {}
 

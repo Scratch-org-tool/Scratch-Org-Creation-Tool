@@ -235,11 +235,14 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     return projects.map((project) => this.project(project, connection.config));
   }
 
-  async getProjectOverview(projectKey: string): Promise<WorkItemOverview> {
-    const connection = await this.requireConnection();
+  async getProjectOverview(
+    projectKey: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemOverview> {
+    const connection = await this.requireConnection(context.connectionId);
     const client = this.connectionClient(connection);
     const project = await client.json<JiraProject>(`project/${encodeURIComponent(projectKey)}`);
-    const items = await this.queryWorkItems({ project: projectKey });
+    const items = await this.queryWorkItems({ project: projectKey, ...context });
     return {
       project: this.project(project, connection.config),
       total: items.length,
@@ -249,8 +252,8 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     };
   }
 
-  getOverview(project: string): Promise<WorkItemOverview> {
-    return this.getProjectOverview(project);
+  getOverview(project: string, context?: AdapterContext): Promise<WorkItemOverview> {
+    return this.getProjectOverview(project, context);
   }
 
   async queryWorkItems(query: WorkItemQuery): Promise<WorkItemSummary[]> {
@@ -293,8 +296,12 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     return issues.map((issue) => this.toSummary(issue, connection.config, mappings));
   }
 
-  async getWorkItem(id: string, project?: string): Promise<WorkItemDetail> {
-    return this.getWorkItemForConnection(id, project);
+  async getWorkItem(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemDetail> {
+    return this.getWorkItemForConnection(id, project, context.connectionId);
   }
 
   async getWorkItemForConnection(
@@ -320,7 +327,7 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
       body: JSON.stringify({ fields }),
     });
     if (input.state) await this.transition(created.key, input.state, input.project, connection, mappings);
-    return this.getWorkItem(created.key, input.project);
+    return this.getWorkItemForConnection(created.key, input.project, connection.id);
   }
 
   async updateWorkItem(
@@ -339,11 +346,11 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
       });
     }
     if (input.state) await this.transition(id, input.state, project, connection, mappings);
-    return this.getWorkItem(id, project);
+    return this.getWorkItemForConnection(id, project, connection.id);
   }
 
-  async listIssueTypes(project: string): Promise<string[]> {
-    const connection = await this.requireConnection();
+  async listIssueTypes(project: string, context: AdapterContext = {}): Promise<string[]> {
+    const connection = await this.requireConnection(context.connectionId);
     const result = await this.connectionClient(connection).json<Array<{
       id?: string;
       name?: string;
@@ -351,8 +358,12 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     return result.map((type) => type.name ?? type.id ?? '').filter(Boolean);
   }
 
-  async getComments(id: string): Promise<WorkItemComment[]> {
-    const connection = await this.requireConnection();
+  async getComments(
+    id: string,
+    _project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemComment[]> {
+    const connection = await this.requireConnection(context.connectionId);
     const comments: WorkItemComment[] = [];
     let startAt = 0;
     for (;;) {
@@ -380,8 +391,13 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     return comments;
   }
 
-  async addComment(id: string, body: string): Promise<WorkItemComment> {
-    const connection = await this.requireConnection();
+  async addComment(
+    id: string,
+    body: string,
+    _project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemComment> {
+    const connection = await this.requireConnection(context.connectionId);
     const comment = await this.connectionClient(connection).json<{
       id: string;
       body?: unknown;
@@ -402,8 +418,12 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     };
   }
 
-  async getStateOptions(id: string, project?: string): Promise<WorkItemState[]> {
-    const connection = await this.requireConnection();
+  async getStateOptions(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemState[]> {
+    const connection = await this.requireConnection(context.connectionId);
     const mappings = await this.fieldMappings(connection.id, project ?? id.split('-')[0]);
     const result = await this.connectionClient(connection).json<{
       transitions?: Array<{ id: string; name: string; to?: JiraStatus }>;
@@ -415,15 +435,24 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     }));
   }
 
-  async updateState(id: string, state: string, project?: string): Promise<WorkItemDetail> {
-    const connection = await this.requireConnection();
+  async updateState(
+    id: string,
+    state: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemDetail> {
+    const connection = await this.requireConnection(context.connectionId);
     const mappings = await this.fieldMappings(connection.id, project ?? id.split('-')[0]);
     await this.transition(id, state, project, connection, mappings);
-    return this.getWorkItem(id, project);
+    return this.getWorkItemForConnection(id, project, connection.id);
   }
 
-  async getHistory(id: string): Promise<WorkItemHistoryEvent[]> {
-    const connection = await this.requireConnection();
+  async getHistory(
+    id: string,
+    _project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemHistoryEvent[]> {
+    const connection = await this.requireConnection(context.connectionId);
     const histories: JiraHistory[] = [];
     let startAt = 0;
     for (;;) {
@@ -455,8 +484,12 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     });
   }
 
-  async listAttachments(id: string): Promise<WorkItemAttachment[]> {
-    const connection = await this.requireConnection();
+  async listAttachments(
+    id: string,
+    _project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemAttachment[]> {
+    const connection = await this.requireConnection(context.connectionId);
     const issue = await this.connectionClient(connection).json<JiraIssue>(
       `issue/${encodeURIComponent(id)}?fields=attachment`,
     );
@@ -466,9 +499,11 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
   async getAttachmentContent(
     id: string,
     attachmentId: string,
+    project?: string,
+    context: AdapterContext = {},
   ): Promise<AttachmentContent> {
-    const connection = await this.requireConnection();
-    const attachments = await this.listAttachments(id);
+    const connection = await this.requireConnection(context.connectionId);
+    const attachments = await this.listAttachments(id, project, context);
     const attachment = attachments.find((candidate) => candidate.id === attachmentId);
     if (!attachment) {
       throw new IntegrationError('not_found', `Attachment "${attachmentId}" does not belong to "${id}"`, {
@@ -489,8 +524,10 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
   async uploadAttachment(
     id: string,
     upload: WorkItemUpload,
+    _project?: string,
+    context: AdapterContext = {},
   ): Promise<WorkItemAttachment> {
-    const connection = await this.requireConnection();
+    const connection = await this.requireConnection(context.connectionId);
     const form = new FormData();
     form.append(
       'file',
@@ -514,12 +551,19 @@ export class JiraWorkItemAdapter implements WorkItemAdapter {
     return this.attachment(attachment);
   }
 
-  async listAssignees(project: string): Promise<WorkItemUser[]> {
-    return this.listUsers(project);
+  async listAssignees(
+    project: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemUser[]> {
+    return this.listUsers(project, '', context);
   }
 
-  async listUsers(project?: string, query = ''): Promise<WorkItemUser[]> {
-    const connection = await this.requireConnection();
+  async listUsers(
+    project?: string,
+    query = '',
+    context: AdapterContext = {},
+  ): Promise<WorkItemUser[]> {
+    const connection = await this.requireConnection(context.connectionId);
     if (!project) {
       throw new IntegrationError('invalid_request', 'Jira project is required when listing users', {
         provider: this.provider,

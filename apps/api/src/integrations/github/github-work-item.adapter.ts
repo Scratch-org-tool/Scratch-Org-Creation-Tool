@@ -175,10 +175,13 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     return this.uniqueProjects(projects);
   }
 
-  async getProjectOverview(project: string): Promise<WorkItemOverview> {
-    const items = await this.queryWorkItems({ project });
+  async getProjectOverview(
+    project: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemOverview> {
+    const items = await this.queryWorkItems({ project, ...context });
     const selected =
-      (await this.listProjects()).find((candidate) => candidate.id === project) ??
+      (await this.listProjects(context)).find((candidate) => candidate.id === project) ??
       this.repositoryProject(project);
     return {
       project: selected,
@@ -189,8 +192,8 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     };
   }
 
-  getOverview(project: string): Promise<WorkItemOverview> {
-    return this.getProjectOverview(project);
+  getOverview(project: string, context?: AdapterContext): Promise<WorkItemOverview> {
+    return this.getProjectOverview(project, context);
   }
 
   async queryWorkItems(query: WorkItemQuery): Promise<WorkItemSummary[]> {
@@ -264,14 +267,18 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
-  async getWorkItem(id: string, project?: string): Promise<WorkItemDetail> {
-    const credentials = await this.requireCredentials();
+  async getWorkItem(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemDetail> {
+    const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.issueRef(id, project);
     const issue = await this.api.request<GitHubIssue>(
       credentials,
       `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/issues/${ref.number}`,
     );
-    const binding = await this.bindingForRepository(ref);
+    const binding = await this.bindingForRepository(ref, project, context.connectionId);
     let fields: ProjectFieldValue[] = [];
     if (binding) {
       const item = (await this.projectItems(credentials, binding)).find(
@@ -310,7 +317,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       (await this.bindingForRepository({
         ...ref,
         number: issue.number,
-      }, input.project));
+      }, input.project, input.connectionId));
     if (binding && issue.node_id) {
       await this.addIssueToProject(credentials, binding.projectId, issue.node_id);
       await this.updateProjectFields(
@@ -327,7 +334,11 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
         },
       );
     }
-    return this.getWorkItem(githubIssueId({ ...ref, number: issue.number }));
+    return this.getWorkItem(
+      githubIssueId({ ...ref, number: issue.number }),
+      input.project,
+      { connectionId: input.connectionId },
+    );
   }
 
   async updateWorkItem(
@@ -350,7 +361,7 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
       `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/issues/${ref.number}`,
       { method: 'PATCH', body: JSON.stringify(patch) },
     );
-    const binding = await this.bindingForRepository(ref, input.project);
+    const binding = await this.bindingForRepository(ref, input.project, input.connectionId);
     if (binding && issue.node_id) {
       await this.updateProjectFields(credentials, binding, issue.node_id, {
         ...(input.customFields ?? {}),
@@ -361,15 +372,28 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
         ...(input.state ? { Status: input.state } : {}),
       });
     }
-    return this.getWorkItem(githubIssueId(ref));
+    return this.getWorkItem(
+      githubIssueId(ref),
+      input.project,
+      { connectionId: input.connectionId },
+    );
   }
 
-  async updateState(id: string, state: string, project?: string): Promise<WorkItemDetail> {
-    return this.updateWorkItem(id, { project, state });
+  async updateState(
+    id: string,
+    state: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemDetail> {
+    return this.updateWorkItem(id, { project, state, connectionId: context.connectionId });
   }
 
-  async getComments(id: string, project?: string): Promise<WorkItemComment[]> {
-    const credentials = await this.requireCredentials();
+  async getComments(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemComment[]> {
+    const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.issueRef(id, project);
     const comments = await this.api.paginate<{
       id: number;
@@ -390,13 +414,18 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     }));
   }
 
-  async addComment(id: string, body: string, project?: string): Promise<WorkItemComment> {
+  async addComment(
+    id: string,
+    body: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemComment> {
     if (!body.trim()) {
       throw new IntegrationError('invalid_request', 'Comment body is required', {
         provider: this.provider,
       });
     }
-    const credentials = await this.requireCredentials();
+    const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.issueRef(id, project);
     const comment = await this.api.request<{
       id: number;
@@ -418,12 +447,16 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     };
   }
 
-  async getStateOptions(id: string, project?: string): Promise<WorkItemState[]> {
+  async getStateOptions(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemState[]> {
     const ref = this.issueRef(id, project);
-    const binding = await this.bindingForRepository(ref, project);
+    const binding = await this.bindingForRepository(ref, project, context.connectionId);
     const base = [this.state('open'), this.state('closed')];
     if (!binding) return base;
-    const credentials = await this.requireCredentials();
+    const credentials = await this.requireCredentials(context.connectionId);
     const fields = await this.projectFields(credentials, binding.projectId);
     const statusRef = binding.fieldMapping.Status ?? 'Status';
     const status = fields.find((field) => field.id === statusRef || field.name === statusRef);
@@ -436,8 +469,8 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     );
   }
 
-  async listIssueTypes(project: string): Promise<string[]> {
-    const credentials = await this.requireCredentials();
+  async listIssueTypes(project: string, context: AdapterContext = {}): Promise<string[]> {
+    const credentials = await this.requireCredentials(context.connectionId);
     const owner = this.repositoryForInput(project).split('/')[0];
     const data = await this.api.graphql<{
       organization: { issueTypes?: { nodes?: Array<{ name: string }> } } | null;
@@ -451,8 +484,8 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     return (data.organization?.issueTypes?.nodes ?? []).map((type) => type.name);
   }
 
-  async listAssignees(project: string): Promise<WorkItemUser[]> {
-    const credentials = await this.requireCredentials();
+  async listAssignees(project: string, context: AdapterContext = {}): Promise<WorkItemUser[]> {
+    const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.repositoryRef(this.repositoryForInput(project));
     const users = await this.api.paginate<GitHubUser>(
       credentials,
@@ -461,8 +494,8 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     return users.map((user) => this.user(user));
   }
 
-  async listLabels(project: string): Promise<string[]> {
-    const credentials = await this.requireCredentials();
+  async listLabels(project: string, context: AdapterContext = {}): Promise<string[]> {
+    const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.repositoryRef(this.repositoryForInput(project));
     const labels = await this.api.paginate<GitHubLabel>(
       credentials,
@@ -471,8 +504,12 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     return labels.map((label) => label.name);
   }
 
-  async getHistory(id: string, project?: string): Promise<WorkItemHistoryEvent[]> {
-    const credentials = await this.requireCredentials();
+  async getHistory(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemHistoryEvent[]> {
+    const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.issueRef(id, project);
     const events = await this.api.paginate<Record<string, unknown>>(
       credentials,
@@ -482,8 +519,12 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     return events.map((event, index) => this.historyEvent(event, index));
   }
 
-  async listSubIssues(id: string, project?: string): Promise<WorkItemSummary[]> {
-    const credentials = await this.requireCredentials();
+  async listSubIssues(
+    id: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<WorkItemSummary[]> {
+    const credentials = await this.requireCredentials(context.connectionId);
     const ref = this.issueRef(id, project);
     const issues = await this.api.paginate<GitHubIssue>(
       credentials,
@@ -496,8 +537,9 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     id: string,
     subIssueId: string,
     project?: string,
+    context: AdapterContext = {},
   ): Promise<WorkItemMutationResult> {
-    const credentials = await this.requireCredentials();
+    const credentials = await this.requireCredentials(context.connectionId);
     const parent = this.issueRef(id, project);
     const child = this.issueRef(subIssueId, project);
     const childIssue = await this.api.request<GitHubIssue>(
@@ -512,7 +554,11 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     return { id: githubIssueId(child), updated: true };
   }
 
-  async listAttachments(id: string, project?: string): Promise<WorkItemAttachment[]> {
+  async listAttachments(
+    id: string,
+    project?: string,
+    _context: AdapterContext = {},
+  ): Promise<WorkItemAttachment[]> {
     const ref = this.issueRef(id, project);
     return this.attachments.list(githubIssueId(ref));
   }
@@ -975,8 +1021,9 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
   private async bindingForRepository(
     ref: GitHubIssueRef,
     projectId?: string,
+    connectionId?: string,
   ): Promise<GitHubProjectBindingRecord | undefined> {
-    const bindings = await this.integration.listProjectBindings();
+    const bindings = await this.integration.listProjectBindings(connectionId);
     return bindings.find(
       (binding) =>
         (projectId ? binding.projectId === projectId : true) &&
