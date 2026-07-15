@@ -277,7 +277,9 @@ export class IntelligentOrchestratorService {
       await prisma.deployment.update({
         where: { id: options.deploymentId },
         data: {
-          status: report.success ? 'completed' : 'failed',
+          // The metadata worker may still need to assign permissions or queue
+          // chained data work. Only the outer worker may mark success terminal.
+          ...(!report.success ? { status: 'failed' as const } : {}),
           metadata: {
             ...meta,
             intelligentDeployRunId: options.runId,

@@ -128,7 +128,7 @@ export class DataDeployWorker {
       await this.streamService.publishJobLog(dbJobId, stream, line);
     };
 
-    if (this.processRegistry.isCancelled(dbJobId)) {
+    if (await this.processRegistry.isCancellationRequested(dbJobId)) {
       await log('stderr', 'Job was cancelled before it started');
       await prisma.dataMovement.update({
         where: { id: movementId },
@@ -220,7 +220,7 @@ export class DataDeployWorker {
         return { recordCount: 0, movementId, chunkId };
       }
 
-      if (this.processRegistry.isCancelled(dbJobId)) {
+      if (await this.processRegistry.isCancellationRequested(dbJobId)) {
         throw new Error('Job cancelled by user');
       }
 
@@ -283,7 +283,7 @@ export class DataDeployWorker {
       return { recordCount, movementId, chunkId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const cancelled = this.processRegistry.isCancelled(dbJobId);
+      const cancelled = await this.processRegistry.isCancellationRequested(dbJobId);
       await log('stderr', cancelled ? 'Deployment cancelled by user' : `Deployment failed: ${message}`);
       await prisma.dataMovement.update({
         where: { id: movementId },

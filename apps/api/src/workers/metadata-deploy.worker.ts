@@ -104,6 +104,7 @@ export class MetadataDeployWorker {
     };
 
     const isCancelled = async () => {
+      if (await this.processRegistry.isCancellationRequested(dbJobId)) return true;
       const current = await prisma.job.findUnique({ where: { id: dbJobId }, select: { status: true } });
       return current?.status === 'cancelled';
     };

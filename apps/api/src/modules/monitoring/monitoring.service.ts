@@ -352,7 +352,7 @@ export class MonitoringService {
         startedAt: j.startedAt?.toISOString() ?? null,
         failedAt: j.finishedAt?.toISOString() ?? null,
         parentRunId: j.parentRunId,
-        replayable: !j.parentRunId,
+        replayable: !j.parentRunId && j.type !== 'data_deploy_chunk',
         replayOfJobId: typeof payload.replayOfJobId === 'string' ? payload.replayOfJobId : null,
       };
     });
@@ -373,6 +373,11 @@ export class MonitoringService {
     if (job.parentRunId) {
       throw new BadRequestException(
         'This job belongs to an automation run — resume the run instead of replaying the job directly',
+      );
+    }
+    if (job.type === 'data_deploy_chunk') {
+      throw new BadRequestException(
+        'Insert data chunks cannot be replayed safely because the failed bulk job may have committed some records',
       );
     }
 

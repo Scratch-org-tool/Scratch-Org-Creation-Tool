@@ -13,6 +13,7 @@ import {
 } from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
+import { JobProcessRegistryService } from '../jobs/job-process-registry.service';
 import { StreamService } from '../stream/stream.service';
 import { AzureService } from '../../integrations/azure/azure.service';
 import { MetadataDeployQueueService } from '../deployment/metadata-deploy-queue.service';
@@ -47,6 +48,7 @@ export class PipelineOrchestratorService {
   constructor(
     private readonly queueService: QueueService,
     private readonly jobsService: JobsService,
+    private readonly processRegistry: JobProcessRegistryService,
     private readonly streamService: StreamService,
     private readonly azureService: AzureService,
     private readonly metadataDeployQueue: MetadataDeployQueueService,
@@ -248,9 +250,20 @@ export class PipelineOrchestratorService {
       checkpointData.deploymentId &&
       (failedStep === 'azure_metadata_deploy' || failedStep === 'assign_permission_set')
     ) {
+      const deployment = await prisma.deployment.findUnique({
+        where: { id: checkpointData.deploymentId },
+        select: { metadata: true },
+      });
       await prisma.deployment.update({
         where: { id: checkpointData.deploymentId },
-        data: { status: 'failed', metadata: { error } as Prisma.InputJsonValue },
+        data: {
+          status: 'failed',
+          metadata: {
+            ...((deployment?.metadata as Record<string, unknown> | null) ?? {}),
+            error,
+            failedAt: new Date().toISOString(),
+          } as Prisma.InputJsonValue,
+        },
       });
     }
 
@@ -285,24 +298,65 @@ export class PipelineOrchestratorService {
     if (userId) assertResourceOwner(run, userId, 'Automation run');
     if (run.status !== 'paused') throw new Error('Run is not paused');
 
+    // Atomically claim the paused run. Concurrent resume requests must not
+    // create two active jobs (or two Deployment rows) for the same checkpoint.
+    const claimed = await prisma.automationRun.updateMany({
+      where: { id: automationRunId, status: 'paused' },
+      data: { status: 'running', failedStep: null, lastError: null },
+    });
+    if (claimed.count === 0) throw new Error('Run is no longer paused');
+
+    const activeJob = await prisma.job.findFirst({
+      where: {
+        parentRunId: automationRunId,
+        status: { in: ['pending', 'queued', 'running'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    if (activeJob) {
+      return {
+        automationRunId,
+        jobId: activeJob.id,
+        status: 'running',
+        resumeFrom: ((run.checkpoint as unknown as PipelineCheckpoint | null)?.resumeFrom),
+      };
+    }
+
     // Org-to-org metadata runs store the full deploy input in run.config —
     // resume re-enqueues the deploy (with any chained data config) directly.
     if (run.intent === 'org_to_org_metadata_data') {
-      await prisma.automationRun.update({
-        where: { id: automationRunId },
-        data: { status: 'running', failedStep: null, lastError: null },
-      });
-      const result = await this.deploymentService.deployOrgToOrgMetadata(
-        run.config as Record<string, unknown>,
-        run.createdBy,
-        { automationRunId },
-      );
-      return {
-        automationRunId,
-        resumeFrom: 'azure_metadata_deploy' as PipelineStepId,
-        ...result,
-        status: 'running',
-      };
+      const checkpoint = (run.checkpoint ?? {}) as unknown as PipelineCheckpoint;
+      let deploymentId = checkpoint.deploymentId;
+      if (!deploymentId) {
+        const previousJob = await prisma.job.findFirst({
+          where: { parentRunId: automationRunId, queue: QUEUE_NAMES.METADATA_DEPLOY },
+          orderBy: { createdAt: 'desc' },
+          select: { payload: true },
+        });
+        deploymentId = ((previousJob?.payload ?? {}) as Record<string, unknown>).deploymentId as string | undefined;
+      }
+      try {
+        const result = await this.deploymentService.deployOrgToOrgMetadata(
+          run.config as Record<string, unknown>,
+          run.createdBy,
+          { automationRunId, deploymentId },
+        );
+        checkpoint.deploymentId = result.deploymentId;
+        await prisma.automationRun.update({
+          where: { id: automationRunId },
+          data: { checkpoint: checkpoint as unknown as Prisma.InputJsonValue },
+        });
+        return {
+          automationRunId,
+          resumeFrom: 'azure_metadata_deploy' as PipelineStepId,
+          ...result,
+          status: 'running',
+        };
+      } catch (error) {
+        await this.restorePausedResume(automationRunId, error);
+        throw error;
+      }
     }
 
     const config = {
@@ -317,9 +371,6 @@ export class PipelineOrchestratorService {
     await prisma.automationRun.update({
       where: { id: automationRunId },
       data: {
-        status: 'running',
-        failedStep: null,
-        lastError: null,
         config: config as unknown as Prisma.InputJsonValue,
         checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
       },
@@ -327,21 +378,36 @@ export class PipelineOrchestratorService {
 
     const resumeFrom = checkpoint.resumeFrom;
 
-    if (resumeFrom === 'azure_metadata_deploy') {
-      await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
-    } else if (resumeFrom === 'assign_permission_set') {
-      await this.enqueueAssignPermissionSet(automationRunId, checkpoint);
-    } else if (resumeFrom === 'load_custom_settings') {
-      await this.enqueueCustomSettingsLoad(automationRunId, config, checkpoint, run.createdBy);
-    } else if (resumeFrom === 'load_org_config') {
-      await this.enqueueLoadOrgConfig(automationRunId, config, checkpoint);
-    } else if (resumeFrom === 'scratch_org_create') {
-      await this.enqueueScratchOrgResume(automationRunId, config, checkpoint);
-    } else {
-      throw new Error(`Resume not supported for step "${resumeFrom}"`);
+    try {
+      if (resumeFrom === 'azure_metadata_deploy') {
+        await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
+      } else if (resumeFrom === 'assign_permission_set') {
+        await this.enqueueAssignPermissionSet(automationRunId, checkpoint);
+      } else if (resumeFrom === 'load_custom_settings') {
+        await this.enqueueCustomSettingsLoad(automationRunId, config, checkpoint, run.createdBy);
+      } else if (resumeFrom === 'load_org_config') {
+        await this.enqueueLoadOrgConfig(automationRunId, config, checkpoint);
+      } else if (resumeFrom === 'scratch_org_create') {
+        await this.enqueueScratchOrgResume(automationRunId, config, checkpoint);
+      } else {
+        throw new Error(`Resume not supported for step "${resumeFrom}"`);
+      }
+    } catch (error) {
+      await this.restorePausedResume(automationRunId, error);
+      throw error;
     }
 
     return { automationRunId, status: 'running', resumeFrom };
+  }
+
+  private async restorePausedResume(automationRunId: string, error: unknown) {
+    await prisma.automationRun.update({
+      where: { id: automationRunId },
+      data: {
+        status: 'paused',
+        lastError: error instanceof Error ? error.message : String(error),
+      },
+    }).catch(() => undefined);
   }
 
   async runUserActions(automationRunId: string, body: unknown, userId?: string) {
@@ -480,6 +546,7 @@ export class PipelineOrchestratorService {
 
     for (const job of run.jobs) {
       if (!['pending', 'queued', 'running'].includes(job.status)) continue;
+      await this.processRegistry.cancel(job.id);
       if (job.queue === QUEUE_NAMES.SCRATCH_ORG_CREATE) {
         this.scratchOrgJobService.cancel(job.id);
       }
@@ -574,16 +641,28 @@ export class PipelineOrchestratorService {
     });
     if (!target) throw new Error('Target org connection not found');
 
-    const deployment = await prisma.deployment.create({
-      data: {
-        targetOrgId: target.id,
-        repo: config.azureDeploy.repo,
-        branch: config.azureDeploy.branch,
-        strategy: 'azure',
-        status: 'queued',
-        createdBy: (await prisma.automationRun.findUnique({ where: { id: automationRunId } }))?.createdBy ?? 'system',
-      },
-    });
+    const existingDeployment = checkpoint.deploymentId
+      ? await prisma.deployment.findUnique({ where: { id: checkpoint.deploymentId } })
+      : null;
+    const deployment = existingDeployment
+      ? await prisma.deployment.update({
+          where: { id: existingDeployment.id },
+          data: {
+            status: 'queued',
+            repo: config.azureDeploy.repo,
+            branch: config.azureDeploy.branch,
+          },
+        })
+      : await prisma.deployment.create({
+          data: {
+            targetOrgId: target.id,
+            repo: config.azureDeploy.repo,
+            branch: config.azureDeploy.branch,
+            strategy: 'azure',
+            status: 'queued',
+            createdBy: (await prisma.automationRun.findUnique({ where: { id: automationRunId } }))?.createdBy ?? 'system',
+          },
+        });
     checkpoint.deploymentId = deployment.id;
 
     await this.azureService.triggerPipeline(
