@@ -65,8 +65,9 @@ describe('defects optimistic mutations', () => {
   });
 
   it('overlays pending operations on refresh and reconciles success when the temp row was dropped', () => {
-    const pending = { id: 'temp-c2', body: 'Draft', optimisticState: 'pending' };
-    expect(appendMissingById([{ id: 'c1', body: 'Existing' }], [pending]))
+    type CommentRow = { id: string; body: string; optimisticState?: string };
+    const pending: CommentRow = { id: 'temp-c2', body: 'Draft', optimisticState: 'pending' };
+    expect(appendMissingById<CommentRow>([{ id: 'c1', body: 'Existing' }], [pending]))
       .toEqual([{ id: 'c1', body: 'Existing' }, pending]);
 
     const server = { id: 'c2', body: 'Saved' };
