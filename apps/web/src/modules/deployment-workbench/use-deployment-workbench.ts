@@ -20,8 +20,10 @@ import { api, getStreamUrl } from '@/services/api';
 import type {
   CompareItem,
   CompareSummary,
+  DestructiveReview,
   DeploymentHistoryFilters,
   DeploymentHistoryResponse,
+  WorkbenchCapabilities,
   WorkbenchForm,
   WorkbenchPreview,
   WorkbenchProgress,
@@ -31,11 +33,15 @@ import type {
 } from './types';
 import {
   applyProductionLocks,
+  componentCount,
   createInitialForm,
+  invalidateSourceState,
   payloadFromForm,
   policyForEnvironment,
   profileForOrgType,
   selectionsFromCompareItems,
+  serverRunActions,
+  supportsDestructiveAcknowledgement,
   TERMINAL_RUN_STATUSES,
   validateWorkbenchForm,
 } from './workbench-utils';
@@ -87,7 +93,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const [form, setForm] = useState<WorkbenchForm>(() =>
     createInitialForm(forcedSourceMode ?? initialMode(params.get('sourceType') ?? params.get('source'))));
   const [orgs, setOrgs] = useState<ConnectedOrg[]>([]);
-  const [capabilities, setCapabilities] = useState<WorkbenchPreview['capabilities'] | null>(null);
+  const [capabilities, setCapabilities] = useState<WorkbenchCapabilities | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -98,6 +104,10 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const [comparing, setComparing] = useState(false);
   const [preview, setPreview] = useState<WorkbenchPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [destructiveReview, setDestructiveReview] = useState<DestructiveReview | null>(null);
+  const [destructiveReviewLoading, setDestructiveReviewLoading] = useState(false);
+  const [destructiveAcknowledgedHash, setDestructiveAcknowledgedHash] = useState<string | null>(null);
+  const [destructiveSubmittedHash, setDestructiveSubmittedHash] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<WorkbenchStatus | null>(null);
@@ -118,14 +128,58 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   });
   const [historyLoading, setHistoryLoading] = useState(false);
   const compareRequest = useRef(0);
+  const comparisonAbort = useRef<AbortController | null>(null);
+  const previewRequest = useRef(0);
+  const previewAbort = useRef<AbortController | null>(null);
+  const runRequest = useRef(0);
+  const runAbort = useRef<AbortController | null>(null);
+  const activeRunId = useRef<string | null>(null);
+  const historyRequest = useRef(0);
+  const historyAbort = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    comparisonAbort.current?.abort();
+    previewAbort.current?.abort();
+    runAbort.current?.abort();
+    historyAbort.current?.abort();
+  }, []);
+
+  const clearPlanResolution = useCallback(() => {
+    previewRequest.current += 1;
+    previewAbort.current?.abort();
+    setPreview(null);
+    setDestructiveReview(null);
+    setDestructiveAcknowledgedHash(null);
+    setDestructiveSubmittedHash(null);
+    setDestructiveReviewLoading(false);
+  }, []);
+
+  const clearComparison = useCallback(() => {
+    compareRequest.current += 1;
+    comparisonAbort.current?.abort();
+    setComparisonStatus('idle');
+    setComparisonSummary(null);
+    setCompareItems([]);
+    setSelectedKeys(new Set());
+    setComparing(false);
+  }, []);
 
   const loadRun = useCallback(async (id: string) => {
+    const request = ++runRequest.current;
+    runAbort.current?.abort();
+    const controller = new AbortController();
+    runAbort.current = controller;
     const [nextStatus, nextStages, nextResults, nextProgress] = await Promise.all([
-      api<WorkbenchStatus>(`/deployment-workbench/${id}/status`),
-      api<WorkbenchStage[]>(`/deployment-workbench/${id}/stages`),
-      api<WorkbenchResults>(`/deployment-workbench/${id}/results`),
-      api<WorkbenchProgress>(`/deployment-workbench/${id}/progress`),
+      api<WorkbenchStatus>(`/deployment-workbench/${id}/status`, { signal: controller.signal }),
+      api<WorkbenchStage[]>(`/deployment-workbench/${id}/stages`, { signal: controller.signal }),
+      api<WorkbenchResults>(`/deployment-workbench/${id}/results`, { signal: controller.signal }),
+      api<WorkbenchProgress>(`/deployment-workbench/${id}/progress`, { signal: controller.signal }),
     ]);
+    if (
+      request !== runRequest.current
+      || controller.signal.aborted
+      || activeRunId.current !== id
+    ) return nextStatus;
     startTransition(() => {
       setStatus(nextStatus);
       setStages(nextStages);
@@ -137,10 +191,16 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const initialHistoryRequest = ++historyRequest.current;
+    historyAbort.current?.abort();
+    historyAbort.current = controller;
     Promise.all([
       fetchOrgsList(),
-      api<WorkbenchPreview['capabilities']>('/deployment-workbench/capabilities'),
-      api<DeploymentHistoryResponse>(historyUrl(DEFAULT_HISTORY_FILTERS)).catch(() => ({
+      api<WorkbenchCapabilities>('/deployment-workbench/capabilities', { signal: controller.signal }),
+      api<DeploymentHistoryResponse>(historyUrl(DEFAULT_HISTORY_FILTERS), {
+        signal: controller.signal,
+      }).catch(() => ({
         items: [],
         page: 1,
         pageSize: 20,
@@ -151,7 +211,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       if (cancelled) return;
       setOrgs(nextOrgs);
       setCapabilities(nextCapabilities);
-      setHistoryResponse(nextHistory);
+      if (initialHistoryRequest === historyRequest.current) setHistoryResponse(nextHistory);
       const sourceOrgId = params.get('sourceOrgId') ?? '';
       const targetOrgId = params.get('targetOrgId') ?? '';
       const requestedMode = forcedSourceMode ?? initialMode(params.get('sourceType') ?? params.get('source'));
@@ -167,6 +227,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       }));
       const requestedRun = params.get('runId') ?? params.get('run');
       if (requestedRun) {
+        activeRunId.current = requestedRun;
         setRunId(requestedRun);
         setStep(5);
         try {
@@ -182,31 +243,45 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [forcedSourceMode, loadRun, params]);
 
   const loadHistory = useCallback(async (next: DeploymentHistoryFilters) => {
+    const request = ++historyRequest.current;
+    historyAbort.current?.abort();
+    const controller = new AbortController();
+    historyAbort.current = controller;
     setHistoryLoading(true);
     setError(null);
     try {
-      const response = await api<DeploymentHistoryResponse>(historyUrl(next));
+      const response = await api<DeploymentHistoryResponse>(historyUrl(next), {
+        signal: controller.signal,
+      });
+      if (request !== historyRequest.current || controller.signal.aborted) return null;
       setHistoryFilters(next);
       setHistoryResponse(response);
       return response;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not load deployment history.');
+      if (request === historyRequest.current && !controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : 'Could not load deployment history.');
+      }
       return null;
     } finally {
-      setHistoryLoading(false);
+      if (request === historyRequest.current) setHistoryLoading(false);
     }
   }, []);
 
   const refreshComparison = useCallback(async (id: string) => {
     const request = ++compareRequest.current;
+    comparisonAbort.current?.abort();
+    const controller = new AbortController();
+    comparisonAbort.current = controller;
     const response = await api<ComparisonResponse>(
       `/metadata/compare/${id}?page=1&pageSize=5000`,
+      { signal: controller.signal },
     );
-    if (request !== compareRequest.current) return response;
+    if (request !== compareRequest.current || controller.signal.aborted) return response;
     setComparisonStatus(response.status);
     setComparisonSummary(response.summary);
     setCompareItems(response.items);
@@ -215,16 +290,25 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
 
   useEffect(() => {
     if (!form.comparisonId || comparisonStatus !== 'running') return;
-    const timer = setInterval(() => {
-      void refreshComparison(form.comparisonId!).catch((cause) => {
-        setError(cause instanceof Error ? cause.message : 'Comparison refresh failed.');
-      });
-    }, 2500);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      await refreshComparison(form.comparisonId!).catch(() => undefined);
+      if (!cancelled) timer = setTimeout(() => void poll(), 2500);
+    };
+    timer = setTimeout(() => void poll(), 2500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [comparisonStatus, form.comparisonId, refreshComparison]);
 
   const startComparison = useCallback(async () => {
     if (!form.sourceOrgId || !form.targetOrgId || form.sourceOrgId === form.targetOrgId) return;
+    const request = ++compareRequest.current;
+    comparisonAbort.current?.abort();
+    const controller = new AbortController();
+    comparisonAbort.current = controller;
     setComparing(true);
     setError(null);
     setCompareItems([]);
@@ -232,21 +316,26 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     try {
       const response = await api<{ comparisonId: string; status: string }>('/metadata/compare/start', {
         method: 'POST',
+        signal: controller.signal,
         body: JSON.stringify({
           sourceOrgId: form.sourceOrgId,
           targetOrgId: form.targetOrgId,
         }),
       });
+      if (request !== compareRequest.current || controller.signal.aborted) return;
       setForm((current) => ({ ...current, comparisonId: response.comparisonId }));
       setComparisonStatus(response.status);
+      setComparing(false);
       const comparison = await refreshComparison(response.comparisonId);
       if (comparison.status === 'completed') {
         setNotice('Background comparison completed. Select changed, new, and destructive components.');
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not compare orgs.');
+      if (request === compareRequest.current && !controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : 'Could not compare orgs.');
+      }
     } finally {
-      setComparing(false);
+      if (request === compareRequest.current) setComparing(false);
     }
   }, [form.sourceOrgId, form.targetOrgId, refreshComparison]);
 
@@ -282,15 +371,33 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     }));
   }, [compareItems, selectedKeys]);
 
+  const selectSourceMode = useCallback((sourceMode: WorkbenchForm['sourceMode']) => {
+    clearComparison();
+    clearPlanResolution();
+    setStep(0);
+    setForm((current) => invalidateSourceState(current, {
+      sourceMode,
+      sourceOrgId: sourceMode === 'scm' ? '' : current.sourceOrgId,
+    }));
+  }, [clearComparison, clearPlanResolution]);
+
+  const selectSource = useCallback((sourceOrgId: string) => {
+    clearComparison();
+    clearPlanResolution();
+    setForm((current) => invalidateSourceState(current, { sourceOrgId }));
+  }, [clearComparison, clearPlanResolution]);
+
   const selectTarget = useCallback((targetOrgId: string) => {
     const profile = profileForOrgType(orgs.find((org) => org.id === targetOrgId)?.type);
+    clearComparison();
+    clearPlanResolution();
     setForm((current) => ({
-      ...current,
+      ...invalidateSourceState(current, { targetOrgId }),
       targetOrgId,
       targetProfile: profile,
       policy: policyForEnvironment(profile),
     }));
-  }, [orgs]);
+  }, [clearComparison, clearPlanResolution, orgs]);
 
   const selectProfile = useCallback((targetProfile: DeploymentEnvironment) => {
     setForm((current) => ({
@@ -325,6 +432,18 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       ...(source.manifestPath ? { manifestPath: source.manifestPath } : {}),
     };
   }, [scm.gitSource]);
+  const scmResolutionKey = scmSource?.type === 'scm' ? JSON.stringify(scmSource) : '';
+  const previousScmResolutionKey = useRef(scmResolutionKey);
+  useEffect(() => {
+    if (
+      form.sourceMode === 'scm'
+      && previousScmResolutionKey.current
+      && previousScmResolutionKey.current !== scmResolutionKey
+    ) {
+      clearPlanResolution();
+    }
+    previousScmResolutionKey.current = scmResolutionKey;
+  }, [clearPlanResolution, form.sourceMode, scmResolutionKey]);
 
   const validation = useMemo(
     () => validateWorkbenchForm(form, Boolean(scmSource)),
@@ -336,45 +455,166 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     [form, scmSource],
   );
 
+  const loadDestructiveReview = useCallback(async (id: string) => {
+    setDestructiveReviewLoading(true);
+    try {
+      const review = await api<{
+        manifestXml: string | null;
+        digest: string;
+        componentCount: number;
+        selections?: DestructiveReview['selections'];
+        apiVersion?: string;
+        warning?: string;
+        requiresReview: boolean;
+      }>(`/deployment-workbench/${id}/destructive-review`);
+      const normalized = review.requiresReview && review.manifestXml
+        ? {
+            manifestXml: review.manifestXml,
+            manifestHash: review.digest,
+            componentCount: review.componentCount,
+            selections: review.selections,
+            apiVersion: review.apiVersion,
+            warning: review.warning,
+          }
+        : null;
+      setDestructiveReview(normalized);
+      setDestructiveAcknowledgedHash(null);
+      setDestructiveSubmittedHash(null);
+      return normalized;
+    } catch (cause) {
+      setDestructiveReview(null);
+      setError(cause instanceof Error ? cause.message : 'Could not load destructive manifest.');
+      return null;
+    } finally {
+      setDestructiveReviewLoading(false);
+    }
+  }, []);
+
   const previewPlan = useCallback(async () => {
+    const request = ++previewRequest.current;
+    previewAbort.current?.abort();
+    const controller = new AbortController();
+    previewAbort.current = controller;
     setPreviewing(true);
+    setDestructiveReview(null);
+    setDestructiveAcknowledgedHash(null);
     setError(null);
     try {
+      const payload = buildPayload();
       const response = await api<WorkbenchPreview>('/deployment-workbench/preview', {
         method: 'POST',
-        body: JSON.stringify(buildPayload()),
+        signal: controller.signal,
+        body: JSON.stringify(payload),
       });
+      if (request !== previewRequest.current || controller.signal.aborted) return false;
       setPreview(response);
+      const destructiveCount = componentCount(form.destructiveSelections);
+      if (response.destructiveReview) {
+        setDestructiveReviewLoading(true);
+        try {
+          const review = response.destructiveReview ?? (
+            supportsDestructiveAcknowledgement(capabilities)
+              ? await api<DestructiveReview>('/deployment-workbench/destructive-review', {
+                  method: 'POST',
+                  signal: controller.signal,
+                  body: JSON.stringify(payload),
+                })
+              : null
+          );
+          if (request === previewRequest.current && !controller.signal.aborted) {
+            setDestructiveReview(
+              review?.manifestXml && review.manifestHash ? review : null,
+            );
+          }
+        } catch (cause) {
+          if (request === previewRequest.current && !controller.signal.aborted) {
+            setError(cause instanceof Error
+              ? `Destructive manifest review failed: ${cause.message}`
+              : 'Destructive manifest review failed.');
+          }
+        } finally {
+          if (request === previewRequest.current) setDestructiveReviewLoading(false);
+        }
+      }
       setStep(4);
       requestAnimationFrame(() => document.querySelector<HTMLElement>('#workbench-main')?.focus());
       return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not preview the deployment plan.');
+      if (request === previewRequest.current && !controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : 'Could not preview the deployment plan.');
+      }
       return false;
     } finally {
-      setPreviewing(false);
+      if (request === previewRequest.current) setPreviewing(false);
     }
-  }, [buildPayload]);
+  }, [buildPayload, capabilities, form.destructiveSelections]);
 
   const createRun = useCallback(async () => {
+    const destructiveCount = componentCount(form.destructiveSelections);
+    const request = ++previewRequest.current;
+    previewAbort.current?.abort();
+    const controller = new AbortController();
+    previewAbort.current = controller;
     setCreating(true);
     setError(null);
     try {
+      const payload = buildPayload();
       const response = await api<{ id: string }>('/deployment-workbench/plans', {
         method: 'POST',
-        body: JSON.stringify(buildPayload()),
+        signal: controller.signal,
+        body: JSON.stringify(payload),
       });
+      if (request !== previewRequest.current || controller.signal.aborted) return null;
+      activeRunId.current = response.id;
       setRunId(response.id);
       setStep(5);
       await loadRun(response.id);
+      if (destructiveCount > 0) await loadDestructiveReview(response.id);
       return response.id;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not start the deployment run.');
+      if (request === previewRequest.current && !controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : 'Could not start the deployment run.');
+      }
       return null;
     } finally {
-      setCreating(false);
+      if (request === previewRequest.current) setCreating(false);
     }
-  }, [buildPayload, loadRun]);
+  }, [
+    buildPayload,
+    form.destructiveSelections,
+    loadDestructiveReview,
+    loadRun,
+  ]);
+
+  const submitDestructiveReview = useCallback(async () => {
+    if (
+      !runId
+      || !destructiveReview
+      || destructiveAcknowledgedHash !== destructiveReview.manifestHash
+    ) {
+      setError('Explicitly acknowledge the displayed destructive manifest hash first.');
+      return false;
+    }
+    setActionPending('destructive-review');
+    setError(null);
+    try {
+      await api(`/deployment-workbench/${runId}/destructive-review`, {
+        method: 'POST',
+        body: JSON.stringify({
+          digest: destructiveReview.manifestHash,
+          approved: true,
+        }),
+      });
+      setDestructiveSubmittedHash(destructiveReview.manifestHash);
+      await loadRun(runId);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not approve destructive manifest.');
+      return false;
+    } finally {
+      setActionPending(null);
+    }
+  }, [destructiveAcknowledgedHash, destructiveReview, loadRun, runId]);
 
   useEffect(() => {
     if (!runId || !status || TERMINAL_RUN_STATUSES.includes(status.status as never)) return;
@@ -403,7 +643,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
             payload?: { workbenchRunId?: string };
           };
           if (message.payload?.workbenchRunId !== runId) return;
-          void loadRun(runId);
+          void loadRun(runId).catch(() => undefined);
         } catch {
           // Polling remains the authoritative fallback.
         }
@@ -418,20 +658,25 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
 
   useEffect(() => {
     if (form.policy.tests.level !== 'RunSpecifiedTests' || !form.targetOrgId) return;
-    let cancelled = false;
+    const controller = new AbortController();
     setTestClassesLoading(true);
-    api<TestClassResponse>(`/deployments/test-classes?orgId=${encodeURIComponent(form.targetOrgId)}`)
+    api<TestClassResponse>(
+      `/deployments/test-classes?orgId=${encodeURIComponent(form.targetOrgId)}`,
+      { signal: controller.signal },
+    )
       .then((response) => {
-        if (!cancelled) setTestClasses(response.classes);
+        if (!controller.signal.aborted) setTestClasses(response.classes);
       })
       .catch((cause) => {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : 'Could not load Apex classes.');
+        if (!controller.signal.aborted) {
+          setError(cause instanceof Error ? cause.message : 'Could not load Apex classes.');
+        }
       })
       .finally(() => {
-        if (!cancelled) setTestClassesLoading(false);
+        if (!controller.signal.aborted) setTestClassesLoading(false);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [form.policy.tests.level, form.targetOrgId]);
 
@@ -440,6 +685,22 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     body?: Record<string, unknown>,
   ) => {
     if (!runId || !status) return;
+    const allowed = serverRunActions(status);
+    const permitted = action === 'approve'
+      ? allowed.canApprove
+      : action === 'reject'
+        ? allowed.canReject
+        : action === 'cancel'
+          ? allowed.canCancel
+          : action === 'resume'
+            ? allowed.canResume
+            : action === 'quick-deploy'
+              ? allowed.canQuickDeploy
+              : allowed.canRollback;
+    if (!permitted) {
+      setError(`The server has not authorized ${action.replace('-', ' ')} for this run.`);
+      return;
+    }
     const authoritative = status;
     setActionPending(action);
     setError(null);
@@ -462,15 +723,17 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   }, [loadRun, runId, status]);
 
   const openHistoryRun = useCallback(async (id: string) => {
+    activeRunId.current = id;
     setRunId(id);
     setStep(5);
     setError(null);
     try {
       await loadRun(id);
+      await loadDestructiveReview(id).catch(() => null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not open deployment history.');
     }
-  }, [loadRun]);
+  }, [loadDestructiveReview, loadRun]);
 
   return {
     step,
@@ -487,6 +750,8 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     setNotice,
     scm,
     scmSource,
+    selectSourceMode,
+    selectSource,
     selectTarget,
     selectProfile,
     comparisonStatus,
@@ -501,6 +766,12 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     preview,
     previewing,
     previewPlan,
+    destructiveReview,
+    destructiveReviewLoading,
+    destructiveAcknowledgedHash,
+    setDestructiveAcknowledgedHash,
+    destructiveSubmittedHash,
+    submitDestructiveReview,
     creating,
     createRun,
     runId,

@@ -8,6 +8,16 @@ import type {
 } from '@sfcc/shared';
 
 export type SourceMode = 'org_compare' | 'scm';
+export type WorkbenchCapabilities = Omit<DeploymentWorkbenchCapabilities, 'supports'> & {
+  staticAnalysisAvailability?: Record<string, boolean>;
+  supports: DeploymentWorkbenchCapabilities['supports'] & {
+    destructiveOnly?: boolean;
+    destructiveAcknowledgement?: boolean;
+    destructiveReview?: boolean;
+    includeOptional?: boolean;
+    optionalDependencies?: boolean;
+  };
+};
 export type WizardStep =
   | 'source'
   | 'components'
@@ -53,7 +63,7 @@ export interface WorkbenchPreview {
   normalized: unknown;
   policy: DeploymentPolicy;
   stages: WorkbenchStage[];
-  capabilities: DeploymentWorkbenchCapabilities;
+  capabilities: WorkbenchCapabilities;
   executionAvailable: boolean;
   readOnly?: boolean;
   sourceResolution?: {
@@ -62,7 +72,17 @@ export interface WorkbenchPreview {
     manifest: string;
     apiVersion: string;
     selectedComponents: number;
+    commitSha?: string;
+    sourceDigest?: string;
+    digest?: string;
+    revision?: string;
+    artifactId?: string;
+    manifestHash?: string;
+    selectionHash?: string;
+    sourceIdentityHash?: string;
+    targetHash?: string;
   };
+  destructiveReview?: DestructiveReview;
   dependencies?: {
     nodes: DependencyGraph['nodes'];
     edges: DependencyGraph['edges'];
@@ -89,6 +109,51 @@ export interface WorkbenchStatus {
   createdAt: string;
   updatedAt: string;
   job?: { id: string; status: string; currentStep?: string; error?: string | null } | null;
+  canApprove?: boolean;
+  canReject?: boolean;
+  canQuickDeploy?: boolean;
+  canCancel?: boolean;
+  canResume?: boolean;
+  canRollback?: boolean;
+  commitSha?: string;
+  sourceDigest?: string;
+  destructiveReviewRequired?: boolean;
+  destructiveReviewed?: boolean;
+  approvalCount?: number;
+  minimumApprovals?: number;
+  results?: {
+    staticAnalysis?: {
+      status: string;
+      summary?: Record<string, unknown> | null;
+      artifacts?: Record<string, unknown> | null;
+      issues: WorkbenchIssue[];
+    };
+    validation?: {
+      status: string;
+      id?: string | null;
+      summary?: Record<string, unknown> | null;
+      issues: WorkbenchIssue[];
+    };
+    tests?: {
+      status: string;
+      summary?: Record<string, unknown> | null;
+      results: WorkbenchTestResult[];
+    };
+    coverage?: {
+      status: string;
+      percentage: number | null;
+      minimum: number;
+    };
+  };
+}
+
+export interface DestructiveReview {
+  manifestXml: string;
+  manifestHash: string;
+  componentCount: number;
+  selections?: MetadataSelection[];
+  apiVersion?: string;
+  warning?: string;
 }
 
 export interface WorkbenchStage {
@@ -145,6 +210,9 @@ export interface WorkbenchResults {
   issues: WorkbenchIssue[];
   testResults: WorkbenchTestResult[];
   audits: WorkbenchAudit[];
+  coverage?: number | null;
+  componentFailures?: Array<Record<string, unknown>>;
+  apexTestFailures?: Array<Record<string, unknown>>;
 }
 
 export interface WorkbenchProgress {

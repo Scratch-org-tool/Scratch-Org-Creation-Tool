@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type KeyboardEvent } from 'react';
 import {
   Boxes,
   CheckCircle2,
@@ -29,10 +29,13 @@ import { useDeploymentWorkbench } from './use-deployment-workbench';
 import type { CompareItem, DependencyGraph, WorkbenchStage } from './types';
 import {
   componentCount,
+  groupQualityResults,
   layoutDependencyGraph,
   readableStage,
-  runCanResume,
+  serverRunActions,
   stageRisk,
+  supportsDestructiveAcknowledgement,
+  supportsOptionalDependencies,
   WORKBENCH_STEPS,
 } from './workbench-utils';
 
@@ -66,8 +69,20 @@ export function DeploymentWorkbenchWorkspace({
       />
 
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Deployment workbench views">
-        <TabButton active={tab === 'plan'} onClick={() => setTab('plan')}>Plan & execute</TabButton>
-        <TabButton active={tab === 'history'} onClick={() => setTab('history')}>
+        <TabButton
+          id="workbench-tab-plan"
+          controls="workbench-panel-plan"
+          active={tab === 'plan'}
+          onClick={() => setTab('plan')}
+        >
+          Plan &amp; execute
+        </TabButton>
+        <TabButton
+          id="workbench-tab-history"
+          controls="workbench-panel-history"
+          active={tab === 'history'}
+          onClick={() => setTab('history')}
+        >
           Audit & history
         </TabButton>
       </div>
@@ -83,26 +98,57 @@ export function DeploymentWorkbenchWorkspace({
         </InlineAlert>
       )}
 
-      {tab === 'history' ? <HistoryView w={w} /> : <PlanView w={w} />}
+      <section
+        id={`workbench-panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`workbench-tab-${tab}`}
+        tabIndex={0}
+      >
+        {tab === 'history' ? <HistoryView w={w} /> : <PlanView w={w} />}
+      </section>
     </div>
   );
 }
 
 function TabButton({
   active,
+  controls,
   children,
+  id,
   onClick,
 }: {
   active: boolean;
+  controls: string;
   children: React.ReactNode;
+  id: string;
   onClick: () => void;
 }) {
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = Array.from(
+      event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [],
+    );
+    if (!tabs.length) return;
+    event.preventDefault();
+    const current = tabs.indexOf(event.currentTarget);
+    const next = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next]?.focus();
+    tabs[next]?.click();
+  };
   return (
     <button
       type="button"
+      id={id}
       role="tab"
+      aria-controls={controls}
       aria-selected={active}
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
+      onKeyDown={onKeyDown}
       className={cn(
         'rounded-full border px-3 py-1.5 text-xs transition-colors',
         active
@@ -147,16 +193,20 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
         <legend className="sr-only">Deployment source type</legend>
         <div className="grid gap-3 sm:grid-cols-2">
           <SourceChoice
+            name="workbench-source-mode"
+            value="org_compare"
             checked={w.form.sourceMode === 'org_compare'}
             title="Org to org"
             description="Compare connected orgs in the background."
-            onClick={() => w.setForm((current) => ({ ...current, sourceMode: 'org_compare' }))}
+            onChange={() => w.selectSourceMode('org_compare')}
           />
           <SourceChoice
+            name="workbench-source-mode"
+            value="scm"
             checked={w.form.sourceMode === 'scm'}
             title="Source control"
             description="Azure DevOps, GitHub, or Bitbucket repository manifest."
-            onClick={() => w.setForm((current) => ({ ...current, sourceMode: 'scm' }))}
+            onChange={() => w.selectSourceMode('scm')}
           />
         </div>
 
@@ -166,11 +216,7 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
               <Select
                 id="workbench-source-org"
                 value={w.form.sourceOrgId}
-                onChange={(event) => w.setForm((current) => ({
-                  ...current,
-                  sourceOrgId: event.target.value,
-                  comparisonId: undefined,
-                }))}
+                onChange={(event) => w.selectSource(event.target.value)}
               >
                 <option value="">Select source org…</option>
                 {w.orgs.map((org) => (
@@ -252,27 +298,35 @@ function SourceChoice({
   checked,
   title,
   description,
-  onClick,
+  name,
+  onChange,
+  value,
 }: {
   checked: boolean;
   title: string;
   description: string;
-  onClick: () => void;
+  name: string;
+  onChange: () => void;
+  value: string;
 }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={checked}
-      onClick={onClick}
+    <label
       className={cn(
-        'rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'relative cursor-pointer rounded-xl border p-4 text-left transition-colors focus-within:ring-2 focus-within:ring-ring',
         checked ? 'border-primary bg-primary/5' : 'border-border/60 hover:border-primary/40',
       )}
     >
+      <input
+        type="radio"
+        name={name}
+        value={value}
+        checked={checked}
+        onChange={onChange}
+        className="absolute right-4 top-4"
+      />
       <span className="block text-sm font-medium">{title}</span>
       <span className="mt-1 block text-xs text-muted-foreground">{description}</span>
-    </button>
+    </label>
   );
 }
 
@@ -371,6 +425,14 @@ function ComponentsStep({ w }: { w: DeploymentWorkbenchState }) {
           </section>
         );
       })}
+      {componentCount(w.form.destructiveSelections) > 0 && (
+        !w.capabilities?.supports.destructiveChanges
+        || !supportsDestructiveAcknowledgement(w.capabilities)
+      ) && (
+        <InlineAlert variant="error" title="Destructive plan blocked">
+          The server must advertise destructive changes and hash-bound acknowledgement.
+        </InlineAlert>
+      )}
       {!w.compareItems.length && w.comparisonStatus !== 'running' && (
         <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
           Run the background comparison to resolve changed, new, and deleted metadata.
@@ -415,10 +477,12 @@ function DependenciesStep({ w }: { w: DeploymentWorkbenchState }) {
           ].map(([value, title, description]) => (
             <SourceChoice
               key={value}
+              name="workbench-dependency-mode"
+              value={value}
               checked={w.form.dependencyPolicy.mode === value}
               title={title}
               description={description}
-              onClick={() => w.setForm((current) => ({
+              onChange={() => w.setForm((current) => ({
                 ...current,
                 dependencyPolicy: {
                   ...current.dependencyPolicy,
@@ -464,15 +528,17 @@ function DependenciesStep({ w }: { w: DeploymentWorkbenchState }) {
                 dependencyPolicy: { ...current.dependencyPolicy, allowCycles: checked },
               }))}
             />
-            <PolicyToggle
-              id="include-optional"
-              label="Include optional dependencies"
-              checked={w.form.dependencyPolicy.includeOptional}
-              onChange={(checked) => w.setForm((current) => ({
-                ...current,
-                dependencyPolicy: { ...current.dependencyPolicy, includeOptional: checked },
-              }))}
-            />
+            {supportsOptionalDependencies(w.capabilities) && (
+              <PolicyToggle
+                id="include-optional"
+                label="Include optional dependencies"
+                checked={w.form.dependencyPolicy.includeOptional}
+                onChange={(checked) => w.setForm((current) => ({
+                  ...current,
+                  dependencyPolicy: { ...current.dependencyPolicy, includeOptional: checked },
+                }))}
+              />
+            )}
           </div>
         </div>
       </GlassCard>
@@ -493,6 +559,40 @@ function DependenciesStep({ w }: { w: DeploymentWorkbenchState }) {
               <Metric label="Estimated batches" value={batchCount} />
             </div>
             {graph?.nodes.length ? <DependencyGraphVisual graph={graph} /> : null}
+            {graph?.nodes.length ? (
+              <details className="mb-4 rounded-lg border border-border/60 p-3">
+                <summary className="cursor-pointer text-sm font-medium">
+                  Accessible dependency graph fallback
+                </summary>
+                <table className="mt-3 w-full text-sm">
+                  <caption className="sr-only">Dependency graph nodes</caption>
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="p-2">Node</th>
+                      <th className="p-2">Type</th>
+                      <th className="p-2">Selection</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {graph.nodes.map((node) => (
+                      <tr key={node.id} className="border-t border-border/40">
+                        <td className="p-2">{node.id}</td>
+                        <td className="p-2">{node.metadataType ?? '—'}</td>
+                        <td className="p-2">{node.selected ? 'Selected' : 'Included'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <h4 className="mt-3 text-sm font-medium">Directed references</h4>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm">
+                  {graph.edges.map((edge, index) => (
+                    <li key={`${edge.from}-${edge.to}-${index}`}>
+                      {edge.from} → {edge.to}{edge.explanation ? `: ${edge.explanation}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
             <div className="max-h-80 overflow-auto rounded-lg border border-border/60">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-card">
@@ -844,7 +944,10 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
 
 function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
   const stages = w.preview?.stages ?? [];
-  const destructiveCount = componentCount(w.form.destructiveSelections);
+  const destructiveCount = Math.max(
+    componentCount(w.form.destructiveSelections),
+    w.destructiveReview?.componentCount ?? 0,
+  );
   const dependencies = w.preview?.dependencies;
   const estimatedBatches = Number(dependencies?.batchEstimate.batchCount ?? 1);
   const resolvedComponents = Number(
@@ -860,11 +963,23 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
           <Metric label="Stages" value={stages.length} />
         </div>
         {w.preview?.sourceResolution && (
-          <InlineAlert variant="info" className="mb-4">
-            Read-only {w.preview.sourceResolution.type === 'scm' ? 'SCM checkout' : 'source-org retrieve'} resolved{' '}
-            {w.preview.sourceResolution.selectedComponents} selected component(s) from{' '}
-            {w.preview.sourceResolution.manifest}.
-          </InlineAlert>
+          <>
+            <InlineAlert variant="info" className="mb-4">
+              Read-only {w.preview.sourceResolution.type === 'scm' ? 'SCM checkout' : 'source-org retrieve'} resolved{' '}
+              {w.preview.sourceResolution.selectedComponents} selected component(s) from{' '}
+              {w.preview.sourceResolution.manifest}.
+            </InlineAlert>
+            <dl className="mb-4 grid gap-3 rounded-lg border border-border/60 p-3 text-sm sm:grid-cols-2">
+              <SummaryTerm
+                label="Pinned commit SHA"
+                value={w.preview.sourceResolution.commitSha ?? w.preview.sourceResolution.revision ?? 'Not supplied'}
+              />
+              <SummaryTerm
+                label="Source digest"
+                value={w.preview.sourceResolution.sourceDigest ?? w.preview.sourceResolution.digest ?? 'Not supplied'}
+              />
+            </dl>
+          </>
         )}
         {dependencies?.blocking.map((reason) => (
           <InlineAlert key={reason} variant="error" title="Dependency blocker" className="mb-3">
@@ -894,6 +1009,50 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
           </table>
         </div>
       </GlassCard>
+      {destructiveCount > 0 && (
+        <GlassCard
+          title="Destructive manifest acknowledgement"
+          description="The acknowledgement is bound to the exact server-generated manifest hash."
+        >
+          {!supportsDestructiveAcknowledgement(w.capabilities) ? (
+            <InlineAlert variant="error" title="Destructive execution blocked">
+              This backend does not advertise hash-bound destructive acknowledgement support.
+            </InlineAlert>
+          ) : !w.runId ? (
+            <InlineAlert variant="warning" title="Execution will pause for destructive review">
+              Create the immutable plan to fetch its server-generated destructive manifest and
+              SHA-256 digest. Target mutation remains blocked until that exact digest is explicitly
+              acknowledged.
+            </InlineAlert>
+          ) : w.destructiveReviewLoading ? (
+            <p className="text-sm text-muted-foreground">Loading the server-generated destructive manifest…</p>
+          ) : w.destructiveReview ? (
+            <div className="space-y-3">
+              <dl><SummaryTerm label="Manifest SHA-256" value={w.destructiveReview.manifestHash} /></dl>
+              <pre className="max-h-80 overflow-auto rounded-lg border border-border/60 bg-background/50 p-3 text-xs">
+                {w.destructiveReview.manifestXml}
+              </pre>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={w.destructiveAcknowledgedHash === w.destructiveReview.manifestHash}
+                  onChange={(event) => w.setDestructiveAcknowledgedHash(
+                    event.target.checked ? w.destructiveReview!.manifestHash : null,
+                  )}
+                />
+                <span>
+                  I reviewed and explicitly acknowledge destructive manifest hash{' '}
+                  <code>{w.destructiveReview.manifestHash}</code>.
+                </span>
+              </label>
+            </div>
+          ) : (
+            <InlineAlert variant="error" title="Destructive execution blocked">
+              The server did not return a manifest and hash for this exact plan.
+            </InlineAlert>
+          )}
+        </GlassCard>
+      )}
       <GlassCard title="Plan identity">
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Deployment name" htmlFor="deployment-name">
@@ -937,9 +1096,14 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
       </GlassCard>
     );
   }
-  const active = ['planned', 'approved', 'running', 'awaiting_approval'].includes(w.status.status);
-  const quickAvailable = Boolean(w.status.validationId);
-  const rollbackReady = w.stages.some((stage) => stage.key === 'rollback_ready' && stage.status === 'passed');
+  const actions = serverRunActions(w.status);
+  const sourceIdentity = w.results?.artifacts?.source as Record<string, unknown> | undefined;
+  const pinnedCommit = typeof sourceIdentity?.commitSha === 'string'
+    ? sourceIdentity.commitSha
+    : w.status.commitSha;
+  const sourceDigest = typeof sourceIdentity?.digest === 'string'
+    ? sourceIdentity.digest
+    : w.status.sourceDigest;
   return (
     <div className="space-y-4">
       <GlassCard
@@ -960,11 +1124,17 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
         <div aria-live="polite" aria-atomic="true" className="sr-only">
           Deployment status {w.status.status}. Current stage {w.status.currentStage ?? 'none'}.
         </div>
+        {(pinnedCommit || sourceDigest) && (
+          <dl className="mb-4 grid gap-3 rounded-lg border border-border/60 p-3 text-sm sm:grid-cols-2">
+            <SummaryTerm label="Pinned commit SHA" value={pinnedCommit ?? '—'} />
+            <SummaryTerm label="Source digest" value={sourceDigest ?? '—'} />
+          </dl>
+        )}
         <div className="space-y-2">
           {w.stages.map((stage) => <StageRow key={stage.key} stage={stage} />)}
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
-          {active && (
+          {actions.canCancel && (
             <Button
               variant="outline"
               loading={w.actionPending === 'cancel'}
@@ -973,7 +1143,7 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
               <XCircle className="mr-2 size-4" /> Cancel
             </Button>
           )}
-          {w.status.status === 'awaiting_approval' && (
+          {actions.canApprove && (
             <Button
               loading={w.actionPending === 'approve'}
               onClick={() => void w.runAction('approve')}
@@ -981,12 +1151,12 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
               <ShieldCheck className="mr-2 size-4" /> Approve
             </Button>
           )}
-          {runCanResume(w.status.status, w.progress ?? undefined) && (
+          {actions.canResume && (
             <Button loading={w.actionPending === 'resume'} onClick={() => void w.runAction('resume')}>
               <Play className="mr-2 size-4" /> Resume intelligent batches
             </Button>
           )}
-          {quickAvailable && w.status.status !== 'passed' && (
+          {actions.canQuickDeploy && (
             <Button
               variant="outline"
               loading={w.actionPending === 'quick-deploy'}
@@ -996,7 +1166,7 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
             </Button>
           )}
         </div>
-        {w.status.status === 'awaiting_approval' && (
+        {actions.canReject && (
           <div className="mt-4 flex flex-col gap-2 rounded-lg border border-border/60 p-3 sm:flex-row sm:items-end">
             <Field label="Rejection reason" htmlFor="reject-reason" className="flex-1">
               <Input id="reject-reason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} />
@@ -1029,10 +1199,60 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
         </GlassCard>
       ) : null}
 
+      {(w.destructiveReview || w.destructiveReviewLoading) && (
+        <GlassCard
+          title="Destructive manifest review"
+          description="Target mutation is blocked until this persisted plan digest is explicitly approved."
+        >
+          {w.destructiveReviewLoading || !w.destructiveReview ? (
+            <p className="text-sm text-muted-foreground">Loading destructive manifest…</p>
+          ) : (
+            <div className="space-y-3">
+              <dl>
+                <SummaryTerm label="Manifest SHA-256" value={w.destructiveReview.manifestHash} />
+              </dl>
+              <pre className="max-h-80 overflow-auto rounded-lg border border-border/60 bg-background/50 p-3 text-xs">
+                {w.destructiveReview.manifestXml}
+              </pre>
+              {w.status?.destructiveReviewed
+              || w.destructiveSubmittedHash === w.destructiveReview.manifestHash ? (
+                <InlineAlert variant="success">
+                  This exact destructive manifest digest is acknowledged.
+                </InlineAlert>
+              ) : (
+                <>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={w.destructiveAcknowledgedHash === w.destructiveReview.manifestHash}
+                      onChange={(event) => w.setDestructiveAcknowledgedHash(
+                        event.target.checked ? w.destructiveReview!.manifestHash : null,
+                      )}
+                    />
+                    <span>
+                      I reviewed every deletion and acknowledge digest{' '}
+                      <code>{w.destructiveReview.manifestHash}</code>.
+                    </span>
+                  </label>
+                  <Button
+                    variant="destructive"
+                    disabled={w.destructiveAcknowledgedHash !== w.destructiveReview.manifestHash}
+                    loading={w.actionPending === 'destructive-review'}
+                    onClick={() => void w.submitDestructiveReview()}
+                  >
+                    Confirm destructive review
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+        </GlassCard>
+      )}
+
       <ResultDetails w={w} />
       <DependenciesStep w={w} />
 
-      {rollbackReady && (
+      {actions.canRollback && (
         <GlassCard title="Rollback" description="Restores captured existing metadata. Net-new metadata is not deleted automatically.">
           <InlineAlert variant="warning" className="mb-3">
             Review net-new cleanup separately; rollback cannot recreate or safely infer destructive cleanup.
@@ -1080,28 +1300,33 @@ function StageRow({ stage }: { stage: WorkbenchStage }) {
 }
 
 function ResultDetails({ w }: { w: DeploymentWorkbenchState }) {
-  const validationStage = w.results?.stages.find((stage) => stage.key === 'validation');
-  const raw = validationStage?.artifacts?.raw as Record<string, unknown> | undefined;
-  const resultRoot = (raw?.result ?? raw) as Record<string, unknown> | undefined;
-  const details = resultRoot?.details as Record<string, unknown> | undefined;
-  const componentFailures = arrayValue(details?.componentFailures);
-  const coverage = numberValue(validationStage?.summary?.coverage);
+  const grouped = groupQualityResults(w.results, w.status);
   return (
     <div className="space-y-4">
       <GlassCard title="Quality results">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Metric label="Static issues" value={w.results?.issues.length ?? 0} danger={Boolean(w.results?.issues.length)} />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Metric label="Static issues" value={grouped.staticIssues.length} danger={grouped.staticIssues.length > 0} />
+          <Metric
+            label="Validation component failures"
+            value={grouped.validationComponentFailures.length}
+            danger={grouped.validationComponentFailures.length > 0}
+          />
           <Metric
             label="Failed Apex tests"
-            value={w.results?.testResults.filter((test) => test.status === 'failed').length ?? 0}
-            danger={Boolean(w.results?.testResults.some((test) => test.status === 'failed'))}
+            value={grouped.apexTestFailures.length}
+            danger={grouped.apexTestFailures.length > 0}
           />
-          <Metric label="Apex coverage" value={coverage === null ? '—' : `${coverage}%`} danger={coverage !== null && coverage < w.form.policy.tests.minimumCoverage} />
+          <Metric label="Apex coverage" value={grouped.coverage === null ? '—' : `${grouped.coverage}%`} danger={grouped.coverage !== null && grouped.coverage < w.form.policy.tests.minimumCoverage} />
         </div>
       </GlassCard>
-      {componentFailures.length > 0 && (
+      {grouped.validationComponentFailures.length > 0 && (
         <GlassCard title="Validation component failures">
-          <GenericTable rows={componentFailures} />
+          <GenericTable rows={grouped.validationComponentFailures} />
+        </GlassCard>
+      )}
+      {grouped.apexTestFailures.length > 0 && !w.results?.testResults.length && (
+        <GlassCard title="Apex test failures from validation artifacts">
+          <GenericTable rows={grouped.apexTestFailures} />
         </GlassCard>
       )}
       {w.results?.issues.length ? (
@@ -1343,6 +1568,21 @@ function HistoryView({ w }: { w: DeploymentWorkbenchState }) {
 }
 
 function WizardFooter({ w }: { w: DeploymentWorkbenchState }) {
+  const deployableCount = componentCount(w.form.components);
+  const destructiveCount = Math.max(
+    componentCount(w.form.destructiveSelections),
+    w.destructiveReview?.componentCount ?? 0,
+  );
+  const destructiveSupported = destructiveCount === 0
+    || (
+      w.capabilities?.supports.destructiveChanges === true
+      && supportsDestructiveAcknowledgement(w.capabilities)
+      && (
+        deployableCount > 0
+        || w.capabilities?.supports.destructiveOnly === true
+        || w.capabilities?.supports.destructiveChanges === true
+      )
+    );
   const sourceBlocked = !w.form.targetOrgId || (
     w.form.sourceMode === 'org_compare'
       ? !w.form.sourceOrgId || w.form.sourceOrgId === w.form.targetOrgId
@@ -1353,7 +1593,7 @@ function WizardFooter({ w }: { w: DeploymentWorkbenchState }) {
   const nextBlocked =
     (w.step === 0 && sourceBlocked)
     || (w.step === 1 && componentBlocked)
-    || (w.step === 3 && w.validation.blockers.length > 0);
+    || (w.step === 3 && (w.validation.blockers.length > 0 || !destructiveSupported));
 
   const next = async () => {
     if (w.step === 3) {
@@ -1372,10 +1612,17 @@ function WizardFooter({ w }: { w: DeploymentWorkbenchState }) {
         {w.step === 4 ? (
           <Button
             loading={w.creating}
-            disabled={w.validation.blockers.length > 0 || !w.preview?.executionAvailable}
+            disabled={
+              w.validation.blockers.length > 0
+              || !w.preview?.executionAvailable
+              || !destructiveSupported
+              || w.destructiveReviewLoading
+            }
             onClick={() => void w.createRun()}
           >
-            <Play className="mr-2 size-4" /> Create & execute plan
+            <Play className="mr-2 size-4" /> {destructiveCount > 0
+              ? 'Create plan for destructive review'
+              : 'Create & execute plan'}
           </Button>
         ) : (
           <Button loading={w.previewing} disabled={nextBlocked} onClick={() => void next()}>
@@ -1546,16 +1793,6 @@ function DependencyGraphVisual({ graph }: { graph: DependencyGraph }) {
       )}
     </figure>
   );
-}
-
-function arrayValue(value: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object');
-  if (value && typeof value === 'object') return [value as Record<string, unknown>];
-  return [];
-}
-
-function numberValue(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function displayValue(value: unknown): string {

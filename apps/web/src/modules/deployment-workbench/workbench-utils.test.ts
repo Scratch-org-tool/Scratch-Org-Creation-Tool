@@ -3,11 +3,14 @@ import {
   applyProductionLocks,
   componentCount,
   createInitialForm,
+  groupQualityResults,
+  invalidateSourceState,
   layoutDependencyGraph,
   payloadFromForm,
   policyForEnvironment,
   profileForOrgType,
   runCanResume,
+  serverRunActions,
   selectionsFromCompareItems,
   stageRisk,
   validateWorkbenchForm,
@@ -60,8 +63,11 @@ describe('deployment workbench utilities', () => {
   it('builds a normalized SCM payload and validates chained data JSON', () => {
     const form = createInitialForm('scm');
     form.targetOrgId = '00000000-0000-4000-8000-000000000001';
+    form.sourceOrgId = 'must-not-leak';
+    form.components = [{ metadataType: 'ApexClass', members: ['Stale'] }];
+    form.destructiveSelections = [{ metadataType: 'ApexClass', members: ['Old'] }];
     form.chainedDataEnabled = true;
-    form.chainedDataJson = '[{"object":"Account"}]';
+    form.chainedDataJson = '[{"objectName":"Account","strategy":"upsert","matchField":"ExternalId__c"}]';
     const source = {
       type: 'scm' as const,
       provider: 'github' as const,
@@ -71,9 +77,98 @@ describe('deployment workbench utilities', () => {
     };
     const payload = payloadFromForm(form, source);
     expect(payload.source).toEqual(source);
-    expect(payload.chainedData?.config).toEqual([{ object: 'Account' }]);
+    expect(payload.components).toEqual([]);
+    expect(payload.destructiveSelections).toEqual([]);
+    expect(payload.chainedData?.config).toEqual([{
+      objectName: 'Account',
+      strategy: 'upsert',
+      matchField: 'ExternalId__c',
+    }]);
     form.chainedDataJson = '{}';
     expect(() => payloadFromForm(form, source)).toThrow(/non-empty JSON array/);
+  });
+
+  it('invalidates every source-specific selection when mode or org changes', () => {
+    const form = createInitialForm();
+    form.comparisonId = 'comparison';
+    form.components = [{ metadataType: 'ApexClass', members: ['Current'] }];
+    form.destructiveSelections = [{ metadataType: 'ApexClass', members: ['Old'] }];
+    const switched = invalidateSourceState(form, { sourceMode: 'scm', sourceOrgId: '' });
+    expect(switched).toMatchObject({
+      sourceMode: 'scm',
+      sourceOrgId: '',
+      components: [],
+      destructiveSelections: [],
+    });
+    expect(switched.comparisonId).toBeUndefined();
+    const retargeted = invalidateSourceState(form, { targetOrgId: 'new-target' });
+    expect(retargeted.components).toEqual([]);
+    expect(retargeted.destructiveSelections).toEqual([]);
+    expect(retargeted.comparisonId).toBeUndefined();
+  });
+
+  it('uses only explicit server action flags and never infers approval', () => {
+    const status = {
+      id: 'run',
+      status: 'awaiting_approval',
+      currentStage: 'approval',
+      validationId: 'validation',
+      approvalRequired: true,
+      approvedAt: null,
+      rejectedAt: null,
+      createdAt: '',
+      updatedAt: '',
+      canCancel: true,
+    };
+    expect(serverRunActions(status)).toEqual({
+      canApprove: false,
+      canReject: false,
+      canQuickDeploy: false,
+      canCancel: true,
+      canResume: false,
+      canRollback: false,
+    });
+    expect(serverRunActions({ ...status, canApprove: true }).canApprove).toBe(true);
+  });
+
+  it('separates validation failures, Apex failures, static issues, and coverage', () => {
+    const grouped = groupQualityResults({
+      id: 'run',
+      status: 'failed',
+      stages: [{
+        key: 'validation',
+        ordinal: 1,
+        required: true,
+        status: 'failed',
+        summary: { coverage: 72 },
+        artifacts: {
+          raw: { result: { details: { componentFailures: [{ fullName: 'Broken' }] } } },
+        },
+      }, {
+        key: 'apex_tests',
+        ordinal: 2,
+        required: true,
+        status: 'failed',
+      }],
+      issues: [{
+        id: 'issue',
+        engine: 'pmd',
+        ruleId: 'Rule',
+        severity: 'error',
+        message: 'Static issue',
+      }],
+      testResults: [{
+        id: 'test',
+        className: 'ExampleTest',
+        methodName: 'fails',
+        status: 'failed',
+      }],
+      audits: [],
+    });
+    expect(grouped.staticIssues).toHaveLength(1);
+    expect(grouped.validationComponentFailures).toEqual([{ fullName: 'Broken' }]);
+    expect(grouped.apexTestFailures).toHaveLength(1);
+    expect(grouped.coverage).toBe(72);
   });
 
   it('counts grouped components and classifies execution risk', () => {

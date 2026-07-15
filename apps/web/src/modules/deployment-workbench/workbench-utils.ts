@@ -4,7 +4,15 @@ import type {
   DeploymentWorkbenchInput,
   MetadataSelection,
 } from '@sfcc/shared';
-import type { CompareItem, DependencyGraph, WorkbenchForm, WorkbenchStage } from './types';
+import type {
+  CompareItem,
+  DependencyGraph,
+  WorkbenchCapabilities,
+  WorkbenchForm,
+  WorkbenchResults,
+  WorkbenchStage,
+  WorkbenchStatus,
+} from './types';
 
 export const WORKBENCH_STEPS = [
   'Source',
@@ -107,6 +115,19 @@ export function createInitialForm(sourceMode: WorkbenchForm['sourceMode'] = 'org
   };
 }
 
+export function invalidateSourceState(
+  form: WorkbenchForm,
+  patch: Partial<Pick<WorkbenchForm, 'sourceMode' | 'sourceOrgId' | 'targetOrgId'>>,
+): WorkbenchForm {
+  return {
+    ...form,
+    ...patch,
+    comparisonId: undefined,
+    components: [],
+    destructiveSelections: [],
+  };
+}
+
 export function selectionsFromCompareItems(
   items: CompareItem[],
   destructive = false,
@@ -194,8 +215,9 @@ export function payloadFromForm(
     chainedData = {
       enabled: true,
       stopOnError: form.chainedDataStopOnError,
-      config: parsed as Array<Record<string, unknown>>,
-    };
+      sequential: true,
+      config: parsed,
+    } as unknown as DeploymentWorkbenchInput['chainedData'];
   }
   const policy = form.targetProfile === 'production'
     ? applyProductionLocks(form.policy)
@@ -213,8 +235,8 @@ export function payloadFromForm(
     source,
     target: { orgId: form.targetOrgId, profile: form.targetProfile },
     strategy: form.strategy,
-    components: form.components,
-    destructiveSelections: form.destructiveSelections,
+    components: form.sourceMode === 'scm' ? [] : form.components,
+    destructiveSelections: form.sourceMode === 'scm' ? [] : form.destructiveSelections,
     dependencyPolicy: form.dependencyPolicy,
     policy,
     ...(chainedData ? { chainedData } : {}),
@@ -233,6 +255,114 @@ export function readableStage(key: string): string {
 
 export function runCanResume(status: string, progress?: { resumable: boolean }): boolean {
   return Boolean(progress?.resumable) && !['running', 'planned', 'approved', 'awaiting_approval'].includes(status);
+}
+
+export function supportsOptionalDependencies(capabilities: WorkbenchCapabilities | null): boolean {
+  return capabilities?.supports.includeOptional === true
+    || capabilities?.supports.optionalDependencies === true;
+}
+
+export function supportsDestructiveAcknowledgement(
+  capabilities: WorkbenchCapabilities | null,
+): boolean {
+  return capabilities?.supports.destructiveAcknowledgement === true
+    || capabilities?.supports.destructiveReview === true
+    || capabilities?.supports.destructiveChanges === true;
+}
+
+export function serverRunActions(status: WorkbenchStatus | null) {
+  return {
+    canApprove: status?.canApprove === true,
+    canReject: status?.canReject === true,
+    canQuickDeploy: status?.canQuickDeploy === true,
+    canCancel: status?.canCancel === true,
+    canResume: status?.canResume === true,
+    canRollback: status?.canRollback === true,
+  };
+}
+
+export interface GroupedQualityResults {
+  staticIssues: WorkbenchResults['issues'];
+  validationComponentFailures: Array<Record<string, unknown>>;
+  apexTestFailures: Array<Record<string, unknown>>;
+  coverage: number | null;
+}
+
+export function groupQualityResults(
+  results: WorkbenchResults | null,
+  status?: WorkbenchStatus | null,
+): GroupedQualityResults {
+  if (!results) {
+    return {
+      staticIssues: [],
+      validationComponentFailures: [],
+      apexTestFailures: [],
+      coverage: null,
+    };
+  }
+  const validation = results.stages.find((stage) => stage.key === 'validation');
+  const apex = results.stages.find((stage) => stage.key === 'apex_tests');
+  const validationRaw = asRecord(validation?.artifacts?.raw);
+  const validationRoot = asRecord(validationRaw?.result) ?? validationRaw;
+  const details = asRecord(validationRoot?.details);
+  const apexRaw = asRecord(apex?.artifacts?.raw);
+  const apexRoot = asRecord(apexRaw?.result) ?? apexRaw;
+  const apexDetails = asRecord(apexRoot?.details);
+  const validationFailures = results.componentFailures
+    ?? recordArray(validation?.artifacts?.componentFailures)
+    ?? recordArray(details?.componentFailures)
+    ?? [];
+  const artifactTestFailures =
+    recordArray(apex?.artifacts?.testFailures)
+    ?? recordArray(apexDetails?.runTestResult)
+    ?? recordArray(details?.runTestResult)
+    ?? [];
+  const persistedTestFailures = results.testResults
+    .filter((test) => test.status.toLowerCase() === 'failed')
+    .map((test) => ({ ...test }));
+  const coverageCandidates = [
+    status?.results?.coverage?.percentage,
+    results.coverage,
+    validation?.summary?.coverage,
+    apex?.summary?.coverage,
+    details?.coverage,
+    apexDetails?.coverage,
+  ];
+  const coverage = coverageCandidates.find(
+    (value): value is number => typeof value === 'number' && Number.isFinite(value),
+  ) ?? null;
+  return {
+    staticIssues: status?.results?.staticAnalysis?.issues ?? results.issues.filter(
+      (issue) => issue.engine !== 'salesforce',
+    ),
+    validationComponentFailures: status?.results?.validation?.issues?.map(
+      (issue) => ({ ...issue }),
+    ) ?? validationFailures,
+    apexTestFailures: results.apexTestFailures
+      ?? (
+        status?.results?.tests?.results
+          .filter((test) => test.status.toLowerCase() === 'failed')
+          .map((test) => ({ ...test }))
+        ?? (persistedTestFailures.length ? persistedTestFailures : artifactTestFailures)
+      ),
+    coverage,
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function recordArray(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object',
+    );
+  }
+  const record = asRecord(value);
+  return record ? [record] : undefined;
 }
 
 export function layoutDependencyGraph(graph: DependencyGraph, limit = 24) {
