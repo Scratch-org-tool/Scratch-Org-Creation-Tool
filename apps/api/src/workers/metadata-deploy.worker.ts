@@ -30,6 +30,7 @@ import { PipelineStepError } from './metadata-deploy.worker.errors';
 import { MetadataDataChainService } from '../modules/metadata/metadata-data-chain.service';
 import { bootstrapOrgToOrgWorkspace } from '../integrations/azure/org-to-org-workspace.util';
 import { DeploymentWorkbenchRuntimeService } from '../modules/deployment/deployment-workbench-runtime.service';
+import { DeploymentArtifactStore } from '../modules/deployment/deployment-artifact.store';
 
 export { PipelineStepError } from './metadata-deploy.worker.errors';
 
@@ -48,6 +49,7 @@ export class MetadataDeployWorker {
     private readonly intelligentOrchestrator: IntelligentOrchestratorService,
     private readonly metadataDataChain: MetadataDataChainService,
     private readonly workbenchRuntime: DeploymentWorkbenchRuntimeService,
+    private readonly artifactStore: DeploymentArtifactStore,
   ) {}
 
   async process(job: Job) {
@@ -82,6 +84,7 @@ export class MetadataDeployWorker {
       destructiveChangesXml,
       quickDeployValidationId,
       localProjectRoot,
+      sourceArtifactId,
     } = job.data as {
       orgAlias: string;
       manifestPath?: string;
@@ -106,6 +109,7 @@ export class MetadataDeployWorker {
       destructiveChangesXml?: string;
       quickDeployValidationId?: string;
       localProjectRoot?: string;
+      sourceArtifactId?: string;
     };
     const gitSource = normalizeGitSourceConfig({
       gitSource: rawGitSource,
@@ -189,16 +193,32 @@ export class MetadataDeployWorker {
           ? 'Preparing org-to-org metadata retrieve and deploy...'
           : `Cloning ${gitSource?.repo}@${gitSource?.branch} from ${provider}...`);
 
-      const workspace = await this.deploySourceResolver.resolve({
-        orgAlias,
-        gitSource,
-        azureDeploy,
-        manifestPath: manifest,
-        manifestContent,
-        sourceOrgAlias: resolvedSourceOrgAlias,
-        deployMode,
-        localProjectRoot,
-      });
+      const durableSource = sourceArtifactId
+        ? await this.artifactStore.materializeDirectory(sourceArtifactId, 'sfcc-rollback-')
+        : undefined;
+      let workspace: Awaited<ReturnType<DeploySourceResolver['resolve']>>;
+      try {
+        workspace = await this.deploySourceResolver.resolve({
+          orgAlias,
+          gitSource,
+          azureDeploy,
+          manifestPath: manifest,
+          manifestContent,
+          sourceOrgAlias: resolvedSourceOrgAlias,
+          deployMode,
+          localProjectRoot: durableSource?.root ?? localProjectRoot,
+        });
+      } catch (error) {
+        await durableSource?.cleanup();
+        throw error;
+      }
+      if (durableSource) {
+        const resolverCleanup = workspace.cleanup;
+        workspace.cleanup = async () => {
+          await resolverCleanup?.();
+          await durableSource.cleanup();
+        };
+      }
 
       try {
         // Capture rollback state before either execution strategy can mutate

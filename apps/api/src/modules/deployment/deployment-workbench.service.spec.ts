@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 const db = vi.hoisted(() => ({
   deploymentQualityRun: {
@@ -15,6 +16,7 @@ const db = vi.hoisted(() => ({
   },
   deploymentQualityStage: {
     findMany: vi.fn(),
+    findUnique: vi.fn(),
     updateMany: vi.fn(),
   },
   deploymentQualityIssue: { findMany: vi.fn() },
@@ -23,12 +25,15 @@ const db = vi.hoisted(() => ({
     findMany: vi.fn(),
     create: vi.fn(),
   },
+  deploymentQualityApproval: { create: vi.fn(), count: vi.fn() },
+  deploymentDestructiveReview: { findFirst: vi.fn(), upsert: vi.fn() },
   job: { findUnique: vi.fn() },
   orgConnection: { findUnique: vi.fn(), findMany: vi.fn() },
   appUser: { findMany: vi.fn() },
   metadataComparison: { findFirst: vi.fn() },
   scmConnection: { findFirst: vi.fn() },
   projectBinding: { findFirst: vi.fn() },
+  $queryRawUnsafe: vi.fn(),
   $transaction: vi.fn(),
 }));
 
@@ -58,6 +63,8 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
   const updateStatus = vi.fn();
   const rollback = vi.fn();
   const resolveSource = vi.fn();
+  const putDirectory = vi.fn();
+  const readBytes = vi.fn();
   const tempRoots: string[] = [];
 
   beforeEach(() => {
@@ -72,16 +79,21 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       { detectAvailability: vi.fn().mockResolvedValue({}) } as never,
       { rollback } as never,
       { resolve: resolveSource } as never,
+      { putDirectory, readBytes } as never,
     );
     db.$transaction.mockImplementation((callback: (tx: typeof db) => unknown) => callback(db));
     db.deploymentQualityRun.updateMany.mockResolvedValue({ count: 1 });
     db.deploymentQualityStage.updateMany.mockResolvedValue({ count: 1 });
     db.deploymentQualityAudit.create.mockResolvedValue({});
+    db.deploymentQualityApproval.create.mockResolvedValue({});
+    db.deploymentQualityApproval.count.mockResolvedValue(1);
     db.deploymentQualityRun.update.mockResolvedValue({});
     enqueue.mockResolvedValue({ id: 'job-2' });
     removeJob.mockResolvedValue(true);
     updateStatus.mockResolvedValue({});
     rollback.mockResolvedValue({ rollbackId: 'rollback-1', jobId: 'job-rb' });
+    putDirectory.mockResolvedValue(`workbench-source:${'a'.repeat(64)}`);
+    readBytes.mockResolvedValue(Buffer.from('artifact'));
   });
 
   afterEach(() => {
@@ -104,6 +116,11 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       id: 'run-1',
       createdBy: 'user-1',
       policySnapshot,
+      status: 'awaiting_approval',
+      artifacts: {},
+      destructiveSelections: [],
+      manifestXml: null,
+      apiVersion: '62.0',
       approvedAt: null,
       rejectedAt: null,
     });
@@ -121,6 +138,11 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
         id: 'run-1',
         createdBy: 'user-1',
         policySnapshot,
+        status: 'awaiting_approval',
+        artifacts: {},
+        destructiveSelections: [],
+        manifestXml: null,
+        apiVersion: '62.0',
         approvedAt: null,
         rejectedAt: null,
       })
@@ -153,7 +175,7 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
 
     expect(result?.status).toBe('approved');
     expect(db.deploymentQualityRun.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'run-1', approvedAt: null, rejectedAt: null },
+      where: expect.objectContaining({ id: 'run-1', approvedAt: null, rejectedAt: null }),
       data: expect.objectContaining({ approvedBy: 'admin-1', status: 'approved' }),
     }));
     expect(db.deploymentQualityAudit.create).toHaveBeenCalledWith({
@@ -163,6 +185,52 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
         actorId: 'admin-1',
       }),
     });
+  });
+
+  it('counts a concurrent actor only once toward minimum approvals', async () => {
+    const multiPolicy = {
+      ...policySnapshot,
+      approval: { required: true, approverType: 'distinct_user', minimumApprovals: 2 },
+    };
+    db.deploymentQualityRun.findUnique.mockImplementation(({ select }: {
+      select?: Record<string, boolean>;
+    }) => Promise.resolve(select?.rejectionReason ? {
+      id: 'run-1',
+      status: 'awaiting_approval',
+      approvedBy: null,
+      approvedAt: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      rejectionReason: null,
+    } : {
+      id: 'run-1',
+      createdBy: 'user-1',
+      policySnapshot: multiPolicy,
+      status: 'awaiting_approval',
+      artifacts: {},
+      destructiveSelections: [],
+      manifestXml: null,
+      apiVersion: '62.0',
+      approvedAt: null,
+      rejectedAt: null,
+    }));
+    let inserted = false;
+    db.deploymentQualityApproval.create.mockImplementation(async () => {
+      if (inserted) throw { code: 'P2002' };
+      inserted = true;
+      return {};
+    });
+    db.deploymentQualityApproval.count.mockResolvedValue(1);
+
+    const decisions = await Promise.allSettled([
+      service.approve('run-1', { userId: 'user-2', isAdmin: false }),
+      service.approve('run-1', { userId: 'user-2', isAdmin: false }),
+    ]);
+
+    expect(decisions.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(decisions.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(db.deploymentQualityRun.updateMany).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it('rejects a target profile that understates a production org', async () => {
@@ -192,6 +260,43 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     }, 'user-1')).rejects.toThrow('Target profile mismatch');
   });
 
+  it('rejects a comparison id bound to different source or target orgs', async () => {
+    db.orgConnection.findUnique
+      .mockResolvedValueOnce({
+        id: '22222222-2222-4222-8222-222222222222',
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'target',
+      })
+      .mockResolvedValueOnce({
+        id: '11111111-1111-4111-8111-111111111111',
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'source',
+      });
+    db.metadataComparison.findFirst.mockResolvedValue({
+      id: '33333333-3333-4333-8333-333333333333',
+      sourceOrgId: '11111111-1111-4111-8111-111111111111',
+      targetOrgId: '44444444-4444-4444-8444-444444444444',
+      status: 'completed',
+      items: [],
+    });
+
+    await expect(service.preview({
+      source: {
+        type: 'org_compare',
+        sourceOrgId: '11111111-1111-4111-8111-111111111111',
+        comparisonId: '33333333-3333-4333-8333-333333333333',
+      },
+      target: {
+        orgId: '22222222-2222-4222-8222-222222222222',
+        profile: 'scratch',
+      },
+      components: [{ metadataType: 'ApexClass', members: ['Example'] }],
+    }, 'user-1')).rejects.toThrow('source and target do not match');
+    expect(resolveSource).not.toHaveBeenCalled();
+  });
+
   it('resolves a read-only preview, returns dependency planning, caches it, and cleans up', async () => {
     const root = fs.mkdtempSync(path.join(tmpdir(), 'workbench-preview-service-'));
     tempRoots.push(root);
@@ -204,6 +309,13 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       path.join(manifestDir, 'package.xml'),
       '<Package><types><members>Example</members><name>ApexClass</name></types><version>62.0</version></Package>',
     );
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', [
+      '-c', 'user.name=Test',
+      '-c', 'user.email=test@example.com',
+      'commit', '-m', 'fixture',
+    ], { cwd: root });
     const cleanup = vi.fn().mockResolvedValue(undefined);
     resolveSource.mockResolvedValue({
       projectRoot: root,
@@ -299,6 +411,76 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     }));
   });
 
+  it('returns authoritative actions and stage-separated normalized results', async () => {
+    db.deploymentQualityRun.findFirst.mockResolvedValue({
+      id: 'run-1',
+      status: 'awaiting_approval',
+      currentStage: 'approval',
+      validationId: '0Af-valid',
+      approvedAt: null,
+      rejectedAt: null,
+      policySnapshot,
+      artifacts: {
+        source: {
+          digest: 'source-digest',
+          artifactId: `workbench-source:${'a'.repeat(64)}`,
+        },
+      },
+      strategy: 'validate_then_quick',
+      deploymentId: 'deployment-1',
+      destructiveSelections: [],
+      manifestXml: null,
+      apiVersion: '62.0',
+      createdBy: 'user-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    db.deploymentQualityStage.findMany.mockResolvedValue([
+      {
+        key: 'static_analysis',
+        status: 'passed',
+        summary: { counts: { error: 0 } },
+        artifacts: { reports: [] },
+      },
+      {
+        key: 'validation',
+        status: 'passed',
+        summary: { coverage: 88 },
+        artifacts: { sourceDigest: 'source-digest' },
+      },
+      {
+        key: 'apex_tests',
+        status: 'passed',
+        summary: { coverage: 88 },
+        artifacts: null,
+      },
+    ]);
+    db.deploymentQualityIssue.findMany.mockResolvedValue([
+      { engine: 'eslint', severity: 'warning' },
+      { engine: 'salesforce', severity: 'error' },
+    ]);
+    db.deploymentQualityTestResult.findMany.mockResolvedValue([
+      { className: 'ExampleTest', methodName: 'works', status: 'passed' },
+    ]);
+    db.deploymentQualityApproval.count.mockResolvedValue(0);
+
+    const status = await service.getStatus('run-1', 'user-1', true);
+
+    expect(status).toEqual(expect.objectContaining({
+      canApprove: true,
+      canQuickDeploy: false,
+      canCancel: true,
+      canResume: false,
+      canRollback: false,
+      results: expect.objectContaining({
+        staticAnalysis: expect.objectContaining({ status: 'passed' }),
+        validation: expect.objectContaining({ id: '0Af-valid' }),
+        tests: expect.objectContaining({ status: 'passed' }),
+        coverage: expect.objectContaining({ percentage: 88 }),
+      }),
+    }));
+  });
+
   it('forbids a non-admin owner override in quality history', async () => {
     await expect(service.listHistory(
       { owner: 'user-2' },
@@ -328,6 +510,24 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     );
   });
 
+  it('never resumes a cancelled run', async () => {
+    db.deploymentQualityRun.findFirst.mockResolvedValue({
+      id: 'run-1',
+      status: 'cancelled',
+      policySnapshot,
+      approvedAt: new Date(),
+      artifacts: { source: { artifactId: `workbench-source:${'a'.repeat(64)}` } },
+      destructiveSelections: [],
+      manifestXml: null,
+      apiVersion: '62.0',
+    });
+
+    await expect(service.resume('run-1', 'user-1')).rejects.toThrow(
+      'A cancelled workbench run cannot be resumed',
+    );
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('queues quick deploy only from the persisted validation id', async () => {
     db.deploymentQualityRun.findFirst.mockResolvedValue({
       id: 'run-1',
@@ -337,6 +537,15 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       strategy: 'validate_then_quick',
       approvedAt: new Date(),
       policySnapshot,
+      status: 'awaiting_approval',
+      artifacts: { source: { digest: 'source-digest' } },
+      destructiveSelections: [],
+      manifestXml: null,
+      apiVersion: '62.0',
+    });
+    db.deploymentQualityStage.findUnique.mockResolvedValue({
+      status: 'passed',
+      artifacts: { sourceDigest: 'source-digest' },
     });
     db.orgConnection.findUnique.mockResolvedValue({
       id: 'target-1',
@@ -350,6 +559,38 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({
       workbenchRunId: 'run-1',
     }));
+  });
+
+  it('requires an exact hash-bound destructive review decision', async () => {
+    db.deploymentQualityRun.findFirst.mockResolvedValue({
+      id: 'run-1',
+      status: 'planned',
+      createdBy: 'user-1',
+      destructiveSelections: [{ metadataType: 'ApexClass', members: ['Legacy'] }],
+      apiVersion: '62.0',
+      manifestXml: null,
+      policySnapshot: {
+        ...policySnapshot,
+        approval: { required: false, approverType: 'owner', minimumApprovals: 1 },
+      },
+      artifacts: {},
+    });
+    const review = await service.destructiveReview('run-1', 'user-1');
+
+    await expect(service.decideDestructiveReview('run-1', {
+      digest: '0'.repeat(64),
+      approved: true,
+    }, { userId: 'user-1', isAdmin: false })).rejects.toThrow('does not match');
+
+    await expect(service.decideDestructiveReview('run-1', {
+      digest: review.digest,
+      approved: true,
+    }, { userId: 'user-1', isAdmin: false })).resolves.toEqual({
+      id: 'run-1',
+      digest: review.digest,
+      approved: true,
+    });
+    expect(db.deploymentDestructiveReview.upsert).toHaveBeenCalledTimes(1);
   });
 
   it('preserves the selected Apex test policy for rollback', async () => {

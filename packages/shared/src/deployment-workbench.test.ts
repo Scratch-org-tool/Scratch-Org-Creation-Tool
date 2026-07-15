@@ -147,6 +147,34 @@ describe('deployment workbench compatibility and planning', () => {
       'rollback_ready',
     ]);
   });
+
+  it('supports destructive-only plans with an empty package selection', () => {
+    const parsed = deploymentWorkbenchInputSchema.parse({
+      source: { type: 'org_compare', sourceOrgId: SOURCE_ID },
+      target: { orgId: TARGET_ID, profile: 'scratch' },
+      components: [],
+      destructiveSelections: [{ metadataType: 'ApexClass', members: ['LegacyClass'] }],
+    });
+    assert.deepEqual(parsed.components, []);
+    assert.equal(parsed.destructiveSelections[0]?.members[0], 'LegacyClass');
+  });
+
+  it('rejects malformed or source-incompatible chained data before execution', () => {
+    assert.throws(() => deploymentWorkbenchInputSchema.parse({
+      source: {
+        type: 'scm',
+        provider: 'github',
+        repo: 'metadata',
+        branch: 'main',
+      },
+      target: { orgId: TARGET_ID, profile: 'scratch' },
+      components: [{ metadataType: 'ApexClass', members: ['Example'] }],
+      chainedData: {
+        enabled: true,
+        config: [{ objectName: 'Account', soql: 'SELECT Id FROM Contact', unexpected: true }],
+      },
+    }), /Unrecognized key|requires an org comparison source/);
+  });
 });
 
 describe('deployment workbench quality gates', () => {

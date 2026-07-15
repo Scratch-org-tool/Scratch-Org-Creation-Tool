@@ -14,6 +14,7 @@ import { DeploymentWorkbenchController } from './deployment-workbench.controller
 import { DeploymentWorkbenchService } from './deployment-workbench.service';
 import { DeploymentWorkbenchRuntimeService } from './deployment-workbench-runtime.service';
 import { SafeExecFileAdapter, StaticAnalysisService } from './static-analysis.service';
+import { DeploymentArtifactStore } from './deployment-artifact.store';
 
 @Module({
   imports: [JobsModule, StreamModule, IntelligentDeployModule],
@@ -24,6 +25,7 @@ import { SafeExecFileAdapter, StaticAnalysisService } from './static-analysis.se
     DeploymentWorkbenchRuntimeService,
     SafeExecFileAdapter,
     StaticAnalysisService,
+    DeploymentArtifactStore,
     MetadataDeployQueueService,
     MetadataDeployJobService,
     MetadataDataChainService,
@@ -38,6 +40,7 @@ import { SafeExecFileAdapter, StaticAnalysisService } from './static-analysis.se
     DeploymentWorkbenchService,
     DeploymentWorkbenchRuntimeService,
     StaticAnalysisService,
+    DeploymentArtifactStore,
     MetadataDataChainService,
   ],
 })

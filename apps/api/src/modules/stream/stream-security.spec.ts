@@ -29,6 +29,29 @@ class FakeRedis {
   }
 }
 
+class FakePubSubRedis {
+  private messageHandler?: (channel: string, message: string) => void;
+  private subscriber?: FakePubSubRedis;
+
+  duplicate() {
+    this.subscriber = new FakePubSubRedis();
+    return this.subscriber;
+  }
+
+  subscribe(_channel: string) {
+    return Promise.resolve(1);
+  }
+
+  on(event: string, handler: (channel: string, message: string) => void) {
+    if (event === 'message') this.messageHandler = handler;
+  }
+
+  async publish(channel: string, message: string) {
+    this.subscriber?.messageHandler?.(channel, message);
+    return 1;
+  }
+}
+
 function contextFor(request: Partial<StreamRequest>): ExecutionContext {
   return {
     switchToHttp: () => ({ getRequest: () => request }),
@@ -139,5 +162,19 @@ describe('stream ownership', () => {
         parentRun: { select: { createdBy: true } },
       }),
     }));
+  });
+
+  it('delivers a Redis-published event once without a local duplicate', async () => {
+    const redis = new FakePubSubRedis();
+    const service = new StreamService({ getConnection: () => redis } as never);
+    service.onModuleInit();
+    const received: StreamEvent[] = [];
+    service.subscribe(undefined, { userId: 'DPT_owner', isAdmin: false })
+      .subscribe((event) => received.push(event));
+
+    await service.publish('job_status', { status: 'running' }, 'DPT_owner');
+
+    expect(received).toHaveLength(1);
+    expect(received[0].id).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

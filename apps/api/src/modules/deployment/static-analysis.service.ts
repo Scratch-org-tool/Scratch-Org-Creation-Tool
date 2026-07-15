@@ -69,7 +69,13 @@ export interface StaticAnalysisRunResult {
   unavailableEngines: string[];
   skippedEngines: Array<{ engine: string; reason: string }>;
   issues: StaticAnalysisIssue[];
-  artifacts: Array<{ engine: string; path: string }>;
+  artifacts: Array<{ engine: string; content: string; checksum: string; artifactId?: string }>;
+  engineResults: Array<{
+    engine: string;
+    status: 'passed' | 'unavailable' | 'timed_out' | 'crashed' | 'not_applicable';
+    exitCode?: number;
+    message?: string;
+  }>;
   timedOut: boolean;
 }
 
@@ -85,10 +91,14 @@ export class StaticAnalysisService {
         const engine = normalizeEngine(raw);
         if (!engine) return [raw, false] as const;
         const command = this.command(engine);
-        const result = await this.runner.run(command.file, command.versionArgs, {
-          timeoutMs: 10_000,
-        }).promise;
-        return [raw, result.exitCode === 0] as const;
+        try {
+          const result = await this.runner.run(command.file, command.versionArgs, {
+            timeoutMs: 10_000,
+          }).promise;
+          return [raw, result.exitCode === 0] as const;
+        } catch {
+          return [raw, false] as const;
+        }
       }),
     );
     return Object.fromEntries(entries);
@@ -100,64 +110,102 @@ export class StaticAnalysisService {
     timeoutMs?: number;
     registerKill?: (kill: () => void) => void;
     clearKill?: () => void;
+    persistArtifact?: (engine: string, content: string) => Promise<string>;
   }): Promise<StaticAnalysisRunResult> {
     const timeoutMs = input.timeoutMs ?? Number(process.env.CODE_ANALYZER_TIMEOUT_MS ?? 10 * 60_000);
     const outputDir = path.join(tmpdir(), 'sfcc-code-analysis', randomUUID());
     fs.mkdirSync(outputDir, { recursive: true });
-    const availability = await this.detectAvailability(input.engines);
     const result: StaticAnalysisRunResult = {
       availableEngines: [],
       unavailableEngines: [],
       skippedEngines: [],
       issues: [],
       artifacts: [],
+      engineResults: [],
       timedOut: false,
     };
+    try {
+      const availability = await this.detectAvailability(input.engines);
+      for (const requested of [...new Set(input.engines)]) {
+        const engine = normalizeEngine(requested);
+        if (!engine || !availability[requested]) {
+          result.unavailableEngines.push(requested);
+          result.engineResults.push({
+            engine: requested,
+            status: 'unavailable',
+            message: 'Requested analyzer is unavailable',
+          });
+          continue;
+        }
+        if (!this.isApplicable(engine, input.projectRoot)) {
+          result.skippedEngines.push({ engine: requested, reason: 'No applicable source files found' });
+          result.engineResults.push({ engine: requested, status: 'not_applicable' });
+          continue;
+        }
 
-    for (const requested of [...new Set(input.engines)]) {
-      const engine = normalizeEngine(requested);
-      if (!engine || !availability[requested]) {
-        result.unavailableEngines.push(requested);
-        continue;
-      }
-      if (!this.isApplicable(engine, input.projectRoot)) {
-        result.skippedEngines.push({ engine: requested, reason: 'No applicable source files found' });
-        continue;
-      }
+        result.availableEngines.push(requested);
+        const outputPath = path.join(outputDir, `${engine}.json`);
+        const command = this.command(engine, input.projectRoot, outputPath);
+        let completed: ExecFileResult;
+        try {
+          const execution = this.runner.run(command.file, command.args, {
+            cwd: input.projectRoot,
+            timeoutMs,
+          });
+          input.registerKill?.(execution.kill);
+          completed = await execution.promise;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          result.engineResults.push({ engine: requested, status: 'crashed', message });
+          result.issues.push(makeIssue(requested, {
+            ruleId: 'ANALYZER_CRASH',
+            severity: 'error',
+            message,
+          }));
+          continue;
+        } finally {
+          input.clearKill?.();
+        }
+        result.timedOut ||= completed.timedOut;
 
-      result.availableEngines.push(requested);
-      const outputPath = path.join(outputDir, `${engine}.json`);
-      const command = this.command(engine, input.projectRoot, outputPath);
-      const execution = this.runner.run(command.file, command.args, {
-        cwd: input.projectRoot,
-        timeoutMs,
-      });
-      input.registerKill?.(execution.kill);
-      let completed: ExecFileResult;
-      try {
-        completed = await execution.promise;
-      } finally {
-        input.clearKill?.();
+        const raw = readAnalyzerOutput(outputPath, completed.stdout);
+        if (raw !== undefined) {
+          const content = JSON.stringify(raw, null, 2);
+          result.artifacts.push({
+            engine: requested,
+            content,
+            checksum: createHash('sha256').update(content).digest('hex'),
+            artifactId: await input.persistArtifact?.(requested, content),
+          });
+          result.issues.push(...normalizeAnalyzerIssues(requested, raw));
+        }
+        // Linters commonly return non-zero when findings exist (ESLint uses 1,
+        // PMD uses 4). A parseable report is a completed engine run, not a crash.
+        const failed = completed.timedOut || raw === undefined;
+        result.engineResults.push({
+          engine: requested,
+          status: completed.timedOut ? 'timed_out' : failed ? 'crashed' : 'passed',
+          exitCode: completed.exitCode,
+          ...(failed ? {
+            message: completed.timedOut
+              ? `Static analysis timed out after ${timeoutMs}ms`
+              : completed.stderr.trim() || `${requested} produced no valid report`,
+          } : {}),
+        });
+        if (failed) {
+          result.issues.push(makeIssue(requested, {
+            ruleId: completed.timedOut ? 'ANALYZER_TIMEOUT' : 'ANALYZER_EXECUTION',
+            severity: 'error',
+            message: completed.timedOut
+              ? `Static analysis timed out after ${timeoutMs}ms`
+              : completed.stderr.trim() || `${requested} exited with code ${completed.exitCode}`,
+          }));
+        }
       }
-      result.timedOut ||= completed.timedOut;
-
-      const raw = readAnalyzerOutput(outputPath, completed.stdout);
-      if (raw !== undefined) {
-        fs.writeFileSync(outputPath, JSON.stringify(raw, null, 2), 'utf8');
-        result.artifacts.push({ engine: requested, path: outputPath });
-        result.issues.push(...normalizeAnalyzerIssues(requested, raw));
-      }
-      if (completed.exitCode !== 0 && result.issues.length === 0) {
-        result.issues.push(makeIssue(requested, {
-          ruleId: completed.timedOut ? 'ANALYZER_TIMEOUT' : 'ANALYZER_EXECUTION',
-          severity: 'error',
-          message: completed.timedOut
-            ? `Static analysis timed out after ${timeoutMs}ms`
-            : completed.stderr.trim() || `${requested} exited with code ${completed.exitCode}`,
-        }));
-      }
+      return result;
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true });
     }
-    return result;
   }
 
   private command(
@@ -243,6 +291,24 @@ function readAnalyzerOutput(outputPath: string, stdout: string): unknown {
 }
 
 function normalizeAnalyzerIssues(engine: string, raw: unknown): StaticAnalysisIssue[] {
+  if (normalizeEngine(engine) === 'eslint' && Array.isArray(raw)) {
+    return raw.flatMap((file) => {
+      const fileRecord = asRecord(file);
+      if (!fileRecord) return [];
+      return (Array.isArray(fileRecord.messages) ? fileRecord.messages : []).flatMap((message) => {
+        const item = asRecord(message);
+        if (!item || !stringValue(item.message)) return [];
+        return [makeIssue(engine, {
+          ruleId: stringValue(item.ruleId) ?? (item.fatal ? 'ESLINT_FATAL' : 'ESLINT'),
+          severity: Number(item.severity) >= 2 ? 'error' : 'warning',
+          message: stringValue(item.message)!,
+          file: stringValue(fileRecord.filePath),
+          line: positiveInt(item.line),
+          column: positiveInt(item.column),
+        })];
+      });
+    });
+  }
   const records: Record<string, unknown>[] = [];
   collectIssueRecords(raw, records);
   return records.map((record) => {

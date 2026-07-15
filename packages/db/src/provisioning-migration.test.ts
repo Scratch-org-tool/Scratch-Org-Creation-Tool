@@ -160,6 +160,34 @@ describe('deployment workbench foundation migration', () => {
   });
 });
 
+describe('deployment workbench review hardening migration', () => {
+  const migrationPath =
+    'migrations/20260715200000_workbench_review_fixes/migration.sql';
+
+  it('stores checksummed durable artifacts with retention', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+    assert.match(schema, /model DeploymentArtifact[\s\S]*content\s+Bytes/);
+    assert.match(schema, /model DeploymentArtifact[\s\S]*retainUntil\s+DateTime\?/);
+    assert.match(migration, /"content" BYTEA NOT NULL/);
+    assert.match(migration, /"checksum" TEXT NOT NULL/);
+    assert.match(migration, /"retainUntil" TIMESTAMP\(3\)/);
+  });
+
+  it('enforces one approval per run and actor atomically', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+    assert.match(
+      schema,
+      /model DeploymentQualityApproval[\s\S]*@@unique\(\[runId, actorId\]\)/,
+    );
+    assert.match(migration, /DeploymentQualityApproval_runId_actorId_key/);
+    assert.match(migration, /DeploymentDestructiveReview_runId_actorId_digest_key/);
+    assert.match(migration, /ADD COLUMN "executionLease" TEXT/);
+    assert.match(migration, /ON DELETE CASCADE/);
+  });
+});
+
 describe('durable Data Center rollback migration', () => {
   const migrationPath =
     'migrations/20260715193000_durable_data_rollback/migration.sql';

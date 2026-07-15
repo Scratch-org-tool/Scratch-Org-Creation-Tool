@@ -5,9 +5,10 @@ import {
   NotFoundException,
   RequestTimeoutException,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { prisma, Prisma } from '@sfcc/db';
 import {
   DEFAULT_METADATA_API_VERSION,
@@ -20,6 +21,7 @@ import {
   parsePackageXml,
   type DeploymentWorkbenchCapabilities,
   type DeploymentWorkbenchInput,
+  type MetadataSelection,
 } from '@sfcc/shared';
 import { assertOrgOwned } from '../../common/user-tenancy.util';
 import { MetadataDeployQueueService } from './metadata-deploy-queue.service';
@@ -36,6 +38,7 @@ import {
   buildDependencyPreview,
   type WorkbenchWorkspace,
 } from './deployment-workbench-runtime.service';
+import { DeploymentArtifactStore } from './deployment-artifact.store';
 
 export interface WorkbenchActor {
   userId: string;
@@ -83,6 +86,7 @@ export class DeploymentWorkbenchService {
     private readonly staticAnalysis: StaticAnalysisService,
     private readonly deployments: DeploymentService,
     private readonly sourceResolver: DeploySourceResolver,
+    private readonly artifactStore: DeploymentArtifactStore = new DeploymentArtifactStore(),
   ) {}
 
   async capabilities(): Promise<DeploymentWorkbenchCapabilities & {
@@ -123,53 +127,10 @@ export class DeploymentWorkbenchService {
     const cached = this.getPreviewCache(cacheKey);
     if (cached) return { ...cached, cache: { hit: true } };
 
-    const suppliedManifest = input.manifestXml?.trim();
-    const apiVersion = suppliedManifest
-      ? parsePackageXml(suppliedManifest).apiVersion ?? DEFAULT_METADATA_API_VERSION
-      : input.apiVersion ?? DEFAULT_METADATA_API_VERSION;
-    const manifestContent = suppliedManifest || (
-      input.components.length
-        ? buildPackageXml(input.components, apiVersion)
-        : undefined
-    );
-    const resolution = this.sourceResolver.resolve({
-      orgAlias: access.target.username ?? access.target.alias,
-      sourceOrgAlias: access.sourceOrg
-        ? access.sourceOrg.username ?? access.sourceOrg.alias
-        : undefined,
-      deployMode: input.source.type === 'org_compare' ? 'org_to_org' : 'git',
-      gitSource: input.source.type === 'scm' ? {
-        provider: input.source.provider,
-        connectionId: input.source.connectionId,
-        bindingId: input.source.bindingId,
-        namespace: input.source.namespace,
-        project: input.source.project,
-        repositoryId: input.source.repositoryId,
-        repo: input.source.repo,
-        branch: input.source.branch,
-        manifestPath: input.source.manifestPath,
-      } : undefined,
-      manifestPath: input.source.type === 'scm'
-        ? input.source.manifestPath
-        : 'manifest/package.xml',
-      manifestContent,
-    });
-
-    let workspace: WorkbenchWorkspace | undefined;
+    let prepared: Awaited<ReturnType<DeploymentWorkbenchService['prepareSource']>> | undefined;
     try {
-      workspace = await this.resolvePreviewWorkspace(resolution);
-      if (manifestContent) {
-        fs.mkdirSync(path.dirname(workspace.manifestAbsolutePath), { recursive: true });
-        fs.writeFileSync(workspace.manifestAbsolutePath, manifestContent, 'utf8');
-      }
-      const dependency = buildDependencyPreview(
-        `preview-${cacheKey.slice(0, 16)}`,
-        workspace,
-        input.dependencyPolicy,
-      );
-      const resolvedManifest = parsePackageXml(
-        fs.readFileSync(workspace.manifestAbsolutePath, 'utf8'),
-      );
+      prepared = await this.prepareSource(input, access, `preview-${cacheKey.slice(0, 16)}`);
+      const { dependency, resolution: sourceResolution } = prepared;
       const value = {
         normalized: input,
         policy: input.policy,
@@ -179,10 +140,7 @@ export class DeploymentWorkbenchService {
         readOnly: true as const,
         sourceResolution: {
           type: input.source.type,
-          mode: workspace.mode,
-          manifest: workspace.manifestRelative,
-          apiVersion: resolvedManifest.apiVersion ?? apiVersion,
-          selectedComponents: resolvedManifest.members.length,
+          ...sourceResolution,
         },
         dependencies: {
           nodes: dependency.graph.nodes,
@@ -203,16 +161,19 @@ export class DeploymentWorkbenchService {
       this.setPreviewCache(cacheKey, value);
       return { ...value, cache: { hit: false } };
     } finally {
-      await workspace?.cleanup?.().catch(() => undefined);
+      await prepared?.workspace.cleanup?.().catch(() => undefined);
     }
   }
 
   async create(body: unknown, userId: string) {
     const input = deploymentWorkbenchCreateSchema.parse(body);
-    await this.assertInputAccess(input, userId);
+    const access = await this.assertInputAccess(input, userId);
     const stagePlan = buildDeploymentStagePlan(input);
+    const prepared = await this.prepareSource(input, access, `create-${createHash('sha256')
+      .update(userId).update(JSON.stringify(input)).digest('hex').slice(0, 16)}`);
 
-    const run = await prisma.$transaction(async (tx) => {
+    try {
+      const run = await prisma.$transaction(async (tx) => {
       const run = await tx.deploymentQualityRun.create({
         data: {
           name: input.name,
@@ -221,9 +182,9 @@ export class DeploymentWorkbenchService {
           targetOrgId: input.target.orgId,
           targetProfile: input.target.profile,
           strategy: input.strategy,
-          components: json(input.components),
-          manifestXml: input.manifestXml,
-          apiVersion: input.apiVersion,
+          components: json(prepared.dependency.resolvedSelections),
+          manifestXml: prepared.manifestXml,
+          apiVersion: prepared.apiVersion,
           destructiveSelections: json(input.destructiveSelections),
           dependencyPolicy: json(input.dependencyPolicy),
           chainedData: input.chainedData ? json(input.chainedData) : undefined,
@@ -232,6 +193,13 @@ export class DeploymentWorkbenchService {
           status: 'planned',
           currentStage: stagePlan[0]?.key,
           createdBy: userId,
+          artifacts: json({
+            source: prepared.resolution,
+            destructive: {
+              digest: destructiveDigest(input.destructiveSelections, prepared.apiVersion),
+              reviewed: input.destructiveSelections.length === 0,
+            },
+          }),
           stages: {
             create: stagePlan.map((stage) => ({
               key: stage.key,
@@ -255,10 +223,13 @@ export class DeploymentWorkbenchService {
           }),
         },
       });
-      return run;
-    });
-    const job = await this.enqueueExecution(run.id, userId);
-    return { ...run, jobId: job.id, executionAvailable: true as const };
+        return run;
+      });
+      const job = await this.enqueueExecution(run.id, userId);
+      return { ...run, jobId: job.id, executionAvailable: true as const };
+    } finally {
+      await prepared.workspace.cleanup?.().catch(() => undefined);
+    }
   }
 
   async listHistory(query: WorkbenchHistoryQuery, actor: WorkbenchActor) {
@@ -398,6 +369,12 @@ export class DeploymentWorkbenchService {
       rejectedAt: true,
       policySnapshot: true,
       artifacts: true,
+      strategy: true,
+      deploymentId: true,
+      destructiveSelections: true,
+      manifestXml: true,
+      apiVersion: true,
+      createdBy: true,
       createdAt: true,
       updatedAt: true,
     }, isAdmin);
@@ -405,12 +382,50 @@ export class DeploymentWorkbenchService {
     const execution = ((run.artifacts ?? {}) as Record<string, unknown>).execution as
       | Record<string, unknown>
       | undefined;
-    const job = typeof execution?.jobId === 'string'
-      ? await prisma.job.findUnique({
+    const [job, stages, issues, testResults, approvalCount] = await Promise.all([
+      typeof execution?.jobId === 'string' ? prisma.job.findUnique({
           where: { id: execution.jobId },
           select: { id: true, status: true, currentStep: true, error: true },
-        })
-      : null;
+        }) : null,
+      prisma.deploymentQualityStage.findMany({
+        where: { runId: id },
+        orderBy: { ordinal: 'asc' },
+      }),
+      prisma.deploymentQualityIssue.findMany({
+        where: { runId: id },
+        orderBy: [{ severity: 'desc' }, { createdAt: 'asc' }],
+      }),
+      prisma.deploymentQualityTestResult.findMany({
+        where: { runId: id },
+        orderBy: [{ className: 'asc' }, { methodName: 'asc' }],
+      }),
+      prisma.deploymentQualityApproval.count({ where: { runId: id } }),
+    ]);
+    const destructiveReady = await this.isDestructiveReviewed(run);
+    const approvalAuthorized = policy.approval.approverType === 'admin'
+      ? isAdmin
+      : policy.approval.approverType === 'distinct_user'
+        ? userId !== run.createdBy
+        : userId === run.createdBy || isAdmin;
+    const approvalSatisfied = !policy.approval.required
+      || (Boolean(run.approvedAt) && approvalCount >= policy.approval.minimumApprovals);
+    const ownerAction = userId === run.createdBy;
+    const validation = stages.find((stage) => stage.key === 'validation');
+    const staticStage = stages.find((stage) => stage.key === 'static_analysis');
+    const testStage = stages.find((stage) => stage.key === 'apex_tests');
+    const rollbackArtifact = stringValue(record(record(run.artifacts).rollback).snapshotArtifactId);
+    const approvedSourceDigest = stringValue(record(record(run.artifacts).source).digest);
+    const sourceArtifactId = stringValue(record(record(run.artifacts).source).artifactId);
+    const [sourceAvailable, rollbackAvailable] = await Promise.all([
+      sourceArtifactId
+        ? this.artifactStore.readBytes(sourceArtifactId).then(() => true, () => false)
+        : false,
+      rollbackArtifact
+        ? this.artifactStore.readBytes(rollbackArtifact).then(() => true, () => false)
+        : false,
+    ]);
+    const testCoverage = numberValue(record(testStage?.summary).coverage);
+    const coverage = testCoverage ?? numberValue(record(validation?.summary).coverage);
     return {
       id: run.id,
       status: run.status,
@@ -422,6 +437,57 @@ export class DeploymentWorkbenchService {
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
       job,
+      approvalCount,
+      minimumApprovals: policy.approval.minimumApprovals,
+      destructiveReviewRequired: hasSelections(run.destructiveSelections),
+      destructiveReviewed: destructiveReady,
+      canApprove: run.status === 'awaiting_approval'
+        && policy.approval.required
+        && approvalAuthorized
+        && destructiveReady
+        && sourceAvailable
+        && !run.approvedAt,
+      canQuickDeploy: run.strategy === 'validate_then_quick'
+        && ownerAction
+        && run.status === 'awaiting_approval'
+        && Boolean(run.validationId)
+        && Boolean(approvedSourceDigest)
+        && sourceAvailable
+        && validation?.status === 'passed'
+        && stringValue(record(validation?.artifacts).sourceDigest) === approvedSourceDigest
+        && approvalSatisfied
+        && destructiveReady,
+      canCancel: ownerAction
+        && ['planned', 'awaiting_approval', 'approved', 'running'].includes(run.status),
+      canResume: ownerAction
+        && run.status === 'failed' && approvalSatisfied && destructiveReady && sourceAvailable,
+      canRollback: ownerAction
+        && Boolean(run.deploymentId && rollbackAvailable)
+        && ['passed', 'failed'].includes(run.status),
+      results: {
+        staticAnalysis: {
+          status: staticStage?.status ?? 'not_required',
+          summary: staticStage?.summary ?? null,
+          artifacts: staticStage?.artifacts ?? null,
+          issues: issues.filter((issue) => issue.engine !== 'salesforce'),
+        },
+        validation: {
+          status: validation?.status ?? 'not_required',
+          id: run.validationId,
+          summary: validation?.summary ?? null,
+          issues: issues.filter((issue) => issue.engine === 'salesforce'),
+        },
+        tests: {
+          status: testStage?.status ?? 'not_required',
+          summary: testStage?.summary ?? null,
+          results: testResults,
+        },
+        coverage: {
+          status: testStage?.status ?? validation?.status ?? 'not_required',
+          percentage: coverage ?? null,
+          minimum: policy.tests.minimumCoverage,
+        },
+      },
     };
   }
 
@@ -488,36 +554,44 @@ export class DeploymentWorkbenchService {
     if (!policy.approval.required) {
       throw new BadRequestException('This workbench plan does not require approval');
     }
-    if (run.rejectedAt) throw new BadRequestException('A rejected workbench plan cannot be approved');
+    if (run.status !== 'awaiting_approval') {
+      throw new BadRequestException(`A ${run.status} workbench plan cannot be approved`);
+    }
+    await this.assertDestructiveReviewed(run);
     if (run.approvedAt) return this.getStatusForDecision(id);
 
     const approvedAt = new Date();
-    await prisma.$transaction(async (tx) => {
-      if (policy.approval.minimumApprovals > 1) {
-        const priorDecision = await tx.deploymentQualityAudit.findFirst({
-          where: { runId: id, action: 'approved', actorId: actor.userId },
-          select: { id: true },
+    const finalized = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "DeploymentQualityRun" WHERE "id" = $1 FOR UPDATE',
+        id,
+      );
+      try {
+        await tx.deploymentQualityApproval.create({
+          data: { runId: id, actorId: actor.userId },
         });
-        if (priorDecision) throw new BadRequestException('This user has already approved the plan');
-        const approvalCount = await tx.deploymentQualityAudit.count({
-          where: { runId: id, action: 'approved' },
-        });
-        await tx.deploymentQualityAudit.create({
-          data: {
-            runId: id,
-            action: 'approved',
-            actorId: actor.userId,
-            details: json({
-              approverType: policy.approval.approverType,
-              approvalNumber: approvalCount + 1,
-              approvalsRequired: policy.approval.minimumApprovals,
-            }),
-          },
-        });
-        if (approvalCount + 1 < policy.approval.minimumApprovals) return;
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new BadRequestException('This user has already approved the plan');
+        }
+        throw error;
       }
+      const approvalCount = await tx.deploymentQualityApproval.count({ where: { runId: id } });
+      await tx.deploymentQualityAudit.create({
+        data: {
+          runId: id,
+          action: 'approved',
+          actorId: actor.userId,
+          details: json({
+            approverType: policy.approval.approverType,
+            approvalNumber: approvalCount,
+            approvalsRequired: policy.approval.minimumApprovals,
+          }),
+        },
+      });
+      if (approvalCount < policy.approval.minimumApprovals) return false;
       const updated = await tx.deploymentQualityRun.updateMany({
-        where: { id, approvedAt: null, rejectedAt: null },
+        where: { id, status: 'awaiting_approval', approvedAt: null, rejectedAt: null },
         data: {
           approvedBy: actor.userId,
           approvedAt,
@@ -529,19 +603,10 @@ export class DeploymentWorkbenchService {
         where: { runId: id, key: 'approval' },
         data: { status: 'passed', startedAt: approvedAt, finishedAt: approvedAt, durationMs: 0 },
       });
-      if (policy.approval.minimumApprovals === 1) {
-        await tx.deploymentQualityAudit.create({
-          data: {
-            runId: id,
-            action: 'approved',
-            actorId: actor.userId,
-            details: json({ approverType: policy.approval.approverType }),
-          },
-        });
-      }
-    });
+      return true;
+    }, { isolationLevel: 'Serializable' });
     const result = await this.getStatusForDecision(id);
-    if (result?.status === 'approved') {
+    if (finalized && result?.status === 'approved') {
       await this.stream.publish(
         'deployment_stage',
         { workbenchRunId: id, stage: 'approval', status: 'passed' },
@@ -563,13 +628,16 @@ export class DeploymentWorkbenchService {
     if (!policy.approval.required) {
       throw new BadRequestException('This workbench plan does not require approval');
     }
+    if (run.status !== 'awaiting_approval') {
+      throw new BadRequestException(`A ${run.status} workbench plan cannot be rejected`);
+    }
     if (run.approvedAt) throw new BadRequestException('An approved workbench plan cannot be rejected');
     if (run.rejectedAt) return this.getStatusForDecision(id);
 
     const rejectedAt = new Date();
     await prisma.$transaction(async (tx) => {
       const updated = await tx.deploymentQualityRun.updateMany({
-        where: { id, approvedAt: null, rejectedAt: null },
+        where: { id, status: 'awaiting_approval', approvedAt: null, rejectedAt: null },
         data: {
           rejectedBy: actor.userId,
           rejectedAt,
@@ -613,14 +681,20 @@ export class DeploymentWorkbenchService {
       rejectedAt: true,
       policySnapshot: true,
       approvedAt: true,
+      artifacts: true,
+      destructiveSelections: true,
+      manifestXml: true,
+      apiVersion: true,
     });
-    if (['cancelled', 'rejected', 'passed'].includes(run.status)) {
-      throw new BadRequestException(`A ${run.status} workbench run cannot be resumed`);
-    }
+    if (run.status !== 'failed') throw new BadRequestException(`A ${run.status} workbench run cannot be resumed`);
     const policy = deploymentPolicySchema.parse(run.policySnapshot);
-    if (policy.approval.required && !run.approvedAt && run.status === 'awaiting_approval') {
+    if (policy.approval.required && !run.approvedAt) {
       throw new BadRequestException('Required approval has not been granted');
     }
+    await this.assertDestructiveReviewed(run);
+    const artifactId = stringValue(record(record(run.artifacts).source).artifactId);
+    if (!artifactId) throw new BadRequestException('Pinned deployment source is unavailable');
+    await this.artifactStore.readBytes(artifactId);
     const job = await this.enqueueExecution(id, userId);
     await this.audit(id, 'resumed', userId, { jobId: job.id });
     return { id, jobId: job.id, status: 'queued' };
@@ -636,18 +710,16 @@ export class DeploymentWorkbenchService {
       return { id, cancelled: false, reason: 'Run is not active', status: run.status };
     }
     const jobId = this.executionJobId(run.artifacts);
-    if (jobId) {
-      await this.queue.removeJob(QUEUE_NAMES.METADATA_DEPLOY, jobId).catch(() => false);
-      this.deployJobs.cancel(jobId);
-      await this.processRegistry.cancel(jobId);
-      await this.jobs.updateStatus(jobId, 'cancelled').catch(() => undefined);
-    }
     const now = new Date();
-    await prisma.$transaction(async (tx) => {
-      await tx.deploymentQualityRun.update({
-        where: { id },
+    const cancelled = await prisma.$transaction(async (tx) => {
+      const updated = await tx.deploymentQualityRun.updateMany({
+        where: {
+          id,
+          status: { in: ['planned', 'awaiting_approval', 'approved', 'running'] },
+        },
         data: { status: 'cancelled' },
       });
+      if (updated.count !== 1) return false;
       await tx.deploymentQualityStage.updateMany({
         where: { runId: id, status: { in: ['pending', 'ready', 'running', 'blocked'] } },
         data: { status: 'cancelled', finishedAt: now, error: 'Cancelled by user' },
@@ -655,7 +727,15 @@ export class DeploymentWorkbenchService {
       await tx.deploymentQualityAudit.create({
         data: { runId: id, action: 'cancelled', actorId: userId, details: json({ jobId }) },
       });
+      return true;
     });
+    if (!cancelled) return { id, cancelled: false, reason: 'Run is not active', status: run.status };
+    if (jobId) {
+      await this.queue.removeJob(QUEUE_NAMES.METADATA_DEPLOY, jobId).catch(() => false);
+      this.deployJobs.cancel(jobId);
+      await this.processRegistry.cancel(jobId);
+      await this.jobs.updateStatus(jobId, 'cancelled').catch(() => undefined);
+    }
     await this.stream.publish(
       'deployment_result',
       { workbenchRunId: id, status: 'cancelled' },
@@ -674,6 +754,10 @@ export class DeploymentWorkbenchService {
       strategy: true,
       approvedAt: true,
       policySnapshot: true,
+      artifacts: true,
+      destructiveSelections: true,
+      manifestXml: true,
+      apiVersion: true,
     });
     if (!run.validationId) {
       throw new BadRequestException('A successful validation id is required for quick deploy');
@@ -681,9 +765,25 @@ export class DeploymentWorkbenchService {
     if (run.strategy !== 'validate_then_quick') {
       throw new BadRequestException('Quick deploy is only available for validate_then_quick runs');
     }
+    if (!['awaiting_approval', 'approved'].includes(run.status)) {
+      throw new BadRequestException(`A ${run.status} workbench run cannot be quick deployed`);
+    }
     const policy = deploymentPolicySchema.parse(run.policySnapshot);
     if (policy.approval.required && !run.approvedAt) {
       throw new BadRequestException('Required approval has not been granted');
+    }
+    await this.assertDestructiveReviewed(run);
+    const validationStage = await prisma.deploymentQualityStage.findUnique({
+      where: { runId_key: { runId: id, key: 'validation' } },
+      select: { status: true, artifacts: true },
+    });
+    const sourceDigest = stringValue(record(record(run.artifacts).source).digest);
+    if (
+      validationStage?.status !== 'passed'
+      || !sourceDigest
+      || stringValue(record(validationStage.artifacts).sourceDigest) !== sourceDigest
+    ) {
+      throw new BadRequestException('Validation does not match the immutable deployment source');
     }
     const job = await this.enqueueExecution(id, userId);
     await this.audit(id, 'quick_deploy_enqueued', userId, {
@@ -727,6 +827,7 @@ export class DeploymentWorkbenchService {
       destructiveSelections: true,
       apiVersion: true,
       manifestXml: true,
+      artifacts: true,
     }, isAdmin);
     const selections = run.destructiveSelections as unknown as Array<{
       metadataType: string;
@@ -745,8 +846,55 @@ export class DeploymentWorkbenchService {
         ? buildDestructiveChangesXml(selections, selectedVersion)
         : null,
       requiresReview: selections.length > 0,
+      digest: destructiveDigest(selections, selectedVersion),
       warning: 'Destructive changes are irreversible and rollback snapshots cannot recreate net-new cleanup targets.',
     };
+  }
+
+  async decideDestructiveReview(
+    id: string,
+    body: unknown,
+    actor: WorkbenchActor,
+  ) {
+    const input = record(body);
+    const digest = typeof input.digest === 'string' ? input.digest.trim() : '';
+    const approved = input.approved;
+    if (!/^[a-f0-9]{64}$/i.test(digest) || typeof approved !== 'boolean') {
+      throw new BadRequestException('A SHA-256 digest and explicit approved boolean are required');
+    }
+    const run = await this.ownedRun(id, actor.userId, {
+      id: true,
+      status: true,
+      createdBy: true,
+      destructiveSelections: true,
+      apiVersion: true,
+      manifestXml: true,
+      policySnapshot: true,
+    }, actor.isAdmin);
+    const selections = run.destructiveSelections as unknown as MetadataSelection[];
+    if (!selections.length) throw new BadRequestException('This plan has no destructive selections');
+    if (['cancelled', 'rejected', 'passed'].includes(run.status)) {
+      throw new BadRequestException(`A ${run.status} workbench plan cannot be reviewed`);
+    }
+    const apiVersion = run.manifestXml
+      ? parsePackageXml(run.manifestXml).apiVersion ?? run.apiVersion ?? DEFAULT_METADATA_API_VERSION
+      : run.apiVersion ?? DEFAULT_METADATA_API_VERSION;
+    const expected = destructiveDigest(selections, apiVersion);
+    if (digest !== expected) {
+      throw new BadRequestException('Destructive review digest does not match the persisted plan');
+    }
+    await prisma.deploymentDestructiveReview.upsert({
+      where: { runId_actorId_digest: { runId: id, actorId: actor.userId, digest } },
+      create: { runId: id, actorId: actor.userId, digest, approved },
+      update: { approved },
+    });
+    await this.audit(id, approved ? 'destructive_review_approved' : 'destructive_review_rejected',
+      actor.userId, { digest });
+    const policy = deploymentPolicySchema.parse(run.policySnapshot);
+    if (approved && !policy.approval.required && run.status === 'awaiting_approval') {
+      await this.enqueueExecution(id, run.createdBy);
+    }
+    return { id, digest, approved };
   }
 
   async getProgress(id: string, userId: string, isAdmin = false) {
@@ -784,22 +932,60 @@ export class DeploymentWorkbenchService {
       targetOrgId: true,
       artifacts: true,
       status: true,
+      executionLease: true,
     });
     const existingJobId = this.executionJobId(run.artifacts);
     if (existingJobId) {
       const existing = await prisma.job.findUnique({ where: { id: existingJobId } });
       if (existing && ['pending', 'queued', 'running'].includes(existing.status)) return existing;
     }
-    const target = await assertOrgOwned(run.targetOrgId, userId, prisma);
-    const job = await this.metadataQueue.enqueue({
-      orgAlias: target.username ?? target.alias,
-      workbenchRunId: id,
-      createdBy: userId,
-      intelligentDeployEnabled: false,
+    if (['cancelled', 'rejected', 'passed'].includes(run.status)) {
+      throw new BadRequestException(`A ${run.status} workbench run cannot be enqueued`);
+    }
+    const lease = randomUUID();
+    const claimed = await prisma.deploymentQualityRun.updateMany({
+      where: {
+        id,
+        status: { notIn: ['cancelled', 'rejected', 'passed'] },
+        executionLease: run.executionLease,
+      },
+      data: { executionLease: lease },
     });
+    if (claimed.count !== 1) {
+      const winner = await prisma.deploymentQualityRun.findUnique({
+        where: { id },
+        select: { artifacts: true },
+      });
+      const winnerJobId = this.executionJobId(winner?.artifacts);
+      const winnerJob = winnerJobId
+        ? await prisma.job.findUnique({ where: { id: winnerJobId } })
+        : null;
+      if (winnerJob && ['pending', 'queued', 'running'].includes(winnerJob.status)) return winnerJob;
+      throw new BadRequestException('Workbench execution is being enqueued concurrently');
+    }
+    const target = await assertOrgOwned(run.targetOrgId, userId, prisma);
+    let job: Awaited<ReturnType<MetadataDeployQueueService['enqueue']>>;
+    try {
+      job = await this.metadataQueue.enqueue({
+        orgAlias: target.username ?? target.alias,
+        workbenchRunId: id,
+        createdBy: userId,
+        intelligentDeployEnabled: false,
+      });
+    } catch (error) {
+      await prisma.deploymentQualityRun.updateMany({
+        where: { id, executionLease: lease },
+        data: { executionLease: run.executionLease },
+      }).catch(() => undefined);
+      throw error;
+    }
     const artifacts = (run.artifacts ?? {}) as Record<string, unknown>;
-    await prisma.deploymentQualityRun.update({
-      where: { id },
+    const attached = await prisma.deploymentQualityRun.updateMany({
+      where: {
+        id,
+        status: { notIn: ['cancelled', 'rejected', 'passed'] },
+        executionLease: lease,
+      },
       data: {
         status: run.status === 'approved' ? 'approved' : 'planned',
         artifacts: json({
@@ -811,6 +997,13 @@ export class DeploymentWorkbenchService {
         }),
       },
     });
+    if (attached.count !== 1) {
+      await this.queue.removeJob(QUEUE_NAMES.METADATA_DEPLOY, job.id).catch(() => false);
+      this.deployJobs.cancel(job.id);
+      await this.processRegistry.cancel(job.id);
+      await this.jobs.updateStatus(job.id, 'cancelled').catch(() => undefined);
+      throw new BadRequestException('Workbench run became terminal before execution was attached');
+    }
     await this.audit(id, 'execution_enqueued', userId, { jobId: job.id });
     return job;
   }
@@ -841,6 +1034,131 @@ export class DeploymentWorkbenchService {
     await prisma.deploymentQualityAudit.create({
       data: { runId: id, action, actorId, details: json(details) },
     });
+  }
+
+  private async prepareSource(
+    input: DeploymentWorkbenchInput,
+    access: {
+      target: { id: string; alias: string; username: string | null; orgId: string | null };
+      sourceOrg?: { id: string; alias: string; username: string | null; orgId: string | null };
+    },
+    planningId: string,
+  ) {
+    const suppliedManifest = input.manifestXml?.trim();
+    let apiVersion = suppliedManifest
+      ? parsePackageXml(suppliedManifest).apiVersion ?? DEFAULT_METADATA_API_VERSION
+      : input.apiVersion ?? DEFAULT_METADATA_API_VERSION;
+    const requestedManifest = suppliedManifest || (
+      input.components.length || input.destructiveSelections.length || input.source.type === 'org_compare'
+        ? buildPackageXml(input.components, apiVersion)
+        : undefined
+    );
+    const resolutionPromise = this.sourceResolver.resolve({
+      orgAlias: access.target.username ?? access.target.alias,
+      sourceOrgAlias: access.sourceOrg
+        ? access.sourceOrg.username ?? access.sourceOrg.alias
+        : undefined,
+      deployMode: input.source.type === 'org_compare' ? 'org_to_org' : 'git',
+      gitSource: input.source.type === 'scm' ? {
+        provider: input.source.provider,
+        connectionId: input.source.connectionId,
+        bindingId: input.source.bindingId,
+        namespace: input.source.namespace,
+        project: input.source.project,
+        repositoryId: input.source.repositoryId,
+        repo: input.source.repo,
+        branch: input.source.branch,
+        manifestPath: input.source.manifestPath,
+      } : undefined,
+      manifestPath: input.source.type === 'scm'
+        ? input.source.manifestPath
+        : 'manifest/package.xml',
+      manifestContent: requestedManifest,
+    });
+    const workspace = await this.resolvePreviewWorkspace(resolutionPromise);
+    try {
+      fs.mkdirSync(path.dirname(workspace.manifestAbsolutePath), { recursive: true });
+      if (requestedManifest) {
+        fs.writeFileSync(workspace.manifestAbsolutePath, requestedManifest, 'utf8');
+      } else if (!fs.existsSync(workspace.manifestAbsolutePath)) {
+        throw new BadRequestException('The pinned SCM source does not contain the requested manifest');
+      } else {
+        apiVersion = parsePackageXml(
+          fs.readFileSync(workspace.manifestAbsolutePath, 'utf8'),
+        ).apiVersion ?? apiVersion;
+      }
+      const dependency = buildDependencyPreview(
+        planningId,
+        workspace,
+        input.dependencyPolicy,
+        input.target.profile === 'scratch' ? 'greenfield' : 'incremental',
+      );
+      if (dependency.blocking.length) {
+        throw new BadRequestException(dependency.blocking.join('; '));
+      }
+      const manifestXml = buildPackageXml(dependency.resolvedSelections, apiVersion);
+      fs.writeFileSync(workspace.manifestAbsolutePath, manifestXml, 'utf8');
+      const commitSha = input.source.type === 'scm' ? resolveGitCommit(workspace.projectRoot) : undefined;
+      const selectionHash = stableHash(dependency.resolvedSelections);
+      const approvedNodeIds = dependency.decisions
+        .filter((decision) => ['selected', 'included'].includes(decision.decision))
+        .map((decision) => decision.nodeId)
+        .sort();
+      const planBatches = dependency.plan.batches.map((batch) => batch.nodeIds);
+      const planHash = stableHash(planBatches);
+      const manifestHash = hashText(manifestXml);
+      const targetHash = stableHash({
+        id: access.target.id,
+        orgId: access.target.orgId,
+        username: access.target.username,
+      });
+      const sourceIdentityHash = stableHash(input.source.type === 'org_compare'
+        ? {
+            type: input.source.type,
+            source: access.sourceOrg?.id,
+            sourceOrgId: access.sourceOrg?.orgId,
+            target: access.target.id,
+            comparisonId: input.source.comparisonId,
+          }
+        : {
+            ...input.source,
+            commitSha,
+          });
+      const artifactId = await this.artifactStore.putDirectory('workbench-source', workspace.projectRoot, {
+        sourceType: input.source.type,
+        commitSha,
+        manifestHash,
+        selectionHash,
+        targetHash,
+        sourceIdentityHash,
+      });
+      const digest = artifactId.slice(artifactId.indexOf(':') + 1);
+      return {
+        workspace,
+        dependency,
+        apiVersion,
+        manifestXml,
+        resolution: {
+          mode: workspace.mode,
+          manifest: workspace.manifestRelative,
+          apiVersion,
+          selectedComponents: dependency.summary.resolved,
+          artifactId,
+          digest,
+          commitSha,
+          sourceIdentityHash,
+          targetHash,
+          selectionHash,
+          approvedNodeIds,
+          planHash,
+          planBatches,
+          manifestHash,
+        },
+      };
+    } catch (error) {
+      await workspace.cleanup?.().catch(() => undefined);
+      throw error;
+    }
   }
 
   private async resolvePreviewWorkspace(
@@ -917,25 +1235,89 @@ export class DeploymentWorkbenchService {
       if (input.source.comparisonId) {
         const comparison = await prisma.metadataComparison.findFirst({
           where: { id: input.source.comparisonId, createdBy: userId },
-          select: { id: true },
+          select: {
+            id: true,
+            sourceOrgId: true,
+            targetOrgId: true,
+            status: true,
+            items: true,
+          },
         });
         if (!comparison) throw new NotFoundException('Metadata comparison not found');
+        if (
+          comparison.sourceOrgId !== input.source.sourceOrgId
+          || comparison.targetOrgId !== input.target.orgId
+        ) {
+          throw new BadRequestException('Metadata comparison source and target do not match this request');
+        }
+        if (!['completed', 'partial'].includes(comparison.status)) {
+          throw new BadRequestException('Metadata comparison is not terminal');
+        }
+        const compared = new Map(
+          (Array.isArray(comparison.items) ? comparison.items : []).map((item) => {
+            const value = record(item);
+            return [`${String(value.metadataType)}:${String(value.fullName)}`, value] as const;
+          }),
+        );
+        const requested = input.manifestXml
+          ? parsePackageXml(input.manifestXml).selections
+          : input.components;
+        for (const selection of requested) {
+          for (const member of selection.members) {
+            const item = compared.get(`${selection.metadataType}:${member}`);
+            if (member === '*' || !item || item.diffType === 'deleted') {
+              throw new BadRequestException(
+                `Selected component ${selection.metadataType}:${member} is not bound to the comparison`,
+              );
+            }
+          }
+        }
+        for (const selection of input.destructiveSelections) {
+          for (const member of selection.members) {
+            const item = compared.get(`${selection.metadataType}:${member}`);
+            if (member === '*' || !item || item.diffType !== 'deleted') {
+              throw new BadRequestException(
+                `Destructive component ${selection.metadataType}:${member} is not a target-only comparison item`,
+              );
+            }
+          }
+        }
       }
       return { target, sourceOrg };
     }
     if (input.source.connectionId) {
       const connection = await prisma.scmConnection.findFirst({
         where: { id: input.source.connectionId, connectedBy: userId },
-        select: { id: true },
+        select: { id: true, provider: true, status: true },
       });
       if (!connection) throw new NotFoundException('SCM connection not found');
+      if (connection.provider !== input.source.provider || connection.status !== 'connected') {
+        throw new BadRequestException('SCM connection does not match the requested active provider');
+      }
     }
     if (input.source.bindingId) {
       const binding = await prisma.projectBinding.findFirst({
         where: { id: input.source.bindingId, createdBy: userId },
-        select: { id: true },
+        select: {
+          id: true,
+          scmConnectionId: true,
+          repositoryId: true,
+          repositoryName: true,
+          externalProjectId: true,
+          scmConnection: { select: { provider: true, status: true } },
+        },
       });
       if (!binding) throw new NotFoundException('Project binding not found');
+      if (
+        binding.scmConnection?.provider !== input.source.provider
+        || binding.scmConnection?.status !== 'connected'
+        || (input.source.connectionId && binding.scmConnectionId !== input.source.connectionId)
+        || (input.source.repositoryId && binding.repositoryId !== input.source.repositoryId)
+        || (binding.repositoryName && binding.repositoryName !== input.source.repo)
+        || (input.source.project && binding.externalProjectId !== input.source.project)
+      ) {
+        throw new BadRequestException('SCM binding does not match the requested source');
+      }
     }
     return { target, sourceOrg: undefined };
   }
@@ -970,6 +1352,11 @@ export class DeploymentWorkbenchService {
         id: true,
         createdBy: true,
         policySnapshot: true,
+        status: true,
+        artifacts: true,
+        destructiveSelections: true,
+        manifestXml: true,
+        apiVersion: true,
         approvedAt: true,
         rejectedAt: true,
       },
@@ -992,6 +1379,35 @@ export class DeploymentWorkbenchService {
     if (approverType === 'owner' && actor.userId !== createdBy && !actor.isAdmin) {
       throw new NotFoundException('Deployment workbench run not found');
     }
+  }
+
+  private async assertDestructiveReviewed(run: {
+    id: string;
+    destructiveSelections: Prisma.JsonValue;
+    manifestXml: string | null;
+    apiVersion: string | null;
+  }) {
+    if (!(await this.isDestructiveReviewed(run))) {
+      throw new BadRequestException('Hash-bound destructive review is required before approval');
+    }
+  }
+
+  private async isDestructiveReviewed(run: {
+    id: string;
+    destructiveSelections: Prisma.JsonValue;
+    manifestXml: string | null;
+    apiVersion: string | null;
+  }) {
+    const selections = run.destructiveSelections as unknown as MetadataSelection[];
+    if (!selections.length) return true;
+    const apiVersion = run.manifestXml
+      ? parsePackageXml(run.manifestXml).apiVersion ?? run.apiVersion ?? DEFAULT_METADATA_API_VERSION
+      : run.apiVersion ?? DEFAULT_METADATA_API_VERSION;
+    const digest = destructiveDigest(selections, apiVersion);
+    return Boolean(await prisma.deploymentDestructiveReview.findFirst({
+      where: { runId: run.id, digest, approved: true },
+      select: { id: true },
+    }));
   }
 
   private async getStatusForDecision(id: string) {
@@ -1022,6 +1438,27 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function hasSelections(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { code?: string }).code === 'P2002',
+  );
 }
 
 function positivePage(value: string | undefined, fallback: number, maximum: number): number {
@@ -1068,4 +1505,41 @@ function historyGateOutcome(
     || stages.some((stage) => ['failed', 'blocked'].includes(stage.status))
   ) return 'blocked';
   return 'pending';
+}
+
+function destructiveDigest(selections: MetadataSelection[], apiVersion: string) {
+  return hashText(buildDestructiveChangesXml(selections, apiVersion));
+}
+
+function hashText(value: string) {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function stableHash(value: unknown) {
+  return hashText(JSON.stringify(sortJson(value)));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortJson(item)]),
+  );
+}
+
+function resolveGitCommit(projectRoot: string): string {
+  try {
+    const sha = execFileSync('git', ['-C', projectRoot, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      windowsHide: true,
+    }).trim();
+    if (/^[a-f0-9]{40,64}$/i.test(sha)) return sha;
+  } catch {
+    // A provider checkout without .git metadata cannot satisfy immutable SCM execution.
+  }
+  throw new BadRequestException('SCM source did not resolve to a pinned commit SHA');
 }

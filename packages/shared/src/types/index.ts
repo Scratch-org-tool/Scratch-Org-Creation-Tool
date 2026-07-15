@@ -105,6 +105,8 @@ export interface AgentSession {
 }
 
 export interface StreamEvent {
+  /** Stable publisher-generated id used to deduplicate Redis deliveries. */
+  id?: string;
   type:
     | 'job_log'
     | 'job_status'

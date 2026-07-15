@@ -116,6 +116,19 @@ export class DeploymentWorkbenchController {
     return this.workbench.destructiveReview(id, userId, request.userProfile?.role === 'admin');
   }
 
+  @Post(':id/destructive-review')
+  decideDestructiveReview(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.decideDestructiveReview(id, body, {
+      userId,
+      isAdmin: request.userProfile?.role === 'admin',
+    });
+  }
+
   @Post(':id/resume')
   resume(@Param('id') id: string, @CurrentUser() userId: string) {
     return this.workbench.resume(id, userId);

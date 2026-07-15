@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -189,6 +190,8 @@ export class IntelligentOrchestratorService {
     registerKill: (kill: () => void) => void;
     clearKill: () => void;
     targetOrgProfile?: TargetOrgProfile;
+    approvedNodeIds?: string[];
+    expectedPlanHash?: string;
   }): Promise<FinalReport> {
     const persistence = this.createPrismaPersistence(options.runId);
     const checkpointStore = new CheckpointStore(persistence);
@@ -238,12 +241,19 @@ export class IntelligentOrchestratorService {
           automationRunId: options.automationRunId,
           resumeCheckpoint: options.resumeCheckpoint,
           targetOrgProfile: options.targetOrgProfile,
+          approvedNodeIds: options.approvedNodeIds,
         },
         {
           ...options.callbacks,
           registerKill: options.registerKill,
           clearKill: options.clearKill,
           onPlan: async (plan, nodes) => {
+            if (
+              options.expectedPlanHash
+              && planHash(plan.batches.map((batch) => batch.nodeIds)) !== options.expectedPlanHash
+            ) {
+              throw new Error('Intelligent execution plan differs from the approved preview batches');
+            }
             await options.callbacks.onPlan?.(plan, nodes);
             await prisma.intelligentDeployRun.update({
               where: { id: options.runId },
@@ -438,4 +448,8 @@ export async function resolveTargetOrgProfile(
     select: { type: true },
   });
   return org?.type === 'scratch' ? 'greenfield' : 'incremental';
+}
+
+function planHash(batches: string[][]) {
+  return createHash('sha256').update(JSON.stringify(batches)).digest('hex');
 }

@@ -26,6 +26,7 @@ export interface MetadataDeployEnqueueInput {
   destructiveChangesXml?: string;
   quickDeployValidationId?: string;
   localProjectRoot?: string;
+  sourceArtifactId?: string;
   sourceOrgId?: string;
   sourceOrgAlias?: string;
   deployMode?: 'git' | 'azure' | 'org_to_org' | 'local_workspace';
@@ -141,6 +142,7 @@ export class MetadataDeployQueueService {
       destructiveChangesXml: input.destructiveChangesXml,
       quickDeployValidationId: input.quickDeployValidationId,
       localProjectRoot: input.localProjectRoot,
+      sourceArtifactId: input.sourceArtifactId,
       automationRunId: input.automationRunId,
       deploymentId: input.deploymentId,
       assignPermissionSet: input.assignPermissionSet ?? false,

@@ -452,6 +452,7 @@ model DeploymentQualityRun {
   summary               Json?
   artifacts             Json?
   validationId          String?
+  executionLease        String?
   approvedBy            String?
   approvedAt            DateTime?
   rejectedBy            String?
@@ -464,11 +465,55 @@ model DeploymentQualityRun {
   issues                DeploymentQualityIssue[]
   testResults           DeploymentQualityTestResult[]
   audits                DeploymentQualityAudit[]
+  approvals             DeploymentQualityApproval[]
+  destructiveReviews   DeploymentDestructiveReview[]
 
   @@index([createdBy, createdAt])
   @@index([targetOrgId, status])
   @@index([deploymentId])
   @@index([validationId])
+}
+
+/// Immutable, content-addressed Workbench bytes. The database implementation is
+/// the default durable object store; callers only retain this checksum key.
+model DeploymentArtifact {
+  id          String   @id
+  kind        String
+  checksum    String
+  content     Bytes
+  sizeBytes   Int
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  retainUntil DateTime?
+
+  @@index([kind, createdAt])
+  @@index([retainUntil])
+}
+
+/// One actor can contribute at most one approval to a run.
+model DeploymentQualityApproval {
+  id        String               @id @default(uuid())
+  runId     String
+  run       DeploymentQualityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  actorId   String
+  createdAt DateTime             @default(now())
+
+  @@unique([runId, actorId])
+  @@index([runId, createdAt])
+}
+
+/// Explicit, hash-bound destructive decisions are independent from plan approval.
+model DeploymentDestructiveReview {
+  id        String               @id @default(uuid())
+  runId     String
+  run       DeploymentQualityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  actorId   String
+  digest    String
+  approved  Boolean
+  createdAt DateTime             @default(now())
+
+  @@unique([runId, actorId, digest])
+  @@index([runId, digest, approved])
 }
 
 model DeploymentQualityStage {

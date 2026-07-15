@@ -140,10 +140,36 @@ export const snapshotPolicySchema = z.object({
   }
 });
 
+export const chainedDataConfigItemSchema = z.object({
+  objectName: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9_]*$/, 'Invalid Salesforce object API name'),
+  soql: z.string().trim().min(1).max(20_000).optional(),
+  strategy: z.enum(['insert', 'upsert']).default('upsert'),
+  matchField: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9_]*$/, 'Invalid match field API name').default('Name'),
+}).strict().superRefine((item, ctx) => {
+  if (item.strategy === 'upsert' && !item.matchField) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['matchField'],
+      message: 'matchField is required for upsert',
+    });
+  }
+  if (item.soql) {
+    const from = /\bFROM\s+([A-Za-z][A-Za-z0-9_]*)\b/i.exec(item.soql)?.[1];
+    if (!from || from.toLowerCase() !== item.objectName.toLowerCase()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['soql'],
+        message: 'SOQL FROM object must match objectName',
+      });
+    }
+  }
+});
+
 export const chainedDataSchema = z.object({
   enabled: z.boolean().default(true),
   stopOnError: z.boolean().default(true),
-  config: z.array(z.record(z.unknown())).min(1).max(200),
+  sequential: z.boolean().default(true),
+  config: z.array(chainedDataConfigItemSchema).min(1).max(200),
 }).strict();
 
 export const deploymentPolicySchema = z.object({
@@ -351,6 +377,7 @@ const normalizedWorkbenchSchema = z.object({
     input.source.type === 'org_compare'
     && input.components.length === 0
     && !input.manifestXml
+    && input.destructiveSelections.length === 0
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -363,6 +390,13 @@ const normalizedWorkbenchSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['target', 'orgId'],
       message: 'Source and target org must differ',
+    });
+  }
+  if (input.chainedData?.enabled && input.source.type !== 'org_compare') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['chainedData'],
+      message: 'Chained data deployment requires an org comparison source',
     });
   }
   if (input.strategy === 'validate_then_quick' && !input.policy.validation.required) {
@@ -663,6 +697,40 @@ export const deploymentWorkbenchStatusSchema = z.object({
   rejectedAt: z.coerce.date().nullable(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
+  canApprove: z.boolean(),
+  canQuickDeploy: z.boolean(),
+  canCancel: z.boolean(),
+  canResume: z.boolean(),
+  canRollback: z.boolean(),
+  destructiveReviewRequired: z.boolean(),
+  destructiveReviewed: z.boolean(),
+  approvalCount: z.number().int().nonnegative(),
+  minimumApprovals: z.number().int().positive(),
+  job: z.unknown().nullable(),
+  results: z.object({
+    staticAnalysis: z.object({
+      status: z.string(),
+      summary: z.unknown().nullable(),
+      artifacts: z.unknown().nullable(),
+      issues: z.array(z.unknown()),
+    }).strict(),
+    validation: z.object({
+      status: z.string(),
+      id: z.string().nullable(),
+      summary: z.unknown().nullable(),
+      issues: z.array(z.unknown()),
+    }).strict(),
+    tests: z.object({
+      status: z.string(),
+      summary: z.unknown().nullable(),
+      results: z.array(z.unknown()),
+    }).strict(),
+    coverage: z.object({
+      status: z.string(),
+      percentage: z.number().nullable(),
+      minimum: z.number(),
+    }).strict(),
+  }).strict(),
 }).strict();
 
 export type DeploymentWorkbenchCapabilities = z.infer<typeof deploymentWorkbenchCapabilitiesSchema>;

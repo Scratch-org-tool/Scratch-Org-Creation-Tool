@@ -85,6 +85,25 @@ describe('StaticAnalysisService', () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it('reports each unavailable requested engine independently', async () => {
+    const run = vi.fn()
+      .mockReturnValueOnce(execution({ exitCode: 127, stderr: 'sf unavailable' }))
+      .mockReturnValueOnce(execution({ stdout: 'eslint 9' }))
+      .mockReturnValueOnce(execution({ stdout: '[]' }));
+    const service = new StaticAnalysisService({ run } as unknown as SafeExecFileAdapter);
+
+    const result = await service.run({
+      projectRoot: workspace('.ts'),
+      engines: ['code-analyzer', 'eslint'],
+    });
+
+    expect(result.engineResults).toEqual([
+      expect.objectContaining({ engine: 'code-analyzer', status: 'unavailable' }),
+      expect.objectContaining({ engine: 'eslint', status: 'passed' }),
+    ]);
+    expect(result.unavailableEngines).toEqual(['code-analyzer']);
+  });
+
   it('normalizes PMD findings and stable fingerprints', async () => {
     const payload = [{ rule: 'UnusedLocalVariable', priority: 3, description: 'Unused x', file: 'X.cls' }];
     const run = vi.fn()
@@ -117,6 +136,52 @@ describe('StaticAnalysisService', () => {
       ruleId: 'ANALYZER_TIMEOUT',
       severity: 'error',
     }));
+    expect(result.engineResults).toContainEqual(expect.objectContaining({
+      engine: 'code-analyzer',
+      status: 'timed_out',
+    }));
+  });
+
+  it('parses ESLint messages and persists reports before cleaning temporary output', async () => {
+    let outputDir = '';
+    const run = vi.fn()
+      .mockReturnValueOnce(execution({ stdout: 'eslint 9' }))
+      .mockImplementationOnce((_file: string, args: string[]) => {
+        const outputPath = args[args.indexOf('--output-file') + 1];
+        outputDir = path.dirname(outputPath);
+        fs.writeFileSync(outputPath, JSON.stringify([{
+          filePath: '/workspace/Example.ts',
+          messages: [{
+            ruleId: 'no-eval',
+            severity: 2,
+            message: 'eval is unsafe',
+            line: 3,
+            column: 5,
+          }],
+        }]));
+        return execution({ exitCode: 1 });
+      });
+    const persistArtifact = vi.fn(async (_engine: string, _content: string) => {
+      expect(fs.existsSync(outputDir)).toBe(true);
+      return 'static-analysis:abc';
+    });
+    const service = new StaticAnalysisService({ run } as unknown as SafeExecFileAdapter);
+
+    const result = await service.run({
+      projectRoot: workspace('.ts'),
+      engines: ['eslint'],
+      persistArtifact,
+    });
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      engine: 'eslint',
+      ruleId: 'no-eval',
+      severity: 'error',
+      line: 3,
+    }));
+    expect(result.engineResults[0].status).toBe('passed');
+    expect(result.artifacts[0].artifactId).toBe('static-analysis:abc');
+    expect(fs.existsSync(outputDir)).toBe(false);
   });
 });
 

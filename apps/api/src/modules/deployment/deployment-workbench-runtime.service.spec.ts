@@ -6,6 +6,7 @@ import {
   buildDependencyPreview,
   parseDeployPayload,
 } from './deployment-workbench-runtime.service';
+import { buildPackageXml } from '@sfcc/shared';
 
 const tempRoots: string[] = [];
 
@@ -173,5 +174,90 @@ describe('Deployment Workbench dependency preview', () => {
       }),
     ]);
     expect(preview.blocking[0]).toContain('required dependencies are missing');
+  });
+
+  it('keeps selected-only plans exact and produces identical approved execution batches', () => {
+    const root = fs.mkdtempSync(path.join(tmpdir(), 'dependency-selected-test-'));
+    tempRoots.push(root);
+    const classes = path.join(root, 'force-app', 'main', 'default', 'classes');
+    const objects = path.join(root, 'force-app', 'main', 'default', 'objects', 'Invoice__c');
+    const manifestDir = path.join(root, 'manifest');
+    fs.mkdirSync(classes, { recursive: true });
+    fs.mkdirSync(objects, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(path.join(classes, 'InvoiceService.cls'), 'class InvoiceService { Invoice__c row; }');
+    fs.writeFileSync(
+      path.join(objects, 'Invoice__c.object-meta.xml'),
+      '<CustomObject><label>Invoice</label></CustomObject>',
+    );
+    const manifestPath = path.join(manifestDir, 'package.xml');
+    fs.writeFileSync(
+      manifestPath,
+      '<Package><types><members>InvoiceService</members><name>ApexClass</name></types><version>62.0</version></Package>',
+    );
+    const workspace = {
+      projectRoot: root,
+      manifestRelative: 'manifest/package.xml',
+      manifestAbsolutePath: manifestPath,
+      mode: 'local_workspace' as const,
+    };
+    const selectedOnly = buildDependencyPreview('selected', workspace, {
+      mode: 'selected_only',
+      maxDepth: 10,
+      failOnMissing: true,
+      allowCycles: false,
+    });
+    expect(selectedOnly.resolvedSelections).toEqual([
+      { metadataType: 'ApexClass', members: ['InvoiceService'] },
+    ]);
+    expect(selectedOnly.plan.batches.flatMap((batch) => batch.nodeIds)).toEqual([
+      'ApexClass:InvoiceService',
+    ]);
+
+    const approved = buildDependencyPreview('approved', workspace, {
+      mode: 'include_required',
+      maxDepth: 10,
+      failOnMissing: true,
+      allowCycles: false,
+    });
+    fs.writeFileSync(manifestPath, buildPackageXml(approved.resolvedSelections, '62.0'));
+    const execution = buildDependencyPreview('execution', workspace, {
+      mode: 'include_required',
+      maxDepth: 10,
+      failOnMissing: true,
+      allowCycles: false,
+    });
+    expect(execution.plan.batches.map((batch) => batch.nodeIds))
+      .toEqual(approved.plan.batches.map((batch) => batch.nodeIds));
+  });
+
+  it('honors includeOptional by adding otherwise unrelated pinned components', () => {
+    const root = fs.mkdtempSync(path.join(tmpdir(), 'dependency-optional-test-'));
+    tempRoots.push(root);
+    const classes = path.join(root, 'force-app', 'main', 'default', 'classes');
+    const manifestDir = path.join(root, 'manifest');
+    fs.mkdirSync(classes, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(path.join(classes, 'Selected.cls'), 'class Selected {}');
+    fs.writeFileSync(path.join(classes, 'Optional.cls'), 'class Optional {}');
+    const manifestPath = path.join(manifestDir, 'package.xml');
+    fs.writeFileSync(
+      manifestPath,
+      '<Package><types><members>Selected</members><name>ApexClass</name></types><version>62.0</version></Package>',
+    );
+    const preview = buildDependencyPreview('optional', {
+      projectRoot: root,
+      manifestRelative: 'manifest/package.xml',
+      manifestAbsolutePath: manifestPath,
+      mode: 'local_workspace',
+    }, {
+      mode: 'include_required',
+      includeOptional: true,
+      maxDepth: 10,
+      failOnMissing: true,
+      allowCycles: false,
+    });
+    expect(preview.resolvedSelections[0]?.members).toEqual(['Optional', 'Selected']);
+    expect(preview.summary.optionalIncluded).toBe(1);
   });
 });

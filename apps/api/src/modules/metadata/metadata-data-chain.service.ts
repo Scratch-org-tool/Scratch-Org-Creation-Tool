@@ -4,6 +4,7 @@ import { QUEUE_NAMES } from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
 import { generateSfdmuConfigFromSoql } from '../data/sfdmu-config.generator';
+import { chainedDataConfigItemSchema } from '@sfcc/shared';
 
 interface DataDeployConfigItem {
   objectName: string;
@@ -26,20 +27,33 @@ export class MetadataDataChainService {
     automationRunId?: string;
     createdBy?: string;
     onLog: (line: string) => Promise<void>;
+    awaitTerminal?: boolean;
+    sequential?: boolean;
+    stopOnError?: boolean;
+    timeoutMs?: number;
   }): Promise<string[]> {
+    // Validate the complete chain before creating a movement or queue job.
+    const configs = options.dataDeployConfig.map((item) => chainedDataConfigItemSchema.parse(item));
     const [source, target] = await Promise.all([
       prisma.orgConnection.findUnique({ where: { id: options.sourceOrgId } }),
       prisma.orgConnection.findUnique({ where: { id: options.targetOrgId } }),
     ]);
     if (!source || !target) throw new Error('Source or target org not found for data chain');
+    if (
+      options.createdBy
+      && (source.createdBy !== options.createdBy || target.createdBy !== options.createdBy)
+    ) {
+      throw new Error('Chained data source or target is not owned by the deployment actor');
+    }
+    if (source.id === target.id) throw new Error('Chained data source and target must differ');
 
     const sourceAlias = source.username ?? source.alias;
     const targetAlias = target.username ?? target.alias;
     const jobIds: string[] = [];
 
-    await options.onLog(`Starting chained data deploy for ${options.dataDeployConfig.length} object(s)...`);
+    await options.onLog(`Starting chained data deploy for ${configs.length} object(s)...`);
 
-    for (const cfg of options.dataDeployConfig) {
+    const enqueueOne = async (cfg: DataDeployConfigItem) => {
       const soql = cfg.soql?.trim()
         ?? `SELECT Id, Name FROM ${cfg.objectName} LIMIT 200`;
 
@@ -103,8 +117,45 @@ export class MetadataDataChainService {
 
       jobIds.push(job.id);
       await options.onLog(`Queued data deploy for ${cfg.objectName} (job ${job.id})`);
+      return job.id;
+    };
+
+    if (options.sequential !== false) {
+      for (const cfg of configs) {
+        const id = await enqueueOne(cfg);
+        if (options.awaitTerminal) {
+          const terminal = await this.awaitJob(id, options.timeoutMs);
+          await options.onLog(`Data deploy ${id} finished with ${terminal.status}`);
+          if (terminal.status !== 'completed' && options.stopOnError !== false) {
+            throw new Error(`Chained data deploy ${id} ${terminal.status}: ${terminal.error ?? 'unknown error'}`);
+          }
+        }
+      }
+    } else {
+      const ids = await Promise.all(configs.map(enqueueOne));
+      if (options.awaitTerminal) {
+        const outcomes = await Promise.all(ids.map((id) => this.awaitJob(id, options.timeoutMs)));
+        const failed = outcomes.find((outcome) => outcome.status !== 'completed');
+        if (failed && options.stopOnError !== false) {
+          throw new Error(`Chained data deploy ${failed.id} ${failed.status}: ${failed.error ?? 'unknown error'}`);
+        }
+      }
     }
 
     return jobIds;
+  }
+
+  private async awaitJob(id: string, timeoutMs = 30 * 60_000) {
+    const deadline = Date.now() + Math.min(Math.max(timeoutMs, 1_000), 24 * 60 * 60_000);
+    for (;;) {
+      const job = await prisma.job.findUnique({
+        where: { id },
+        select: { id: true, status: true, error: true },
+      });
+      if (!job) throw new Error(`Chained data job ${id} disappeared`);
+      if (['completed', 'partial', 'failed', 'cancelled'].includes(job.status)) return job;
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for chained data job ${id}`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
   }
 }
