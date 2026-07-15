@@ -18,7 +18,25 @@ const db = vi.hoisted(() => ({
       row.workItemConnectionId === where.workItemConnectionId &&
       row.externalProjectId === where.externalProjectId &&
       row.externalItemId === where.externalItemId) ?? null),
+    aggregate: vi.fn(async ({ where }: any) => ({
+      _sum: {
+        sizeBytes: attachmentRows
+          .filter((row) =>
+            (!where.workItemConnectionId || row.workItemConnectionId === where.workItemConnectionId) &&
+            (!where.externalProjectId || row.externalProjectId === where.externalProjectId) &&
+            (!where.externalItemId || row.externalItemId === where.externalItemId) &&
+            (!where.createdBy || row.createdBy === where.createdBy))
+          .reduce((sum, row) => sum + row.sizeBytes, 0),
+      },
+    })),
+    deleteMany: vi.fn(async () => ({ count: 0 })),
+    delete: vi.fn(async ({ where }: any) => {
+      const index = attachmentRows.findIndex((row) => row.id === where.id);
+      if (index >= 0) attachmentRows.splice(index, 1);
+      return {};
+    }),
   },
+  $transaction: vi.fn(async (callback: (tx: any) => unknown) => callback(db)),
 }));
 
 vi.mock('@sfcc/db', () => ({ prisma: db }));
@@ -88,5 +106,28 @@ describe('PrismaGitHubAttachmentStore', () => {
     db.workItemConnection.findFirst.mockResolvedValueOnce(null);
     await expect(new PrismaGitHubAttachmentStore().list(scope))
       .rejects.toThrow(/not active/);
+  });
+
+  it('enforces aggregate quota and uploader/admin deletion authorization', async () => {
+    process.env.GITHUB_ATTACHMENT_USER_QUOTA_BYTES = '20';
+    const store = new PrismaGitHubAttachmentStore();
+    const attachment = await store.put({
+      scope,
+      name: 'evidence.txt',
+      contentType: 'text/plain',
+      content: Buffer.from('1234567890'),
+      authorId: 'user-1',
+    });
+    await expect(store.put({
+      scope,
+      name: 'more.txt',
+      contentType: 'text/plain',
+      content: Buffer.from('12345678901'),
+      authorId: 'user-1',
+    })).rejects.toThrow(/user quota/);
+    await expect(store.delete(scope, attachment.id, 'user-2', false))
+      .rejects.toThrow(/uploader or an admin/);
+    await expect(store.delete(scope, attachment.id, 'admin', true)).resolves.toBeUndefined();
+    delete process.env.GITHUB_ATTACHMENT_USER_QUOTA_BYTES;
   });
 });

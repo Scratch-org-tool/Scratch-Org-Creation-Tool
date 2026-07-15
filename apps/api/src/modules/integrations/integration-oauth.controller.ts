@@ -5,10 +5,11 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { RequireRole, RoleGuard } from '../../common/role.guard';
@@ -21,12 +22,21 @@ export class IntegrationOAuthController {
   constructor(private readonly oauth: IntegrationOAuthService) {}
 
   @Post(':provider/start')
-  start(
+  async start(
     @Param('provider') provider: string,
     @CurrentUser() appUserId: string,
     @Body() body: { returnPath?: string },
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.oauth.start(provider, appUserId, body);
+    const result = await this.oauth.start(provider, appUserId, body);
+    response.cookie(this.cookieName(result.state), result.browserBinding, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 10 * 60 * 1_000,
+    });
+    return { authorizationUrl: result.authorizationUrl, provider: result.provider };
   }
 
   @Get('jira/selections/:state')
@@ -45,6 +55,10 @@ export class IntegrationOAuthController {
   ) {
     return this.oauth.selectJiraSite(state, body.siteId ?? '', appUserId);
   }
+
+  private cookieName(state: string): string {
+    return `__Host-sfcc_oauth_${state.slice(0, 16)}`;
+  }
 }
 
 @Controller('integrations/oauth')
@@ -57,17 +71,45 @@ export class IntegrationOAuthCallbackController {
     @Query('state') state: string | undefined,
     @Query('code') code: string | undefined,
     @Query('installation_id') installationId: string | undefined,
+    @Req() request: Request,
     @Res() response: Response,
   ) {
-    if (!state) {
+    if (!state || !/^[A-Za-z0-9_-]{43}$/.test(state)) {
       return response.redirect(303, this.oauth.failureUrl(provider, 'Missing provider state'));
     }
+    const cookieName = `__Host-sfcc_oauth_${state.slice(0, 16)}`;
+    const browserBinding = this.cookie(request.headers.cookie, cookieName);
+    response.clearCookie(cookieName, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: '/',
+    });
     try {
-      const target = await this.oauth.callback(provider, state, code, installationId);
+      const target = await this.oauth.callback(
+        provider,
+        state,
+        browserBinding ?? '',
+        code,
+        installationId,
+      );
       return response.redirect(303, target);
     } catch {
       // Do not reflect provider errors, codes, tokens, or stored secrets into the browser.
       return response.redirect(303, this.oauth.failureUrl(provider));
     }
+  }
+
+  private cookie(header: string | undefined, name: string): string | null {
+    for (const part of header?.split(';') ?? []) {
+      const separator = part.indexOf('=');
+      if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+      try {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 }

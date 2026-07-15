@@ -22,6 +22,8 @@ export interface BitbucketConnectionConfig {
   oauthBaseUrl: string;
   workspace?: string;
   webhookSecret?: string;
+  webhookIssuer?: string;
+  webhookAudience?: string;
 }
 
 export interface JiraConnectionConfig {
@@ -34,6 +36,8 @@ export interface JiraConnectionConfig {
   authBaseUrl: string;
   fieldMappings?: JiraFieldMappings;
   webhookSecret?: string;
+  webhookIssuer?: string;
+  webhookAudience?: string;
 }
 
 export interface JiraFieldMappings {
@@ -81,6 +85,8 @@ export interface AtlassianConnectInput {
   authBaseUrl?: string;
   fieldMappings?: JiraFieldMappings;
   webhookSecret?: string;
+  webhookIssuer?: string;
+  webhookAudience?: string;
 }
 
 export function normalizeCredential(input: AtlassianConnectInput): AtlassianCredential {

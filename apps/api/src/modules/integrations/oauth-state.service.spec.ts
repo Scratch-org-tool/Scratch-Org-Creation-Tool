@@ -15,6 +15,7 @@ const db = vi.hoisted(() => ({
       Object.assign(row, data);
       return { count: 1 };
     }),
+    deleteMany: vi.fn(async () => ({ count: 0 })),
   },
   $transaction: vi.fn(async (callback: (tx: any) => unknown) => callback(db)),
 }));
@@ -57,6 +58,29 @@ describe('OAuthStateService', () => {
     row.expiresAt = new Date(Date.now() - 1);
     await expect(service.consume(state, 'jira', 'select_site', 'user-1'))
       .rejects.toThrow(/invalid, expired/);
+  });
+
+  it('binds provider callbacks to the initiating browser and erases consumed ciphertext', async () => {
+    const service = new OAuthStateService();
+    const browser = service.newBrowserBinding();
+    const state = await service.create(
+      'jira',
+      'authorize',
+      'user-1',
+      { verifier: 'secret' },
+      '/environment-center',
+      browser,
+    );
+    await expect(service.consume(
+      state,
+      'jira',
+      'authorize',
+      undefined,
+      service.newBrowserBinding(),
+    )).rejects.toThrow(/invalid, expired/);
+    await expect(service.consume(state, 'jira', 'authorize', undefined, browser))
+      .resolves.toMatchObject({ payload: { verifier: 'secret' } });
+    expect([...rows.values()][0].encryptedPayload).toBeNull();
   });
 
   it('rejects return URLs that could redirect outside the configured app', async () => {

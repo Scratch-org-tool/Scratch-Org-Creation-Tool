@@ -21,6 +21,7 @@ import type {
   AdapterContext,
   WorkItemAdapter,
   WorkItemCreateInput,
+  WorkItemUpload,
   WorkItemUpdateInput,
 } from '../../integrations/foundation/adapter.contracts';
 import { IntegrationError } from '../../integrations/foundation/adapter.errors';
@@ -41,6 +42,7 @@ interface ResolvedProvider {
 
 interface AccessIdentity {
   externalUserId: string;
+  externalLogin: string | null;
   email: string | null;
 }
 
@@ -48,6 +50,7 @@ interface BindingRow {
   id: string;
   externalProjectId: string;
   projectKey: string | null;
+  repositoryName?: string | null;
   workItemConnectionId: string | null;
   workItemConnection: { provider: WorkItemProvider } | null;
 }
@@ -257,7 +260,7 @@ export class DefectsService {
     const user = await this.requireUser(userId);
     const input = this.object(body);
     const resolved = await this.resolveProvider({ ...query, project: query.project ?? this.string(input.project) });
-    this.capability(resolved, 'write', resolved.adapter.createWorkItem, 'Creating work items');
+    this.capability(resolved, 'create', resolved.adapter.createWorkItem, 'Creating work items');
     const identity = await this.identityFor(user.id, user.email, isAdmin, resolved);
     const title = this.string(input.title);
     const project = resolved.project ?? this.string(input.project);
@@ -270,7 +273,7 @@ export class DefectsService {
     };
     if (!isAdmin && identity) {
       createInput.assigneeId = identity.externalUserId;
-      createInput.assigneeLogins = [identity.externalUserId];
+      if (identity.externalLogin) createInput.assigneeLogins = [identity.externalLogin];
     }
     const item = await resolved.adapter.createWorkItem!(createInput);
     this.assertAccess(item, identity, isAdmin, resolved);
@@ -287,11 +290,16 @@ export class DefectsService {
   ) {
     const authorized = await this.authorizedItem(userId, isAdmin, id, query);
     const { resolved, identity } = authorized;
-    this.capability(resolved, 'write', resolved.adapter.updateWorkItem, 'Updating work items');
+    this.capability(resolved, 'update', resolved.adapter.updateWorkItem, 'Updating work items');
     const input = this.object(body) as unknown as WorkItemUpdateInput;
     if (!isAdmin && identity) {
-      const requested = input.assigneeId ?? input.assigneeLogins?.[0];
-      if (requested !== undefined && requested !== identity.externalUserId) {
+      const requestedId = input.assigneeId;
+      const requestedLogin = input.assigneeLogins?.[0];
+      if (
+        (requestedId !== undefined && requestedId !== identity.externalUserId) ||
+        (requestedLogin !== undefined &&
+          requestedLogin.toLowerCase() !== identity.externalLogin?.toLowerCase())
+      ) {
         throw new ForbiddenException('You cannot assign a work item to another provider identity.');
       }
     }
@@ -325,7 +333,7 @@ export class DefectsService {
     query: Query = {},
   ) {
     const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
-    this.capability(resolved, 'write', resolved.adapter.addComment, 'Adding comments');
+    this.capability(resolved, 'comments', resolved.adapter.addComment, 'Adding comments');
     const text = this.string(this.object(body).body);
     if (!text) throw new BadRequestException('body is required');
     const comment = await resolved.adapter.addComment!(
@@ -422,30 +430,22 @@ export class DefectsService {
     userId: string,
     isAdmin: boolean,
     id: string,
-    body: unknown,
+    upload: WorkItemUpload,
     query: Query = {},
   ) {
     const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
     this.capability(
       resolved,
-      'attachments',
+      'attachmentUploads',
       resolved.adapter.uploadAttachment,
       'Attachment uploads',
     );
-    const input = this.object(body);
-    const fileName = this.string(input.fileName);
-    const contentType = this.string(input.contentType);
-    const base64 = this.string(input.base64);
-    if (!fileName || !contentType || !base64) {
-      throw new BadRequestException('fileName, contentType, and base64 are required');
-    }
-    const buffer = Buffer.from(base64, 'base64');
-    if (!buffer.length || buffer.length > 25 * 1024 * 1024) {
-      throw new BadRequestException('Attachment must be between 1 byte and 25 MB');
+    if (!upload.fileName || !upload.contentType || !upload.buffer.length) {
+      throw new BadRequestException('A non-empty multipart file is required');
     }
     const attachment = await resolved.adapter.uploadAttachment!(
       id,
-      { fileName, contentType, buffer },
+      upload,
       resolved.project,
       this.context(resolved, userId),
     );
@@ -453,9 +453,33 @@ export class DefectsService {
     return attachment;
   }
 
+  async deleteAttachment(
+    userId: string,
+    isAdmin: boolean,
+    id: string,
+    attachmentId: string,
+    query: Query = {},
+  ) {
+    const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
+    this.capability(
+      resolved,
+      'attachments',
+      resolved.adapter.deleteAttachment,
+      'Attachment deletion',
+    );
+    await resolved.adapter.deleteAttachment!(
+      id,
+      attachmentId,
+      resolved.project,
+      this.context(resolved, userId, isAdmin),
+    );
+    await this.refreshSnapshot(id, resolved);
+    return { deleted: true, id: attachmentId };
+  }
+
   async listTypes(userId: string, isAdmin: boolean, query: Query = {}) {
     const { resolved } = await this.authorizedProject(userId, isAdmin, query);
-    this.capability(resolved, 'read', resolved.adapter.listIssueTypes, 'Issue types');
+    this.capability(resolved, 'issueTypes', resolved.adapter.listIssueTypes, 'Issue types');
     const types = await resolved.adapter.listIssueTypes!(
       resolved.project!,
       this.context(resolved),
@@ -465,6 +489,12 @@ export class DefectsService {
 
   async listUsers(userId: string, isAdmin: boolean, query: Query = {}) {
     const { resolved } = await this.authorizedProject(userId, isAdmin, query);
+    this.capability(
+      resolved,
+      'users',
+      resolved.adapter.listUsers ?? resolved.adapter.listAssignees,
+      'Users',
+    );
     const context = this.context(resolved);
     const users = resolved.adapter.listUsers
       ? await resolved.adapter.listUsers(resolved.project, query.q ?? query.query, context)
@@ -476,7 +506,7 @@ export class DefectsService {
 
   async listSubIssues(userId: string, isAdmin: boolean, id: string, query: Query = {}) {
     const { resolved, identity } = await this.authorizedItem(userId, isAdmin, id, query);
-    this.capability(resolved, 'read', resolved.adapter.listSubIssues, 'Subissues');
+    this.capability(resolved, 'subIssues', resolved.adapter.listSubIssues, 'Subissues');
     const items = await resolved.adapter.listSubIssues!(
       id,
       resolved.project,
@@ -500,7 +530,7 @@ export class DefectsService {
     query: Query = {},
   ) {
     const { resolved } = await this.authorizedItem(userId, isAdmin, id, query);
-    this.capability(resolved, 'write', resolved.adapter.addSubIssue, 'Subissues');
+    this.capability(resolved, 'subIssues', resolved.adapter.addSubIssue, 'Subissues');
     const subIssueId = this.string(this.object(body).subIssueId);
     if (!subIssueId) throw new BadRequestException('subIssueId is required');
     await this.authorizedItem(userId, isAdmin, subIssueId, {
@@ -584,7 +614,7 @@ export class DefectsService {
           : undefined,
       assigneeLogin:
         !isAdmin && resolved.provider === 'github_issues'
-          ? identity?.externalUserId
+          ? identity?.externalLogin ?? undefined
           : undefined,
       types: type ? [type] : undefined,
       text: query.q ?? query.text,
@@ -606,6 +636,12 @@ export class DefectsService {
       if (!binding?.workItemConnectionId || !binding.workItemConnection) {
         throw new NotFoundException('Work-item project binding not found');
       }
+      if (
+        query.connectionId?.trim() &&
+        query.connectionId.trim() !== binding.workItemConnectionId
+      ) {
+        throw new BadRequestException('connectionId does not match bindingId');
+      }
     }
 
     const requested = query.provider?.trim();
@@ -616,18 +652,25 @@ export class DefectsService {
       throw new BadRequestException('provider does not match bindingId');
     }
     const provider = parsed.data;
+    const requestedProject = query.project?.trim();
+    const boundProject =
+      provider === 'github_issues'
+        ? binding?.externalProjectId
+        : binding?.projectKey || binding?.externalProjectId;
+    if (binding && requestedProject && requestedProject !== boundProject) {
+      throw new BadRequestException('project does not match bindingId');
+    }
     let connectionId = binding?.workItemConnectionId ?? query.connectionId?.trim() ?? null;
     let project =
-      query.project?.trim() ||
-      (provider === 'github_issues'
-        ? binding?.externalProjectId
-        : binding?.projectKey || binding?.externalProjectId) ||
+      requestedProject ||
+      boundProject ||
       undefined;
 
     if (provider !== 'azure_boards' && !binding && project) {
       const found = await prisma.projectBinding.findFirst({
         where: {
           OR: [{ externalProjectId: project }, { projectKey: project }],
+          ...(connectionId ? { workItemConnectionId: connectionId } : {}),
           workItemConnection: { provider },
         },
         include: { workItemConnection: { select: { provider: true } } },
@@ -674,14 +717,14 @@ export class DefectsService {
   ): Promise<AccessIdentity | null> {
     if (isAdmin) return null;
     if (resolved.provider === 'azure_boards') {
-      return { externalUserId: email, email };
+      return { externalUserId: email, externalLogin: null, email };
     }
     const binding = await prisma.externalIdentityBinding.findFirst({
       where: {
         workItemConnectionId: resolved.connectionId!,
         appUserId: userId,
       },
-      select: { externalUserId: true, externalEmail: true },
+      select: { externalUserId: true, externalLogin: true, externalEmail: true },
     });
     if (!binding) {
       throw new ForbiddenException({
@@ -690,7 +733,18 @@ export class DefectsService {
         provider: resolved.provider,
       });
     }
-    return { externalUserId: binding.externalUserId, email: binding.externalEmail };
+    if (resolved.provider === 'github_issues' && !binding.externalLogin) {
+      throw new ForbiddenException({
+        code: 'EXTERNAL_IDENTITY_LOGIN_MISSING',
+        message: 'Your GitHub identity mapping is missing its login',
+        provider: resolved.provider,
+      });
+    }
+    return {
+      externalUserId: binding.externalUserId,
+      externalLogin: binding.externalLogin,
+      email: binding.externalEmail,
+    };
   }
 
   private assertAccess(
@@ -718,9 +772,7 @@ export class DefectsService {
           item.assignee.displayName.toLowerCase().includes(`<${email}>`)),
       );
     }
-    return item.assignee.id === identity.externalUserId ||
-      (resolved.provider === 'github_issues' &&
-        item.assignee.displayName.toLowerCase() === identity.externalUserId.toLowerCase());
+    return item.assignee.id === identity.externalUserId;
   }
 
   private capability(
@@ -742,8 +794,12 @@ export class DefectsService {
     );
   }
 
-  private context(resolved: ResolvedProvider, actorId?: string): AdapterContext {
-    return { connectionId: resolved.connectionId ?? undefined, actorId };
+  private context(
+    resolved: ResolvedProvider,
+    actorId?: string,
+    isAdmin?: boolean,
+  ): AdapterContext {
+    return { connectionId: resolved.connectionId ?? undefined, actorId, isAdmin };
   }
 
   private itemDto<T extends WorkItemSummary>(item: T, resolved: ResolvedProvider): T & {

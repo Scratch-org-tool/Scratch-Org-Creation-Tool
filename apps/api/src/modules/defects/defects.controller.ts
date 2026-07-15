@@ -1,6 +1,8 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -8,9 +10,13 @@ import {
   Query,
   Req,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import { memoryStorage } from 'multer';
 import { AuthGuard, type AuthenticatedRequest } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
@@ -233,19 +239,49 @@ export class DefectsController {
   }
 
   @Post(['work-items/:id/attachments', 'providers/:provider/work-items/:id/attachments'])
+  @UseInterceptors(FileInterceptor('file', {
+    storage: memoryStorage(),
+    limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+  }))
   uploadAttachment(
     @Req() req: AuthenticatedRequest,
     @CurrentUser() userId: string,
     @Param('id') id: string,
-    @Body() body: unknown,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Query() query: QueryParams,
     @Param('provider') provider?: string,
   ) {
+    if (!file) throw new BadRequestException('A multipart file field named "file" is required');
     return this.defectsService.uploadAttachment(
       userId,
       this.isAdmin(req),
       id,
-      body,
+      {
+        fileName: file.originalname,
+        contentType: file.mimetype,
+        buffer: file.buffer,
+      },
+      this.query(query, provider),
+    );
+  }
+
+  @Delete([
+    'work-items/:id/attachments/:attachmentId',
+    'providers/:provider/work-items/:id/attachments/:attachmentId',
+  ])
+  deleteAttachment(
+    @Req() req: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+    @Param('id') id: string,
+    @Param('attachmentId') attachmentId: string,
+    @Query() query: QueryParams,
+    @Param('provider') provider?: string,
+  ) {
+    return this.defectsService.deleteAttachment(
+      userId,
+      this.isAdmin(req),
+      id,
+      attachmentId,
       this.query(query, provider),
     );
   }

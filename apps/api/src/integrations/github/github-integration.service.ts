@@ -151,6 +151,12 @@ export class GitHubIntegrationService {
       if (parsed.data.projectBindings.length > 0) {
         await tx.projectBinding.createMany({
           data: parsed.data.projectBindings.map((binding) => ({
+            bindingKey: [
+              scm.id,
+              workItems.id,
+              binding.projectId,
+              '',
+            ].map((value) => `${value.length}:${value}`).join('|'),
             scmConnectionId: scm.id,
             workItemConnectionId: workItems.id,
             externalProjectId: binding.projectId,

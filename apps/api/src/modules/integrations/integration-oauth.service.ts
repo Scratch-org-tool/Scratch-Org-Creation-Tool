@@ -36,7 +36,12 @@ export class IntegrationOAuthService {
     @Inject(INTEGRATION_OAUTH_FETCH) private readonly fetchImpl: FetchLike,
   ) {}
 
-  async start(provider: string, appUserId: string, input: StartInput = {}) {
+  async start(
+    provider: string,
+    appUserId: string,
+    input: StartInput = {},
+    browserBinding = this.states.newBrowserBinding(),
+  ) {
     const returnPath = input.returnPath ?? '/environment-center';
     if (provider === 'github') {
       const config = this.githubConfig();
@@ -46,10 +51,11 @@ export class IntegrationOAuthService {
         appUserId,
         { baseUrl: config.baseUrl },
         returnPath,
+        browserBinding,
       );
       const url = new URL(`/apps/${encodeURIComponent(config.appSlug)}/installations/new`, config.baseUrl);
       url.searchParams.set('state', state);
-      return { authorizationUrl: url.toString(), provider };
+      return { authorizationUrl: url.toString(), provider, state, browserBinding };
     }
     if (provider === 'bitbucket') {
       const config = this.bitbucketConfig();
@@ -59,13 +65,14 @@ export class IntegrationOAuthService {
         appUserId,
         {},
         returnPath,
+        browserBinding,
       );
       const url = new URL('/site/oauth2/authorize', config.oauthBaseUrl);
       url.searchParams.set('client_id', config.clientId);
       url.searchParams.set('response_type', 'code');
       url.searchParams.set('state', state);
       url.searchParams.set('redirect_uri', this.callbackUrl('bitbucket'));
-      return { authorizationUrl: url.toString(), provider };
+      return { authorizationUrl: url.toString(), provider, state, browserBinding };
     }
     if (provider === 'jira') {
       const config = this.jiraConfig();
@@ -76,6 +83,7 @@ export class IntegrationOAuthService {
         appUserId,
         { verifier },
         returnPath,
+        browserBinding,
       );
       const url = new URL('/authorize', config.authBaseUrl);
       url.searchParams.set('audience', 'api.atlassian.com');
@@ -87,14 +95,26 @@ export class IntegrationOAuthService {
       url.searchParams.set('prompt', 'consent');
       url.searchParams.set('code_challenge_method', 'S256');
       url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
-      return { authorizationUrl: url.toString(), provider };
+      return { authorizationUrl: url.toString(), provider, state, browserBinding };
     }
     throw new BadRequestException(`OAuth provider "${provider}" is not supported`);
   }
 
-  async callback(provider: string, state: string, code?: string, installationId?: string) {
+  async callback(
+    provider: string,
+    state: string,
+    browserBinding: string,
+    code?: string,
+    installationId?: string,
+  ) {
     if (provider === 'github') {
-      const value = await this.states.consume<{ baseUrl: string }>(state, provider, 'install');
+      const value = await this.states.consume<{ baseUrl: string }>(
+        state,
+        provider,
+        'install',
+        undefined,
+        browserBinding,
+      );
       if (!installationId || !/^\d+$/.test(installationId)) {
         return this.resultUrl(value.returnPath, provider, 'error', 'GitHub installation was not completed');
       }
@@ -112,7 +132,13 @@ export class IntegrationOAuthService {
       return this.resultUrl(value.returnPath, provider, 'success', 'GitHub App installed');
     }
     if (provider === 'bitbucket') {
-      const value = await this.states.consume<Record<string, never>>(state, provider, 'authorize');
+      const value = await this.states.consume<Record<string, never>>(
+        state,
+        provider,
+        'authorize',
+        undefined,
+        browserBinding,
+      );
       if (!code) {
         return this.resultUrl(value.returnPath, provider, 'error', 'Bitbucket authorization was not completed');
       }
@@ -122,7 +148,13 @@ export class IntegrationOAuthService {
       return this.resultUrl(value.returnPath, provider, 'success', 'Bitbucket connected');
     }
     if (provider === 'jira') {
-      const value = await this.states.consume<{ verifier: string }>(state, provider, 'authorize');
+      const value = await this.states.consume<{ verifier: string }>(
+        state,
+        provider,
+        'authorize',
+        undefined,
+        browserBinding,
+      );
       if (!code) {
         return this.resultUrl(value.returnPath, provider, 'error', 'Jira authorization was not completed');
       }
@@ -268,6 +300,8 @@ export class IntegrationOAuthService {
       gitBaseUrl: oauth.gitBaseUrl,
       oauthBaseUrl: oauth.oauthBaseUrl,
       webhookSecret: process.env.BITBUCKET_WEBHOOK_SECRET?.trim() || undefined,
+      webhookIssuer: process.env.BITBUCKET_WEBHOOK_ISSUER?.trim() || undefined,
+      webhookAudience: process.env.BITBUCKET_WEBHOOK_AUDIENCE?.trim() || undefined,
     };
     const verified = await this.bitbucket.verifyConnection(credential, config);
     await this.store.saveBitbucket({
@@ -343,6 +377,8 @@ export class IntegrationOAuthService {
       authBaseUrl: config.authBaseUrl,
       apiGatewayBaseUrl: config.apiGatewayBaseUrl,
       webhookSecret: process.env.JIRA_WEBHOOK_SECRET?.trim() || undefined,
+      webhookIssuer: process.env.JIRA_WEBHOOK_ISSUER?.trim() || undefined,
+      webhookAudience: process.env.JIRA_WEBHOOK_AUDIENCE?.trim() || undefined,
     };
   }
 

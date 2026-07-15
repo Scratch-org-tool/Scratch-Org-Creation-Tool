@@ -50,7 +50,12 @@ describe('IntegrationOAuthService', () => {
       fetchImpl,
     );
 
-    const redirect = await service.callback('bitbucket', 'state', 'authorization-code');
+    const redirect = await service.callback(
+      'bitbucket',
+      'state',
+      'B'.repeat(43),
+      'authorization-code',
+    );
     expect(fetchImpl).toHaveBeenCalledWith(
       expect.objectContaining({ href: 'https://bitbucket.org/site/oauth2/access_token' }),
       expect.objectContaining({
@@ -85,7 +90,7 @@ describe('IntegrationOAuthService', () => {
       {} as JiraWorkItemAdapter,
       vi.fn(),
     );
-    const result = await service.start('jira', 'user-1');
+    const result = await service.start('jira', 'user-1', {}, 'B'.repeat(43));
     const url = new URL(result.authorizationUrl);
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
     expect(url.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -95,6 +100,7 @@ describe('IntegrationOAuthService', () => {
       'user-1',
       { verifier: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) },
       '/environment-center',
+      'B'.repeat(43),
     );
     expect(result.authorizationUrl).not.toContain('jira-secret');
   });
@@ -121,7 +127,13 @@ describe('IntegrationOAuthService', () => {
       vi.fn(),
     );
 
-    const redirect = await service.callback('github', 'state', undefined, '456');
+    const redirect = await service.callback(
+      'github',
+      'state',
+      'B'.repeat(43),
+      undefined,
+      '456',
+    );
     expect(github.connect).toHaveBeenCalledWith({
       appId: '123',
       privateKey: 'server-private-key',

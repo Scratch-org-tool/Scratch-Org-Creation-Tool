@@ -87,7 +87,8 @@ export class GitHubWebhookService {
     }
 
     const payloadHash = createHash('sha256').update(input.rawBody).digest('hex');
-    const idempotencyKey = `github:${input.deliveryId}`;
+    const connectionScope = `work:${connection.id}`;
+    const idempotencyKey = `github:${connection.id}:${input.deliveryId}`;
     let delivery: {
       id: string;
       status: string;
@@ -98,6 +99,7 @@ export class GitHubWebhookService {
       delivery = await prisma.webhookDelivery.create({
         data: {
           idempotencyKey,
+          connectionScope,
           provider: 'github',
           externalDeliveryId: input.deliveryId,
           eventType: input.eventType,
@@ -109,10 +111,26 @@ export class GitHubWebhookService {
     } catch (error) {
       if (!this.isUniqueViolation(error)) throw error;
       duplicate = true;
-      const existing = await prisma.webhookDelivery.findUnique({
+      let existing = await prisma.webhookDelivery.findUnique({
         where: { idempotencyKey },
       });
-      if (!existing || existing.payloadHash !== payloadHash) {
+      if (!existing) {
+        existing = await prisma.webhookDelivery.findUnique({
+          where: {
+            provider_connectionScope_externalDeliveryId: {
+              provider: 'github',
+              connectionScope,
+              externalDeliveryId: input.deliveryId,
+            },
+          },
+        });
+      }
+      if (
+        !existing ||
+        existing.payloadHash !== payloadHash ||
+        existing.connectionScope !== connectionScope ||
+        existing.workItemConnectionId !== connection.id
+      ) {
         throw new BadRequestException('GitHub delivery id was reused with different content');
       }
       if (existing.status === 'processed' || existing.status === 'processing') {

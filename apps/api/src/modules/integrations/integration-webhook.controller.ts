@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Post, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Param, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { IntegrationWebhookService } from './integration-webhook.service';
 
@@ -15,13 +15,19 @@ export class IntegrationWebhookController {
     @Req() request: RawRequest,
     @Body() payload: unknown,
   ) {
-    const rawBody = request.rawBody ?? Buffer.from(JSON.stringify(payload ?? {}));
+    if (!request.rawBody) {
+      throw new BadRequestException('Exact webhook request bytes are required');
+    }
+    const url = new URL(request.originalUrl, 'https://webhook.invalid');
     return this.service.receive({
       provider,
       connectionId,
       headers: request.headers,
-      rawBody,
+      rawBody: request.rawBody,
       payload,
+      method: request.method,
+      path: url.pathname,
+      query: url.search.slice(1),
     });
   }
 }

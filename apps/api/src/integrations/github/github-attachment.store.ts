@@ -34,6 +34,12 @@ export interface GitHubAttachmentStore {
     scope: GitHubAttachmentScope,
     attachmentId: string,
   ): Promise<{ buffer: Buffer; attachment: WorkItemAttachment }>;
+  delete(
+    scope: GitHubAttachmentScope,
+    attachmentId: string,
+    actorId: string,
+    isAdmin: boolean,
+  ): Promise<void>;
 }
 
 @Injectable()
@@ -55,6 +61,15 @@ export class DisabledGitHubAttachmentStore implements GitHubAttachmentStore {
     throw this.unsupported();
   }
 
+  async delete(
+    _scope: GitHubAttachmentScope,
+    _attachmentId: string,
+    _actorId: string,
+    _isAdmin: boolean,
+  ): Promise<void> {
+    throw this.unsupported();
+  }
+
   private unsupported(): IntegrationError {
     return new IntegrationError(
       'unsupported_capability',
@@ -68,6 +83,10 @@ export class DisabledGitHubAttachmentStore implements GitHubAttachmentStore {
 export class PrismaGitHubAttachmentStore implements GitHubAttachmentStore {
   readonly available = true;
   static readonly MAX_BYTES = 10 * 1024 * 1024;
+  static readonly ISSUE_QUOTA_BYTES = 50 * 1024 * 1024;
+  static readonly USER_QUOTA_BYTES = 100 * 1024 * 1024;
+  static readonly CONNECTION_QUOTA_BYTES = 500 * 1024 * 1024;
+  static readonly RETENTION_DAYS = 90;
   private readonly allowedTypes = new Set([
     'application/json',
     'application/pdf',
@@ -83,11 +102,13 @@ export class PrismaGitHubAttachmentStore implements GitHubAttachmentStore {
 
   async list(scope: GitHubAttachmentScope): Promise<WorkItemAttachment[]> {
     await this.assertScope(scope);
+    await this.purgeExpired();
     const rows = await prisma.gitHubAttachment.findMany({
       where: {
         workItemConnectionId: scope.workItemConnectionId,
         externalProjectId: scope.externalProjectId,
         externalItemId: scope.workItemId,
+        expiresAt: { gt: new Date() },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -107,19 +128,9 @@ export class PrismaGitHubAttachmentStore implements GitHubAttachmentStore {
     if (!input.content.length || input.content.length > PrismaGitHubAttachmentStore.MAX_BYTES) {
       throw this.invalid('GitHub attachment must be between 1 byte and 10 MB');
     }
-    const row = await prisma.gitHubAttachment.create({
-      data: {
-        workItemConnectionId: input.scope.workItemConnectionId,
-        externalProjectId: input.scope.externalProjectId,
-        externalItemId: input.scope.workItemId,
-        fileName: name,
-        contentType,
-        sizeBytes: input.content.length,
-        sha256: createHash('sha256').update(input.content).digest('hex'),
-        encryptedBlob: Buffer.from(encrypt(input.content.toString('base64')), 'utf8'),
-        createdBy: input.authorId ?? null,
-      },
-    });
+    if (!input.authorId) throw this.invalid('Authenticated attachment author is required');
+    await this.purgeExpired();
+    const row = await this.createWithinQuota(input, name, contentType);
     return this.metadata(row);
   }
 
@@ -128,12 +139,14 @@ export class PrismaGitHubAttachmentStore implements GitHubAttachmentStore {
     attachmentId: string,
   ): Promise<{ buffer: Buffer; attachment: WorkItemAttachment }> {
     await this.assertScope(scope);
+    await this.purgeExpired();
     const row = await prisma.gitHubAttachment.findFirst({
       where: {
         id: attachmentId,
         workItemConnectionId: scope.workItemConnectionId,
         externalProjectId: scope.externalProjectId,
         externalItemId: scope.workItemId,
+        expiresAt: { gt: new Date() },
       },
     });
     if (!row) {
@@ -161,6 +174,137 @@ export class PrismaGitHubAttachmentStore implements GitHubAttachmentStore {
       });
     }
     return { buffer, attachment: this.metadata(row) };
+  }
+
+  async delete(
+    scope: GitHubAttachmentScope,
+    attachmentId: string,
+    actorId: string,
+    isAdmin: boolean,
+  ): Promise<void> {
+    await this.assertScope(scope);
+    const row = await prisma.gitHubAttachment.findFirst({
+      where: {
+        id: attachmentId,
+        workItemConnectionId: scope.workItemConnectionId,
+        externalProjectId: scope.externalProjectId,
+        externalItemId: scope.workItemId,
+      },
+      select: { id: true, createdBy: true },
+    });
+    if (!row) {
+      throw new IntegrationError('not_found', 'Attachment does not belong to this GitHub issue', {
+        provider: 'github_issues',
+      });
+    }
+    if (!isAdmin && row.createdBy !== actorId) {
+      throw new IntegrationError('authorization_failed', 'Only the uploader or an admin may delete this attachment', {
+        provider: 'github_issues',
+      });
+    }
+    await prisma.gitHubAttachment.delete({ where: { id: row.id } });
+  }
+
+  async purgeExpired(): Promise<number> {
+    const result = await prisma.gitHubAttachment.deleteMany({
+      where: { expiresAt: { lte: new Date() } },
+    });
+    return result.count;
+  }
+
+  private async createWithinQuota(
+    input: AppManagedAttachmentInput,
+    name: string,
+    contentType: string,
+  ) {
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() + this.limit('GITHUB_ATTACHMENT_RETENTION_DAYS', PrismaGitHubAttachmentStore.RETENTION_DAYS) *
+        24 * 60 * 60 * 1_000,
+    );
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          const active = { expiresAt: { gt: now } };
+          const [connection, issue, user] = await Promise.all([
+            tx.gitHubAttachment.aggregate({
+              where: {
+                workItemConnectionId: input.scope.workItemConnectionId,
+                ...active,
+              },
+              _sum: { sizeBytes: true },
+            }),
+            tx.gitHubAttachment.aggregate({
+              where: {
+                workItemConnectionId: input.scope.workItemConnectionId,
+                externalProjectId: input.scope.externalProjectId,
+                externalItemId: input.scope.workItemId,
+                ...active,
+              },
+              _sum: { sizeBytes: true },
+            }),
+            tx.gitHubAttachment.aggregate({
+              where: { createdBy: input.authorId, ...active },
+              _sum: { sizeBytes: true },
+            }),
+          ]);
+          this.assertQuota(
+            connection._sum.sizeBytes ?? 0,
+            input.content.length,
+            this.limit('GITHUB_ATTACHMENT_CONNECTION_QUOTA_BYTES', PrismaGitHubAttachmentStore.CONNECTION_QUOTA_BYTES),
+            'connection',
+          );
+          this.assertQuota(
+            issue._sum.sizeBytes ?? 0,
+            input.content.length,
+            this.limit('GITHUB_ATTACHMENT_ISSUE_QUOTA_BYTES', PrismaGitHubAttachmentStore.ISSUE_QUOTA_BYTES),
+            'issue',
+          );
+          this.assertQuota(
+            user._sum.sizeBytes ?? 0,
+            input.content.length,
+            this.limit('GITHUB_ATTACHMENT_USER_QUOTA_BYTES', PrismaGitHubAttachmentStore.USER_QUOTA_BYTES),
+            'user',
+          );
+          return tx.gitHubAttachment.create({
+            data: {
+              workItemConnectionId: input.scope.workItemConnectionId,
+              externalProjectId: input.scope.externalProjectId,
+              externalItemId: input.scope.workItemId,
+              fileName: name,
+              contentType,
+              sizeBytes: input.content.length,
+              sha256: createHash('sha256').update(input.content).digest('hex'),
+              encryptedBlob: Buffer.from(encrypt(input.content.toString('base64')), 'utf8'),
+              createdBy: input.authorId,
+              expiresAt,
+            },
+          });
+        }, { isolationLevel: 'Serializable' });
+      } catch (error) {
+        if (
+          attempt < 2 &&
+          error &&
+          typeof error === 'object' &&
+          (error as { code?: string }).code === 'P2034'
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw this.invalid('Attachment quota transaction could not be completed');
+  }
+
+  private assertQuota(current: number, added: number, maximum: number, scope: string): void {
+    if (current + added > maximum) {
+      throw this.invalid(`GitHub attachment ${scope} quota would be exceeded`);
+    }
+  }
+
+  private limit(name: string, fallback: number): number {
+    const parsed = Number(process.env[name]);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
   }
 
   private async assertScope(scope: GitHubAttachmentScope): Promise<void> {

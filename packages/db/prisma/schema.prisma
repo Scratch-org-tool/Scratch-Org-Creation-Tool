@@ -430,10 +430,11 @@ model AppUser {
 model OAuthState {
   id               String    @id @default(uuid())
   tokenHash        String    @unique
+  browserBindingHash String?
   provider         String
   purpose          String
   appUserId        String
-  encryptedPayload String
+  encryptedPayload String?
   returnPath       String
   expiresAt        DateTime
   consumedAt       DateTime?
@@ -526,14 +527,17 @@ model GitHubAttachment {
   encryptedBlob        Bytes
   createdBy            String?
   createdAt            DateTime           @default(now())
+  expiresAt            DateTime
 
   @@index([workItemConnectionId, externalItemId, createdAt])
   @@index([createdBy])
+  @@index([expiresAt])
 }
 
 /// Binds an app-owned context to provider project/repository identifiers.
 model ProjectBinding {
   id                   String              @id @default(uuid())
+  bindingKey           String              @unique
   scmConnectionId      String?
   scmConnection        ScmConnection?      @relation(fields: [scmConnectionId], references: [id], onDelete: Cascade)
   workItemConnectionId String?
@@ -547,7 +551,6 @@ model ProjectBinding {
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
 
-  @@unique([scmConnectionId, workItemConnectionId, externalProjectId, repositoryId])
   @@index([createdBy])
 }
 
@@ -564,6 +567,7 @@ model ExternalIdentityBinding {
   updatedAt            DateTime           @updatedAt
 
   @@unique([workItemConnectionId, externalUserId])
+  // A partial unique index for non-null appUserId is installed by migration.
   @@index([appUserId])
   @@index([externalEmail])
 }
@@ -590,6 +594,7 @@ model WorkItemSnapshot {
 model WebhookDelivery {
   id                   String              @id @default(uuid())
   idempotencyKey       String              @unique
+  connectionScope      String
   provider             String
   externalDeliveryId   String
   eventType            String
@@ -605,7 +610,7 @@ model WebhookDelivery {
   processedAt          DateTime?
   updatedAt            DateTime            @updatedAt
 
-  @@unique([provider, externalDeliveryId])
+  @@unique([provider, connectionScope, externalDeliveryId])
   @@index([status, receivedAt])
 }
 

@@ -4,6 +4,7 @@ import {
   timingSafeEqual,
 } from 'crypto';
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -11,6 +12,10 @@ import {
 import { prisma, type Prisma } from '@sfcc/db';
 import { AtlassianConnectionStore } from '../../integrations/atlassian/atlassian-connection.store';
 import { JiraWorkItemAdapter } from '../../integrations/jira/jira.adapter';
+import type {
+  BitbucketConnectionConfig,
+  JiraConnectionConfig,
+} from '../../integrations/atlassian/atlassian.types';
 
 export interface WebhookRequest {
   provider: string;
@@ -18,7 +23,15 @@ export interface WebhookRequest {
   headers: Record<string, string | string[] | undefined>;
   rawBody: Buffer;
   payload: unknown;
+  method: string;
+  path: string;
+  query: string;
 }
+
+type WebhookConfig = Pick<
+  BitbucketConnectionConfig | JiraConnectionConfig,
+  'webhookSecret' | 'webhookIssuer' | 'webhookAudience'
+>;
 
 @Injectable()
 export class IntegrationWebhookService {
@@ -28,8 +41,8 @@ export class IntegrationWebhookService {
   ) {}
 
   async receive(input: WebhookRequest) {
-    const secret = await this.webhookSecret(input.provider, input.connectionId);
-    this.verifySignature(input.headers, input.rawBody, secret);
+    const config = await this.webhookConfig(input.provider, input.connectionId);
+    this.verifySignature(input, config);
     const payloadHash = createHash('sha256').update(input.rawBody).digest('hex');
     const eventType =
       this.header(input.headers, 'x-event-key') ??
@@ -42,11 +55,16 @@ export class IntegrationWebhookService {
       this.header(input.headers, 'x-webhook-identifier') ??
       `${eventType}:${payloadHash}`;
     const idempotencyKey = `${input.provider}:${input.connectionId}:${externalDeliveryId}`;
+    const connectionScope =
+      input.provider === 'bitbucket'
+        ? `scm:${input.connectionId}`
+        : `work:${input.connectionId}`;
     let delivery;
     try {
       delivery = await prisma.webhookDelivery.create({
         data: {
           idempotencyKey,
+          connectionScope,
           provider: input.provider,
           externalDeliveryId,
           eventType,
@@ -56,10 +74,39 @@ export class IntegrationWebhookService {
         },
       });
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
+      if (!this.isUniqueViolation(error)) throw error;
+      delivery = await prisma.webhookDelivery.findUnique({ where: { idempotencyKey } });
+      if (
+        !delivery ||
+        delivery.provider !== input.provider ||
+        delivery.connectionScope !== connectionScope ||
+        delivery.externalDeliveryId !== externalDeliveryId ||
+        delivery.payloadHash !== payloadHash ||
+        delivery.scmConnectionId !== (input.provider === 'bitbucket' ? input.connectionId : null) ||
+        delivery.workItemConnectionId !== (input.provider === 'jira' ? input.connectionId : null)
+      ) {
+        throw new ConflictException('Webhook delivery ID was reused with different content or scope');
+      }
+      if (!['received', 'failed'].includes(delivery.status)) {
         return { accepted: true, duplicate: true, deliveryId: externalDeliveryId };
       }
-      throw error;
+    }
+
+    const claimed = await prisma.webhookDelivery.updateMany({
+      where: {
+        id: delivery.id,
+        status: { in: ['received', 'failed'] },
+        payloadHash,
+        connectionScope,
+      },
+      data: {
+        status: 'processing',
+        attempts: { increment: 1 },
+        error: null,
+      },
+    });
+    if (claimed.count !== 1) {
+      return { accepted: true, duplicate: true, deliveryId: externalDeliveryId };
     }
 
     try {
@@ -68,7 +115,6 @@ export class IntegrationWebhookService {
         where: { id: delivery.id },
         data: {
           status: 'processed',
-          attempts: { increment: 1 },
           processedAt: new Date(),
           error: null,
         },
@@ -79,7 +125,6 @@ export class IntegrationWebhookService {
         where: { id: delivery.id },
         data: {
           status: 'failed',
-          attempts: { increment: 1 },
           error: (error instanceof Error ? error.message : 'Snapshot refresh failed').slice(0, 1_000),
         },
       });
@@ -87,14 +132,14 @@ export class IntegrationWebhookService {
     }
   }
 
-  private async webhookSecret(provider: string, connectionId: string): Promise<string> {
+  private async webhookConfig(provider: string, connectionId: string): Promise<WebhookConfig> {
     if (provider === 'bitbucket') {
       const connection = await this.store.getBitbucket(connectionId);
       if (!connection) throw new NotFoundException('Bitbucket webhook connection not found');
       if (!connection.config.webhookSecret) {
         throw new UnauthorizedException('Bitbucket webhook secret is not configured');
       }
-      return connection.config.webhookSecret;
+      return connection.config;
     }
     if (provider === 'jira') {
       const connection = await this.store.getJira(connectionId);
@@ -102,16 +147,14 @@ export class IntegrationWebhookService {
       if (!connection.config.webhookSecret) {
         throw new UnauthorizedException('Jira webhook secret is not configured');
       }
-      return connection.config.webhookSecret;
+      return connection.config;
     }
     throw new NotFoundException(`Webhook provider "${provider}" is not supported`);
   }
 
-  private verifySignature(
-    headers: Record<string, string | string[] | undefined>,
-    body: Buffer,
-    secret: string,
-  ): void {
+  private verifySignature(input: WebhookRequest, config: WebhookConfig): void {
+    const { headers, rawBody: body } = input;
+    const secret = config.webhookSecret!;
     const signature =
       this.header(headers, 'x-hub-signature-256') ??
       this.header(headers, 'x-hub-signature');
@@ -124,28 +167,49 @@ export class IntegrationWebhookService {
       if (!this.safeEqual(digest, expected)) throw new UnauthorizedException('Invalid webhook signature');
       return;
     }
+    if (input.provider === 'bitbucket') {
+      throw new UnauthorizedException('Bitbucket webhooks require a raw-body HMAC signature');
+    }
     const authorization = this.header(headers, 'authorization');
     if (authorization?.startsWith('JWT ')) {
-      this.verifyJwt(authorization.slice(4), secret);
+      this.verifyJwt(authorization.slice(4), secret, input, config);
       return;
     }
-    const sharedSecret = this.header(headers, 'x-webhook-secret');
-    if (sharedSecret && this.safeEqual(sharedSecret, secret)) return;
     throw new UnauthorizedException('Missing webhook signature');
   }
 
-  private verifyJwt(token: string, secret: string): void {
+  private verifyJwt(
+    token: string,
+    secret: string,
+    request: WebhookRequest,
+    config: WebhookConfig,
+  ): void {
     const [encodedHeader, encodedPayload, signature] = token.split('.');
     if (!encodedHeader || !encodedPayload || !signature) {
       throw new UnauthorizedException('Invalid webhook JWT');
     }
     let header: { alg?: string };
-    let payload: { exp?: number; nbf?: number };
+    let payload: {
+      exp?: number;
+      iat?: number;
+      nbf?: number;
+      iss?: string;
+      aud?: string | string[];
+      qsh?: string;
+      bodyHash?: string;
+      body_hash?: string;
+    };
     try {
       header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf8')) as { alg?: string };
       payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as {
         exp?: number;
+        iat?: number;
         nbf?: number;
+        iss?: string;
+        aud?: string | string[];
+        qsh?: string;
+        bodyHash?: string;
+        body_hash?: string;
       };
     } catch {
       throw new UnauthorizedException('Invalid webhook JWT');
@@ -156,12 +220,58 @@ export class IntegrationWebhookService {
       .digest('base64url');
     if (!this.safeEqual(signature, expected)) throw new UnauthorizedException('Invalid webhook JWT');
     const now = Math.floor(Date.now() / 1_000);
-    if (payload.exp !== undefined && payload.exp < now - 30) {
+    if (!Number.isInteger(payload.exp) || !Number.isInteger(payload.iat)) {
+      throw new UnauthorizedException('Webhook JWT requires exp and iat');
+    }
+    if (payload.exp! < now - 30) {
       throw new UnauthorizedException('Expired webhook JWT');
+    }
+    if (
+      payload.iat! > now + 30 ||
+      payload.iat! < now - 330 ||
+      payload.exp! > now + 300 ||
+      payload.exp! - payload.iat! > 300
+    ) {
+      throw new UnauthorizedException('Webhook JWT lifetime is invalid');
     }
     if (payload.nbf !== undefined && payload.nbf > now + 30) {
       throw new UnauthorizedException('Webhook JWT is not active');
     }
+    if (config.webhookIssuer && payload.iss !== config.webhookIssuer) {
+      throw new UnauthorizedException('Webhook JWT issuer is invalid');
+    }
+    const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (config.webhookAudience && !audiences.includes(config.webhookAudience)) {
+      throw new UnauthorizedException('Webhook JWT audience is invalid');
+    }
+    if (!payload.qsh || !this.safeEqual(payload.qsh, this.queryStringHash(request))) {
+      throw new UnauthorizedException('Webhook JWT request hash is invalid');
+    }
+    const bodyHash = payload.bodyHash ?? payload.body_hash;
+    const expectedBodyHash = createHash('sha256').update(request.rawBody).digest('hex');
+    if (!bodyHash || !this.safeEqual(bodyHash, expectedBodyHash)) {
+      throw new UnauthorizedException('Webhook JWT body hash is invalid');
+    }
+  }
+
+  private queryStringHash(request: WebhookRequest): string {
+    const values = [...new URLSearchParams(request.query).entries()]
+      .filter(([key]) => key.toLowerCase() !== 'jwt')
+      .map(([key, value]) => [this.percentEncode(key), this.percentEncode(value)] as const)
+      .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+        leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue));
+    const canonicalQuery = values.map(([key, value]) => `${key}=${value}`).join('&');
+    const canonical = [
+      request.method.toUpperCase(),
+      request.path.startsWith('/') ? request.path : `/${request.path}`,
+      canonicalQuery,
+    ].join('&');
+    return createHash('sha256').update(canonical).digest('hex');
+  }
+
+  private percentEncode(value: string): string {
+    return encodeURIComponent(value).replace(/[!'()*]/g, (character) =>
+      `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
   }
 
   private async refreshJiraSnapshot(connectionId: string, payload: unknown): Promise<void> {

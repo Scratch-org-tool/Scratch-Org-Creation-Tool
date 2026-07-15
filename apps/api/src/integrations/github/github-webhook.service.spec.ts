@@ -106,6 +106,8 @@ describe('GitHub webhook processing', () => {
     db.webhookDelivery.findUnique.mockResolvedValue({
       id: 'delivery-row',
       status: 'processed',
+      connectionScope: 'work:work-connection',
+      workItemConnectionId: 'work-connection',
       payloadHash: await import('crypto').then(({ createHash }) =>
         createHash('sha256').update(payload).digest('hex'),
       ),

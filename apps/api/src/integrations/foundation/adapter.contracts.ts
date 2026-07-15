@@ -24,6 +24,7 @@ export interface AdapterContext {
   connectionId?: string;
   /** Authenticated app actor, used only for app-managed ownership/audit metadata. */
   actorId?: string;
+  isAdmin?: boolean;
 }
 
 export interface RepositoryQuery extends AdapterContext {
@@ -154,6 +155,12 @@ export interface WorkItemAdapter {
     project?: string,
     context?: AdapterContext,
   ): Promise<WorkItemAttachment>;
+  deleteAttachment?(
+    id: string,
+    attachmentId: string,
+    project?: string,
+    context?: AdapterContext,
+  ): Promise<void>;
   listLabels?(project: string, context?: AdapterContext): Promise<string[]>;
   listSubIssues?(id: string, project?: string, context?: AdapterContext): Promise<WorkItemSummary[]>;
   addSubIssue?(id: string, subIssueId: string, project?: string, context?: AdapterContext): Promise<WorkItemMutationResult>;

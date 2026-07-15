@@ -19,12 +19,15 @@ export class OAuthStateService {
     appUserId: string,
     payload: T,
     returnPath = '/environment-center',
+    browserBinding?: string,
   ): Promise<string> {
+    await this.safePurge();
     const safeReturnPath = this.safeReturnPath(returnPath);
     const state = randomBytes(32).toString('base64url');
     await prisma.oAuthState.create({
       data: {
         tokenHash: this.hash(state),
+        browserBindingHash: browserBinding ? this.hash(this.validBrowserBinding(browserBinding)) : null,
         provider,
         purpose,
         appUserId,
@@ -41,7 +44,9 @@ export class OAuthStateService {
     provider: string,
     purpose: string,
     expectedAppUserId?: string,
+    expectedBrowserBinding?: string,
   ): Promise<OAuthStateValue<T>> {
+    await this.safePurge();
     const tokenHash = this.hash(this.validToken(state));
     return prisma.$transaction(async (tx) => {
       const row = await tx.oAuthState.findUnique({ where: { tokenHash } });
@@ -51,22 +56,26 @@ export class OAuthStateService {
         row.purpose !== purpose ||
         row.consumedAt ||
         row.expiresAt.getTime() <= Date.now() ||
-        (expectedAppUserId && row.appUserId !== expectedAppUserId)
+        (expectedAppUserId && row.appUserId !== expectedAppUserId) ||
+        (row.browserBindingHash !== null &&
+          (!expectedBrowserBinding ||
+            row.browserBindingHash !== this.hash(this.validBrowserBinding(expectedBrowserBinding))))
       ) {
         throw this.invalid();
       }
+      const payload = this.payload<T>(row.encryptedPayload);
       const consumed = await tx.oAuthState.updateMany({
         where: {
           id: row.id,
           consumedAt: null,
           expiresAt: { gt: new Date() },
         },
-        data: { consumedAt: new Date() },
+        data: { consumedAt: new Date(), encryptedPayload: null },
       });
       if (consumed.count !== 1) throw this.invalid();
       return {
         appUserId: row.appUserId,
-        payload: this.payload<T>(row.encryptedPayload),
+        payload,
         returnPath: this.safeReturnPath(row.returnPath),
       };
     });
@@ -78,6 +87,7 @@ export class OAuthStateService {
     purpose: string,
     expectedAppUserId: string,
   ): Promise<OAuthStateValue<T>> {
+    await this.safePurge();
     const row = await prisma.oAuthState.findUnique({
       where: { tokenHash: this.hash(this.validToken(state)) },
     });
@@ -98,7 +108,29 @@ export class OAuthStateService {
     };
   }
 
-  private payload<T>(ciphertext: string): T {
+  newBrowserBinding(): string {
+    return randomBytes(32).toString('base64url');
+  }
+
+  async purge(): Promise<number> {
+    const result = await prisma.oAuthState.deleteMany({
+      where: {
+        OR: [
+          { expiresAt: { lte: new Date() } },
+          { consumedAt: { not: null } },
+        ],
+      },
+    });
+    return result.count;
+  }
+
+  private async safePurge(): Promise<void> {
+    // Cleanup must never make a valid authorization unavailable.
+    await this.purge().catch(() => undefined);
+  }
+
+  private payload<T>(ciphertext: string | null): T {
+    if (!ciphertext) throw this.invalid();
     try {
       return JSON.parse(decrypt(ciphertext)) as T;
     } catch {
@@ -109,6 +141,11 @@ export class OAuthStateService {
   private validToken(state: string): string {
     if (!/^[A-Za-z0-9_-]{43}$/.test(state)) throw this.invalid();
     return state;
+  }
+
+  private validBrowserBinding(value: string): string {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(value)) throw this.invalid();
+    return value;
   }
 
   private hash(value: string): string {

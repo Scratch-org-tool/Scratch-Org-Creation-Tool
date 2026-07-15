@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   Optional,
@@ -119,6 +120,8 @@ export class IntegrationAdminService {
       oauthBaseUrl: this.secureUrl(input.oauthBaseUrl ?? BITBUCKET_GIT, 'oauthBaseUrl'),
       workspace: input.workspace?.trim() || undefined,
       webhookSecret: input.webhookSecret?.trim() || undefined,
+      webhookIssuer: input.webhookIssuer?.trim() || undefined,
+      webhookAudience: input.webhookAudience?.trim() || undefined,
     };
     let verified;
     try {
@@ -182,6 +185,8 @@ export class IntegrationAdminService {
       authBaseUrl: this.secureUrl(input.authBaseUrl ?? ATLASSIAN_AUTH, 'authBaseUrl'),
       fieldMappings: input.fieldMappings,
       webhookSecret: input.webhookSecret?.trim() || undefined,
+      webhookIssuer: input.webhookIssuer?.trim() || undefined,
+      webhookAudience: input.webhookAudience?.trim() || undefined,
     };
     let verified;
     try {
@@ -350,26 +355,18 @@ export class IntegrationAdminService {
       workflowMappings: this.jsonObject(input.workflowMappings),
       ...this.jsonObject(input.metadata),
     };
-    const existing = await prisma.projectBinding.findFirst({
+    const bindingKey = this.bindingKey(
+      scmConnectionId,
+      workItemConnectionId,
+      externalProjectId,
+      repositoryId,
+    );
+    return prisma.projectBinding.upsert({
       where: {
-        scmConnectionId: scmConnectionId ?? null,
-        workItemConnectionId: workItemConnectionId ?? null,
-        externalProjectId,
-        repositoryId,
+        bindingKey,
       },
-    });
-    if (existing) {
-      return prisma.projectBinding.update({
-        where: { id: existing.id },
-        data: {
-          projectKey,
-          repositoryName,
-          metadata: metadata as Prisma.InputJsonValue,
-        },
-      });
-    }
-    return prisma.projectBinding.create({
-      data: {
+      create: {
+        bindingKey,
         scmConnectionId: scmConnectionId ?? null,
         workItemConnectionId: workItemConnectionId ?? null,
         externalProjectId,
@@ -377,6 +374,11 @@ export class IntegrationAdminService {
         repositoryId,
         repositoryName,
         createdBy,
+        metadata: metadata as Prisma.InputJsonValue,
+      },
+      update: {
+        projectKey,
+        repositoryName,
         metadata: metadata as Prisma.InputJsonValue,
       },
     });
@@ -415,31 +417,51 @@ export class IntegrationAdminService {
     if (connection.provider === 'github_issues' && !externalLogin) {
       throw new BadRequestException('externalLogin is required for GitHub identity mappings');
     }
-    return prisma.externalIdentityBinding.upsert({
-      where: {
-        workItemConnectionId_externalUserId: { workItemConnectionId, externalUserId },
-      },
-      create: {
-        workItemConnectionId,
-        externalUserId,
-        appUserId: this.optionalString(input.appUserId),
-        externalLogin,
-        externalEmail: this.optionalString(input.externalEmail),
-        displayName,
-      },
-      update: {
-        appUserId: this.optionalString(input.appUserId),
-        externalLogin,
-        externalEmail: this.optionalString(input.externalEmail),
-        displayName,
-      },
-    });
+    try {
+      return await prisma.externalIdentityBinding.upsert({
+        where: {
+          workItemConnectionId_externalUserId: { workItemConnectionId, externalUserId },
+        },
+        create: {
+          workItemConnectionId,
+          externalUserId,
+          appUserId: this.optionalString(input.appUserId),
+          externalLogin,
+          externalEmail: this.optionalString(input.externalEmail),
+          displayName,
+        },
+        update: {
+          appUserId: this.optionalString(input.appUserId),
+          externalLogin,
+          externalEmail: this.optionalString(input.externalEmail),
+          displayName,
+        },
+      });
+    } catch (error) {
+      if (error && typeof error === 'object' && (error as { code?: string }).code === 'P2002') {
+        throw new ConflictException(
+          'This app user already has an external identity for the work-item connection',
+        );
+      }
+      throw error;
+    }
   }
 
   async deleteIdentityBinding(id: string) {
     const deleted = await prisma.externalIdentityBinding.deleteMany({ where: { id } });
     if (!deleted.count) throw new NotFoundException('Identity mapping not found');
     return { deleted: true, id };
+  }
+
+  private bindingKey(
+    scmConnectionId: string | null | undefined,
+    workItemConnectionId: string | null | undefined,
+    externalProjectId: string,
+    repositoryId: string | null | undefined,
+  ): string {
+    return [scmConnectionId ?? '', workItemConnectionId ?? '', externalProjectId, repositoryId ?? '']
+      .map((value) => `${value.length}:${value}`)
+      .join('|');
   }
 
   private input(body: unknown): AtlassianConnectInput {

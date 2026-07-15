@@ -626,6 +626,26 @@ export class GitHubWorkItemAdapter implements WorkItemAdapter {
     return { ...attachment, url };
   }
 
+  async deleteAttachment(
+    id: string,
+    attachmentId: string,
+    project?: string,
+    context: AdapterContext = {},
+  ): Promise<void> {
+    if (!context.actorId) {
+      throw new IntegrationError('authorization_failed', 'Authenticated attachment actor is required', {
+        provider: this.provider,
+      });
+    }
+    const ref = this.issueRef(id, project);
+    await this.attachments.delete(
+      await this.attachmentScope(ref, context.connectionId),
+      attachmentId,
+      context.actorId,
+      context.isAdmin === true,
+    );
+  }
+
   private async projectItems(
     credentials: GitHubCredentials,
     binding: GitHubProjectBindingRecord,
