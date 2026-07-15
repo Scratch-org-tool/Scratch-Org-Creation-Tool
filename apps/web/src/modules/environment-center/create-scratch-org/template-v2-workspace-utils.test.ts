@@ -87,6 +87,47 @@ describe('Template V2 launch and recovery contracts', () => {
     expect(payload).not.toHaveProperty('duration');
   });
 
+  it('restores the create-new request contract after configure-existing mode', () => {
+    const form = {
+      devHubAlias: 'dev-hub',
+      alias: 'preserved-create-draft',
+      duration: 14,
+      template: 'config/project-scratch-def.json',
+      description: '',
+      azureProject: '',
+      azureRepo: '',
+      azureBranch: '',
+      azureManifestPath: 'manifest/package.xml',
+      gitProvider: 'github',
+      gitConnectionId: '',
+      gitNamespace: '',
+      gitRepositoryId: '',
+      templateId: 'template-id',
+      sourceOrgId: '',
+      dataDeploymentOrgId: '',
+      customSettingsOrgId: '',
+      runtimeEmailPool: '',
+    } satisfies ScratchOrgFormState;
+
+    const payload = buildTemplateLaunchRequest(form, { provider: 'github' }, true, {
+      mode: 'create_new',
+      existingOrgConnectionId: 'stale-existing-target',
+      existingOrgOptions: {
+        verifyAuthentication: false,
+        ensureRequiredPackage: false,
+      },
+    });
+
+    expect(payload).toMatchObject({
+      mode: 'create_new',
+      alias: 'preserved-create-draft',
+      devHubAlias: 'dev-hub',
+      duration: 14,
+    });
+    expect(payload).not.toHaveProperty('existingOrgConnectionId');
+    expect(payload).not.toHaveProperty('existingOrgOptions');
+  });
+
   it('uses only the synchronous saved run alias for credential recovery', () => {
     expect(completedRunAlias({
       id: 'run',

@@ -16,6 +16,7 @@ import type { StreamConnectionState } from '@/hooks/use-job-event-stream';
 import { cn } from '@/utils/cn';
 import type { ReactNode } from 'react';
 import { TemplateV2Progress } from './template-v2-progress';
+import { resolvePreparationProgress } from './existing-scratch-org-utils';
 
 function formatElapsed(ms: number): string {
   const sec = Math.floor(ms / 1000);
@@ -114,10 +115,7 @@ export function JobProgressPanel({
   generatingPassword,
 }: JobProgressPanelProps) {
   const preparationJob = run?.jobs?.findLast((job) => job.type === 'prepare_existing_org');
-  const preparationResult = preparationJob?.result as {
-    authenticated?: boolean | null;
-    packageAction?: 'already_installed' | 'installed' | 'skipped';
-  } | undefined;
+  const preparationProgress = resolvePreparationProgress(run);
   if (!automationRunId) {
     const previewSteps = [
       { label: 'Configure', icon: ClipboardList, active: wizardPreviewStep === 0 },
@@ -292,29 +290,20 @@ export function JobProgressPanel({
             <div className="rounded-md border border-border/60 p-2">
               <span className="text-muted-foreground">Authentication</span>
               <strong className="block mt-0.5">
-                {preparationResult?.authenticated === true
-                  ? 'Verified'
-                  : preparationResult?.authenticated === null
-                    ? 'Skipped'
-                    : preparationJob.status === 'running'
-                      ? 'Verifying…'
-                      : 'Pending'}
+                {preparationProgress?.authentication}
               </strong>
             </div>
             <div className="rounded-md border border-border/60 p-2">
               <span className="text-muted-foreground">Required package</span>
               <strong className="block mt-0.5">
-                {preparationResult?.packageAction === 'already_installed'
-                  ? 'Already installed'
-                  : preparationResult?.packageAction === 'installed'
-                    ? 'Installed'
-                    : preparationResult?.packageAction === 'skipped'
-                      ? 'Skipped'
-                      : preparationJob.status === 'running'
-                        ? 'Checking / installing…'
-                        : 'Pending'}
+                {preparationProgress?.requiredPackage}
               </strong>
             </div>
+            {preparationProgress?.error && (
+              <p className="sm:col-span-2 font-mono text-[10px] text-destructive whitespace-pre-wrap break-words">
+                {preparationProgress.error}
+              </p>
+            )}
           </div>
         )}
 
