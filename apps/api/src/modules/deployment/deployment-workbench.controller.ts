@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -11,6 +12,7 @@ import { AuthGuard, type AuthenticatedRequest } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { DeploymentWorkbenchService } from './deployment-workbench.service';
+import type { WorkbenchHistoryQuery } from './deployment-workbench.service';
 
 /** Provider-neutral workbench; the deployments prefix remains a compatibility alias. */
 @Controller(['deployment-workbench', 'deployments/workbench'])
@@ -39,39 +41,79 @@ export class DeploymentWorkbenchController {
     return this.workbench.create(body, userId);
   }
 
+  @Get('history')
+  history(
+    @Query() query: WorkbenchHistoryQuery,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.listHistory(query, {
+      userId,
+      isAdmin: request.userProfile?.role === 'admin',
+    });
+  }
+
   @Get(':id')
-  get(@Param('id') id: string, @CurrentUser() userId: string) {
-    return this.workbench.getStatus(id, userId);
+  get(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.getStatus(id, userId, request.userProfile?.role === 'admin');
   }
 
   @Get(':id/status')
-  status(@Param('id') id: string, @CurrentUser() userId: string) {
-    return this.workbench.getStatus(id, userId);
+  status(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.getStatus(id, userId, request.userProfile?.role === 'admin');
   }
 
   @Get(':id/policy')
-  policy(@Param('id') id: string, @CurrentUser() userId: string) {
-    return this.workbench.getPolicy(id, userId);
+  policy(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.getPolicy(id, userId, request.userProfile?.role === 'admin');
   }
 
   @Get(':id/stages')
-  stages(@Param('id') id: string, @CurrentUser() userId: string) {
-    return this.workbench.getStages(id, userId);
+  stages(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.getStages(id, userId, request.userProfile?.role === 'admin');
   }
 
   @Get(':id/results')
-  results(@Param('id') id: string, @CurrentUser() userId: string) {
-    return this.workbench.getResults(id, userId);
+  results(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.getResults(id, userId, request.userProfile?.role === 'admin');
   }
 
   @Get(':id/progress')
-  progress(@Param('id') id: string, @CurrentUser() userId: string) {
-    return this.workbench.getProgress(id, userId);
+  progress(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.getProgress(id, userId, request.userProfile?.role === 'admin');
   }
 
   @Get(':id/destructive-review')
-  destructiveReview(@Param('id') id: string, @CurrentUser() userId: string) {
-    return this.workbench.destructiveReview(id, userId);
+  destructiveReview(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    return this.workbench.destructiveReview(id, userId, request.userProfile?.role === 'admin');
   }
 
   @Post(':id/resume')

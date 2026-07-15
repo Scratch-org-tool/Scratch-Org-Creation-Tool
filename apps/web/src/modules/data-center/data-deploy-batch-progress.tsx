@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, InlineAlert, ListRow, ListRowGroup, StatusBadge } from '@/components/studio';
 import { api } from '@/services/api';
-import { isRetrySafe } from './data-center-contracts';
+import { isBatchCancellable, isRetrySafe } from './data-center-contracts';
 
 export interface DataDeployBatchChunk {
   id: string;
@@ -55,6 +55,7 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmRollback, setConfirmRollback] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const load = useCallback(async (): Promise<boolean> => {
     try {
@@ -93,6 +94,7 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
   const rollbackAvailable = retrySafe
     && batch.rollbackPolicy === 'capture'
     && ['completed', 'partial', 'failed'].includes(batch.status);
+  const cancelAvailable = isBatchCancellable(batch.status);
 
   const runAction = async (key: string, path: string, body?: unknown) => {
     setActionLoading(key);
@@ -196,14 +198,13 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
             Roll back
           </Button>
         )}
-        {!TERMINAL.includes(batch.status) && (
+        {cancelAvailable && (
           <Button
             size="sm"
             variant="outline"
-            disabled
-            title="The data batch API does not expose cancellation"
+            onClick={() => setConfirmCancel(true)}
           >
-            Cancel unavailable
+            Cancel batch
           </Button>
         )}
       </div>
@@ -217,6 +218,19 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
           ) : null}
         </InlineAlert>
       )}
+      <ConfirmDialog
+        open={confirmCancel}
+        title="Cancel this data batch?"
+        message="Pending chunks will not be released. Queued and running Bulk API or SFDMU work will be cancelled on a best-effort basis."
+        confirmLabel="Cancel batch"
+        destructive
+        loading={actionLoading === 'cancel'}
+        onOpenChange={setConfirmCancel}
+        onConfirm={() => {
+          setConfirmCancel(false);
+          void runAction('cancel', `/data/batches/${batch.id}/cancel`);
+        }}
+      />
       <ConfirmDialog
         open={confirmRollback}
         title="Roll back this data batch?"

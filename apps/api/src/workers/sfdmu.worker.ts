@@ -59,22 +59,27 @@ export class SfdmuWorker {
           data: { status: 'cancelled' },
         }).catch(() => undefined);
       }
+      cleanupSfdmuRunDir(configPath);
       return { cancelled: true, movementId, chunkId };
     }
 
-    if (movementId) {
-      await prisma.dataMovement.update({
-        where: { id: movementId },
-        data: { status: 'running' },
-      });
-    }
-
     if (chunkId) {
-      await prisma.dataDeployChunk.update({
-        where: { id: chunkId },
+      const claimed = await prisma.dataDeployChunk.updateMany({
+        where: { id: chunkId, status: { in: ['pending', 'queued'] } },
         data: { status: 'running' },
       });
+      if (claimed.count === 0) {
+        await log('stderr', 'Chunk is no longer active; skipping cancelled or duplicate work');
+        cleanupSfdmuRunDir(configPath);
+        return { cancelled: true, movementId, chunkId };
+      }
       await log('stdout', `Processing SFDMU chunk ${(chunkIndex ?? 0) + 1}${batchId ? ` (batch ${batchId})` : ''}`);
+    }
+    if (movementId) {
+      await prisma.dataMovement.updateMany({
+        where: { id: movementId, status: { in: ['pending', 'queued', 'planning'] } },
+        data: { status: 'running' },
+      });
     }
 
     // Acquire org slots in a deterministic (sorted) order so that two jobs
@@ -118,8 +123,8 @@ export class SfdmuWorker {
       }
 
       if (movementId) {
-        await prisma.dataMovement.update({
-          where: { id: movementId },
+        await prisma.dataMovement.updateMany({
+          where: { id: movementId, status: { in: ['pending', 'queued', 'planning', 'running'] } },
           data: { status: 'completed' },
         });
       }

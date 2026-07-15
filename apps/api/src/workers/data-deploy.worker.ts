@@ -95,7 +95,7 @@ export class DataDeployWorker {
       await this.jobsService.addLog(dbJobId, stream, line);
       await this.streamService.publishJobLog(dbJobId, stream, line);
     };
-    return this.dataDeployOrchestrator.planBatch(batchId, log);
+    return this.dataDeployOrchestrator.planBatch(batchId, log, dbJobId);
   }
 
   private async processDeploy(job: Job) {
@@ -145,18 +145,21 @@ export class DataDeployWorker {
       return { cancelled: true, movementId, chunkId };
     }
 
-    await prisma.dataMovement.update({
-      where: { id: movementId },
-      data: { status: 'running' },
-    });
-
     if (chunkId) {
-      await prisma.dataDeployChunk.update({
-        where: { id: chunkId },
+      const claimed = await prisma.dataDeployChunk.updateMany({
+        where: { id: chunkId, status: { in: ['pending', 'queued'] } },
         data: { status: 'running' },
       });
+      if (claimed.count === 0) {
+        await log('stderr', 'Chunk is no longer active; skipping cancelled or duplicate work');
+        return { cancelled: true, movementId, chunkId };
+      }
       await log('stdout', `Processing chunk ${(chunkIndex ?? 0) + 1}${batchId ? ` (batch ${batchId})` : ''}`);
     }
+    await prisma.dataMovement.updateMany({
+      where: { id: movementId, status: { in: ['pending', 'queued', 'planning'] } },
+      data: { status: 'running' },
+    });
 
     const [source, target] = await Promise.all([
       prisma.orgConnection.findUnique({ where: { id: sourceOrgId } }),
@@ -218,8 +221,8 @@ export class DataDeployWorker {
 
       if (recordCount === 0) {
         await log('stderr', 'No records to import — chunk completed with 0 records');
-        await prisma.dataMovement.update({
-          where: { id: movementId },
+        await prisma.dataMovement.updateMany({
+          where: { id: movementId, status: { in: ['pending', 'queued', 'planning', 'running'] } },
           data: { status: 'completed', recordCount: 0 },
         });
         if (chunkId) {
@@ -297,8 +300,8 @@ export class DataDeployWorker {
 
       await log('stdout', `Successfully deployed ${recordCount} record(s) to ${target.alias}`);
 
-      await prisma.dataMovement.update({
-        where: { id: movementId },
+      await prisma.dataMovement.updateMany({
+        where: { id: movementId, status: { in: ['pending', 'queued', 'planning', 'running'] } },
         data: { status: 'completed', recordCount },
       });
 

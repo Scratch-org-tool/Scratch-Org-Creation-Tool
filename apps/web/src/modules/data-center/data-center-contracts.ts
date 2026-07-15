@@ -131,6 +131,10 @@ export function isRetrySafe(batch: {
     && Boolean(batch.externalIdField?.trim());
 }
 
+export function isBatchCancellable(status: string): boolean {
+  return ['pending', 'queued', 'planning', 'running', 'paused'].includes(status);
+}
+
 export function normalizeTemplates(input: unknown): QueryTemplateApi[] {
   if (!Array.isArray(input)) return [];
   return input.flatMap((value) => {

@@ -5,6 +5,7 @@ import {
   defaultOperationForMeta,
   dependencyError,
   externalIdOptions,
+  isBatchCancellable,
   isRetrySafe,
   moveByIndex,
   normalizeTemplates,
@@ -193,6 +194,13 @@ describe('Data Center dependency and recovery safety', () => {
       idempotent: true,
       externalIdField: null,
     })).toBe(false);
+  });
+
+  it('shows cancellation only while a batch can still release or run work', () => {
+    expect(['pending', 'queued', 'planning', 'running', 'paused'].every(isBatchCancellable))
+      .toBe(true);
+    expect(['completed', 'partial', 'failed', 'cancelled'].some(isBatchCancellable))
+      .toBe(false);
   });
 });
 

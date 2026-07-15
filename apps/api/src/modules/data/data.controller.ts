@@ -133,6 +133,11 @@ export class DataController {
     return this.dataService.retryFailedChunks(id, userId);
   }
 
+  @Post('batches/:id/cancel')
+  cancelBatch(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.dataService.cancelDeployBatch(id, userId);
+  }
+
   @Post('batches/:id/rollback')
   rollbackBatch(
     @Param('id') id: string,
@@ -158,6 +163,11 @@ export class DataController {
   @Get('batch-groups/:groupId')
   getBatchGroup(@Param('groupId') groupId: string, @CurrentUser() userId: string) {
     return this.dataService.getBatchGroup(groupId, userId);
+  }
+
+  @Post('batch-groups/:groupId/cancel')
+  cancelBatchGroup(@Param('groupId') groupId: string, @CurrentUser() userId: string) {
+    return this.dataService.cancelBatchGroup(groupId, userId);
   }
 
   @Post('deploy/preflight')

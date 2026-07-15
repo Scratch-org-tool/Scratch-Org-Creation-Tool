@@ -20,7 +20,8 @@ import { api, getStreamUrl } from '@/services/api';
 import type {
   CompareItem,
   CompareSummary,
-  DeploymentHistoryRow,
+  DeploymentHistoryFilters,
+  DeploymentHistoryResponse,
   WorkbenchForm,
   WorkbenchPreview,
   WorkbenchProgress,
@@ -52,6 +53,28 @@ interface TestClassResponse {
 }
 
 const DEFAULT_MANIFEST = 'manifest/package.xml';
+const DEFAULT_HISTORY_FILTERS: DeploymentHistoryFilters = {
+  page: 1,
+  pageSize: 20,
+  source: '',
+  target: '',
+  environment: '',
+  status: '',
+  dateFrom: '',
+  dateTo: '',
+  owner: '',
+};
+
+function historyUrl(filters: DeploymentHistoryFilters): string {
+  const query = new URLSearchParams({
+    page: String(filters.page),
+    pageSize: String(filters.pageSize),
+  });
+  for (const key of ['source', 'target', 'environment', 'status', 'dateFrom', 'dateTo', 'owner'] as const) {
+    if (filters[key]) query.set(key, filters[key]);
+  }
+  return `/deployment-workbench/history?${query.toString()}`;
+}
 
 function initialMode(value: string | null): WorkbenchForm['sourceMode'] {
   return value === 'scm' || value === 'git' ? 'scm' : 'org_compare';
@@ -85,7 +108,15 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [testClasses, setTestClasses] = useState<TestClassResponse['classes']>([]);
   const [testClassesLoading, setTestClassesLoading] = useState(false);
-  const [history, setHistory] = useState<DeploymentHistoryRow[]>([]);
+  const [historyFilters, setHistoryFilters] = useState<DeploymentHistoryFilters>(DEFAULT_HISTORY_FILTERS);
+  const [historyResponse, setHistoryResponse] = useState<DeploymentHistoryResponse>({
+    items: [],
+    page: 1,
+    pageSize: 20,
+    total: 0,
+    totalPages: 0,
+  });
+  const [historyLoading, setHistoryLoading] = useState(false);
   const compareRequest = useRef(0);
 
   const loadRun = useCallback(async (id: string) => {
@@ -109,12 +140,18 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     Promise.all([
       fetchOrgsList(),
       api<WorkbenchPreview['capabilities']>('/deployment-workbench/capabilities'),
-      api<DeploymentHistoryRow[]>('/deployments').catch(() => []),
+      api<DeploymentHistoryResponse>(historyUrl(DEFAULT_HISTORY_FILTERS)).catch(() => ({
+        items: [],
+        page: 1,
+        pageSize: 20,
+        total: 0,
+        totalPages: 0,
+      })),
     ]).then(async ([nextOrgs, nextCapabilities, nextHistory]) => {
       if (cancelled) return;
       setOrgs(nextOrgs);
       setCapabilities(nextCapabilities);
-      setHistory(nextHistory.filter((row) => row.metadata?.workbenchRunId));
+      setHistoryResponse(nextHistory);
       const sourceOrgId = params.get('sourceOrgId') ?? '';
       const targetOrgId = params.get('targetOrgId') ?? '';
       const requestedMode = forcedSourceMode ?? initialMode(params.get('sourceType') ?? params.get('source'));
@@ -128,11 +165,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
         targetProfile: targetOrgId ? profile : current.targetProfile,
         policy: targetOrgId ? policyForEnvironment(profile) : current.policy,
       }));
-      let requestedRun = params.get('runId') ?? params.get('run');
-      const legacyDeployment = params.get('deployment');
-      if (!requestedRun && legacyDeployment) {
-        requestedRun = nextHistory.find((row) => row.id === legacyDeployment)?.metadata?.workbenchRunId ?? null;
-      }
+      const requestedRun = params.get('runId') ?? params.get('run');
       if (requestedRun) {
         setRunId(requestedRun);
         setStep(5);
@@ -151,6 +184,22 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       cancelled = true;
     };
   }, [forcedSourceMode, loadRun, params]);
+
+  const loadHistory = useCallback(async (next: DeploymentHistoryFilters) => {
+    setHistoryLoading(true);
+    setError(null);
+    try {
+      const response = await api<DeploymentHistoryResponse>(historyUrl(next));
+      setHistoryFilters(next);
+      setHistoryResponse(response);
+      return response;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not load deployment history.');
+      return null;
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
 
   const refreshComparison = useCallback(async (id: string) => {
     const request = ++compareRequest.current;
@@ -464,7 +513,12 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     runAction,
     testClasses,
     testClassesLoading,
-    history,
+    history: historyResponse.items,
+    historyResponse,
+    historyFilters,
+    setHistoryFilters,
+    historyLoading,
+    loadHistory,
     openHistoryRun,
     validation,
   };

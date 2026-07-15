@@ -3,9 +3,15 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  RequestTimeoutException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { prisma, Prisma } from '@sfcc/db';
 import {
+  DEFAULT_METADATA_API_VERSION,
+  buildPackageXml,
   buildDestructiveChangesXml,
   buildDeploymentStagePlan,
   deploymentPolicySchema,
@@ -25,11 +31,35 @@ import { StreamService } from '../stream/stream.service';
 import { QUEUE_NAMES } from '@sfcc/shared';
 import { StaticAnalysisService } from './static-analysis.service';
 import { DeploymentService } from './deployment.service';
+import { DeploySourceResolver } from '../intelligent-deploy/intelligent-orchestrator.service';
+import {
+  buildDependencyPreview,
+  type WorkbenchWorkspace,
+} from './deployment-workbench-runtime.service';
 
 export interface WorkbenchActor {
   userId: string;
   isAdmin: boolean;
 }
+
+export interface WorkbenchHistoryQuery {
+  page?: string;
+  pageSize?: string;
+  source?: string;
+  target?: string;
+  environment?: string;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  owner?: string;
+}
+
+interface PreviewCacheEntry {
+  expiresAt: number;
+  value: Record<string, unknown>;
+}
+
+const PREVIEW_CACHE_LIMIT = 100;
 
 function json(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -41,6 +71,8 @@ function orgEnvironment(type: 'scratch' | 'sandbox' | 'prod') {
 
 @Injectable()
 export class DeploymentWorkbenchService {
+  private readonly previewCache = new Map<string, PreviewCacheEntry>();
+
   constructor(
     private readonly metadataQueue: MetadataDeployQueueService,
     private readonly deployJobs: MetadataDeployJobService,
@@ -50,6 +82,7 @@ export class DeploymentWorkbenchService {
     private readonly stream: StreamService,
     private readonly staticAnalysis: StaticAnalysisService,
     private readonly deployments: DeploymentService,
+    private readonly sourceResolver: DeploySourceResolver,
   ) {}
 
   async capabilities(): Promise<DeploymentWorkbenchCapabilities & {
@@ -80,15 +113,98 @@ export class DeploymentWorkbenchService {
 
   async preview(body: unknown, userId: string) {
     const input = deploymentWorkbenchPreviewSchema.parse(body);
-    await this.assertInputAccess(input, userId);
+    const access = await this.assertInputAccess(input, userId);
     const stages = buildDeploymentStagePlan(input);
-    return {
-      normalized: input,
-      policy: input.policy,
-      stages,
-      capabilities: await this.capabilities(),
-      executionAvailable: true as const,
-    };
+    const cacheKey = createHash('sha256')
+      .update(userId)
+      .update('\0')
+      .update(JSON.stringify(input))
+      .digest('hex');
+    const cached = this.getPreviewCache(cacheKey);
+    if (cached) return { ...cached, cache: { hit: true } };
+
+    const suppliedManifest = input.manifestXml?.trim();
+    const apiVersion = suppliedManifest
+      ? parsePackageXml(suppliedManifest).apiVersion ?? DEFAULT_METADATA_API_VERSION
+      : input.apiVersion ?? DEFAULT_METADATA_API_VERSION;
+    const manifestContent = suppliedManifest || (
+      input.components.length
+        ? buildPackageXml(input.components, apiVersion)
+        : undefined
+    );
+    const resolution = this.sourceResolver.resolve({
+      orgAlias: access.target.username ?? access.target.alias,
+      sourceOrgAlias: access.sourceOrg
+        ? access.sourceOrg.username ?? access.sourceOrg.alias
+        : undefined,
+      deployMode: input.source.type === 'org_compare' ? 'org_to_org' : 'git',
+      gitSource: input.source.type === 'scm' ? {
+        provider: input.source.provider,
+        connectionId: input.source.connectionId,
+        bindingId: input.source.bindingId,
+        namespace: input.source.namespace,
+        project: input.source.project,
+        repositoryId: input.source.repositoryId,
+        repo: input.source.repo,
+        branch: input.source.branch,
+        manifestPath: input.source.manifestPath,
+      } : undefined,
+      manifestPath: input.source.type === 'scm'
+        ? input.source.manifestPath
+        : 'manifest/package.xml',
+      manifestContent,
+    });
+
+    let workspace: WorkbenchWorkspace | undefined;
+    try {
+      workspace = await this.resolvePreviewWorkspace(resolution);
+      if (manifestContent) {
+        fs.mkdirSync(path.dirname(workspace.manifestAbsolutePath), { recursive: true });
+        fs.writeFileSync(workspace.manifestAbsolutePath, manifestContent, 'utf8');
+      }
+      const dependency = buildDependencyPreview(
+        `preview-${cacheKey.slice(0, 16)}`,
+        workspace,
+        input.dependencyPolicy,
+      );
+      const resolvedManifest = parsePackageXml(
+        fs.readFileSync(workspace.manifestAbsolutePath, 'utf8'),
+      );
+      const value = {
+        normalized: input,
+        policy: input.policy,
+        stages,
+        capabilities: await this.capabilities(),
+        executionAvailable: true as const,
+        readOnly: true as const,
+        sourceResolution: {
+          type: input.source.type,
+          mode: workspace.mode,
+          manifest: workspace.manifestRelative,
+          apiVersion: resolvedManifest.apiVersion ?? apiVersion,
+          selectedComponents: resolvedManifest.members.length,
+        },
+        dependencies: {
+          nodes: dependency.graph.nodes,
+          edges: dependency.graph.edges,
+          missing: dependency.missing,
+          cycles: dependency.cycles,
+          reasons: dependency.decisions,
+          decisions: dependency.decisions,
+          blocking: dependency.blocking,
+          summary: dependency.summary,
+          resolvedSelections: dependency.resolvedSelections,
+          batches: dependency.plan.batches,
+          batchEstimate: {
+            ...dependency.plan.metrics,
+          },
+        },
+      };
+      this.setPreviewCache(cacheKey, value);
+      return { ...value, cache: { hit: false } };
+    } finally {
+      await workspace?.cleanup?.().catch(() => undefined);
+    }
   }
 
   async create(body: unknown, userId: string) {
@@ -145,7 +261,134 @@ export class DeploymentWorkbenchService {
     return { ...run, jobId: job.id, executionAvailable: true as const };
   }
 
-  async getStatus(id: string, userId: string) {
+  async listHistory(query: WorkbenchHistoryQuery, actor: WorkbenchActor) {
+    const page = positivePage(query.page, 1, 10_000);
+    const pageSize = positivePage(query.pageSize, 20, 100);
+    const source = query.source?.trim();
+    const environment = query.environment?.trim();
+    const status = query.status?.trim();
+    const owner = query.owner?.trim();
+    if (source && !['org_compare', 'scm'].includes(source)) {
+      throw new BadRequestException('source must be org_compare or scm');
+    }
+    if (environment && !['scratch', 'sandbox', 'production'].includes(environment)) {
+      throw new BadRequestException('Invalid deployment environment');
+    }
+    if (status && ![
+      'planned',
+      'awaiting_approval',
+      'approved',
+      'rejected',
+      'running',
+      'passed',
+      'failed',
+      'cancelled',
+    ].includes(status)) {
+      throw new BadRequestException('Invalid deployment quality status');
+    }
+    if (!actor.isAdmin && owner && owner !== actor.userId) {
+      throw new ForbiddenException('Only administrators can view another owner’s deployment history');
+    }
+    const dateFrom = parseHistoryDate(query.dateFrom, 'dateFrom');
+    const dateTo = parseHistoryDate(query.dateTo, 'dateTo', true);
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      throw new BadRequestException('dateFrom must be before dateTo');
+    }
+
+    const where: Prisma.DeploymentQualityRunWhereInput = {
+      createdBy: actor.isAdmin ? owner || undefined : actor.userId,
+      targetOrgId: query.target?.trim() || undefined,
+      targetProfile: environment || undefined,
+      status: status || undefined,
+      createdAt: dateFrom || dateTo ? { gte: dateFrom, lte: dateTo } : undefined,
+      source: source ? { path: ['type'], equals: source } : undefined,
+    };
+    const [total, runs] = await Promise.all([
+      prisma.deploymentQualityRun.count({ where }),
+      prisma.deploymentQualityRun.findMany({
+        where,
+        include: {
+          stages: {
+            orderBy: { ordinal: 'asc' },
+            select: {
+              key: true,
+              status: true,
+              durationMs: true,
+              summary: true,
+              artifacts: true,
+            },
+          },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+    const [owners, targets] = await Promise.all([
+      prisma.appUser.findMany({
+        where: { id: { in: [...new Set(runs.map((run) => run.createdBy))] } },
+        select: { id: true, displayName: true, email: true },
+      }),
+      prisma.orgConnection.findMany({
+        where: { id: { in: [...new Set(runs.map((run) => run.targetOrgId))] } },
+        select: { id: true, alias: true, username: true, type: true },
+      }),
+    ]);
+    const ownerById = new Map(owners.map((item) => [item.id, item]));
+    const targetById = new Map(targets.map((item) => [item.id, item]));
+    return {
+      items: runs.map((run) => {
+        const sourceRecord = record(run.source);
+        const stageCounts = run.stages.reduce<Record<string, number>>((counts, stage) => {
+          counts[stage.status] = (counts[stage.status] ?? 0) + 1;
+          return counts;
+        }, {});
+        const validation = run.stages.find((stage) => stage.key === 'validation');
+        const coverage = historyCoverage(run.stages);
+        const sourceType = sourceRecord.type === 'org_compare' ? 'org_compare' : 'scm';
+        const sourceLabel = sourceType === 'org_compare'
+          ? String(sourceRecord.sourceOrgId ?? 'Source org')
+          : [
+              sourceRecord.provider,
+              sourceRecord.repo,
+              sourceRecord.branch ? `@${String(sourceRecord.branch)}` : undefined,
+            ].filter(Boolean).join(' ');
+        return {
+          id: run.id,
+          name: run.name,
+          description: run.description,
+          source: { type: sourceType, label: sourceLabel, value: sourceRecord },
+          target: targetById.get(run.targetOrgId) ?? { id: run.targetOrgId },
+          environment: run.targetProfile,
+          strategy: run.strategy,
+          status: run.status,
+          owner: ownerById.get(run.createdBy) ?? { id: run.createdBy },
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+          durationMs: run.stages.reduce((sum, stage) => sum + (stage.durationMs ?? 0), 0),
+          stageCounts,
+          validation: {
+            id: run.validationId,
+            status: validation?.status ?? 'not_required',
+          },
+          coverage,
+          gateOutcome: historyGateOutcome(run.status, run.stages),
+          summary: run.summary,
+          detailLinks: {
+            status: `/deployment-workbench/${run.id}/status`,
+            stages: `/deployment-workbench/${run.id}/stages`,
+            results: `/deployment-workbench/${run.id}/results`,
+          },
+        };
+      }),
+      page,
+      pageSize,
+      total,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
+
+  async getStatus(id: string, userId: string, isAdmin = false) {
     const run = await this.ownedRun(id, userId, {
       id: true,
       status: true,
@@ -157,7 +400,7 @@ export class DeploymentWorkbenchService {
       artifacts: true,
       createdAt: true,
       updatedAt: true,
-    });
+    }, isAdmin);
     const policy = deploymentPolicySchema.parse(run.policySnapshot);
     const execution = ((run.artifacts ?? {}) as Record<string, unknown>).execution as
       | Record<string, unknown>
@@ -182,7 +425,7 @@ export class DeploymentWorkbenchService {
     };
   }
 
-  async getPolicy(id: string, userId: string) {
+  async getPolicy(id: string, userId: string, isAdmin = false) {
     const run = await this.ownedRun(id, userId, {
       id: true,
       targetProfile: true,
@@ -190,7 +433,7 @@ export class DeploymentWorkbenchService {
       policySnapshot: true,
       dependencyPolicy: true,
       createdAt: true,
-    });
+    }, isAdmin);
     return {
       id: run.id,
       targetProfile: run.targetProfile,
@@ -201,22 +444,22 @@ export class DeploymentWorkbenchService {
     };
   }
 
-  async getStages(id: string, userId: string) {
-    await this.requireOwnedRun(id, userId);
+  async getStages(id: string, userId: string, isAdmin = false) {
+    await this.requireOwnedRun(id, userId, isAdmin);
     return prisma.deploymentQualityStage.findMany({
       where: { runId: id },
       orderBy: { ordinal: 'asc' },
     });
   }
 
-  async getResults(id: string, userId: string) {
+  async getResults(id: string, userId: string, isAdmin = false) {
     const run = await this.ownedRun(id, userId, {
       id: true,
       status: true,
       summary: true,
       artifacts: true,
       validationId: true,
-    });
+    }, isAdmin);
     const [stages, issues, testResults, audits] = await Promise.all([
       prisma.deploymentQualityStage.findMany({
         where: { runId: id },
@@ -478,13 +721,13 @@ export class DeploymentWorkbenchService {
     };
   }
 
-  async destructiveReview(id: string, userId: string) {
+  async destructiveReview(id: string, userId: string, isAdmin = false) {
     const run = await this.ownedRun(id, userId, {
       id: true,
       destructiveSelections: true,
       apiVersion: true,
       manifestXml: true,
-    });
+    }, isAdmin);
     const selections = run.destructiveSelections as unknown as Array<{
       metadataType: string;
       members: string[];
@@ -506,13 +749,13 @@ export class DeploymentWorkbenchService {
     };
   }
 
-  async getProgress(id: string, userId: string) {
+  async getProgress(id: string, userId: string, isAdmin = false) {
     const run = await this.ownedRun(id, userId, {
       id: true,
       artifacts: true,
       status: true,
       currentStage: true,
-    });
+    }, isAdmin);
     const intelligent = ((run.artifacts ?? {}) as Record<string, unknown>).intelligent as
       | Record<string, unknown>
       | undefined;
@@ -600,6 +843,67 @@ export class DeploymentWorkbenchService {
     });
   }
 
+  private async resolvePreviewWorkspace(
+    resolution: Promise<WorkbenchWorkspace>,
+  ): Promise<WorkbenchWorkspace> {
+    const configured = Number.parseInt(process.env.WORKBENCH_PREVIEW_TIMEOUT_MS ?? '', 10);
+    const timeoutMs = Number.isFinite(configured)
+      ? Math.min(Math.max(configured, 1_000), 120_000)
+      : 45_000;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        resolution,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new RequestTimeoutException('Workbench source preview timed out')),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } catch (error) {
+      if (error instanceof RequestTimeoutException) {
+        void resolution.then(
+          (workspace) => workspace.cleanup?.().catch(() => undefined),
+          () => undefined,
+        );
+      }
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private getPreviewCache(key: string): Record<string, unknown> | undefined {
+    const entry = this.previewCache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      this.previewCache.delete(key);
+      return undefined;
+    }
+    this.previewCache.delete(key);
+    this.previewCache.set(key, entry);
+    return entry.value;
+  }
+
+  private setPreviewCache(key: string, value: Record<string, unknown>) {
+    const configured = Number.parseInt(process.env.WORKBENCH_PREVIEW_CACHE_TTL_MS ?? '', 10);
+    const ttlMs = Number.isFinite(configured)
+      ? Math.min(Math.max(configured, 0), 300_000)
+      : 30_000;
+    if (ttlMs === 0) return;
+    const now = Date.now();
+    for (const [candidate, entry] of this.previewCache) {
+      if (entry.expiresAt <= now) this.previewCache.delete(candidate);
+    }
+    this.previewCache.set(key, { expiresAt: now + ttlMs, value });
+    while (this.previewCache.size > PREVIEW_CACHE_LIMIT) {
+      const oldest = this.previewCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.previewCache.delete(oldest);
+    }
+  }
+
   private async assertInputAccess(input: DeploymentWorkbenchInput, userId: string) {
     const target = await assertOrgOwned(input.target.orgId, userId, prisma);
     const actualProfile = orgEnvironment(target.type);
@@ -609,7 +913,7 @@ export class DeploymentWorkbenchService {
       );
     }
     if (input.source.type === 'org_compare') {
-      await assertOrgOwned(input.source.sourceOrgId, userId, prisma);
+      const sourceOrg = await assertOrgOwned(input.source.sourceOrgId, userId, prisma);
       if (input.source.comparisonId) {
         const comparison = await prisma.metadataComparison.findFirst({
           where: { id: input.source.comparisonId, createdBy: userId },
@@ -617,7 +921,7 @@ export class DeploymentWorkbenchService {
         });
         if (!comparison) throw new NotFoundException('Metadata comparison not found');
       }
-      return;
+      return { target, sourceOrg };
     }
     if (input.source.connectionId) {
       const connection = await prisma.scmConnection.findFirst({
@@ -633,11 +937,12 @@ export class DeploymentWorkbenchService {
       });
       if (!binding) throw new NotFoundException('Project binding not found');
     }
+    return { target, sourceOrg: undefined };
   }
 
-  private async requireOwnedRun(id: string, userId: string) {
+  private async requireOwnedRun(id: string, userId: string, isAdmin = false) {
     const run = await prisma.deploymentQualityRun.findFirst({
-      where: { id, createdBy: userId },
+      where: { id, createdBy: isAdmin ? undefined : userId },
       select: { id: true },
     });
     if (!run) throw new NotFoundException('Deployment workbench run not found');
@@ -648,9 +953,10 @@ export class DeploymentWorkbenchService {
     id: string,
     userId: string,
     select: T,
+    isAdmin = false,
   ) {
     const run = await prisma.deploymentQualityRun.findFirst({
-      where: { id, createdBy: userId },
+      where: { id, createdBy: isAdmin ? undefined : userId },
       select,
     });
     if (!run) throw new NotFoundException('Deployment workbench run not found');
@@ -710,4 +1016,56 @@ function parseManifestVersion(xml: string): string | null {
   } catch {
     return null;
   }
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function positivePage(value: string | undefined, fallback: number, maximum: number): number {
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new BadRequestException(`Pagination value must be an integer from 1 to ${maximum}`);
+  }
+  return parsed;
+}
+
+function parseHistoryDate(
+  value: string | undefined,
+  label: 'dateFrom' | 'dateTo',
+  endOfDay = false,
+): Date | undefined {
+  if (!value?.trim()) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new BadRequestException(`${label} is not a valid date`);
+  if (endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    date.setUTCHours(23, 59, 59, 999);
+  }
+  return date;
+}
+
+function historyCoverage(stages: Array<{ summary: unknown; artifacts: unknown }>): number | null {
+  for (const stage of stages) {
+    const summaryCoverage = Number(record(stage.summary).coverage);
+    if (Number.isFinite(summaryCoverage)) return summaryCoverage;
+    const artifactCoverage = Number(record(stage.artifacts).coverage);
+    if (Number.isFinite(artifactCoverage)) return artifactCoverage;
+  }
+  return null;
+}
+
+function historyGateOutcome(
+  status: string,
+  stages: Array<{ status: string }>,
+): 'passed' | 'blocked' | 'cancelled' | 'pending' {
+  if (status === 'passed') return 'passed';
+  if (status === 'cancelled') return 'cancelled';
+  if (
+    ['failed', 'rejected'].includes(status)
+    || stages.some((stage) => ['failed', 'blocked'].includes(stage.status))
+  ) return 'blocked';
+  return 'pending';
 }

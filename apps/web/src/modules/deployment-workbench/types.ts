@@ -55,6 +55,27 @@ export interface WorkbenchPreview {
   stages: WorkbenchStage[];
   capabilities: DeploymentWorkbenchCapabilities;
   executionAvailable: boolean;
+  readOnly?: boolean;
+  sourceResolution?: {
+    type: SourceMode;
+    mode: string;
+    manifest: string;
+    apiVersion: string;
+    selectedComponents: number;
+  };
+  dependencies?: {
+    nodes: DependencyGraph['nodes'];
+    edges: DependencyGraph['edges'];
+    missing: Array<{ nodeId: string; requiredBy?: string[]; explanation?: string }>;
+    cycles: string[][];
+    reasons: Array<{ nodeId: string; decision: string; reason: string }>;
+    decisions: Array<{ nodeId: string; decision: string; reason: string }>;
+    blocking: string[];
+    summary: Record<string, number | boolean>;
+    resolvedSelections: MetadataSelection[];
+    batches: unknown[];
+    batchEstimate: Record<string, number>;
+  };
 }
 
 export interface WorkbenchStatus {
@@ -145,17 +166,43 @@ export interface WorkbenchProgress {
 
 export interface DeploymentHistoryRow {
   id: string;
+  name?: string | null;
+  description?: string | null;
   status: string;
   createdAt: string;
-  repo: string;
-  branch: string;
+  updatedAt: string;
   strategy: string;
-  metadata?: {
-    workbenchRunId?: string;
-    workbenchStrategy?: WorkbenchStrategy;
-    name?: string;
-  } | null;
-  targetOrg?: { alias: string } | null;
+  environment: DeploymentEnvironment;
+  source: { type: SourceMode; label: string };
+  target: { id: string; alias?: string; username?: string | null };
+  owner: { id: string; displayName?: string; email?: string };
+  durationMs: number;
+  stageCounts: Record<string, number>;
+  validation: { id?: string | null; status: string };
+  coverage?: number | null;
+  gateOutcome: 'passed' | 'blocked' | 'cancelled' | 'pending';
+  summary?: Record<string, unknown> | null;
+  detailLinks: { status: string; stages: string; results: string };
+}
+
+export interface DeploymentHistoryResponse {
+  items: DeploymentHistoryRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface DeploymentHistoryFilters {
+  page: number;
+  pageSize: number;
+  source: '' | SourceMode;
+  target: string;
+  environment: '' | DeploymentEnvironment;
+  status: string;
+  dateFrom: string;
+  dateTo: string;
+  owner: string;
 }
 
 export interface DependencyGraph {

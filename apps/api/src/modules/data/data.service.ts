@@ -118,6 +118,14 @@ export class DataService {
     return this.dataDeployOrchestrator.retryFailedChunks(batchId, userId);
   }
 
+  async cancelDeployBatch(batchId: string, userId: string) {
+    return this.dataDeployOrchestrator.cancelBatch(batchId, userId);
+  }
+
+  async cancelBatchGroup(groupId: string, userId: string) {
+    return this.dataDeployOrchestrator.cancelBatchGroup(groupId, userId);
+  }
+
   async getBatchGroup(groupId: string, userId: string) {
     return this.dataDeployOrchestrator.getBatchGroup(groupId, userId);
   }

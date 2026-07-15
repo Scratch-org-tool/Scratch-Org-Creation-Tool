@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 import { mkdir, rm } from 'fs/promises';
@@ -25,6 +30,8 @@ import { BulkThrottleService } from './bulk-throttle.service';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 import { ACTIVE_CHUNK_STATUSES, aggregateBatchStatus, countChunkStatuses } from './batch-status.util';
 import { isSafeIdempotentUpsertRetry } from './retry-safety.util';
+import { QueueService } from '../queue/queue.service';
+import { JobProcessRegistryService } from '../jobs/job-process-registry.service';
 
 export type DataDeployStrategy = 'generic' | 'insert' | 'upsert' | 'replicate';
 
@@ -70,6 +77,8 @@ export class DataDeployOrchestratorService {
   constructor(
     private readonly orchestrator: OrchestratorService,
     private readonly bulkThrottle: BulkThrottleService,
+    private readonly queue: QueueService,
+    private readonly processRegistry: JobProcessRegistryService,
   ) {}
 
   chunkSize(): number {
@@ -89,6 +98,111 @@ export class DataDeployOrchestratorService {
     if (!batch) throw new NotFoundException('Data deploy batch not found');
     assertResourceOwner(batch, userId, 'Data deploy batch');
     return batch;
+  }
+
+  async cancelBatch(id: string, userId: string) {
+    const owned = await prisma.dataDeployBatch.findUnique({
+      where: { id },
+      select: { id: true, createdBy: true, status: true },
+    });
+    if (!owned) throw new NotFoundException('Data deploy batch not found');
+    assertResourceOwner(owned, userId, 'Data deploy batch');
+
+    const cancellation = await this.withCancellationLock(id, async () => {
+      const batch = await prisma.dataDeployBatch.findUnique({
+        where: { id },
+        include: { chunks: { select: { jobId: true } } },
+      });
+      if (!batch) throw new NotFoundException('Data deploy batch not found');
+      assertResourceOwner(batch, userId, 'Data deploy batch');
+      if (['completed', 'partial', 'failed'].includes(batch.status)) {
+        return { status: batch.status, changed: false, jobs: [] as Array<{ id: string; queue: string }> };
+      }
+
+      const chunkJobIds = new Set(
+        batch.chunks.map((chunk) => chunk.jobId).filter((id): id is string => Boolean(id)),
+      );
+      const jobs = await prisma.job.findMany({
+        where: {
+          createdBy: userId,
+          queue: { in: [QUEUE_NAMES.DATA_DEPLOY, QUEUE_NAMES.SFDMU_RUN] },
+          OR: [
+            { id: { in: [...chunkJobIds] } },
+            { payload: { path: ['batchId'], equals: id } },
+          ],
+        },
+        select: { id: true, queue: true },
+      });
+      const now = new Date();
+      const activeStatuses = ['pending', 'queued', 'planning', 'running', 'paused'] as const;
+      const changed = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.dataDeployBatch.updateMany({
+          where: { id, createdBy: userId, status: { in: [...activeStatuses] } },
+          data: { status: 'cancelled', error: 'Cancelled by user' },
+        });
+        await tx.dataDeployChunk.updateMany({
+          where: { batchId: id, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
+          data: { status: 'cancelled', error: 'Cancelled by user' },
+        });
+        await tx.dataMovement.updateMany({
+          where: { batchId: id, status: { in: [...activeStatuses] } },
+          data: { status: 'cancelled' },
+        });
+        if (jobs.length) {
+          await tx.job.updateMany({
+            where: { id: { in: jobs.map((job) => job.id) }, status: { in: [...activeStatuses] } },
+            data: {
+              status: 'cancelled',
+              currentStep: 'Cancelled',
+              error: 'Cancelled by user',
+              finishedAt: now,
+            },
+          });
+        }
+        return claimed.count > 0;
+      });
+      return { status: 'cancelled', changed, jobs };
+    });
+
+    for (const job of cancellation.jobs) {
+      await this.queue.removeJob(job.queue, job.id).catch(() => false);
+      await this.processRegistry.cancel(job.id);
+    }
+    await this.refreshBatchProgress(id);
+    const refreshed = await prisma.dataDeployBatch.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        completedChunks: true,
+        failedChunks: true,
+        totalChunks: true,
+      },
+    });
+    return {
+      ...refreshed,
+      cancelled: cancellation.status === 'cancelled',
+      idempotent: !cancellation.changed,
+      cancelledJobs: cancellation.jobs.length,
+    };
+  }
+
+  async cancelBatchGroup(groupId: string, userId: string) {
+    const batches = await prisma.dataDeployBatch.findMany({
+      where: { groupId },
+      select: { id: true, createdBy: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!batches.length || batches.some((batch) => batch.createdBy !== userId)) {
+      throw new NotFoundException('Deploy group not found');
+    }
+    const results = [];
+    for (const batch of batches) results.push(await this.cancelBatch(batch.id, userId));
+    return {
+      groupId,
+      cancelled: results.filter((result) => result.cancelled).length,
+      batches: results,
+    };
   }
 
   async createBatch(input: CreateDataDeployBatchInput) {
@@ -219,7 +333,11 @@ export class DataDeployOrchestratorService {
    * Planner job: exports the ordered Id set once, resolves per-chunk Id ranges,
    * then enqueues every chunk as an independent queue job.
    */
-  async planBatch(batchId: string, log: (stream: 'stdout' | 'stderr', line: string) => Promise<void>) {
+  async planBatch(
+    batchId: string,
+    log: (stream: 'stdout' | 'stderr', line: string) => Promise<void>,
+    dbJobId?: string,
+  ) {
     const batch = await prisma.dataDeployBatch.findUnique({
       where: { id: batchId },
       include: {
@@ -248,9 +366,20 @@ export class DataDeployOrchestratorService {
       const slot = await this.bulkThrottle.acquire(sourceAlias);
       let exportResult;
       try {
-        exportResult = await this.sfCli.exportBulk(idSoql, sourceAlias, idCsvPath, 30, { cwd: workDir });
+        exportResult = await this.sfCli.exportBulk(idSoql, sourceAlias, idCsvPath, 30, {
+          cwd: workDir,
+          ...(dbJobId ? {
+            onSpawn: (proc) => {
+              this.processRegistry.register(dbJobId, () => proc.kill('SIGTERM'));
+            },
+          } : {}),
+        });
       } finally {
         await slot.release();
+      }
+      if (await this.isBatchCancellationRequested(batchId, dbJobId)) {
+        await log('stderr', 'Batch planning cancelled by user');
+        return { batchId, cancelled: true };
       }
       if (!exportResult.success) {
         throw new Error(exportResult.error ?? 'Chunk boundary export failed');
@@ -290,8 +419,8 @@ export class DataDeployOrchestratorService {
         });
       }
 
-      await prisma.dataDeployBatch.update({
-        where: { id: batchId },
+      const activated = await prisma.dataDeployBatch.updateMany({
+        where: { id: batchId, status: { in: ['planning', 'queued'] } },
         data: {
           status: 'running',
           totalChunks: boundaries.length,
@@ -304,6 +433,10 @@ export class DataDeployOrchestratorService {
           } as unknown as Prisma.InputJsonValue,
         },
       });
+      if (activated.count === 0) {
+        await log('stderr', 'Batch planning stopped before chunk release');
+        return { batchId, cancelled: true };
+      }
 
       for (const boundary of boundaries) {
         const chunk = batch.chunks.find((c) => c.chunkIndex === boundary.chunkIndex);
@@ -312,8 +445,8 @@ export class DataDeployOrchestratorService {
           afterId: boundary.afterId,
           endId: boundary.endId,
         });
-        await prisma.dataDeployChunk.update({
-          where: { id: chunk.id },
+        await prisma.dataDeployChunk.updateMany({
+          where: { id: chunk.id, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
           data: {
             soql: chunkSoql,
             afterId: boundary.afterId,
@@ -323,8 +456,11 @@ export class DataDeployOrchestratorService {
           },
         });
         if (chunk.movementId) {
-          await prisma.dataMovement.update({
-            where: { id: chunk.movementId },
+          await prisma.dataMovement.updateMany({
+            where: {
+              id: chunk.movementId,
+              status: { in: ['pending', 'queued', 'planning', 'running'] },
+            },
             data: { soql: chunkSoql, status: 'pending' },
           });
         }
@@ -337,6 +473,10 @@ export class DataDeployOrchestratorService {
       return { batchId, totalChunks: boundaries.length, totalRecords: ids.length };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (await this.isBatchCancellationRequested(batchId, dbJobId)) {
+        await log('stderr', 'Batch planning cancelled by user');
+        return { batchId, cancelled: true };
+      }
       await log('stderr', `Batch planning failed: ${message}`);
       await prisma.dataDeployChunk.updateMany({
         where: { batchId, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
@@ -352,6 +492,7 @@ export class DataDeployOrchestratorService {
       });
       throw error;
     } finally {
+      if (dbJobId) this.processRegistry.clear(dbJobId);
       await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
@@ -611,15 +752,21 @@ export class DataDeployOrchestratorService {
 
   /** Recompute batch counters/status from chunk rows (drift-proof). */
   async refreshBatchProgress(batchId: string) {
-    const grouped = await prisma.dataDeployChunk.groupBy({
-      by: ['status'],
-      where: { batchId },
-      _count: { _all: true },
-    });
+    const [grouped, current] = await Promise.all([
+      prisma.dataDeployChunk.groupBy({
+        by: ['status'],
+        where: { batchId },
+        _count: { _all: true },
+      }),
+      prisma.dataDeployBatch.findUnique({
+        where: { id: batchId },
+        select: { status: true },
+      }),
+    ]);
     const counts = countChunkStatuses(
       grouped.map((g) => [g.status, g._count._all] as [string, number]),
     );
-    const status = aggregateBatchStatus(counts);
+    const status = current?.status === 'cancelled' ? 'cancelled' : aggregateBatchStatus(counts);
     const { completed, failed } = counts;
 
     await prisma.dataDeployBatch.update({
@@ -741,6 +888,24 @@ export class DataDeployOrchestratorService {
     });
     if (batches.length === 0) throw new NotFoundException('Deploy group not found');
     return { groupId, batches };
+  }
+
+  private async withCancellationLock<T>(batchId: string, callback: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const result = await this.bulkThrottle.withSchedulerLock(batchId, callback);
+      if (result !== null) return result;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new ServiceUnavailableException('Data deploy scheduler is busy; retry cancellation');
+  }
+
+  private async isBatchCancellationRequested(batchId: string, dbJobId?: string): Promise<boolean> {
+    if (dbJobId && await this.processRegistry.isCancellationRequested(dbJobId)) return true;
+    const batch = await prisma.dataDeployBatch.findUnique({
+      where: { id: batchId },
+      select: { status: true },
+    });
+    return batch?.status === 'cancelled';
   }
 
   resolveBaseSoql(soql: string | undefined, objectName: string): string {

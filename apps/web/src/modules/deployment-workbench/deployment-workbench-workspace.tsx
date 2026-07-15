@@ -383,18 +383,25 @@ function ComponentsStep({ w }: { w: DeploymentWorkbenchState }) {
 function DependenciesStep({ w }: { w: DeploymentWorkbenchState }) {
   const dependencyStage = w.results?.stages.find((stage) => stage.key === 'dependencies');
   const artifacts = dependencyStage?.artifacts;
-  const graph = artifacts?.graph as DependencyGraph | undefined;
-  const decisions = (artifacts?.decisions ?? []) as Array<{
+  const previewDependencies = w.preview?.dependencies;
+  const graph = (artifacts?.graph ?? (
+    previewDependencies
+      ? { nodes: previewDependencies.nodes, edges: previewDependencies.edges }
+      : undefined
+  )) as DependencyGraph | undefined;
+  const decisions = (artifacts?.decisions ?? previewDependencies?.reasons ?? []) as Array<{
     nodeId: string;
     decision: string;
     reason: string;
   }>;
-  const missing = (artifacts?.missing ?? []) as Array<{
+  const missing = (artifacts?.missing ?? previewDependencies?.missing ?? []) as Array<{
     nodeId: string;
     requiredBy?: string[];
     explanation?: string;
   }>;
-  const cycles = (artifacts?.cycles ?? []) as string[][];
+  const cycles = (artifacts?.cycles ?? previewDependencies?.cycles ?? []) as string[][];
+  const batchCount = Number(previewDependencies?.batchEstimate?.batchCount ?? 0);
+  const dependencyAvailable = Boolean(dependencyStage || previewDependencies);
 
   return (
     <div className="space-y-4">
@@ -471,18 +478,19 @@ function DependenciesStep({ w }: { w: DeploymentWorkbenchState }) {
       </GlassCard>
 
       <GlassCard title="Resolved dependency graph" description="Accessible list and table fallback for the execution graph.">
-        {!dependencyStage ? (
+        {!dependencyAvailable ? (
           <InlineAlert variant="info">
-            The server resolves references against the checked-out source. Graph nodes, missing references, cycles, and inclusion reasons appear here after the dependency stage starts.
+            Preview the plan to resolve the selected manifest against a read-only source checkout.
           </InlineAlert>
         ) : (
           <>
-            {dependencyStage.error && <InlineAlert variant="error">{dependencyStage.error}</InlineAlert>}
-            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+            {dependencyStage?.error && <InlineAlert variant="error">{dependencyStage.error}</InlineAlert>}
+            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
               <Metric label="Nodes" value={graph?.nodes.length ?? 0} />
               <Metric label="Edges" value={graph?.edges.length ?? 0} />
               <Metric label="Missing" value={missing.length} danger={missing.length > 0} />
               <Metric label="Cycles" value={cycles.length} danger={cycles.length > 0} />
+              <Metric label="Estimated batches" value={batchCount} />
             </div>
             {graph?.nodes.length ? <DependencyGraphVisual graph={graph} /> : null}
             <div className="max-h-80 overflow-auto rounded-lg border border-border/60">
@@ -837,18 +845,32 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
 function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
   const stages = w.preview?.stages ?? [];
   const destructiveCount = componentCount(w.form.destructiveSelections);
-  const estimatedBatches = w.form.strategy === 'intelligent'
-    ? Math.max(1, w.form.components.length)
-    : 1;
+  const dependencies = w.preview?.dependencies;
+  const estimatedBatches = Number(dependencies?.batchEstimate.batchCount ?? 1);
+  const resolvedComponents = Number(
+    dependencies?.summary.resolved ?? componentCount(w.form.components),
+  );
   return (
     <div className="space-y-4">
       <GlassCard title="Deployment plan" description="Review server-normalized stages, batches, risks, and immutable policy gates.">
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="Components" value={componentCount(w.form.components)} />
+          <Metric label="Resolved components" value={resolvedComponents} />
           <Metric label="Destructive" value={destructiveCount} danger={destructiveCount > 0} />
           <Metric label="Estimated batches" value={estimatedBatches} />
           <Metric label="Stages" value={stages.length} />
         </div>
+        {w.preview?.sourceResolution && (
+          <InlineAlert variant="info" className="mb-4">
+            Read-only {w.preview.sourceResolution.type === 'scm' ? 'SCM checkout' : 'source-org retrieve'} resolved{' '}
+            {w.preview.sourceResolution.selectedComponents} selected component(s) from{' '}
+            {w.preview.sourceResolution.manifest}.
+          </InlineAlert>
+        )}
+        {dependencies?.blocking.map((reason) => (
+          <InlineAlert key={reason} variant="error" title="Dependency blocker" className="mb-3">
+            {reason}
+          </InlineAlert>
+        ))}
         <div className="overflow-auto rounded-lg border border-border/60">
           <table className="w-full text-sm">
             <thead>
@@ -1136,9 +1158,96 @@ function ResultDetails({ w }: { w: DeploymentWorkbenchState }) {
 }
 
 function HistoryView({ w }: { w: DeploymentWorkbenchState }) {
+  const updateFilter = <K extends keyof typeof w.historyFilters>(
+    key: K,
+    value: (typeof w.historyFilters)[K],
+  ) => w.setHistoryFilters((current) => ({ ...current, [key]: value }));
+
   return (
     <div className="space-y-4">
-      <GlassCard title="Deployment history" description="Compatibility deployment records linked to workbench audit runs.">
+      <GlassCard title="Deployment history" description="Authoritative quality runs, gates, validation, and stage outcomes.">
+        <div className="mb-4 grid gap-3 md:grid-cols-3 lg:grid-cols-4">
+          <Field label="Source" htmlFor="history-source">
+            <Select
+              id="history-source"
+              value={w.historyFilters.source}
+              onChange={(event) => updateFilter('source', event.target.value as typeof w.historyFilters.source)}
+            >
+              <option value="">All sources</option>
+              <option value="org_compare">Org to org</option>
+              <option value="scm">Source control</option>
+            </Select>
+          </Field>
+          <Field label="Target" htmlFor="history-target">
+            <Select
+              id="history-target"
+              value={w.historyFilters.target}
+              onChange={(event) => updateFilter('target', event.target.value)}
+            >
+              <option value="">All targets</option>
+              {w.orgs.map((org) => <option key={org.id} value={org.id}>{org.alias}</option>)}
+            </Select>
+          </Field>
+          <Field label="Environment" htmlFor="history-environment">
+            <Select
+              id="history-environment"
+              value={w.historyFilters.environment}
+              onChange={(event) => updateFilter(
+                'environment',
+                event.target.value as typeof w.historyFilters.environment,
+              )}
+            >
+              <option value="">All environments</option>
+              <option value="scratch">Scratch</option>
+              <option value="sandbox">Sandbox</option>
+              <option value="production">Production</option>
+            </Select>
+          </Field>
+          <Field label="Status" htmlFor="history-status">
+            <Select
+              id="history-status"
+              value={w.historyFilters.status}
+              onChange={(event) => updateFilter('status', event.target.value)}
+            >
+              <option value="">All statuses</option>
+              {['planned', 'running', 'awaiting_approval', 'passed', 'failed', 'cancelled', 'rejected']
+                .map((status) => <option key={status} value={status}>{readableStage(status)}</option>)}
+            </Select>
+          </Field>
+          <Field label="From" htmlFor="history-from">
+            <Input
+              id="history-from"
+              type="date"
+              value={w.historyFilters.dateFrom}
+              onChange={(event) => updateFilter('dateFrom', event.target.value)}
+            />
+          </Field>
+          <Field label="To" htmlFor="history-to">
+            <Input
+              id="history-to"
+              type="date"
+              value={w.historyFilters.dateTo}
+              onChange={(event) => updateFilter('dateTo', event.target.value)}
+            />
+          </Field>
+          <Field label="Owner ID (admin)" htmlFor="history-owner">
+            <Input
+              id="history-owner"
+              value={w.historyFilters.owner}
+              onChange={(event) => updateFilter('owner', event.target.value)}
+              placeholder="Current owner by default"
+            />
+          </Field>
+          <div className="flex items-end">
+            <Button
+              className="w-full"
+              loading={w.historyLoading}
+              onClick={() => void w.loadHistory({ ...w.historyFilters, page: 1 })}
+            >
+              Apply filters
+            </Button>
+          </div>
+        </div>
         {!w.history.length ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No workbench deployments yet.</p>
         ) : (
@@ -1147,7 +1256,8 @@ function HistoryView({ w }: { w: DeploymentWorkbenchState }) {
               <thead>
                 <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
                   <th className="p-3">Deployment</th><th className="p-3">Source</th>
-                  <th className="p-3">Target</th><th className="p-3">Strategy</th>
+                  <th className="p-3">Target</th><th className="p-3">Gates</th>
+                  <th className="p-3">Validation</th><th className="p-3">Duration</th>
                   <th className="p-3">Status</th><th className="p-3">Created</th>
                 </tr>
               </thead>
@@ -1158,14 +1268,22 @@ function HistoryView({ w }: { w: DeploymentWorkbenchState }) {
                       <button
                         type="button"
                         className="font-medium text-primary hover:underline"
-                        onClick={() => row.metadata?.workbenchRunId && void w.openHistoryRun(row.metadata.workbenchRunId)}
+                        onClick={() => void w.openHistoryRun(row.id)}
                       >
-                        {row.metadata?.name || row.metadata?.workbenchRunId?.slice(0, 8)}
+                        {row.name || row.id.slice(0, 8)}
                       </button>
+                      <p className="text-xs text-muted-foreground">{row.owner.displayName ?? row.owner.id}</p>
                     </td>
-                    <td className="p-3">{row.repo}@{row.branch}</td>
-                    <td className="p-3">{row.targetOrg?.alias ?? '—'}</td>
-                    <td className="p-3">{row.metadata?.workbenchStrategy ?? row.strategy}</td>
+                    <td className="p-3">{row.source.label}</td>
+                    <td className="p-3">{row.target.alias ?? row.target.id}<br /><span className="text-xs text-muted-foreground">{row.environment}</span></td>
+                    <td className="p-3"><StatusBadge status={row.gateOutcome} /></td>
+                    <td className="p-3">
+                      <StatusBadge status={row.validation.status} />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {row.coverage == null ? 'Coverage —' : `${row.coverage.toFixed(1)}% coverage`}
+                      </p>
+                    </td>
+                    <td className="p-3">{formatDuration(row.durationMs)}</td>
                     <td className="p-3"><StatusBadge status={row.status} /></td>
                     <td className="p-3">{new Date(row.createdAt).toLocaleString()}</td>
                   </tr>
@@ -1174,6 +1292,35 @@ function HistoryView({ w }: { w: DeploymentWorkbenchState }) {
             </table>
           </div>
         )}
+        <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+          <span className="text-muted-foreground">
+            {w.historyResponse.total} run(s) · page {w.historyResponse.page} of {Math.max(1, w.historyResponse.totalPages)}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={w.historyLoading || w.historyResponse.page <= 1}
+              onClick={() => void w.loadHistory({
+                ...w.historyFilters,
+                page: w.historyResponse.page - 1,
+              })}
+            >
+              Previous
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={w.historyLoading || w.historyResponse.page >= w.historyResponse.totalPages}
+              onClick={() => void w.loadHistory({
+                ...w.historyFilters,
+                page: w.historyResponse.page + 1,
+              })}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       </GlassCard>
       {w.results?.audits.length ? (
         <GlassCard title="Authoritative audit trail">
@@ -1306,6 +1453,13 @@ function Metric({ label, value, danger }: { label: string; value: string | numbe
 
 function SummaryTerm({ label, value }: { label: string; value: string }) {
   return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 break-all font-medium">{value}</dd></div>;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs} ms`;
+  const seconds = Math.round(durationMs / 1_000);
+  if (seconds < 60) return `${seconds} sec`;
+  return `${Math.floor(seconds / 60)} min ${seconds % 60} sec`;
 }
 
 function RiskBadge({ risk }: { risk: 'low' | 'medium' | 'high' }) {
