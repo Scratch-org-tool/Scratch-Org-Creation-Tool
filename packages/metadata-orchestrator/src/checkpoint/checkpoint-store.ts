@@ -36,7 +36,10 @@ export class CheckpointStore {
   }
 
   getResumeBatchNumber(checkpoint: DeployCheckpoint): number {
-    return checkpoint.lastCompletedBatch + 1;
+    // A resumed plan is rebuilt after deployed nodes are restored, so its
+    // first batch is the first still-pending batch regardless of the old
+    // plan's numbering.
+    return checkpoint.pendingNodeIds.length > 0 ? 1 : checkpoint.lastCompletedBatch + 1;
   }
 }
 

@@ -94,44 +94,47 @@ export class DeploySourceResolver {
         cleanup = () => removeTempDir(workDir);
       }
 
-      if (input.manifestContent) {
-        const bootstrapped = bootstrapOrgToOrgWorkspace(workDir, input.manifestContent);
+      try {
+        if (input.manifestContent) {
+          const bootstrapped = bootstrapOrgToOrgWorkspace(workDir, input.manifestContent);
+          const sfCli = createSfCliClient({ cwd: workDir });
+          const retrieve = await sfCli.retrieveManifest(
+            input.sourceOrgAlias,
+            bootstrapped.manifestRelative,
+          );
+          if (!retrieve.success) {
+            throw new Error(retrieve.error ?? 'Metadata retrieve from source org failed');
+          }
+          return {
+            mode,
+            projectRoot: bootstrapped.projectRoot,
+            manifestRelative: bootstrapped.manifestRelative,
+            manifestAbsolutePath: bootstrapped.manifestAbsolutePath,
+            cleanup,
+          };
+        }
+
+        const { manifestRelative } = this.azureCheckout.prepareManifestDeploy(workDir, manifest);
         const sfCli = createSfCliClient({ cwd: workDir });
         const retrieve = await sfCli.retrieveManifest(
           input.sourceOrgAlias,
-          bootstrapped.manifestRelative,
+          manifestRelative,
         );
         if (!retrieve.success) {
-          await cleanup?.();
           throw new Error(retrieve.error ?? 'Metadata retrieve from source org failed');
         }
+
         return {
           mode,
-          projectRoot: bootstrapped.projectRoot,
-          manifestRelative: bootstrapped.manifestRelative,
-          manifestAbsolutePath: bootstrapped.manifestAbsolutePath,
+          projectRoot: workDir,
+          manifestRelative,
+          manifestAbsolutePath: path.join(workDir, manifestRelative),
           cleanup,
         };
-      }
-
-      const { manifestRelative } = this.azureCheckout.prepareManifestDeploy(workDir, manifest);
-      const sfCli = createSfCliClient({ cwd: workDir });
-      const retrieve = await sfCli.retrieveManifest(
-        input.sourceOrgAlias,
-        manifestRelative,
-      );
-      if (!retrieve.success) {
+      } catch (error) {
         await cleanup?.();
-        throw new Error(retrieve.error ?? 'Metadata retrieve from source org failed');
+        throw error;
       }
-
-      return {
-        mode,
-        projectRoot: workDir,
-        manifestRelative,
-        manifestAbsolutePath: path.join(workDir, manifestRelative),
-        cleanup,
-      };
     }
 
     if (!input.azureDeploy?.repo || !input.azureDeploy.branch) {
@@ -148,17 +151,22 @@ export class DeploySourceResolver {
       input.azureDeploy.repo,
       input.azureDeploy.branch,
     );
-    const { projectRoot, manifestRelative } = this.azureCheckout.prepareManifestDeploy(
-      checkout.workspaceDir,
-      manifest,
-    );
-    return {
-      mode: 'azure_manifest',
-      projectRoot,
-      manifestRelative,
-      manifestAbsolutePath: path.join(projectRoot, manifestRelative),
-      cleanup: checkout.cleanup,
-    };
+    try {
+      const { projectRoot, manifestRelative } = this.azureCheckout.prepareManifestDeploy(
+        checkout.workspaceDir,
+        manifest,
+      );
+      return {
+        mode: 'azure_manifest',
+        projectRoot,
+        manifestRelative,
+        manifestAbsolutePath: path.join(projectRoot, manifestRelative),
+        cleanup: checkout.cleanup,
+      };
+    } catch (error) {
+      await checkout.cleanup();
+      throw error;
+    }
   }
 
   private resolveMode(input: DeploySourceResolveInput): DeploySourceMode {
@@ -220,45 +228,50 @@ export class IntelligentOrchestratorService {
       workDir: intelligentWorkDir,
     });
 
-    const report = await orchestrator.run(
-      {
-        runId: options.runId,
-        source,
-        deploymentId: options.deploymentId,
-        automationRunId: options.automationRunId,
-        resumeCheckpoint: options.resumeCheckpoint,
-        targetOrgProfile: options.targetOrgProfile,
-      },
-      {
-        ...options.callbacks,
-        registerKill: options.registerKill,
-        clearKill: options.clearKill,
-        onBatchStart: async (batch, index, total) => {
-          await options.callbacks.onBatchStart?.(batch, index, total);
-          await prisma.intelligentDeployBatch.upsert({
-            where: { runId_batchNumber: { runId: options.runId, batchNumber: batch.batchNumber } },
-            create: {
-              runId: options.runId,
-              batchNumber: batch.batchNumber,
-              nodeCount: batch.nodeIds.length,
-              status: 'running',
-              manifestPath: batch.tempManifestPath,
-            },
-            update: { status: 'running', nodeCount: batch.nodeIds.length },
-          });
+    let report: FinalReport;
+    try {
+      report = await orchestrator.run(
+        {
+          runId: options.runId,
+          source,
+          deploymentId: options.deploymentId,
+          automationRunId: options.automationRunId,
+          resumeCheckpoint: options.resumeCheckpoint,
+          targetOrgProfile: options.targetOrgProfile,
         },
-        onBatchComplete: async (outcome) => {
-          await options.callbacks.onBatchComplete?.(outcome);
-          await prisma.intelligentDeployBatch.update({
-            where: { runId_batchNumber: { runId: options.runId, batchNumber: outcome.batchNumber } },
-            data: {
-              status: outcome.success ? 'completed' : 'failed',
-              durationMs: outcome.durationMs,
-            },
-          });
+        {
+          ...options.callbacks,
+          registerKill: options.registerKill,
+          clearKill: options.clearKill,
+          onBatchStart: async (batch, index, total) => {
+            await options.callbacks.onBatchStart?.(batch, index, total);
+            await prisma.intelligentDeployBatch.upsert({
+              where: { runId_batchNumber: { runId: options.runId, batchNumber: batch.batchNumber } },
+              create: {
+                runId: options.runId,
+                batchNumber: batch.batchNumber,
+                nodeCount: batch.nodeIds.length,
+                status: 'running',
+                manifestPath: batch.tempManifestPath,
+              },
+              update: { status: 'running', nodeCount: batch.nodeIds.length },
+            });
+          },
+          onBatchComplete: async (outcome) => {
+            await options.callbacks.onBatchComplete?.(outcome);
+            await prisma.intelligentDeployBatch.update({
+              where: { runId_batchNumber: { runId: options.runId, batchNumber: outcome.batchNumber } },
+              data: {
+                status: outcome.success ? 'completed' : 'failed',
+                durationMs: outcome.durationMs,
+              },
+            });
+          },
         },
-      },
-    );
+      );
+    } finally {
+      await removeTempDir(intelligentWorkDir);
+    }
 
     await prisma.intelligentDeployRun.update({
       where: { id: options.runId },

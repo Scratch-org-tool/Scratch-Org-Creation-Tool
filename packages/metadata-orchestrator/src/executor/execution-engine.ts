@@ -53,72 +53,90 @@ export class ExecutionEngine {
       }
 
       await callbacks.onBatchStart?.(batch, i + 1, plan.batches.length);
-      const manifestPath = this.manifestBuilder.buildBatchManifest(batch, repo);
       batch.status = 'running';
 
       const started = Date.now();
-      const deploy = this.sfCli.deployManifestCancellable(
-        source.targetOrgAlias,
-        manifestPath,
-        testLevel,
-      );
-      callbacks.registerKill?.(deploy.kill);
+      let attemptBatch = batch;
+      let rawResult: unknown;
 
-      let result: Awaited<typeof deploy.promise>;
-      try {
-        result = await deploy.promise;
-      } finally {
-        callbacks.clearKill?.();
-      }
+      while (true) {
+        const manifestPath = this.manifestBuilder.buildBatchManifest(attemptBatch, repo);
+        const deploy = this.sfCli.deployManifestCancellable(
+          source.targetOrgAlias,
+          manifestPath,
+          testLevel,
+        );
+        callbacks.registerKill?.(deploy.kill);
 
-      if (result.stdout) await callbacks.onLog?.('stdout', result.stdout);
-      if (result.stderr) await callbacks.onLog?.('stderr', result.stderr);
-
-      const parsed = parseSfDeployResult(result.data ?? result.stdout);
-      const durationMs = Date.now() - started;
-
-      const deployedNodeIds: string[] = [];
-      const failedNodeIds: string[] = [];
-
-      if (parsed.success) {
-        for (const nodeId of batch.nodeIds) {
-          repo.markDeployed(nodeId, batch.batchNumber, durationMs);
-          repo.decrementIndegreeForDependents(nodeId);
-          deployedNodeIds.push(nodeId);
+        let result: Awaited<typeof deploy.promise>;
+        try {
+          result = await deploy.promise;
+        } finally {
+          callbacks.clearKill?.();
         }
-        batch.status = 'completed';
-      } else {
-        const failures = parsed.componentFailures ?? this.extractFailuresFromStdout(result.stdout);
-        const outcome: BatchDeployOutcome = {
-          batchNumber: batch.batchNumber,
-          success: false,
-          deployedNodeIds: [],
-          failedNodeIds: batch.nodeIds,
-          durationMs,
-          rawResult: result.data,
-        };
-        failureAnalyzer.analyzeBatchFailures(outcome, repo, failures);
 
-        for (const nodeId of batch.nodeIds) {
-          const node = repo.getNode(nodeId);
-          if (node?.deploymentState === 'DEPLOYED') {
-            deployedNodeIds.push(nodeId);
-          } else {
-            failedNodeIds.push(nodeId);
+        if (result.stdout) await callbacks.onLog?.('stdout', result.stdout);
+        if (result.stderr) await callbacks.onLog?.('stderr', result.stderr);
+
+        rawResult = result.data;
+        const parsed = parseSfDeployResult(result.data ?? result.stdout);
+        if (parsed.success) {
+          for (const nodeId of attemptBatch.nodeIds) {
+            repo.markDeployed(nodeId, batch.batchNumber, Date.now() - started);
+            repo.decrementIndegreeForDependents(nodeId);
           }
+          break;
         }
-        batch.status = 'failed';
 
-        failureAnalyzer.buildRetryQueue(plan, repo, maxRetries);
+        const failures = parsed.componentFailures ?? this.extractFailuresFromStdout(result.stdout);
+        failureAnalyzer.analyzeBatchFailures(
+          {
+            batchNumber: batch.batchNumber,
+            success: false,
+            deployedNodeIds: [],
+            failedNodeIds: attemptBatch.nodeIds,
+            durationMs: Date.now() - started,
+            rawResult,
+          },
+          repo,
+          failures,
+        );
+
+        const attemptedIds = new Set(attemptBatch.nodeIds);
+        const retryNodeIds = failureAnalyzer
+          .buildRetryQueue(plan, repo, maxRetries)
+          .filter((nodeId) => attemptedIds.has(nodeId));
+        if (retryNodeIds.length === 0) break;
+
+        for (const nodeId of retryNodeIds) {
+          const node = repo.getNode(nodeId);
+          if (node) node.deploymentState = 'RETRYING';
+        }
+        attemptBatch = {
+          ...batch,
+          nodeIds: retryNodeIds,
+          tempManifestPath: '',
+          status: 'running',
+        };
       }
+
+      const durationMs = Date.now() - started;
+      const deployedNodeIds = batch.nodeIds.filter(
+        (nodeId) => repo.getNode(nodeId)?.deploymentState === 'DEPLOYED',
+      );
+      const failedNodeIds = batch.nodeIds.filter(
+        (nodeId) => repo.getNode(nodeId)?.deploymentState !== 'DEPLOYED',
+      );
+      const batchSucceeded = failedNodeIds.length === 0;
+      batch.status = batchSucceeded ? 'completed' : 'failed';
 
       const outcome: BatchDeployOutcome = {
         batchNumber: batch.batchNumber,
-        success: parsed.success,
+        success: batchSucceeded,
         deployedNodeIds,
         failedNodeIds,
         durationMs,
-        rawResult: result.data,
+        rawResult,
       };
       outcomes.push(outcome);
       await callbacks.onBatchComplete?.(outcome);
@@ -130,11 +148,11 @@ export class ExecutionEngine {
         source.projectRoot,
         source.manifestPath,
         source.mode,
-        batch.batchNumber,
+        batchSucceeded ? batch.batchNumber : Math.max(0, batch.batchNumber - 1),
       );
       await this.checkpointStore.save(checkpoint);
 
-      if (!parsed.success) {
+      if (!batchSucceeded) {
         return { success: false, outcomes };
       }
     }
