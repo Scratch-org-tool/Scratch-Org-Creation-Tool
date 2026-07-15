@@ -1,6 +1,6 @@
 'use client';
 
-import { SCRATCH_ORG_SKIPPABLE_STEPS } from '@sfcc/shared';
+import { SCRATCH_ORG_SKIPPABLE_STEPS, type ScratchPipelineTemplateConfig } from '@sfcc/shared';
 import { Bug, CloudUpload, KeyRound, ShieldCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
@@ -16,7 +16,7 @@ interface ScratchOrgFormProps {
   devHubs: { alias: string }[];
   sourceOrgs: { id: string; alias: string }[];
   templates: Array<{ id: string; name: string; isSystem: boolean }>;
-  templateMeta?: { name: string; config: Record<string, unknown> } | null;
+  templateMeta?: { name: string; config: ScratchPipelineTemplateConfig } | null;
   metadataSource: GitMetadataSourceHook;
   installPackage: boolean;
   setInstallPackage: (v: boolean) => void;
@@ -117,21 +117,58 @@ export function ScratchOrgForm({
             </Field>
           )}
           <Field>
-            <Label htmlFor="scratch-org-source-org">Source org (data + custom settings)</Label>
+            <Label htmlFor="scratch-org-data-org">Data Deployment Org</Label>
             <Select
-              id="scratch-org-source-org"
-              value={form.sourceOrgId}
-              onChange={(e) => setForm({ ...form, sourceOrgId: e.target.value })}
+              id="scratch-org-data-org"
+              value={form.dataDeploymentOrgId || form.sourceOrgId}
+              onChange={(e) => setForm({
+                ...form,
+                sourceOrgId: e.target.value,
+                dataDeploymentOrgId: e.target.value,
+              })}
               disabled={isRunning}
             >
-              <option value="">Select source org…</option>
+              <option value="">Use template default</option>
               {sourceOrgs.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.alias}
                 </option>
               ))}
             </Select>
+            <p className="text-xs text-muted-foreground mt-1">Runtime override for queries, data seed, and partner joins.</p>
           </Field>
+          <Field>
+            <Label htmlFor="scratch-org-settings-org">Custom Settings Org (optional override)</Label>
+            <Select
+              id="scratch-org-settings-org"
+              value={form.customSettingsOrgId}
+              onChange={(e) => setForm({ ...form, customSettingsOrgId: e.target.value })}
+              disabled={isRunning}
+            >
+              <option value="">Use template default</option>
+              {sourceOrgs.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.alias}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">Only used for the SFDMU custom-settings export.</p>
+          </Field>
+          {usingTemplate && (templateMeta?.config.userProvisioning?.teams?.length ?? 0) > 0 && (
+            <Field className="sm:col-span-2">
+              <Label htmlFor="scratch-org-runtime-email-pool">Replacement team email pool (optional)</Label>
+              <Textarea
+                id="scratch-org-runtime-email-pool"
+                value={form.runtimeEmailPool}
+                onChange={(event) => setForm({ ...form, runtimeEmailPool: event.target.value })}
+                placeholder="person1@example.com&#10;person2@example.com"
+                disabled={isRunning}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Replaces the template pool for this run. Allocation remains deterministic shuffled round-robin.
+              </p>
+            </Field>
+          )}
         </div>
       </FormSection>
 

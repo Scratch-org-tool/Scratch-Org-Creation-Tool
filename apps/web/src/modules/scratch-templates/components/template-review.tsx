@@ -5,6 +5,7 @@ import type { TemplateConfigState } from '../types';
 import { TEMPLATE_WIZARD_STEPS } from '../types';
 import { formatPermissionSets } from './permission-sets-editor';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
+import { countConfiguredUsers } from './user-provisioning-v2-section';
 
 interface TemplateReviewProps {
   name: string;
@@ -26,9 +27,8 @@ function Row({ label, value }: { label: string; value: string }) {
 export function TemplateReview({ name, description, config, orgAliases, onEditStep }: TemplateReviewProps) {
   const dataOrg = config.dataDeploymentOrgId ?? config.sourceOrgId;
   const settingsOrg = config.customSettingsOrgId ?? config.sourceOrgId;
-  const userCount =
-    (config.userProvisioning?.slots?.length ?? 0) ||
-    (config.userProvisioning?.users?.length ?? 0);
+  const userCount = countConfiguredUsers(config.userProvisioning);
+  const querySection = config.dataSeed?.querySection;
 
   const sections = [
     {
@@ -95,6 +95,17 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
     },
     {
       step: 6,
+      title: 'Query section',
+      rows: [
+        ['Name', querySection?.name ?? '—'],
+        ['Enabled queries', String(querySection?.queries.filter((query) => query.enabled).length ?? 0)],
+        ['Execution order', querySection?.queries.filter((query) => query.enabled).map((query) => `${query.stage}:${query.name}`).join(' → ') || '—'],
+        ['Account partner join', querySection?.accountPartnerPlan ? 'Configured' : '—'],
+        ['Legacy configuration retained', config.dataSeed?.querySet || config.accountSeedRows?.length ? 'Yes' : 'No'],
+      ] as const,
+    },
+    {
+      step: 7,
       title: 'Partners & users',
       rows: [
         ['Auto data seed', config.pipelineSteps?.autoRunDataSeed ? 'Yes' : 'No'],
@@ -104,6 +115,8 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
         ['Per office', String(config.partnerImport?.perOffice ?? 20)],
         ['Sales offices JSON', config.partnerImport?.salesOfficeConfig ? 'Yes' : '—'],
         ['User templates', String(config.userProvisioning?.templates?.length ?? 0)],
+        ['User generators', String(config.userProvisioning?.userGenerators?.length ?? 0)],
+        ['Role+bottler mappings', String(config.userProvisioning?.roleBottlerMappings?.length ?? 0)],
         ['Users / slots', String(userCount)],
       ] as const,
     },

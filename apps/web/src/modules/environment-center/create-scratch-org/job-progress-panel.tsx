@@ -14,6 +14,7 @@ import type { ScratchCredentials } from './types';
 import type { StreamConnectionState } from '@/hooks/use-job-event-stream';
 import { cn } from '@/utils/cn';
 import type { ReactNode } from 'react';
+import { TemplateV2Progress } from './template-v2-progress';
 
 function formatElapsed(ms: number): string {
   const sec = Math.floor(ms / 1000);
@@ -244,6 +245,8 @@ export function JobProgressPanel({
           activeSubtext={activeSubtext}
           compact={compact}
         />
+
+        {run && <TemplateV2Progress run={run} />}
 
         {postDeploySlot}
 

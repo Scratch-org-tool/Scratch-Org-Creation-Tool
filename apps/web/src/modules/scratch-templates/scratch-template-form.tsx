@@ -7,7 +7,11 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { FormSection, GlassCard, InlineAlert, PageSkeleton } from '@/components/studio';
 import { api } from '@/services/api';
 import { fetchOrgsList } from '@/hooks/use-orgs';
-import { DEFAULT_AZURE_MANIFEST_PATH } from '@sfcc/shared';
+import {
+  DEFAULT_AZURE_MANIFEST_PATH,
+  migrateTemplateConfigToV2,
+  querySectionSchema,
+} from '@sfcc/shared';
 import { DataSeedSection } from './components/data-seed-section';
 import { fileToBase64 } from './components/file-dropzone';
 import { OrgConfigSection } from './components/org-config-section';
@@ -25,21 +29,14 @@ import { TemplateFormTips } from './components/template-form-tips';
 import { TemplateStepIndicator } from './components/template-step-indicator';
 import { TemplateStepSidebar } from './components/template-step-sidebar';
 import { TemplateFormPageHeader } from './template-form-page-header';
-import {
-  apiSlotsToRows,
-  apiUsersToRows,
-  slotsToApiFormat,
-  usersToApiFormat,
-  UsersTableSection,
-} from './components/users-table-section';
-import type { UserProvisionSlot, UserProvisionTemplate } from '@sfcc/shared';
+import { QuerySectionEditor } from './components/query-section-editor';
+import { UserProvisioningV2Section } from './components/user-provisioning-v2-section';
 import type { ScmProvider } from '@sfcc/shared';
 import type { PublicIntegrationConnection } from '@/modules/environment-center/integrations/types';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import {
   DEFAULT_TEMPLATE_CONFIG,
   TEMPLATE_WIZARD_STEPS,
-  type ConaUserRow,
   type TemplateConfigState,
 } from './types';
 
@@ -62,6 +59,24 @@ function withCanonicalGitSource(config: TemplateConfigState): TemplateConfigStat
   };
 }
 
+function migrateForEditor(config: TemplateConfigState): TemplateConfigState {
+  return withCanonicalGitSource({
+    ...DEFAULT_TEMPLATE_CONFIG,
+    ...migrateTemplateConfigToV2(config),
+  });
+}
+
+function hasValidCustomJson(config: TemplateConfigState, customJson: string): boolean {
+  if (config.customSettings?.enabled === false || config.customSettings?.mode !== 'custom') return true;
+  if (!customJson.trim()) return false;
+  try {
+    JSON.parse(customJson);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function ScratchTemplateForm({
   templateId,
   onClose,
@@ -72,11 +87,8 @@ export function ScratchTemplateForm({
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [config, setConfig] = useState<TemplateConfigState>({ ...DEFAULT_TEMPLATE_CONFIG });
+  const [config, setConfig] = useState<TemplateConfigState>(() => migrateForEditor(DEFAULT_TEMPLATE_CONFIG));
   const [permissionSetsText, setPermissionSetsText] = useState('');
-  const [users, setUsers] = useState<ConaUserRow[]>([]);
-  const [userTemplates, setUserTemplates] = useState<UserProvisionTemplate[]>([]);
-  const [userSlots, setUserSlots] = useState<UserProvisionSlot[]>([]);
   const [customJson, setCustomJson] = useState('');
   const [queryJsonFile, setQueryJsonFile] = useState<File | null>(null);
   const [partnerFile, setPartnerFile] = useState<File | null>(null);
@@ -97,12 +109,12 @@ export function ScratchTemplateForm({
     try {
       sessionStorage.setItem(
         DRAFT_KEY,
-        JSON.stringify({ name, description, config, permissionSetsText, users, userSlots, userTemplates, customJson }),
+        JSON.stringify({ name, description, config, permissionSetsText, customJson }),
       );
     } catch {
       /* ignore */
     }
-  }, [templateId, name, description, config, permissionSetsText, users, userSlots, userTemplates, customJson]);
+  }, [templateId, name, description, config, permissionSetsText, customJson]);
 
   const dataDeploymentOrgId = config.dataDeploymentOrgId ?? config.sourceOrgId;
 
@@ -126,11 +138,13 @@ export function ScratchTemplateForm({
         .then((t) => {
           setName(t.name);
           setDescription(t.description ?? '');
-          setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...t.config }));
+          try {
+            setConfig(migrateForEditor(t.config));
+          } catch (migrationError) {
+            setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...t.config, version: 2 }));
+            setError(migrationError instanceof Error ? migrationError.message : 'Legacy migration needs attention');
+          }
           setPermissionSetsText(formatPermissionSets(t.config.permissionSets));
-          setUsers(apiUsersToRows(t.config.userProvisioning?.users));
-          setUserTemplates(t.config.userProvisioning?.templates ?? []);
-          setUserSlots(apiSlotsToRows(t.config.userProvisioning?.slots));
           const exportConfig = (t.config.customSettings as { exportConfig?: unknown } | undefined)
             ?.exportConfig;
           if (t.config.customSettings?.mode === 'custom' && exportConfig) {
@@ -152,16 +166,18 @@ export function ScratchTemplateForm({
           description?: string;
           config?: TemplateConfigState;
           permissionSetsText?: string;
-          users?: ConaUserRow[];
           customJson?: string;
         };
         if (draft.name) setName(draft.name);
         if (draft.description) setDescription(draft.description);
         if (draft.config) {
-          setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...draft.config }));
+          try {
+            setConfig(migrateForEditor(draft.config));
+          } catch {
+            setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...draft.config, version: 2 }));
+          }
         }
         if (draft.permissionSetsText) setPermissionSetsText(draft.permissionSetsText);
-        if (draft.users) setUsers(draft.users);
         if (draft.customJson) setCustomJson(draft.customJson);
       }
     } catch {
@@ -200,7 +216,10 @@ export function ScratchTemplateForm({
     setError(null);
     try {
       let exportConfig: unknown;
-      if (config.customSettings?.enabled !== false && config.customSettings?.mode === 'custom' && customJson.trim()) {
+      if (config.customSettings?.enabled !== false && config.customSettings?.mode === 'custom') {
+        if (!customJson.trim()) {
+          throw new Error('Custom settings mode requires valid JSON before this V2 template can be saved.');
+        }
         const validated = await api<{ normalized: unknown }>('/data/custom-settings/validate', {
           method: 'POST',
           body: JSON.stringify(JSON.parse(customJson)),
@@ -217,6 +236,7 @@ export function ScratchTemplateForm({
         name,
         description: description || undefined,
         config: {
+          version: 2,
           template: config.template,
           duration: config.duration,
           installPackage: config.installPackage,
@@ -246,6 +266,9 @@ export function ScratchTemplateForm({
             datasets: config.dataSeed?.datasets ?? DEFAULT_TEMPLATE_CONFIG.dataSeed?.datasets,
             mode: config.dataSeed?.mode ?? 'hybrid',
             querySet: config.dataSeed?.querySet,
+            querySection: config.dataSeed?.querySection
+              ? querySectionSchema.parse(config.dataSeed.querySection)
+              : undefined,
           },
           accountSeedRows: config.accountSeedRows,
           partnerImport:
@@ -255,14 +278,7 @@ export function ScratchTemplateForm({
                   partnerExcelBase64,
                 }
               : undefined,
-          userProvisioning:
-            userSlots.length || userTemplates.length || users.length
-              ? {
-                  ...(userTemplates.length ? { templates: userTemplates } : {}),
-                  ...(userSlots.length ? { slots: slotsToApiFormat(userSlots) } : {}),
-                  ...(users.length ? { users: usersToApiFormat(users) } : {}),
-                }
-              : undefined,
+          userProvisioning: config.userProvisioning,
           pipelineSteps: config.pipelineSteps,
         },
       };
@@ -293,7 +309,11 @@ export function ScratchTemplateForm({
       : step === 2
         ? Boolean(config.dataDeploymentOrgId ?? config.sourceOrgId) &&
           Boolean(config.customSettingsOrgId ?? config.sourceOrgId)
-        : true;
+        : step === 3
+          ? hasValidCustomJson(config, customJson)
+          : step === 6 && config.dataSeed?.querySection
+            ? querySectionSchema.safeParse(config.dataSeed.querySection).success
+            : true;
 
   if (loading) {
     return <PageSkeleton variant="form" />;
@@ -629,6 +649,31 @@ export function ScratchTemplateForm({
               )}
 
               {step === 6 && (
+                <FormSection title="Named query section">
+                  <QuerySectionEditor
+                    value={config.dataSeed?.querySection}
+                    sourceOrgId={dataDeploymentOrgId}
+                    legacySummary={
+                      config.dataSeed?.querySet || config.accountSeedRows?.length
+                        ? `${config.dataSeed?.querySet?.queries.length ?? 0} query JSON entries and ${config.accountSeedRows?.length ?? 0} account rows were migrated into named V2 queries.`
+                        : undefined
+                    }
+                    onChange={(querySection) =>
+                      setConfig({
+                        ...config,
+                        dataSeed: {
+                          ...config.dataSeed,
+                          datasets: config.dataSeed?.datasets ?? [],
+                          mode: querySection ? 'query_section' : (config.dataSeed?.mode ?? 'hybrid'),
+                          querySection,
+                        },
+                      })
+                    }
+                  />
+                </FormSection>
+              )}
+
+              {step === 7 && (
                 <div className="space-y-6">
                   <FormSection title="Partner import">
                     <PartnerImportSection
@@ -640,14 +685,10 @@ export function ScratchTemplateForm({
                     />
                   </FormSection>
                   <FormSection title="User provisioning">
-                    <UsersTableSection
+                    <UserProvisioningV2Section
                       sourceOrgId={dataDeploymentOrgId}
-                      templates={userTemplates}
-                      slots={userSlots}
-                      legacyUsers={users}
-                      onTemplatesChange={setUserTemplates}
-                      onSlotsChange={setUserSlots}
-                      onLegacyUsersChange={setUsers}
+                      value={config.userProvisioning ?? DEFAULT_TEMPLATE_CONFIG.userProvisioning!}
+                      onChange={(userProvisioning) => setConfig({ ...config, userProvisioning })}
                     />
                   </FormSection>
                   <FormSection title="Automation">
@@ -659,18 +700,13 @@ export function ScratchTemplateForm({
                 </div>
               )}
 
-              {step === 7 && (
+              {step === 8 && (
                 <TemplateReview
                   name={name}
                   description={description}
                   config={{
                     ...config,
                     permissionSets: parsePermissionSets(permissionSetsText),
-                    userProvisioning: {
-                      users: usersToApiFormat(users),
-                      templates: userTemplates,
-                      slots: slotsToApiFormat(userSlots),
-                    },
                   }}
                   orgAliases={orgAliases}
                   onEditStep={setStep}

@@ -28,6 +28,9 @@ export const DEFAULT_FORM = {
   gitRepositoryId: '',
   templateId: '',
   sourceOrgId: '',
+  dataDeploymentOrgId: '',
+  customSettingsOrgId: '',
+  runtimeEmailPool: '',
 } as const;
 
 export interface AzureStatus {

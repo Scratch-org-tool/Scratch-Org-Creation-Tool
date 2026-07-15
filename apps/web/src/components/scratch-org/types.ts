@@ -37,7 +37,10 @@ export function isPipelineResumable(failedStep?: string | null): boolean {
     failedStep === 'azure_metadata_deploy' ||
     failedStep === 'assign_permission_set' ||
     failedStep === 'load_org_config' ||
-    failedStep === 'load_custom_settings'
+    failedStep === 'load_custom_settings' ||
+    failedStep === 'load_data_seed' ||
+    failedStep === 'load_account_partners' ||
+    failedStep === 'provision_users'
   );
 }
 
@@ -68,7 +71,11 @@ export interface ScratchOrgFormState {
   gitNamespace: string;
   gitRepositoryId: string;
   templateId: string;
+  /** @deprecated Kept for restored V1 runs. */
   sourceOrgId: string;
+  dataDeploymentOrgId: string;
+  customSettingsOrgId: string;
+  runtimeEmailPool: string;
 }
 
 export interface AutomationRunView {
@@ -78,8 +85,17 @@ export interface AutomationRunView {
   lastError?: string | null;
   config?: {
     sourceOrgId?: string;
-    dataSeed?: { datasets: string[] };
-    userProvisioning?: { users: unknown[] };
+    dataSeed?: {
+      datasets?: string[];
+      querySection?: {
+        queries?: Array<{ id: string; name: string; order: number; stage: number }>;
+        accountPartnerPlan?: unknown;
+      };
+    };
+    userProvisioning?: {
+      users?: unknown[];
+      userGenerators?: Array<{ id: string; count: number; role: string }>;
+    };
   };
   checkpoint?: {
     completedSteps?: string[];
@@ -94,6 +110,8 @@ export interface AutomationRunView {
     currentStep: string;
     type: string;
     logs?: Array<{ line: string }>;
+    payload?: Record<string, unknown> | null;
+    result?: Record<string, unknown> | null;
   }>;
 }
 

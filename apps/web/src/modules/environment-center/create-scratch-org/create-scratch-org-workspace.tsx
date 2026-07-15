@@ -98,7 +98,9 @@ function ConfigCard({
           installPackage={w.installPackage}
           sourceControlConnected={w.metadataSource.connected}
           templateMeta={w.templateMeta}
-          sourceOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.sourceOrgId)?.alias}
+          dataOrgAlias={w.sourceOrgs.find((o) => o.id === (w.form.dataDeploymentOrgId || w.form.sourceOrgId))?.alias}
+          settingsOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.customSettingsOrgId)?.alias}
+          templatePreview={w.templatePreview}
         />
       )}
       {pipelineSummary && (
@@ -193,7 +195,7 @@ function JobPanelContent({
         <PostDeployPanel
           run={w.run}
           automationRunId={w.automationRunId}
-          sourceOrgId={w.form.sourceOrgId || undefined}
+          sourceOrgId={w.form.dataDeploymentOrgId || w.form.sourceOrgId || undefined}
           onRefresh={() => w.automationRunId && void w.refreshRun(w.automationRunId)}
         />
       }
@@ -263,7 +265,9 @@ export function CreateScratchOrgWorkspace() {
                   installPackage={w.installPackage}
                   sourceControlConnected={w.metadataSource.connected}
                   templateMeta={w.templateMeta}
-                  sourceOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.sourceOrgId)?.alias}
+                  dataOrgAlias={w.sourceOrgs.find((o) => o.id === (w.form.dataDeploymentOrgId || w.form.sourceOrgId))?.alias}
+                  settingsOrgAlias={w.sourceOrgs.find((o) => o.id === w.form.customSettingsOrgId)?.alias}
+                  templatePreview={w.templatePreview}
                 />
               )}
               <div className="flex gap-2 mt-6">

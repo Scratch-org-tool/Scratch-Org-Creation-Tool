@@ -7,6 +7,7 @@ import { fetchOrgsList } from '@/hooks/use-orgs';
 import { useJobEventStream } from '@/hooks/use-job-event-stream';
 import { useGitMetadataSource } from '@/modules/source-control/use-git-metadata-source';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
+import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
 import {
   buildSkipSteps,
   getStepStates,
@@ -33,6 +34,7 @@ import {
   type MobileView,
   type ScratchCredentials,
 } from './types';
+import { resolveTemplateV2Preview } from './template-v2-runtime';
 
 async function fetchAzureBranches(project: string, repo: string): Promise<string[]> {
   const params = new URLSearchParams({ repo, project });
@@ -120,6 +122,14 @@ function formFromRunConfig(
     template: (cfg.template as string | undefined) ?? fallback.template,
     description: (cfg.description as string | undefined) ?? fallback.description,
     sourceOrgId: (cfg.sourceOrgId as string | undefined) ?? fallback.sourceOrgId,
+    dataDeploymentOrgId:
+      (cfg.dataDeploymentOrgId as string | undefined)
+      ?? (cfg.sourceOrgId as string | undefined)
+      ?? fallback.dataDeploymentOrgId,
+    customSettingsOrgId:
+      (cfg.customSettingsOrgId as string | undefined)
+      ?? fallback.customSettingsOrgId,
+    runtimeEmailPool: fallback.runtimeEmailPool,
     templateId: (cfg.templateId as string | undefined) ?? fallback.templateId,
     gitProvider: git?.provider ?? (azure ? 'azure_devops' : fallback.gitProvider),
     gitConnectionId: git?.connectionId ?? fallback.gitConnectionId,
@@ -197,7 +207,7 @@ export function useScratchOrgWorkspace() {
   const [tick, setTick] = useState(0);
   const [templateMeta, setTemplateMeta] = useState<{
     name: string;
-    config: Record<string, unknown>;
+    config: ScratchPipelineTemplateConfig;
   } | null>(null);
 
   formRef.current = form;
@@ -547,7 +557,7 @@ export function useScratchOrgWorkspace() {
       return;
     }
     let cancelled = false;
-    api<{ name: string; config: Record<string, unknown> }>(
+    api<{ name: string; config: ScratchPipelineTemplateConfig }>(
       `/environment/scratch-templates/${form.templateId}`,
     )
       .then((t) => {
@@ -568,6 +578,8 @@ export function useScratchOrgWorkspace() {
           duration: (cfg.duration as number | undefined) ?? f.duration,
           template: (cfg.template as string | undefined) ?? f.template,
           sourceOrgId: (cfg.sourceOrgId as string | undefined) || f.sourceOrgId,
+          dataDeploymentOrgId: cfg.dataDeploymentOrgId ?? cfg.sourceOrgId ?? f.dataDeploymentOrgId,
+          customSettingsOrgId: cfg.customSettingsOrgId ?? cfg.sourceOrgId ?? f.customSettingsOrgId,
           gitProvider: gitCfg?.provider ?? f.gitProvider,
           gitConnectionId: gitCfg?.connectionId ?? f.gitConnectionId,
           gitNamespace: gitCfg?.namespace ?? gitCfg?.project ?? f.gitNamespace,
@@ -668,10 +680,21 @@ export function useScratchOrgWorkspace() {
 
   void jobIdsKey;
 
+  const templatePreview = useMemo(
+    () => templateMeta
+      ? resolveTemplateV2Preview(templateMeta.config, {
+          seed: `launch-${form.alias || 'preview'}`,
+          runtimeEmailPool: form.runtimeEmailPool,
+        })
+      : null,
+    [form.alias, form.runtimeEmailPool, templateMeta],
+  );
+
   const canLaunch =
     !!form.alias &&
     !!form.devHubAlias &&
-    !!metadataSource.gitSource;
+    !!metadataSource.gitSource &&
+    (!templatePreview || templatePreview.errors.length === 0);
 
   const launchPipeline = async () => {
     setSubmitting(true);
@@ -689,17 +712,24 @@ export function useScratchOrgWorkspace() {
         template: form.template,
         definitionFile: form.template,
         description: form.description || undefined,
-        sourceOrgId: form.sourceOrgId || undefined,
+        sourceOrgId: form.dataDeploymentOrgId || form.sourceOrgId || undefined,
+        dataDeploymentOrgId: form.dataDeploymentOrgId || form.sourceOrgId || undefined,
+        customSettingsOrgId: form.customSettingsOrgId || undefined,
         templateId: form.templateId || undefined,
         gitSource: metadataSource.gitSource,
         skipSteps: buildSkipSteps({ installPackage }),
       };
 
       if (form.templateId) {
-        const tmpl = await api<{ config: Record<string, unknown> }>(
+        const tmpl = await api<{ config: ScratchPipelineTemplateConfig }>(
           `/environment/scratch-templates/${form.templateId}`,
         );
-        const cfg = tmpl.config;
+        const runtime = resolveTemplateV2Preview(tmpl.config, {
+          seed: `launch-${form.alias}`,
+          runtimeEmailPool: form.runtimeEmailPool,
+        });
+        if (runtime.errors.length) throw new Error(runtime.errors.join(' '));
+        const cfg = runtime.config;
         const tmplAzure = cfg.azureDeploy as { manifestPath?: string } | undefined;
         const tmplGit = cfg.gitSource as { manifestPath?: string } | undefined;
         const {
@@ -715,7 +745,23 @@ export function useScratchOrgWorkspace() {
           description: form.description || undefined,
           template: (cfg.template as string) ?? form.template,
           definitionFile: (cfg.template as string) ?? form.template,
-          sourceOrgId: form.sourceOrgId || (cfg.sourceOrgId as string) || undefined,
+          sourceOrgId:
+            form.dataDeploymentOrgId
+            || form.sourceOrgId
+            || cfg.dataDeploymentOrgId
+            || cfg.sourceOrgId
+            || undefined,
+          dataDeploymentOrgId:
+            form.dataDeploymentOrgId
+            || form.sourceOrgId
+            || cfg.dataDeploymentOrgId
+            || cfg.sourceOrgId
+            || undefined,
+          customSettingsOrgId:
+            form.customSettingsOrgId
+            || cfg.customSettingsOrgId
+            || cfg.sourceOrgId
+            || undefined,
           templateId: form.templateId,
           gitSource: metadataSource.gitSource
             ? {
@@ -856,6 +902,7 @@ export function useScratchOrgWorkspace() {
     devHubs,
     templates,
     templateMeta,
+    templatePreview,
     sourceOrgs,
     azureStatus,
     metadataSource,

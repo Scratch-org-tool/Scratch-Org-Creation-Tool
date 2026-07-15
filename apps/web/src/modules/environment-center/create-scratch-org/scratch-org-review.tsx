@@ -2,13 +2,17 @@
 
 import type { ScratchOrgFormState } from '@/components/scratch-org/types';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
+import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
+import type { ResolvedTemplateV2Preview } from './template-v2-runtime';
 
 interface ScratchOrgReviewProps {
   form: ScratchOrgFormState;
   installPackage: boolean;
   sourceControlConnected: boolean;
-  templateMeta?: { name: string; config: Record<string, unknown> } | null;
-  sourceOrgAlias?: string;
+  templateMeta?: { name: string; config: ScratchPipelineTemplateConfig } | null;
+  dataOrgAlias?: string;
+  settingsOrgAlias?: string;
+  templatePreview?: ResolvedTemplateV2Preview | null;
 }
 
 export function ScratchOrgReview({
@@ -16,12 +20,14 @@ export function ScratchOrgReview({
   installPackage,
   sourceControlConnected,
   templateMeta,
-  sourceOrgAlias,
+  dataOrgAlias,
+  settingsOrgAlias,
+  templatePreview,
 }: ScratchOrgReviewProps) {
   const cfg = templateMeta?.config;
   const customSettings = cfg?.customSettings as { mode?: string; enabled?: boolean } | undefined;
   const dataSeed = cfg?.dataSeed as { datasets?: string[] } | undefined;
-  const users = (cfg?.userProvisioning as { users?: unknown[] } | undefined)?.users;
+  const users = cfg?.userProvisioning?.users;
   const pipelineSteps = cfg?.pipelineSteps as {
     autoRunDataSeed?: boolean;
     autoRunPartners?: boolean;
@@ -40,8 +46,11 @@ export function ScratchOrgReview({
   }
 
   if (form.description) rows.push(['Description', form.description]);
-  if (sourceOrgAlias || form.sourceOrgId) {
-    rows.push(['Source org', sourceOrgAlias ?? form.sourceOrgId]);
+  if (dataOrgAlias || form.dataDeploymentOrgId || form.sourceOrgId) {
+    rows.push(['Data Deployment Org', dataOrgAlias ?? form.dataDeploymentOrgId ?? form.sourceOrgId]);
+  }
+  if (settingsOrgAlias || form.customSettingsOrgId) {
+    rows.push(['Custom Settings Org', settingsOrgAlias ?? form.customSettingsOrgId]);
   }
   if (sourceControlConnected) {
     rows.push([
@@ -58,8 +67,14 @@ export function ScratchOrgReview({
   if (templateMeta && dataSeed?.datasets?.length) {
     rows.push(['Data seed', dataSeed.datasets.join(', ')]);
   }
-  if (templateMeta && users?.length) {
-    rows.push(['Users', String(users.length)]);
+  if (templateMeta && (users?.length || templatePreview?.userCount)) {
+    rows.push(['Resolved users', String(templatePreview?.userCount ?? users?.length ?? 0)]);
+  }
+  if (templatePreview?.queries) {
+    rows.push([
+      'Resolved queries',
+      templatePreview.queries.queries.map((query) => `${query.stage}:${query.name}`).join(' → '),
+    ]);
   }
   if (templateMeta && pipelineSteps) {
     const auto: string[] = [];
@@ -70,13 +85,37 @@ export function ScratchOrgReview({
   }
 
   return (
-    <dl className="space-y-3 text-sm rounded-lg border border-border/60 bg-card/30 p-4">
-      {rows.map(([label, value]) => (
-        <div key={label} className="flex justify-between gap-4">
-          <dt className="text-muted-foreground shrink-0">{label}</dt>
-          <dd className="font-medium text-right break-all">{value}</dd>
-        </div>
+    <div className="space-y-4">
+      {templatePreview?.errors.map((error) => (
+        <p key={error} className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>
       ))}
-    </dl>
+      <dl className="space-y-3 text-sm rounded-lg border border-border/60 bg-card/30 p-4">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-4">
+            <dt className="text-muted-foreground shrink-0">{label}</dt>
+            <dd className="font-medium text-right break-all">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {templatePreview?.users.length ? (
+        <div className="rounded-lg border border-border/60 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/30 text-left">
+              <tr><th className="p-2">Role</th><th className="p-2">Email</th><th className="p-2">Username</th><th className="p-2">Access</th></tr>
+            </thead>
+            <tbody>
+              {templatePreview.users.map((user, index) => (
+                <tr key={`${user.generatorId ?? user.email}-${index}`} className="border-t border-border/50">
+                  <td className="p-2">{user.role}</td>
+                  <td className="p-2 break-all"><strong>Email:</strong> {user.email}</td>
+                  <td className="p-2 break-all"><strong>Username:</strong> {user.username ?? 'Assigned at launch'}</td>
+                  <td className="p-2">{[...user.modules, ...user.locations].join(', ') || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
   );
 }

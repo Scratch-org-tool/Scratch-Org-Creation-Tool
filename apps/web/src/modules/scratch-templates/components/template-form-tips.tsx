@@ -29,10 +29,14 @@ const STEP_TIPS: Record<number, string[]> = {
     'Hybrid mode runs automatic datasets plus query JSON.',
   ],
   6: [
-    'Upload bottler sales-office JSON for 20 partners per office matching.',
-    'User templates define role, modules, and locations; slots set name and email.',
+    'Dependencies prevent an unsafe reorder and determine execution order within each stage.',
+    'Validate against the selected data org before saving the query section.',
   ],
   7: [
+    'Team email pools use deterministic shuffled round-robin allocation.',
+    'Email and Salesforce Username are intentionally shown as separate values.',
+  ],
+  8: [
     'Use Edit on any section to jump back and adjust settings.',
     'Saving creates a private template visible only to your workspace.',
   ],

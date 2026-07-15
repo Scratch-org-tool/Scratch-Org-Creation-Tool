@@ -94,7 +94,13 @@ export function DataSeedSection({
           <option value="hybrid">Hybrid (automatic + query JSON)</option>
           <option value="automatic">Automatic CONA datasets only</option>
           <option value="query_json">Query JSON only</option>
+          <option value="query_section">V2 named query section (configured next)</option>
         </Select>
+        {mode === 'query_section' && (
+          <p className="text-xs text-muted-foreground mt-1">
+            Continue to Query section to edit ordered SOQL, dependencies, and Account Partner joins.
+          </p>
+        )}
       </div>
 
       {showQueryJson && (
