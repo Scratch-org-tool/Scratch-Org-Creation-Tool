@@ -22,6 +22,7 @@ import type {
   WorkItemDetail,
   WorkItemHistoryEvent,
   WorkItemMutationInput,
+  OptimisticWorkItemComment,
   WorkItemProvider,
   WorkItemState,
   WorkItemSummary,
@@ -39,6 +40,8 @@ import {
   type GranularIntegrationCapabilities,
   type WorkItemContext,
 } from './work-item-contracts';
+import { removeAtId, restoreAtIndex } from '@/lib/optimistic-list';
+import { applyEntityState } from '@/lib/optimistic-domain';
 
 const PAGE_SIZE = 15;
 const CONTEXT_STORAGE_KEY = 'defects:selected-context:v2';
@@ -124,7 +127,7 @@ export function useDefectsWorkspace() {
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('id'));
   const [detail, setDetail] = useState<WorkItemDetail | null>(null);
-  const [comments, setComments] = useState<WorkItemComment[]>([]);
+  const [comments, setComments] = useState<OptimisticWorkItemComment[]>([]);
   const [history, setHistory] = useState<WorkItemHistoryEvent[]>([]);
   const [attachments, setAttachments] = useState<WorkItemAttachment[]>([]);
   const [states, setStates] = useState<WorkItemState[]>([]);
@@ -135,11 +138,27 @@ export function useDefectsWorkspace() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRevision, setDetailRevision] = useState(0);
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [commentPending, setCommentPending] = useState(false);
+  const [deletingAttachmentIds, setDeletingAttachmentIds] = useState<Record<string, boolean>>({});
+  const [optimisticAnnouncement, setOptimisticAnnouncement] = useState('');
   const [mutating, setMutating] = useState(false);
   const [investigating, setInvestigating] = useState(false);
   const [investigation, setInvestigation] = useState<DefectInvestigationResult | null>(null);
   const detailTokenRef = useRef(0);
+  const listTokenRef = useRef(0);
   const detailAbortRef = useRef<AbortController | null>(null);
+  const selectedIdRef = useRef<string | null>(selectedId);
+  const statusTokensRef = useRef(new Map<string, number>());
+  const statusBusyRef = useRef(new Set<string>());
+  const pendingStatusesRef = useRef(new Map<string, string>());
+  const commentBusyRef = useRef(new Set<string>());
+  const attachmentBusyRef = useRef(new Set<string>());
+  const attachmentTokensRef = useRef(new Map<string, number>());
+  const attachmentsRef = useRef<WorkItemAttachment[]>(attachments);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const connectionOptions = useMemo(
     () => contexts?.connections.filter((connection) => connection.provider === provider) ?? [],
@@ -178,15 +197,19 @@ export function useDefectsWorkspace() {
   const clearDetail = useCallback(() => {
     detailAbortRef.current?.abort();
     detailTokenRef.current += 1;
+    selectedIdRef.current = null;
     setSelectedId(null);
     setDetail(null);
     setComments([]);
     setHistory([]);
     setAttachments([]);
+    attachmentsRef.current = [];
     setStates([]);
     setSubissues([]);
     setInvestigation(null);
     setSectionErrors({});
+    setCommentPending(false);
+    setDeletingAttachmentIds({});
   }, []);
 
   const setProvider = useCallback((nextProvider: WorkItemProvider) => {
@@ -383,10 +406,15 @@ export function useDefectsWorkspace() {
       setTotal(0);
       return null;
     }
+    const token = ++listTokenRef.current;
     const data = await api<DefectsWorkItemsResponse>(
       `${providerEndpoint(provider, 'work-items')}?${listQuery}`,
     );
-    setItems(data.items);
+    if (listTokenRef.current !== token) return data;
+    setItems(data.items.map((item) => {
+      const pendingState = pendingStatusesRef.current.get(item.id);
+      return pendingState ? { ...item, state: { ...item.state, name: pendingState } } : item;
+    }));
     setTotal(data.total);
     return data;
   }, [listQuery, provider, selectedProject]);
@@ -471,6 +499,7 @@ export function useDefectsWorkspace() {
   const selectWorkItem = useCallback((id: string | null) => {
     detailAbortRef.current?.abort();
     detailTokenRef.current += 1;
+    selectedIdRef.current = id;
     setSelectedId(id);
     setInvestigation(null);
     replaceLocation(context, id);
@@ -488,7 +517,8 @@ export function useDefectsWorkspace() {
         signal: controller.signal,
       });
       if (detailTokenRef.current !== token) return;
-      setDetail(item);
+      const pendingState = pendingStatusesRef.current.get(id);
+      setDetail(pendingState ? { ...item, state: { ...item.state, name: pendingState } } : item);
 
       const requests: Array<{
         section: SectionName;
@@ -542,9 +572,14 @@ export function useDefectsWorkspace() {
             workItemEndpoint(context, id, 'attachments'),
             { signal: controller.signal },
           ),
-          apply: (value) => setAttachments((value as { attachments: WorkItemAttachment[] }).attachments),
+          apply: (value) => {
+            const next = (value as { attachments: WorkItemAttachment[] }).attachments;
+            attachmentsRef.current = next;
+            setAttachments(next);
+          },
         });
       } else {
+        attachmentsRef.current = [];
         setAttachments([]);
       }
       const results = await Promise.allSettled(requests.map((request) => request.run()));
@@ -585,24 +620,51 @@ export function useDefectsWorkspace() {
   const updateStatus = useCallback(async (state: string) => {
     if (!selectedId) return;
     if (!operations.transitionState) throw new Error('State transitions are not supported by this provider.');
+    if (statusBusyRef.current.has(selectedId)) return;
+    const itemId = selectedId;
+    listTokenRef.current += 1;
+    detailAbortRef.current?.abort();
+    detailTokenRef.current += 1;
+    setDetailLoading(false);
+    const token = (statusTokensRef.current.get(itemId) ?? 0) + 1;
+    statusTokensRef.current.set(itemId, token);
+    statusBusyRef.current.add(itemId);
+    pendingStatusesRef.current.set(itemId, state);
     setStatusUpdating(true);
-    const previous = detail;
-    if (detail) setDetail({ ...detail, state: { ...detail.state, name: state } });
+    const previousDetail = detail?.id === itemId ? detail : null;
+    const previousSummary = items.find((item) => item.id === itemId) ?? null;
+    if (previousDetail) setDetail({ ...previousDetail, state: { ...previousDetail.state, name: state } });
+    setItems((current) => applyEntityState(current, itemId, state));
+    setOptimisticAnnouncement(`${itemId} status is updating to ${state}.`);
     try {
-      const updated = await api<WorkItemDetail>(workItemEndpoint(context, selectedId, 'state'), {
+      const updated = await api<WorkItemDetail>(workItemEndpoint(context, itemId, 'state'), {
         method: 'PATCH',
         body: JSON.stringify({ state }),
       });
-      setDetail(updated);
-      setItems((current) => current.map((item) => item.id === selectedId ? updated : item));
-      await Promise.all([loadOverview(), loadDetail(selectedId)]);
+      if (statusTokensRef.current.get(itemId) !== token) return;
+      pendingStatusesRef.current.delete(itemId);
+      if (selectedIdRef.current === itemId) setDetail(updated);
+      setItems((current) => current.map((item) => item.id === itemId ? updated : item));
+      setOptimisticAnnouncement(`${itemId} status updated to ${updated.state.name}.`);
+      void loadOverview().catch((loadError) => {
+        setError(errorMessage(loadError, 'Status updated, but the overview could not be refreshed'));
+      });
     } catch (updateError) {
-      if (previous) setDetail(previous);
+      if (statusTokensRef.current.get(itemId) !== token) return;
+      pendingStatusesRef.current.delete(itemId);
+      if (previousDetail && selectedIdRef.current === itemId) setDetail(previousDetail);
+      if (previousSummary) {
+        setItems((current) => current.map((item) => item.id === itemId ? previousSummary : item));
+      }
+      setOptimisticAnnouncement(`${itemId} status update failed and was rolled back.`);
       throw updateError;
     } finally {
-      setStatusUpdating(false);
+      if (statusTokensRef.current.get(itemId) === token) {
+        statusBusyRef.current.delete(itemId);
+        setStatusUpdating(false);
+      }
     }
-  }, [context, detail, loadDetail, loadOverview, operations.transitionState, selectedId]);
+  }, [context, detail, items, loadOverview, operations.transitionState, selectedId]);
 
   const createWorkItem = useCallback(async (input: WorkItemMutationInput) => {
     if (!operations.create) throw new Error('Creating work items is not supported by this provider.');
@@ -645,15 +707,40 @@ export function useDefectsWorkspace() {
   const addComment = useCallback(async (body: string) => {
     if (!selectedId) return;
     if (!operations.addComments) throw new Error('Adding comments is not supported by this provider.');
-    setMutating(true);
+    const itemId = selectedId;
+    if (commentBusyRef.current.has(itemId)) return;
+    commentBusyRef.current.add(itemId);
+    setCommentPending(true);
+    const now = new Date().toISOString();
+    const tempId = `optimistic-comment-${itemId}-${Date.now()}`;
+    const pendingComment: OptimisticWorkItemComment = {
+      id: tempId,
+      body,
+      author: { id: null, displayName: 'You', email: null, avatarUrl: null },
+      createdAt: now,
+      updatedAt: now,
+      optimisticState: 'pending',
+    };
+    setComments((current) => [...current, pendingComment]);
+    setOptimisticAnnouncement('Comment is being posted.');
     try {
-      const comment = await api<WorkItemComment>(workItemEndpoint(context, selectedId, 'comments'), {
+      const comment = await api<WorkItemComment>(workItemEndpoint(context, itemId, 'comments'), {
         method: 'POST',
         body: JSON.stringify({ body }),
       });
-      setComments((current) => [...current, comment]);
+      if (selectedIdRef.current === itemId) {
+        setComments((current) => current.map((entry) => entry.id === tempId ? comment : entry));
+      }
+      setOptimisticAnnouncement('Comment posted.');
+    } catch (commentError) {
+      if (selectedIdRef.current === itemId) {
+        setComments((current) => current.filter((entry) => entry.id !== tempId));
+      }
+      setOptimisticAnnouncement('Comment failed and the draft was restored.');
+      throw commentError;
     } finally {
-      setMutating(false);
+      commentBusyRef.current.delete(itemId);
+      if (selectedIdRef.current === itemId) setCommentPending(false);
     }
   }, [context, operations.addComments, selectedId]);
 
@@ -668,7 +755,9 @@ export function useDefectsWorkspace() {
         workItemEndpoint(context, selectedId, 'attachments'),
         { method: 'POST', body: form },
       );
-      setAttachments((current) => [...current, attachment]);
+      const next = [...attachmentsRef.current, attachment];
+      attachmentsRef.current = next;
+      setAttachments(next);
     } finally {
       setMutating(false);
     }
@@ -677,15 +766,44 @@ export function useDefectsWorkspace() {
   const deleteAttachment = useCallback(async (attachmentId: string) => {
     if (!selectedId) return;
     if (!operations.deleteAttachments) throw new Error('Attachment deletion is not supported by this provider.');
-    setMutating(true);
+    const itemId = selectedId;
+    const mutationKey = `${itemId}:${attachmentId}`;
+    if (attachmentBusyRef.current.has(mutationKey)) return;
+    const token = (attachmentTokensRef.current.get(mutationKey) ?? 0) + 1;
+    attachmentTokensRef.current.set(mutationKey, token);
+    attachmentBusyRef.current.add(mutationKey);
+    setDeletingAttachmentIds((current) => ({ ...current, [attachmentId]: true }));
+    const removal = removeAtId(attachmentsRef.current, attachmentId);
+    attachmentsRef.current = removal.items;
+    setAttachments(removal.items);
+    setOptimisticAnnouncement(`${removal.snapshot?.item.name ?? 'Attachment'} is being deleted.`);
     try {
       await api(
-        workItemEndpoint(context, selectedId, `attachments/${encodeURIComponent(attachmentId)}`),
+        workItemEndpoint(context, itemId, `attachments/${encodeURIComponent(attachmentId)}`),
         { method: 'DELETE' },
       );
-      setAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+      if (attachmentTokensRef.current.get(mutationKey) !== token) return;
+      setOptimisticAnnouncement(`${removal.snapshot?.item.name ?? 'Attachment'} deleted.`);
+    } catch (deleteError) {
+      if (attachmentTokensRef.current.get(mutationKey) !== token) return;
+      if (selectedIdRef.current === itemId) {
+        setAttachments((current) => {
+          const restored = restoreAtIndex(current, removal.snapshot);
+          attachmentsRef.current = restored;
+          return restored;
+        });
+      }
+      setOptimisticAnnouncement(`${removal.snapshot?.item.name ?? 'Attachment'} deletion failed and was rolled back.`);
+      throw deleteError;
     } finally {
-      setMutating(false);
+      if (attachmentTokensRef.current.get(mutationKey) === token) {
+        attachmentBusyRef.current.delete(mutationKey);
+        setDeletingAttachmentIds((current) => {
+          const next = { ...current };
+          delete next[attachmentId];
+          return next;
+        });
+      }
     }
   }, [context, operations.deleteAttachments, selectedId]);
 
@@ -781,6 +899,9 @@ export function useDefectsWorkspace() {
     sectionErrors,
     detailLoading,
     statusUpdating,
+    commentPending,
+    deletingAttachmentIds,
+    optimisticAnnouncement,
     mutating,
     investigating,
     investigation,

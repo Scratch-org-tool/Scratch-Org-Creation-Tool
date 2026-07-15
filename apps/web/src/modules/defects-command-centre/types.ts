@@ -13,6 +13,10 @@ import type {
 
 export type DefectStatusFilter = 'all' | 'open' | 'active' | 'resolved';
 
+export type OptimisticWorkItemComment = WorkItemComment & {
+  optimisticState?: 'pending';
+};
+
 export type {
   IntegrationCapabilities,
   WorkItemAttachment,

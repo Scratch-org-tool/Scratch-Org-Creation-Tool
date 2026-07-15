@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { api } from '@/services/api';
 import { oauthReturnPath, type OAuthProvider } from './oauth-return-path';
@@ -10,6 +10,7 @@ import type {
   ScmProvider,
   WorkItemProvider,
 } from './types';
+import { removeAtId, restoreAtIndex } from '@/lib/optimistic-list';
 
 interface ConnectionsResponse {
   scm: PublicIntegrationConnection[];
@@ -45,6 +46,12 @@ export function useProviderIntegrations() {
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [bindingBusyIds, setBindingBusyIds] = useState<Record<string, boolean>>({});
+  const [bindingErrors, setBindingErrors] = useState<Record<string, string>>({});
+  const [optimisticAnnouncement, setOptimisticAnnouncement] = useState('');
+  const bindingBusyRef = useRef(new Set<string>());
+  const bindingTokensRef = useRef(new Map<string, number>());
+  const bindingsRef = useRef<ProjectBinding[]>([]);
   const [jiraSelectionState, setJiraSelectionState] = useState<string | null>(null);
   const [jiraSites, setJiraSites] = useState<JiraSite[]>([]);
 
@@ -58,6 +65,7 @@ export function useProviderIntegrations() {
           : Promise.resolve([]),
       ]);
       setConnections(nextConnections);
+      bindingsRef.current = nextBindings;
       setBindings(nextBindings);
     } catch (cause) {
       setError(message(cause, 'Could not load source-control integrations.'));
@@ -213,18 +221,44 @@ export function useProviderIntegrations() {
   }, [refresh]);
 
   const deleteBinding = useCallback(async (id: string) => {
-    setMutating(true);
-    setError(null);
+    if (bindingBusyRef.current.has(id)) return;
+    const token = (bindingTokensRef.current.get(id) ?? 0) + 1;
+    bindingTokensRef.current.set(id, token);
+    bindingBusyRef.current.add(id);
+    setBindingBusyIds((current) => ({ ...current, [id]: true }));
+    setBindingErrors((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    const removal = removeAtId(bindingsRef.current, id);
+    bindingsRef.current = removal.items;
+    setBindings(removal.items);
+    setOptimisticAnnouncement(`Binding ${removal.snapshot?.item.externalProjectId ?? id} is being removed.`);
     try {
-      await api(`/integrations/admin/bindings/${id}`, { method: 'DELETE' });
+      await api(`/integrations/admin/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (bindingTokensRef.current.get(id) !== token) return;
       setNotice('Binding removed.');
-      await refresh();
+      setOptimisticAnnouncement(`Binding ${removal.snapshot?.item.externalProjectId ?? id} removed.`);
     } catch (cause) {
-      setError(message(cause, 'Binding could not be removed.'));
+      if (bindingTokensRef.current.get(id) !== token) return;
+      const failure = message(cause, 'Binding could not be removed.');
+      setBindings((current) => {
+        const next = restoreAtIndex(current, removal.snapshot);
+        bindingsRef.current = next;
+        return next;
+      });
+      setBindingErrors((current) => ({ ...current, [id]: failure }));
+      setOptimisticAnnouncement('Binding removal failed and was rolled back.');
     } finally {
-      setMutating(false);
+      bindingBusyRef.current.delete(id);
+      setBindingBusyIds((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
     }
-  }, [refresh]);
+  }, []);
 
   const activeScm = useMemo(
     () => connections.scm.filter((connection) =>
@@ -253,6 +287,9 @@ export function useProviderIntegrations() {
     disconnect,
     saveBinding,
     deleteBinding,
+    bindingBusyIds,
+    bindingErrors,
+    optimisticAnnouncement,
   };
 }
 

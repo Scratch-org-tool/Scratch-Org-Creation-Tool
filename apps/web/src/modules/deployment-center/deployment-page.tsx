@@ -1,12 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/services/api';
 import { fetchOrgsList } from '@/hooks/use-orgs';
+import {
+  applyApprovalPending,
+  reconcileApproval,
+  rollbackApproval,
+  type OptimisticDeployment,
+} from './optimistic-deployments';
+import { EntityRequestGate } from '@/lib/optimistic-list';
 
 interface Org { id: string; alias: string }
 interface Deployment { id: string; repo: string; branch: string; status: string; strategy: string }
@@ -15,10 +22,14 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [repos, setRepos] = useState<Array<{ id: string; name: string; project?: string }>>([]);
   const [branches, setBranches] = useState<string[]>([]);
-  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [deployments, setDeployments] = useState<OptimisticDeployment<Deployment>[]>([]);
   const [form, setForm] = useState({ targetOrgId: '', repo: '', branch: '' });
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState<Record<string, boolean>>({});
+  const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
+  const [announcement, setAnnouncement] = useState('');
+  const approvalGateRef = useRef(new EntityRequestGate());
 
   useEffect(() => {
     setLoading(true);
@@ -56,17 +67,49 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
   };
 
   const approve = async (id: string) => {
-    await api(`/deployments/${id}/approve`, {
-      method: 'POST',
+    const snapshot = deployments.find((deployment) => deployment.id === id);
+    if (!snapshot) return;
+    const token = approvalGateRef.current.begin(id);
+    if (token == null) return;
+    setApprovalBusy((current) => ({ ...current, [id]: true }));
+    setApprovalErrors((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
     });
-    const updated = await api<Deployment[]>('/deployments');
-    setDeployments(updated);
+    setDeployments((current) => applyApprovalPending(current, id));
+    setAnnouncement(`Deployment ${id} approval is queued.`);
+    try {
+      const updated = await api<Deployment>(`/deployments/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+      });
+      if (!approvalGateRef.current.isLatest(id, token)) return;
+      setDeployments((current) => reconcileApproval(current, id, updated));
+      setAnnouncement(`Deployment ${id} approval was accepted.`);
+    } catch (error) {
+      if (!approvalGateRef.current.isLatest(id, token)) return;
+      setDeployments((current) => rollbackApproval(current, snapshot));
+      setApprovalErrors((current) => ({
+        ...current,
+        [id]: error instanceof Error ? error.message : 'Approve failed',
+      }));
+      setAnnouncement(`Deployment ${id} approval failed and was rolled back.`);
+    } finally {
+      if (approvalGateRef.current.finish(id, token)) {
+        setApprovalBusy((current) => {
+          const next = { ...current };
+          delete next[id];
+          return next;
+        });
+      }
+    }
   };
 
   const title = strategy === 'azure' ? 'Azure DevOps' : 'Jenkins';
 
   return (
     <div className="p-4 md:p-6 space-y-6">
+      <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
       <div>
         <h1 className="text-2xl font-bold">{title}</h1>
         <p className="text-muted-foreground">Manage deployments via {title}</p>
@@ -123,13 +166,28 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
             Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)
           ) : (
             deployments.filter((d) => d.strategy === strategy).map((d) => (
-              <div key={d.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 py-2 border-b border-border">
+              <div key={d.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 py-2 border-b border-border" aria-busy={Boolean(approvalBusy[d.id])}>
                 <div>
                   <p className="text-sm font-medium break-all">{d.repo} / {d.branch}</p>
-                  <p className="text-xs text-muted-foreground">{d.status}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {d.status}{d.approvalPending ? ' · Approval pending…' : ''}
+                  </p>
+                  {approvalErrors[d.id] && (
+                    <p role="alert" className="text-xs text-destructive">
+                      {approvalErrors[d.id]} Approval was rolled back.
+                    </p>
+                  )}
                 </div>
                 {d.status === 'pending' && (
-                  <Button size="sm" onClick={() => approve(d.id)} className="self-start sm:self-auto">Approve</Button>
+                  <Button
+                    size="sm"
+                    loading={Boolean(approvalBusy[d.id])}
+                    disabled={Boolean(approvalBusy[d.id])}
+                    onClick={() => void approve(d.id)}
+                    className="self-start sm:self-auto"
+                  >
+                    Approve
+                  </Button>
                 )}
               </div>
             ))

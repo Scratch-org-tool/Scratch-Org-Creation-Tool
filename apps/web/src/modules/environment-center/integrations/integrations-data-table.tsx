@@ -38,9 +38,12 @@ export function IntegrationsTd({ children, className }: { children: React.ReactN
   return <td className={cn('px-3 py-2.5 align-middle', className)}>{children}</td>;
 }
 
-export function IntegrationsTr({ children }: { children: React.ReactNode }) {
+export function IntegrationsTr({ children, ...props }: React.ComponentPropsWithoutRef<'tr'>) {
   return (
-    <tr className="border-b border-border/40 last:border-0 hover:bg-muted/20 transition-colors">
+    <tr
+      className="border-b border-border/40 last:border-0 hover:bg-muted/20 transition-colors"
+      {...props}
+    >
       {children}
     </tr>
   );

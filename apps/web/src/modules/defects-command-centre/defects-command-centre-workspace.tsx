@@ -18,6 +18,7 @@ export function DefectsCommandCentreWorkspace() {
 
   return (
     <div className="p-4 md:p-6 space-y-5">
+      <p className="sr-only" role="status" aria-live="polite">{w.optimisticAnnouncement}</p>
       <DefectsPageHeader w={w} />
 
       {w.error && <InlineAlert variant="error">{w.error}</InlineAlert>}

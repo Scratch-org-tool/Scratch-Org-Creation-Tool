@@ -1,16 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { GlassCard, InlineAlert } from '@/components/studio';
 import { stripHtmlForDisplay } from '@sfcc/shared';
-import type { WorkItemComment } from './types';
+import type { OptimisticWorkItemComment } from './types';
 
 interface DefectCommentsThreadProps {
-  comments: WorkItemComment[];
+  comments: OptimisticWorkItemComment[];
   loading?: boolean;
   writable: boolean;
   mutating: boolean;
@@ -28,6 +28,8 @@ export function DefectCommentsThread({
 }: DefectCommentsThreadProps) {
   const [body, setBody] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const submittingRef = useRef(false);
 
   if (loading) {
     return (
@@ -40,13 +42,19 @@ export function DefectCommentsThread({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!body.trim()) return;
+    const draft = body.trim();
+    if (!draft || mutating || submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitError(null);
+    setBody('');
     try {
-      await onAdd(body.trim());
-      setBody('');
+      await onAdd(draft);
     } catch (submitFailure) {
+      setBody((current) => current || draft);
       setSubmitError(submitFailure instanceof Error ? submitFailure.message : 'Unable to add comment');
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } finally {
+      submittingRef.current = false;
     }
   };
 
@@ -58,7 +66,11 @@ export function DefectCommentsThread({
       ) : (
         <ul className="space-y-3 max-h-[280px] overflow-y-auto scrollbar-thin pr-1">
           {comments.map((comment) => (
-            <li key={comment.id} className="rounded-lg border border-border/50 bg-secondary/20 p-3">
+            <li
+              key={comment.id}
+              className="rounded-lg border border-border/50 bg-secondary/20 p-3"
+              aria-busy={comment.optimisticState === 'pending'}
+            >
               <div className="flex items-center gap-2 mb-2 text-xs text-muted-foreground">
                 <MessageSquare className="w-3.5 h-3.5" />
                 <span className="font-medium text-foreground">{comment.author.displayName}</span>
@@ -66,6 +78,7 @@ export function DefectCommentsThread({
                 <time dateTime={comment.createdAt}>
                   {comment.createdAt ? new Date(comment.createdAt).toLocaleString() : '—'}
                 </time>
+                {comment.optimisticState === 'pending' && <span>· Posting…</span>}
               </div>
               <p className="text-sm whitespace-pre-wrap break-words">
                 {stripHtmlForDisplay(comment.body)}
@@ -80,6 +93,7 @@ export function DefectCommentsThread({
             Add comment
           </label>
           <Textarea
+            ref={textareaRef}
             id="new-work-item-comment"
             value={body}
             onChange={(event) => setBody(event.target.value)}
@@ -87,7 +101,7 @@ export function DefectCommentsThread({
             disabled={mutating}
           />
           {submitError && <p role="alert" className="text-xs text-destructive">{submitError}</p>}
-          <Button type="submit" size="sm" loading={mutating} disabled={!body.trim()}>
+          <Button type="submit" size="sm" loading={mutating} disabled={!body.trim() || mutating}>
             Add comment
           </Button>
         </form>
