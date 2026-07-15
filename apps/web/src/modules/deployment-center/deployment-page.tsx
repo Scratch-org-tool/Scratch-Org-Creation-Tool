@@ -10,7 +10,7 @@ import { fetchOrgsList } from '@/hooks/use-orgs';
 import {
   applyApprovalPending,
   reconcileApproval,
-  rollbackApproval,
+  reconcileApprovalFailure,
   type OptimisticDeployment,
 } from './optimistic-deployments';
 import { EntityRequestGate } from '@/lib/optimistic-list';
@@ -88,12 +88,26 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
       setAnnouncement(`Deployment ${id} approval was accepted.`);
     } catch (error) {
       if (!approvalGateRef.current.isLatest(id, token)) return;
-      setDeployments((current) => rollbackApproval(current, snapshot));
+      const authoritative = await api<Deployment[]>('/deployments').catch(() => null);
+      const failure = error instanceof Error ? error.message : 'Approve failed';
+      const { disposition } = reconcileApprovalFailure([], id, authoritative);
+      setDeployments((current) => {
+        const reconciled = reconcileApprovalFailure(current, id, authoritative);
+        return reconciled.deployments;
+      });
       setApprovalErrors((current) => ({
         ...current,
-        [id]: error instanceof Error ? error.message : 'Approve failed',
+        [id]: disposition === 'rolled_back'
+          ? `${failure} The authoritative pending state was restored.`
+          : disposition === 'reconciled'
+            ? `${failure} The current server state is shown.`
+            : `${failure} The server state could not be confirmed; queued state is retained.`,
       }));
-      setAnnouncement(`Deployment ${id} approval failed and was rolled back.`);
+      setAnnouncement(disposition === 'rolled_back'
+        ? `Deployment ${id} approval failed and was rolled back.`
+        : disposition === 'reconciled'
+          ? `Deployment ${id} approval response failed; server state was reconciled.`
+          : `Deployment ${id} approval response failed; server state is unconfirmed.`);
     } finally {
       if (approvalGateRef.current.finish(id, token)) {
         setApprovalBusy((current) => {
@@ -174,7 +188,7 @@ export default function DeploymentCenterPage({ strategy }: { strategy: 'azure' |
                   </p>
                   {approvalErrors[d.id] && (
                     <p role="alert" className="text-xs text-destructive">
-                      {approvalErrors[d.id]} Approval was rolled back.
+                      {approvalErrors[d.id]}
                     </p>
                   )}
                 </div>

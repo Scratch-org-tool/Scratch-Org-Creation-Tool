@@ -112,7 +112,7 @@ export function SalesforceOrgsTable({
                   size="sm"
                   className="h-7 px-2 text-xs text-destructive hover:text-destructive"
                   loading={disconnectingAlias === org.alias}
-                  disabled={!!disconnectingAlias}
+                  disabled={!!disconnectingAlias || changingDefault}
                   onClick={() => onDisconnect(org.alias)}
                   aria-label={`Disconnect Salesforce org ${org.alias}`}
                 >

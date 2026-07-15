@@ -496,7 +496,12 @@ function BindingsManager({
           </div>
           <Button
             onClick={save}
-            disabled={(!selected && !workItemConnection) || !project.trim() || state.mutating}
+            disabled={
+              (!selected && !workItemConnection)
+              || !project.trim()
+              || state.mutating
+              || state.bindingCollectionBusy
+            }
           >
             <Link2 className="w-4 h-4 mr-2" />
             Save binding
@@ -538,7 +543,7 @@ function BindingsList({ bindings, state }: { bindings: ProjectBinding[]; state: 
               className="text-destructive"
               loading={Boolean(state.bindingBusyIds[binding.id])}
               onClick={() => setPendingDelete(binding)}
-              disabled={state.mutating || Boolean(state.bindingBusyIds[binding.id])}
+              disabled={state.mutating || state.bindingCollectionBusy}
             >
               Remove
             </Button>

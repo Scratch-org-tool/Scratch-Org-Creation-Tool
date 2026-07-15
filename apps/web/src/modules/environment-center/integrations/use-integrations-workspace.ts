@@ -16,7 +16,7 @@ import type {
   OrgConnectType,
 } from './types';
 import { LOGIN_URL_PRODUCTION, LOGIN_URL_SANDBOX } from './types';
-import { setExclusiveDefault } from '@/lib/optimistic-domain';
+import { restoreDefaultFlags, setExclusiveDefault } from '@/lib/optimistic-domain';
 
 function parseApiError(err: unknown, fallback: string) {
   if (!(err instanceof Error)) return fallback;
@@ -93,6 +93,7 @@ export function useIntegrationsWorkspace() {
   const defaultDevHubBusyRef = useRef(new Set<string>());
   const defaultDevHubSequenceRef = useRef(0);
   const orgsRequestRef = useRef(0);
+  const orgMutationBusyRef = useRef(false);
 
   const [azureForm, setAzureForm] = useState({ orgSlug: '', pat: '', project: '' });
   const [azureSubmitting, setAzureSubmitting] = useState(false);
@@ -300,7 +301,8 @@ export function useIntegrationsWorkspace() {
   };
 
   const setDefaultDevHub = async (alias: string) => {
-    if (defaultDevHubBusyRef.current.size > 0) return;
+    if (orgMutationBusyRef.current) return;
+    orgMutationBusyRef.current = true;
     const token = ++defaultDevHubSequenceRef.current;
     orgsRequestRef.current += 1;
     const snapshot = orgs;
@@ -326,11 +328,12 @@ export function useIntegrationsWorkspace() {
     } catch (err) {
       if (defaultDevHubSequenceRef.current !== token) return;
       const failure = parseApiError(err, `Failed to set ${alias} as the default Dev Hub`);
-      setOrgs(snapshot);
+      setOrgs((current) => restoreDefaultFlags(current, snapshot));
       setDefaultDevHubErrors((current) => ({ ...current, [alias]: failure }));
       setOptimisticAnnouncement(`Default Dev Hub change failed and was rolled back.`);
     } finally {
       defaultDevHubBusyRef.current.delete(alias);
+      orgMutationBusyRef.current = false;
       setDefaultDevHubBusy((current) => {
         const next = { ...current };
         delete next[alias];
@@ -340,6 +343,9 @@ export function useIntegrationsWorkspace() {
   };
 
   const disconnectOrg = async (alias: string) => {
+    if (orgMutationBusyRef.current) return;
+    orgMutationBusyRef.current = true;
+    orgsRequestRef.current += 1;
     setDisconnectingAlias(alias);
     setError(null);
     try {
@@ -351,6 +357,7 @@ export function useIntegrationsWorkspace() {
       setError(parseApiError(err, 'Failed to disconnect org'));
     } finally {
       setDisconnectingAlias(null);
+      orgMutationBusyRef.current = false;
     }
   };
 

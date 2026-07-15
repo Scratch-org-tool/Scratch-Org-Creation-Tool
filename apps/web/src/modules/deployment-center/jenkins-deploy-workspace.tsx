@@ -19,7 +19,7 @@ import { useOrgs } from '@/hooks/use-orgs';
 import {
   applyApprovalPending,
   reconcileApproval,
-  rollbackApproval,
+  reconcileApprovalFailure,
   type OptimisticDeployment,
 } from './optimistic-deployments';
 import { EntityRequestGate } from '@/lib/optimistic-list';
@@ -123,9 +123,25 @@ export function JenkinsDeployWorkspace() {
     } catch (err) {
       if (!approvalGateRef.current.isLatest(id, token)) return;
       const failure = err instanceof Error ? err.message : 'Approve failed';
-      setDeployments((current) => rollbackApproval(current, snapshot));
-      setApprovalErrors((current) => ({ ...current, [id]: failure }));
-      setAnnouncement(`Deployment ${id} approval failed and was rolled back.`);
+      const authoritative = await api<Deployment[]>('/deployments').catch(() => null);
+      const { disposition } = reconcileApprovalFailure([], id, authoritative);
+      setDeployments((current) => {
+        const reconciled = reconcileApprovalFailure(current, id, authoritative);
+        return reconciled.deployments;
+      });
+      setApprovalErrors((current) => ({
+        ...current,
+        [id]: disposition === 'rolled_back'
+          ? `${failure} The authoritative pending state was restored.`
+          : disposition === 'reconciled'
+            ? `${failure} The current server state is shown.`
+            : `${failure} The server state could not be confirmed; queued state is retained.`,
+      }));
+      setAnnouncement(disposition === 'rolled_back'
+        ? `Deployment ${id} approval failed and was rolled back.`
+        : disposition === 'reconciled'
+          ? `Deployment ${id} approval response failed; server state was reconciled.`
+          : `Deployment ${id} approval response failed; server state is unconfirmed.`);
     } finally {
       if (approvalGateRef.current.finish(id, token)) {
         setApprovalBusy((current) => {
@@ -233,7 +249,7 @@ export function JenkinsDeployWorkspace() {
                 />
                 {approvalErrors[d.id] && (
                   <p role="alert" className="text-xs text-destructive">
-                    {approvalErrors[d.id]} Approval was rolled back.
+                    {approvalErrors[d.id]}
                   </p>
                 )}
                 {d.status === 'pending' && (

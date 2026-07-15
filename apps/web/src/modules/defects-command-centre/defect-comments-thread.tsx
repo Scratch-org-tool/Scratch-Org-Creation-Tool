@@ -10,6 +10,7 @@ import { stripHtmlForDisplay } from '@sfcc/shared';
 import type { OptimisticWorkItemComment } from './types';
 
 interface DefectCommentsThreadProps {
+  workItemId: string;
   comments: OptimisticWorkItemComment[];
   loading?: boolean;
   writable: boolean;
@@ -19,6 +20,7 @@ interface DefectCommentsThreadProps {
 }
 
 export function DefectCommentsThread({
+  workItemId,
   comments,
   loading,
   writable,
@@ -26,10 +28,25 @@ export function DefectCommentsThread({
   error,
   onAdd,
 }: DefectCommentsThreadProps) {
-  const [body, setBody] = useState('');
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [composerByItem, setComposerByItem] = useState<Record<
+    string,
+    { body: string; error: string | null }
+  >>({});
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const submittingRef = useRef(false);
+  const submittingRef = useRef(new Set<string>());
+  const composer = composerByItem[workItemId] ?? { body: '', error: null };
+  const composerId = `new-work-item-comment-${encodeURIComponent(workItemId)}`;
+  const setComposer = (
+    update: (current: { body: string; error: string | null }) => {
+      body: string;
+      error: string | null;
+    },
+  ) => {
+    setComposerByItem((current) => ({
+      ...current,
+      [workItemId]: update(current[workItemId] ?? { body: '', error: null }),
+    }));
+  };
 
   if (loading) {
     return (
@@ -42,19 +59,22 @@ export function DefectCommentsThread({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    const draft = body.trim();
-    if (!draft || mutating || submittingRef.current) return;
-    submittingRef.current = true;
-    setSubmitError(null);
-    setBody('');
+    const draft = composer.body.trim();
+    if (!draft || mutating || submittingRef.current.has(workItemId)) return;
+    submittingRef.current.add(workItemId);
+    setComposer(() => ({ body: '', error: null }));
     try {
       await onAdd(draft);
     } catch (submitFailure) {
-      setBody((current) => current || draft);
-      setSubmitError(submitFailure instanceof Error ? submitFailure.message : 'Unable to add comment');
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      setComposer((current) => ({
+        body: current.body || draft,
+        error: submitFailure instanceof Error ? submitFailure.message : 'Unable to add comment',
+      }));
+      requestAnimationFrame(() => {
+        if (!submittingRef.current.has(workItemId)) textareaRef.current?.focus();
+      });
     } finally {
-      submittingRef.current = false;
+      submittingRef.current.delete(workItemId);
     }
   };
 
@@ -89,19 +109,22 @@ export function DefectCommentsThread({
       )}
       {writable && (
         <form className="mt-4 pt-4 border-t border-border/40 space-y-2" onSubmit={(event) => void submit(event)}>
-          <label htmlFor="new-work-item-comment" className="text-xs font-medium text-muted-foreground">
+          <label htmlFor={composerId} className="text-xs font-medium text-muted-foreground">
             Add comment
           </label>
           <Textarea
             ref={textareaRef}
-            id="new-work-item-comment"
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
+            id={composerId}
+            value={composer.body}
+            onChange={(event) => setComposer((current) => ({
+              body: event.target.value,
+              error: current.error,
+            }))}
             rows={3}
             disabled={mutating}
           />
-          {submitError && <p role="alert" className="text-xs text-destructive">{submitError}</p>}
-          <Button type="submit" size="sm" loading={mutating} disabled={!body.trim() || mutating}>
+          {composer.error && <p role="alert" className="text-xs text-destructive">{composer.error}</p>}
+          <Button type="submit" size="sm" loading={mutating} disabled={!composer.body.trim() || mutating}>
             Add comment
           </Button>
         </form>

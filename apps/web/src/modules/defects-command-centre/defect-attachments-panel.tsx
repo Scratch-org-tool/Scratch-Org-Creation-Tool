@@ -25,6 +25,7 @@ interface DefectAttachmentsPanelProps {
   deletable: boolean;
   mutating: boolean;
   deletingIds: Record<string, boolean>;
+  deleteBusy: boolean;
   error?: string;
   contentPath: (attachmentId: string) => string;
   onUpload: (file: File) => Promise<void>;
@@ -53,6 +54,7 @@ export function DefectAttachmentsPanel({
   deletable,
   mutating,
   deletingIds,
+  deleteBusy,
   error,
   contentPath,
   onUpload,
@@ -101,7 +103,7 @@ export function DefectAttachmentsPanel({
   };
 
   const remove = async (attachment: WorkItemAttachment) => {
-    if (deletingIds[attachment.id]) return;
+    if (deleteBusy) return;
     if (!window.confirm(`Delete attachment "${attachment.name}"?`)) return;
     setActionError(null);
     setPendingDeletes((current) => ({ ...current, [attachment.id]: attachment.name }));
@@ -196,7 +198,7 @@ export function DefectAttachmentsPanel({
                         size="icon"
                         className="h-8 w-8"
                         loading={Boolean(deletingIds[file.id])}
-                        disabled={Boolean(deletingIds[file.id])}
+                        disabled={deleteBusy}
                         onClick={() => void remove(file)}
                         aria-label={`Delete ${file.name}`}
                       >

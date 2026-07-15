@@ -10,7 +10,12 @@ import type {
   ScmProvider,
   WorkItemProvider,
 } from './types';
-import { removeAtId, restoreAtIndex } from '@/lib/optimistic-list';
+import {
+  MutationAwareRequestGate,
+  removeAtId,
+  restoreAtIndex,
+  withoutIds,
+} from '@/lib/optimistic-list';
 
 interface ConnectionsResponse {
   scm: PublicIntegrationConnection[];
@@ -52,10 +57,13 @@ export function useProviderIntegrations() {
   const bindingBusyRef = useRef(new Set<string>());
   const bindingTokensRef = useRef(new Map<string, number>());
   const bindingsRef = useRef<ProjectBinding[]>([]);
+  const pendingBindingDeletesRef = useRef(new Set<string>());
+  const bindingRequestGateRef = useRef(new MutationAwareRequestGate());
   const [jiraSelectionState, setJiraSelectionState] = useState<string | null>(null);
   const [jiraSites, setJiraSites] = useState<JiraSite[]>([]);
 
   const refresh = useCallback(async () => {
+    const bindingRequest = bindingRequestGateRef.current.beginRequest();
     setError(null);
     try {
       const [nextConnections, nextBindings] = await Promise.all([
@@ -65,8 +73,11 @@ export function useProviderIntegrations() {
           : Promise.resolve([]),
       ]);
       setConnections(nextConnections);
-      bindingsRef.current = nextBindings;
-      setBindings(nextBindings);
+      if (bindingRequestGateRef.current.isLatest(bindingRequest)) {
+        const reconciled = withoutIds(nextBindings, pendingBindingDeletesRef.current);
+        bindingsRef.current = reconciled;
+        setBindings(reconciled);
+      }
     } catch (cause) {
       setError(message(cause, 'Could not load source-control integrations.'));
     } finally {
@@ -221,10 +232,11 @@ export function useProviderIntegrations() {
   }, [refresh]);
 
   const deleteBinding = useCallback(async (id: string) => {
-    if (bindingBusyRef.current.has(id)) return;
+    if (bindingBusyRef.current.size > 0) return;
     const token = (bindingTokensRef.current.get(id) ?? 0) + 1;
     bindingTokensRef.current.set(id, token);
     bindingBusyRef.current.add(id);
+    bindingRequestGateRef.current.beginMutation();
     setBindingBusyIds((current) => ({ ...current, [id]: true }));
     setBindingErrors((current) => {
       const next = { ...current };
@@ -232,16 +244,24 @@ export function useProviderIntegrations() {
       return next;
     });
     const removal = removeAtId(bindingsRef.current, id);
+    pendingBindingDeletesRef.current.add(id);
     bindingsRef.current = removal.items;
     setBindings(removal.items);
     setOptimisticAnnouncement(`Binding ${removal.snapshot?.item.externalProjectId ?? id} is being removed.`);
     try {
       await api(`/integrations/admin/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (bindingTokensRef.current.get(id) !== token) return;
+      pendingBindingDeletesRef.current.delete(id);
+      setBindings((current) => {
+        const next = current.filter((binding) => binding.id !== id);
+        bindingsRef.current = next;
+        return next;
+      });
       setNotice('Binding removed.');
       setOptimisticAnnouncement(`Binding ${removal.snapshot?.item.externalProjectId ?? id} removed.`);
     } catch (cause) {
       if (bindingTokensRef.current.get(id) !== token) return;
+      pendingBindingDeletesRef.current.delete(id);
       const failure = message(cause, 'Binding could not be removed.');
       setBindings((current) => {
         const next = restoreAtIndex(current, removal.snapshot);
@@ -252,6 +272,7 @@ export function useProviderIntegrations() {
       setOptimisticAnnouncement('Binding removal failed and was rolled back.');
     } finally {
       bindingBusyRef.current.delete(id);
+      bindingRequestGateRef.current.finishMutation();
       setBindingBusyIds((current) => {
         const next = { ...current };
         delete next[id];
@@ -288,6 +309,7 @@ export function useProviderIntegrations() {
     saveBinding,
     deleteBinding,
     bindingBusyIds,
+    bindingCollectionBusy: Object.keys(bindingBusyIds).length > 0,
     bindingErrors,
     optimisticAnnouncement,
   };

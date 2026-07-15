@@ -1,15 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { applyEntityState, setExclusiveDefault } from './optimistic-domain';
 import {
+  applyEntityState,
+  restoreDefaultFlags,
+  setExclusiveDefault,
+} from './optimistic-domain';
+import {
+  appendMissingById,
   EntityRequestGate,
   insertAfterId,
+  MutationAwareRequestGate,
   removeAtId,
+  replaceOrAppendAtId,
+  replaceOrInsertAfterId,
   replaceAtId,
   restoreAtIndex,
+  withoutIds,
 } from './optimistic-list';
 import {
   applyApprovalPending,
   reconcileApproval,
+  reconcileApprovalFailure,
   rollbackApproval,
 } from '../modules/deployment-center/optimistic-deployments';
 import {
@@ -53,6 +63,21 @@ describe('defects optimistic mutations', () => {
     expect(removed.items).toEqual([{ id: 'a' }, { id: 'c' }]);
     expect(restoreAtIndex(removed.items, removed.snapshot)).toEqual(attachments);
   });
+
+  it('overlays pending operations on refresh and reconciles success when the temp row was dropped', () => {
+    const pending = { id: 'temp-c2', body: 'Draft', optimisticState: 'pending' };
+    expect(appendMissingById([{ id: 'c1', body: 'Existing' }], [pending]))
+      .toEqual([{ id: 'c1', body: 'Existing' }, pending]);
+
+    const server = { id: 'c2', body: 'Saved' };
+    expect(replaceOrAppendAtId([{ id: 'c1', body: 'Existing' }], pending.id, server))
+      .toEqual([{ id: 'c1', body: 'Existing' }, server]);
+    expect(replaceOrAppendAtId([{ id: 'c1', body: 'Existing' }, server], pending.id, server))
+      .toEqual([{ id: 'c1', body: 'Existing' }, server]);
+
+    const resurrected = [{ id: 'a' }, { id: 'deleted' }, { id: 'b' }];
+    expect(withoutIds(resurrected, new Set(['deleted']))).toEqual([{ id: 'a' }, { id: 'b' }]);
+  });
 });
 
 describe('default Dev Hub optimistic mutation', () => {
@@ -72,6 +97,21 @@ describe('default Dev Hub optimistic mutation', () => {
     expect(reconciled[1]?.status).toBe('Connected');
     expect(orgs.map((org) => org.isDefaultDevHub)).toEqual([true, false]);
   });
+
+  it('rolls back only flags on rows that are still connected', () => {
+    const snapshot = [
+      { alias: 'removed', isDefaultDevHub: true },
+      { alias: 'remaining', isDefaultDevHub: false },
+    ];
+    const current = [
+      { alias: 'remaining', isDefaultDevHub: true, status: 'Connected' },
+      { alias: 'new', isDefaultDevHub: false, status: 'Connected' },
+    ];
+    expect(restoreDefaultFlags(current, snapshot)).toEqual([
+      { alias: 'remaining', isDefaultDevHub: false, status: 'Connected' },
+      { alias: 'new', isDefaultDevHub: false, status: 'Connected' },
+    ]);
+  });
 });
 
 describe('scratch-template optimistic mutations', () => {
@@ -86,6 +126,30 @@ describe('scratch-template optimistic mutations', () => {
     const removed = removeAtId(templates, 'one');
     expect(restoreAtIndex(removed.items, removed.snapshot)).toEqual(templates);
   });
+
+  it('reconciles duplicate success idempotently after a stale refresh dropped the provisional row', () => {
+    const refreshed = [{ id: 'one', name: 'One' }, { id: 'two', name: 'Two' }];
+    const created = { id: 'copy', name: 'Server copy' };
+    const once = replaceOrInsertAfterId(refreshed, 'temp', 'one', created);
+    const twice = replaceOrInsertAfterId(once, 'temp', 'one', created);
+    expect(once).toEqual([
+      { id: 'one', name: 'One' },
+      created,
+      { id: 'two', name: 'Two' },
+    ]);
+    expect(twice).toEqual(once);
+  });
+
+  it('rejects stale list requests across mutations', () => {
+    const gate = new MutationAwareRequestGate();
+    const beforeMutation = gate.beginRequest();
+    gate.beginMutation();
+    expect(gate.isLatest(beforeMutation)).toBe(false);
+    const duringMutation = gate.beginRequest();
+    gate.finishMutation();
+    expect(gate.isLatest(duringMutation)).toBe(false);
+    expect(gate.isLatest(gate.beginRequest())).toBe(true);
+  });
 });
 
 describe('provider-binding optimistic deletion', () => {
@@ -97,6 +161,20 @@ describe('provider-binding optimistic deletion', () => {
   });
 });
 
+describe.each(['attachments', 'templates', 'bindings'])(
+  '%s concurrent optimistic deletions',
+  (collection) => {
+    it('serializes the collection so rollback order cannot depend on response order', () => {
+      const gate = new EntityRequestGate();
+      const first = gate.begin(collection);
+      expect(first).toBe(1);
+      expect(gate.begin(collection)).toBeNull();
+      expect(gate.finish(collection, first!)).toBe(true);
+      expect(gate.begin(collection)).toBe(2);
+    });
+  },
+);
+
 describe('deployment approval optimistic mutation', () => {
   it('queues immediately, reconciles the server result, and rolls back failure', () => {
     const deployments = [{ id: 'dep-1', status: 'pending', repo: 'app' }];
@@ -105,6 +183,22 @@ describe('deployment approval optimistic mutation', () => {
     const server = { id: 'dep-1', status: 'running', repo: 'server-app' };
     expect(reconcileApproval(pending, 'dep-1', server)[0]).toEqual(server);
     expect(rollbackApproval(pending, deployments[0]!)[0]).toEqual(deployments[0]);
+  });
+
+  it('uses authoritative state after an error and retains queued state when reconciliation fails', () => {
+    const deployments = [{ id: 'dep-1', status: 'pending', repo: 'app' }];
+    const pending = applyApprovalPending(deployments, 'dep-1');
+    expect(reconcileApprovalFailure(pending, 'dep-1', deployments)).toEqual({
+      deployments,
+      disposition: 'rolled_back',
+    });
+    expect(reconcileApprovalFailure(pending, 'dep-1', [
+      { id: 'dep-1', status: 'running', repo: 'app' },
+    ])).toMatchObject({ disposition: 'reconciled' });
+    expect(reconcileApprovalFailure(pending, 'dep-1', null)).toEqual({
+      deployments: pending,
+      disposition: 'ambiguous',
+    });
   });
 });
 

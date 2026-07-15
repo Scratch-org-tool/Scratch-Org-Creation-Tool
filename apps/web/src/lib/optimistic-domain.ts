@@ -14,3 +14,12 @@ export function setExclusiveDefault<
     isDefaultDevHub: item.alias === alias,
   }));
 }
+
+export function restoreDefaultFlags<
+  T extends { alias: string; isDefaultDevHub?: boolean },
+>(current: readonly T[], snapshot: readonly T[]): T[] {
+  const flags = new Map(snapshot.map((item) => [item.alias, item.isDefaultDevHub]));
+  return current.map((item) => flags.has(item.alias)
+    ? { ...item, isDefaultDevHub: flags.get(item.alias) }
+    : item);
+}

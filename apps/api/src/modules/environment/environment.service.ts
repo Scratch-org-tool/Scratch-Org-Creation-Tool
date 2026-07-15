@@ -409,15 +409,27 @@ export class EnvironmentService {
   }
 
   async setDefaultDevHub(alias: string, userId: string) {
-    await this.orgsService.findByAlias(alias, userId);
-    await prisma.orgConnection.updateMany({
-      where: userOwnedWhere(userId),
-      data: { isDefaultDevHub: false },
+    const updated = await prisma.$transaction(async (tx) => {
+      const target = await tx.orgConnection.findFirst({
+        where: {
+          alias,
+          ...userOwnedWhere(userId),
+          type: { not: 'scratch' },
+          status: 'active',
+          isDevHub: true,
+        },
+      });
+      if (!target) throw new NotFoundException('Connected Dev Hub not found');
+      await tx.orgConnection.updateMany({
+        where: userOwnedWhere(userId),
+        data: { isDefaultDevHub: false },
+      });
+      return tx.orgConnection.update({
+        where: { id: target.id },
+        data: { isDefaultDevHub: true },
+      });
     });
-    return prisma.orgConnection.update({
-      where: { alias },
-      data: { isDefaultDevHub: true, isDevHub: true },
-    });
+    return this.mapConnectedOrg(updated);
   }
 
   async verifyOrgAuth(orgId: string, userId: string) {

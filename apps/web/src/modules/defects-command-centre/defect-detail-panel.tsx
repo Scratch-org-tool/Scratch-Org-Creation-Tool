@@ -286,6 +286,7 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
               deletable={w.operations.deleteAttachments}
               mutating={w.mutating}
               deletingIds={w.deletingAttachmentIds}
+              deleteBusy={w.attachmentDeleteBusy}
               error={w.sectionErrors.attachments}
               contentPath={(attachmentId) =>
                 workItemEndpoint(
@@ -330,6 +331,7 @@ export function DefectDetailPanel({ w }: { w: DefectsWorkspaceState }) {
 
       {w.operations.readComments && (
         <DefectCommentsThread
+          workItemId={w.selectedWorkItemKey ?? item.id}
           comments={w.comments}
           loading={w.detailLoading}
           writable={w.operations.addComments}

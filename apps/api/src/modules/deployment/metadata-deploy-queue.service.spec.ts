@@ -11,7 +11,10 @@ vi.mock('@sfcc/db', () => ({ prisma: db, Prisma: {} }));
 
 import type { QueueService } from '../queue/queue.service';
 import type { ScmSourceService } from '../../integrations/foundation/scm-source.service';
-import { MetadataDeployQueueService } from './metadata-deploy-queue.service';
+import {
+  MetadataDeployQueueService,
+  metadataEnqueueSideEffectMayHavePersisted,
+} from './metadata-deploy-queue.service';
 
 describe('MetadataDeployQueueService SCM payloads', () => {
   const addJob = vi.fn();
@@ -112,5 +115,24 @@ describe('MetadataDeployQueueService SCM payloads', () => {
     ).rejects.toThrow('not active');
     expect(db.job.create).not.toHaveBeenCalled();
     expect(addJob).not.toHaveBeenCalled();
+  });
+
+  it('marks pre-dispatch failures safe and queue-dispatch failures ambiguous', async () => {
+    requireActive.mockRejectedValueOnce(new Error('inactive'));
+    const safe = await service.enqueue({
+      orgAlias: 'target@example.com',
+      gitSource: { provider: 'github', repo: 'metadata', branch: 'main' },
+    }).catch((error: unknown) => error);
+    expect(safe).toBeInstanceOf(Error);
+    expect(metadataEnqueueSideEffectMayHavePersisted(safe)).toBe(false);
+
+    requireActive.mockImplementation((source: GitSourceConfig) => Promise.resolve(source));
+    addJob.mockRejectedValueOnce(new Error('connection reset'));
+    const ambiguous = await service.enqueue({
+      orgAlias: 'target@example.com',
+      gitSource: { provider: 'github', repo: 'metadata', branch: 'main' },
+    }).catch((error: unknown) => error);
+    expect(ambiguous).toBeInstanceOf(Error);
+    expect(metadataEnqueueSideEffectMayHavePersisted(ambiguous)).toBe(true);
   });
 });

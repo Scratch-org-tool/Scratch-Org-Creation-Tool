@@ -11,7 +11,13 @@ import { ScratchTemplateForm } from './scratch-template-form';
 import { TemplatesPageHeader } from './templates-page-header';
 import { configToSummaryChips } from './types';
 import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
-import { insertAfterId, removeAtId, replaceAtId, restoreAtIndex } from '@/lib/optimistic-list';
+import {
+  insertAfterId,
+  MutationAwareRequestGate,
+  removeAtId,
+  replaceOrInsertAfterId,
+  restoreAtIndex,
+} from '@/lib/optimistic-list';
 
 export interface TemplateRow {
   id: string;
@@ -36,18 +42,21 @@ export function ScratchTemplatesWorkspace() {
   const busyRef = useRef(new Set<string>());
   const tokensRef = useRef(new Map<string, number>());
   const templatesRef = useRef<TemplateRow[]>(cached ?? []);
+  const requestGateRef = useRef(new MutationAwareRequestGate());
 
   const load = useCallback(async () => {
+    const request = requestGateRef.current.beginRequest();
     if (!getSessionCache<TemplateRow[]>(cacheKey)) {
       setLoading(true);
     }
     try {
       const list = await api<TemplateRow[]>('/environment/scratch-templates');
+      if (!requestGateRef.current.isLatest(request) || busyRef.current.size > 0) return;
       templatesRef.current = list;
       setTemplates(list);
       setSessionCache(cacheKey, list);
     } finally {
-      setLoading(false);
+      if (requestGateRef.current.isLatestGeneration(request)) setLoading(false);
     }
   }, [cacheKey]);
 
@@ -57,12 +66,13 @@ export function ScratchTemplatesWorkspace() {
   }, [cacheKey, load]);
 
   const duplicate = async (id: string) => {
-    if (busyRef.current.has(id)) return;
+    if (busyRef.current.size > 0) return;
     const source = templatesRef.current.find((template) => template.id === id);
     if (!source) return;
     const token = (tokensRef.current.get(id) ?? 0) + 1;
     tokensRef.current.set(id, token);
     busyRef.current.add(id);
+    requestGateRef.current.beginMutation();
     setBusyIds((current) => ({ ...current, [id]: true }));
     setMutationErrors((current) => {
       const next = { ...current };
@@ -88,7 +98,7 @@ export function ScratchTemplatesWorkspace() {
       );
       if (tokensRef.current.get(id) !== token) return;
       setTemplates((current) => {
-        const next = replaceAtId(current, provisionalId, created);
+        const next = replaceOrInsertAfterId(current, provisionalId, id, created);
         templatesRef.current = next;
         setSessionCache(cacheKey, next);
         return next;
@@ -108,6 +118,7 @@ export function ScratchTemplatesWorkspace() {
       setAnnouncement(`${source.name} duplication failed; the pending row was removed.`);
     } finally {
       busyRef.current.delete(id);
+      requestGateRef.current.finishMutation();
       setBusyIds((current) => {
         const next = { ...current };
         delete next[id];
@@ -118,10 +129,11 @@ export function ScratchTemplatesWorkspace() {
 
   const remove = async (id: string) => {
     if (!confirm('Delete this template?')) return;
-    if (busyRef.current.has(id)) return;
+    if (busyRef.current.size > 0) return;
     const token = (tokensRef.current.get(id) ?? 0) + 1;
     tokensRef.current.set(id, token);
     busyRef.current.add(id);
+    requestGateRef.current.beginMutation();
     setBusyIds((current) => ({ ...current, [id]: true }));
     setMutationErrors((current) => {
       const next = { ...current };
@@ -135,7 +147,12 @@ export function ScratchTemplatesWorkspace() {
     try {
       await api(`/environment/scratch-templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (tokensRef.current.get(id) !== token) return;
-      setSessionCache(cacheKey, templatesRef.current);
+      setTemplates((current) => {
+        const next = current.filter((template) => template.id !== id);
+        templatesRef.current = next;
+        setSessionCache(cacheKey, next);
+        return next;
+      });
       setAnnouncement(`${removal.snapshot?.item.name ?? 'Template'} deleted.`);
     } catch (error) {
       if (tokensRef.current.get(id) !== token) return;
@@ -152,6 +169,7 @@ export function ScratchTemplatesWorkspace() {
       setAnnouncement(`${removal.snapshot?.item.name ?? 'Template'} deletion failed and was rolled back.`);
     } finally {
       busyRef.current.delete(id);
+      requestGateRef.current.finishMutation();
       setBusyIds((current) => {
         const next = { ...current };
         delete next[id];
@@ -173,12 +191,14 @@ export function ScratchTemplatesWorkspace() {
     );
   }
 
+  const collectionBusy = Object.keys(busyIds).length > 0;
+
   return (
     <div className="p-4 md:p-6 space-y-6">
       <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
       <TemplatesPageHeader
         actions={
-          <Button onClick={() => setCreating(true)}>
+          <Button onClick={() => setCreating(true)} disabled={collectionBusy}>
             <Plus className="w-4 h-4 mr-2" />
             New template
           </Button>
@@ -242,7 +262,7 @@ export function ScratchTemplatesWorkspace() {
                     size="sm"
                     variant="outline"
                     loading={Boolean(busyIds[t.id])}
-                    disabled={Boolean(busyIds[t.id])}
+                    disabled={collectionBusy}
                     onClick={() => void duplicate(t.id)}
                   >
                     <Copy className="w-3.5 h-3.5 mr-1" />
@@ -250,11 +270,11 @@ export function ScratchTemplatesWorkspace() {
                   </Button>
                   {!t.isSystem && (
                     <>
-                      <Button size="sm" variant="outline" disabled={Boolean(busyIds[t.id])} onClick={() => setEditingId(t.id)}>
+                      <Button size="sm" variant="outline" disabled={collectionBusy} onClick={() => setEditingId(t.id)}>
                         <Pencil className="w-3.5 h-3.5 mr-1" />
                         Edit
                       </Button>
-                      <Button size="sm" variant="outline" disabled={Boolean(busyIds[t.id])} onClick={() => void remove(t.id)}>
+                      <Button size="sm" variant="outline" disabled={collectionBusy} onClick={() => void remove(t.id)}>
                         <Trash2 className="w-3.5 h-3.5 mr-1" />
                         Delete
                       </Button>

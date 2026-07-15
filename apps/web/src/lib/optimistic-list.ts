@@ -32,6 +32,23 @@ export function replaceAtId<T extends { id: string }>(
   return items.map((item) => item.id === id ? replacement : item);
 }
 
+export function replaceOrAppendAtId<T extends { id: string }>(
+  items: readonly T[],
+  id: string,
+  replacement: T,
+): T[] {
+  const withoutServerDuplicate = items.filter(
+    (item) => item.id !== replacement.id || item.id === id,
+  );
+  const index = withoutServerDuplicate.findIndex((item) => item.id === id);
+  if (index < 0) return [...withoutServerDuplicate, replacement];
+  return [
+    ...withoutServerDuplicate.slice(0, index),
+    replacement,
+    ...withoutServerDuplicate.slice(index + 1),
+  ];
+}
+
 export function insertAfterId<T extends { id: string }>(
   items: readonly T[],
   id: string,
@@ -40,6 +57,36 @@ export function insertAfterId<T extends { id: string }>(
   const index = items.findIndex((item) => item.id === id);
   if (index < 0) return [...items, inserted];
   return [...items.slice(0, index + 1), inserted, ...items.slice(index + 1)];
+}
+
+export function replaceOrInsertAfterId<T extends { id: string }>(
+  items: readonly T[],
+  provisionalId: string,
+  sourceId: string,
+  replacement: T,
+): T[] {
+  const withoutServerDuplicate = items.filter(
+    (item) => item.id !== replacement.id || item.id === provisionalId,
+  );
+  if (withoutServerDuplicate.some((item) => item.id === provisionalId)) {
+    return replaceAtId(withoutServerDuplicate, provisionalId, replacement);
+  }
+  return insertAfterId(withoutServerDuplicate, sourceId, replacement);
+}
+
+export function appendMissingById<T extends { id: string }>(
+  items: readonly T[],
+  overlay: readonly T[],
+): T[] {
+  const ids = new Set(items.map((item) => item.id));
+  return [...items, ...overlay.filter((item) => !ids.has(item.id))];
+}
+
+export function withoutIds<T extends { id: string }>(
+  items: readonly T[],
+  ids: ReadonlySet<string>,
+): T[] {
+  return ids.size === 0 ? [...items] : items.filter((item) => !ids.has(item.id));
 }
 
 export class EntityRequestGate {
@@ -67,5 +114,39 @@ export class EntityRequestGate {
   invalidate(id: string): void {
     this.tokens.set(id, (this.tokens.get(id) ?? 0) + 1);
     this.busy.delete(id);
+  }
+}
+
+export interface MutationAwareRequest {
+  generation: number;
+  mutationVersion: number;
+}
+
+export class MutationAwareRequestGate {
+  private generation = 0;
+  private mutationVersion = 0;
+
+  beginRequest(): MutationAwareRequest {
+    return {
+      generation: ++this.generation,
+      mutationVersion: this.mutationVersion,
+    };
+  }
+
+  isLatest(request: MutationAwareRequest): boolean {
+    return request.generation === this.generation
+      && request.mutationVersion === this.mutationVersion;
+  }
+
+  isLatestGeneration(request: MutationAwareRequest): boolean {
+    return request.generation === this.generation;
+  }
+
+  beginMutation(): void {
+    this.mutationVersion += 1;
+  }
+
+  finishMutation(): void {
+    this.mutationVersion += 1;
   }
 }
