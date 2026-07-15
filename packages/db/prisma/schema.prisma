@@ -67,53 +67,53 @@ model OrgConnection {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  sourceMovements DataMovement[] @relation("SourceOrg")
-  targetMovements DataMovement[] @relation("TargetOrg")
-  deployments     Deployment[]
-  provisionBatches ProvisioningBatch[]
-  dataDeployBatchesSource DataDeployBatch[] @relation("BatchSourceOrg")
-  dataDeployBatchesTarget DataDeployBatch[] @relation("BatchTargetOrg")
+  sourceMovements         DataMovement[]      @relation("SourceOrg")
+  targetMovements         DataMovement[]      @relation("TargetOrg")
+  deployments             Deployment[]
+  provisionBatches        ProvisioningBatch[]
+  dataDeployBatchesSource DataDeployBatch[]   @relation("BatchSourceOrg")
+  dataDeployBatchesTarget DataDeployBatch[]   @relation("BatchTargetOrg")
 
   @@index([createdBy])
 }
 
 model AutomationRun {
-  id        String     @id @default(uuid())
-  intent    String
-  persona   Persona    @default(developer)
-  status    JobStatus  @default(pending)
-  createdBy String     @default("system")
-  config    Json?
+  id         String    @id @default(uuid())
+  intent     String
+  persona    Persona   @default(developer)
+  status     JobStatus @default(pending)
+  createdBy  String    @default("system")
+  config     Json?
   failedStep String?
   lastError  String?
   checkpoint Json?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  jobs      Job[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  jobs       Job[]
 
   @@index([createdBy])
 }
 
 model Job {
-  id           String         @id @default(uuid())
-  queue        String
-  type         String
-  payload      Json
-  status       JobStatus      @default(pending)
-  currentStep  String         @default("Not Started")
-  alias        String?
-  attempts     Int            @default(0)
-  error        String?
-  parentRunId  String?
-  parentRun    AutomationRun? @relation(fields: [parentRunId], references: [id], onDelete: Cascade)
-  createdBy    String         @default("system")
-  startedAt    DateTime?
-  finishedAt   DateTime?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  logs         JobLog[]
-  scratchOrg   ScratchOrg?
-  deployment   Deployment?
+  id          String         @id @default(uuid())
+  queue       String
+  type        String
+  payload     Json
+  status      JobStatus      @default(pending)
+  currentStep String         @default("Not Started")
+  alias       String?
+  attempts    Int            @default(0)
+  error       String?
+  parentRunId String?
+  parentRun   AutomationRun? @relation(fields: [parentRunId], references: [id], onDelete: Cascade)
+  createdBy   String         @default("system")
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  logs        JobLog[]
+  scratchOrg  ScratchOrg?
+  deployment  Deployment?
 
   @@index([parentRunId])
   @@index([status])
@@ -154,27 +154,27 @@ model JobLog {
 }
 
 model Deployment {
-  id          String             @id @default(uuid())
-  sourceOrgId String?
-  targetOrgId String
-  targetOrg   OrgConnection      @relation(fields: [targetOrgId], references: [id])
-  jobId       String?            @unique
-  job         Job?               @relation(fields: [jobId], references: [id])
-  repo        String
-  branch      String
-  strategy    DeploymentStrategy
-  status      JobStatus          @default(pending)
-  approvedBy  String?
-  approvedAt  DateTime?
-  metadata    Json?
+  id           String             @id @default(uuid())
+  sourceOrgId  String?
+  targetOrgId  String
+  targetOrg    OrgConnection      @relation(fields: [targetOrgId], references: [id])
+  jobId        String?            @unique
+  job          Job?               @relation(fields: [jobId], references: [id])
+  repo         String
+  branch       String
+  strategy     DeploymentStrategy
+  status       JobStatus          @default(pending)
+  approvedBy   String?
+  approvedAt   DateTime?
+  metadata     Json?
   /// Salesforce deploy request id from a validate-only run, usable for quick deploy.
   validationId String?
   /// Path to the pre-deploy snapshot of affected components retrieved from the target org.
   snapshotPath String?
-  createdBy   String             @default("system")
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  rollbacks   Rollback[]
+  createdBy    String             @default("system")
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  rollbacks    Rollback[]
 
   @@index([createdBy])
 }
@@ -205,55 +205,55 @@ model Rollback {
 }
 
 model DataMovement {
-  id           String        @id @default(uuid())
-  sourceOrgId  String
-  sourceOrg    OrgConnection @relation("SourceOrg", fields: [sourceOrgId], references: [id])
-  targetOrgId  String
-  targetOrg    OrgConnection @relation("TargetOrg", fields: [targetOrgId], references: [id])
-  objectName   String?
-  soql         String?
-  recordCount  Int?
-  sfdmuConfig  Json?
+  id                 String           @id @default(uuid())
+  sourceOrgId        String
+  sourceOrg          OrgConnection    @relation("SourceOrg", fields: [sourceOrgId], references: [id])
+  targetOrgId        String
+  targetOrg          OrgConnection    @relation("TargetOrg", fields: [targetOrgId], references: [id])
+  objectName         String?
+  soql               String?
+  recordCount        Int?
+  sfdmuConfig        Json?
   recordTypeMappings Json?
-  status       JobStatus     @default(pending)
-  movementType String        @default("deploy")
-  batchId      String?
-  batch        DataDeployBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
-  chunkIndex   Int?
-  createdBy    String        @default("system")
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  status             JobStatus        @default(pending)
+  movementType       String           @default("deploy")
+  batchId            String?
+  batch              DataDeployBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  chunkIndex         Int?
+  createdBy          String           @default("system")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   @@index([createdBy])
   @@index([batchId])
 }
 
 model DataDeployBatch {
-  id              String   @id @default(uuid())
+  id                 String            @id @default(uuid())
   /// Groups multiple per-object batches created from one multi-object deploy request.
-  groupId         String?
-  sourceOrgId     String
-  sourceOrg       OrgConnection @relation("BatchSourceOrg", fields: [sourceOrgId], references: [id])
-  targetOrgId     String
-  targetOrg       OrgConnection @relation("BatchTargetOrg", fields: [targetOrgId], references: [id])
-  objectName      String?
-  strategy        String   @default("generic")
-  movementType    String   @default("deploy")
-  status          JobStatus @default(queued)
-  baseSoql        String?
-  matchField      String?
+  groupId            String?
+  sourceOrgId        String
+  sourceOrg          OrgConnection     @relation("BatchSourceOrg", fields: [sourceOrgId], references: [id])
+  targetOrgId        String
+  targetOrg          OrgConnection     @relation("BatchTargetOrg", fields: [targetOrgId], references: [id])
+  objectName         String?
+  strategy           String            @default("generic")
+  movementType       String            @default("deploy")
+  status             JobStatus         @default(queued)
+  baseSoql           String?
+  matchField         String?
   recordTypeMappings Json?
-  totalRecords    Int      @default(0)
-  chunkSize       Int      @default(25000)
-  totalChunks     Int      @default(1)
-  completedChunks Int      @default(0)
-  failedChunks    Int      @default(0)
-  error           String?
-  createdBy       String   @default("system")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  chunks          DataDeployChunk[]
-  movements       DataMovement[]
+  totalRecords       Int               @default(0)
+  chunkSize          Int               @default(25000)
+  totalChunks        Int               @default(1)
+  completedChunks    Int               @default(0)
+  failedChunks       Int               @default(0)
+  error              String?
+  createdBy          String            @default("system")
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  chunks             DataDeployChunk[]
+  movements          DataMovement[]
 
   @@index([createdBy])
   @@index([status])
@@ -261,7 +261,7 @@ model DataDeployBatch {
 }
 
 model DataDeployChunk {
-  id          String   @id @default(uuid())
+  id          String          @id @default(uuid())
   batchId     String
   batch       DataDeployBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   chunkIndex  Int
@@ -272,12 +272,12 @@ model DataDeployChunk {
   endId       String?
   movementId  String?
   jobId       String?
-  status      JobStatus @default(queued)
+  status      JobStatus       @default(queued)
   recordCount Int?
   error       String?
-  attempts    Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  attempts    Int             @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   @@unique([batchId, chunkIndex])
   @@index([batchId])
@@ -285,17 +285,17 @@ model DataDeployChunk {
 }
 
 model ProvisioningBatch {
-  id        String            @id @default(uuid())
-  orgId     String
-  org       OrgConnection     @relation(fields: [orgId], references: [id])
-  status    JobStatus         @default(pending)
-  totalRows Int               @default(0)
-  successCount Int            @default(0)
-  failCount    Int            @default(0)
-  createdBy   String           @default("system")
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  users     ProvisionedUser[]
+  id           String            @id @default(uuid())
+  orgId        String
+  org          OrgConnection     @relation(fields: [orgId], references: [id])
+  status       JobStatus         @default(pending)
+  totalRows    Int               @default(0)
+  successCount Int               @default(0)
+  failCount    Int               @default(0)
+  createdBy    String            @default("system")
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  users        ProvisionedUser[]
 
   @@index([createdBy])
 }
@@ -318,15 +318,15 @@ model ProvisionedUser {
 }
 
 model KnowledgeChunk {
-  id        String                      @id @default(uuid())
-  source    String
+  id         String   @id @default(uuid())
+  source     String
   sourceType String
   /// Access tier: 'app_guide' (usage help, safe for granted users) or 'internal' (code/architecture, admin only).
-  tier      String   @default("internal")
-  content   String
-  metadata  Json?
-  embedding Json?
-  createdAt DateTime @default(now())
+  tier       String   @default("internal")
+  content    String
+  metadata   Json?
+  embedding  Json?
+  createdAt  DateTime @default(now())
 
   @@index([sourceType])
   @@index([tier])
@@ -359,20 +359,20 @@ model DeploymentAudit {
 /// Saved, reusable deployment definition — the seam for future automation
 /// (scheduled promotions, webhooks, approval gates).
 model DeploymentPlan {
-  id            String   @id @default(uuid())
-  name          String
-  description   String?
-  sourceOrgId   String?
-  targetOrgId   String?
-  planType      String   @default("combined")
+  id             String    @id @default(uuid())
+  name           String
+  description    String?
+  sourceOrgId    String?
+  targetOrgId    String?
+  planType       String    @default("combined")
   metadataConfig Json?
-  dataConfig    Json?
-  enabled       Boolean  @default(true)
-  lastRunAt     DateTime?
-  lastRunStatus String?
-  createdBy     String   @default("system")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  dataConfig     Json?
+  enabled        Boolean   @default(true)
+  lastRunAt      DateTime?
+  lastRunStatus  String?
+  createdBy      String    @default("system")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([createdBy])
 }
@@ -392,6 +392,25 @@ enum AppUserRole {
   user
 }
 
+enum ScmProvider {
+  azure_devops
+  github
+  bitbucket
+}
+
+enum WorkItemProvider {
+  azure_boards
+  github_issues
+  jira
+}
+
+enum IntegrationConnectionStatus {
+  connected
+  degraded
+  disconnected
+  error
+}
+
 model AppUser {
   id             String      @id
   email          String
@@ -408,14 +427,148 @@ model AppUser {
 }
 
 model AzureDevOpsConnection {
-  id          String   @id @default(uuid())
-  orgSlug     String   @unique
-  project     String?
-  pat         String
-  status      String   @default("active")
-  connectedBy String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String              @id @default(uuid())
+  orgSlug            String              @unique
+  project            String?
+  pat                String
+  status             String              @default("active")
+  connectedBy        String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  scmConnection      ScmConnection?
+  workItemConnection WorkItemConnection?
+}
+
+/// Provider-neutral SCM account. encryptedCredentials must contain only ciphertext.
+/// AzureDevOpsConnection remains the compatibility source during incremental migration.
+model ScmConnection {
+  id                            String                      @id @default(uuid())
+  provider                      ScmProvider
+  externalAccountId             String?
+  displayName                   String
+  namespace                     String?
+  baseUrl                       String?
+  encryptedCredentials          String
+  status                        IntegrationConnectionStatus @default(connected)
+  capabilities                  Json?
+  metadata                      Json?
+  connectedBy                   String?
+  legacyAzureDevOpsConnectionId String?                     @unique
+  legacyAzureDevOpsConnection   AzureDevOpsConnection?      @relation(fields: [legacyAzureDevOpsConnectionId], references: [id], onDelete: SetNull)
+  createdAt                     DateTime                    @default(now())
+  updatedAt                     DateTime                    @updatedAt
+  lastVerifiedAt                DateTime?
+  projectBindings               ProjectBinding[]
+  webhookDeliveries             WebhookDelivery[]
+
+  @@unique([provider, externalAccountId])
+  @@index([provider, status])
+  @@index([connectedBy])
+}
+
+/// Provider-neutral issue tracker account. encryptedCredentials must contain only ciphertext.
+model WorkItemConnection {
+  id                            String                      @id @default(uuid())
+  provider                      WorkItemProvider
+  externalAccountId             String?
+  displayName                   String
+  namespace                     String?
+  baseUrl                       String?
+  encryptedCredentials          String
+  status                        IntegrationConnectionStatus @default(connected)
+  capabilities                  Json?
+  metadata                      Json?
+  connectedBy                   String?
+  legacyAzureDevOpsConnectionId String?                     @unique
+  legacyAzureDevOpsConnection   AzureDevOpsConnection?      @relation(fields: [legacyAzureDevOpsConnectionId], references: [id], onDelete: SetNull)
+  createdAt                     DateTime                    @default(now())
+  updatedAt                     DateTime                    @updatedAt
+  lastVerifiedAt                DateTime?
+  projectBindings               ProjectBinding[]
+  identityBindings              ExternalIdentityBinding[]
+  snapshots                     WorkItemSnapshot[]
+  webhookDeliveries             WebhookDelivery[]
+
+  @@unique([provider, externalAccountId])
+  @@index([provider, status])
+  @@index([connectedBy])
+}
+
+/// Binds an app-owned context to provider project/repository identifiers.
+model ProjectBinding {
+  id                   String              @id @default(uuid())
+  scmConnectionId      String?
+  scmConnection        ScmConnection?      @relation(fields: [scmConnectionId], references: [id], onDelete: Cascade)
+  workItemConnectionId String?
+  workItemConnection   WorkItemConnection? @relation(fields: [workItemConnectionId], references: [id], onDelete: Cascade)
+  externalProjectId    String
+  projectKey           String?
+  repositoryId         String?
+  repositoryName       String?
+  createdBy            String              @default("system")
+  metadata             Json?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  @@unique([scmConnectionId, workItemConnectionId, externalProjectId, repositoryId])
+  @@index([createdBy])
+}
+
+model ExternalIdentityBinding {
+  id                   String             @id @default(uuid())
+  workItemConnectionId String
+  workItemConnection   WorkItemConnection @relation(fields: [workItemConnectionId], references: [id], onDelete: Cascade)
+  appUserId            String?
+  externalUserId       String
+  externalEmail        String?
+  displayName          String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@unique([workItemConnectionId, externalUserId])
+  @@index([appUserId])
+  @@index([externalEmail])
+}
+
+model WorkItemSnapshot {
+  id                   String             @id @default(uuid())
+  workItemConnectionId String
+  workItemConnection   WorkItemConnection @relation(fields: [workItemConnectionId], references: [id], onDelete: Cascade)
+  externalProjectId    String
+  externalItemId       String
+  version              String?
+  state                String?
+  payload              Json
+  providerUpdatedAt    DateTime?
+  capturedAt           DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@unique([workItemConnectionId, externalProjectId, externalItemId])
+  @@index([state])
+  @@index([providerUpdatedAt])
+}
+
+/// The unique idempotencyKey makes webhook receipt safe to retry.
+model WebhookDelivery {
+  id                   String              @id @default(uuid())
+  idempotencyKey       String              @unique
+  provider             String
+  externalDeliveryId   String
+  eventType            String
+  payloadHash          String
+  status               String              @default("received")
+  attempts             Int                 @default(0)
+  error                String?
+  scmConnectionId      String?
+  scmConnection        ScmConnection?      @relation(fields: [scmConnectionId], references: [id], onDelete: SetNull)
+  workItemConnectionId String?
+  workItemConnection   WorkItemConnection? @relation(fields: [workItemConnectionId], references: [id], onDelete: SetNull)
+  receivedAt           DateTime            @default(now())
+  processedAt          DateTime?
+  updatedAt            DateTime            @updatedAt
+
+  @@unique([provider, externalDeliveryId])
+  @@index([status, receivedAt])
 }
 
 model ScratchPipelineTemplate {
@@ -433,21 +586,21 @@ model ScratchPipelineTemplate {
 }
 
 model IntelligentDeployRun {
-  id            String   @id @default(uuid())
-  deploymentId  String?
-  targetOrgId   String?
-  projectRoot   String
-  manifestPath  String
-  deployMode    String   @default("azure_manifest")
-  status        JobStatus @default(pending)
-  checkpoint    Json?
-  plan          Json?
-  metrics       Json?
-  createdBy     String   @default("system")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  batches       IntelligentDeployBatch[]
-  nodes         IntelligentDeployNode[]
+  id           String                   @id @default(uuid())
+  deploymentId String?
+  targetOrgId  String?
+  projectRoot  String
+  manifestPath String
+  deployMode   String                   @default("azure_manifest")
+  status       JobStatus                @default(pending)
+  checkpoint   Json?
+  plan         Json?
+  metrics      Json?
+  createdBy    String                   @default("system")
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  batches      IntelligentDeployBatch[]
+  nodes        IntelligentDeployNode[]
 
   @@index([deploymentId])
   @@index([status])
@@ -455,35 +608,35 @@ model IntelligentDeployRun {
 }
 
 model IntelligentDeployBatch {
-  id           String   @id @default(uuid())
+  id           String               @id @default(uuid())
   runId        String
   run          IntelligentDeployRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   batchNumber  Int
   nodeCount    Int
-  status       String   @default("pending")
+  status       String               @default("pending")
   manifestPath String?
   durationMs   Int?
   error        String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
 
   @@unique([runId, batchNumber])
   @@index([runId])
 }
 
 model IntelligentDeployNode {
-  id              String   @id @default(uuid())
+  id              String               @id @default(uuid())
   runId           String
   run             IntelligentDeployRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   nodeKey         String
   metadataType    String
   apiName         String
-  deploymentState String   @default("DISCOVERED")
+  deploymentState String               @default("DISCOVERED")
   batchNumber     Int?
-  retryCount      Int      @default(0)
+  retryCount      Int                  @default(0)
   lastError       Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
   @@unique([runId, nodeKey])
   @@index([runId])

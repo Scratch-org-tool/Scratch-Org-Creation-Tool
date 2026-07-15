@@ -76,22 +76,75 @@ export class AzureIntegrationService {
     }
     const input = parsed.data;
     await this.verifyPat(input.orgSlug, input.pat, input.project);
+    const encryptedPat = encrypt(input.pat);
 
-    const record = await prisma.azureDevOpsConnection.upsert({
-      where: { orgSlug: input.orgSlug },
-      create: {
-        orgSlug: input.orgSlug,
-        project: input.project ?? null,
-        pat: encrypt(input.pat),
-        status: 'active',
+    const record = await prisma.$transaction(async (tx) => {
+      const legacy = await tx.azureDevOpsConnection.upsert({
+        where: { orgSlug: input.orgSlug },
+        create: {
+          orgSlug: input.orgSlug,
+          project: input.project ?? null,
+          pat: encryptedPat,
+          status: 'active',
+          connectedBy: connectedBy ?? null,
+        },
+        update: {
+          project: input.project ?? null,
+          pat: encryptedPat,
+          status: 'active',
+          connectedBy: connectedBy ?? null,
+        },
+      });
+      const common = {
+        externalAccountId: input.orgSlug,
+        displayName: input.orgSlug,
+        namespace: input.orgSlug,
+        baseUrl: `https://dev.azure.com/${input.orgSlug}`,
+        encryptedCredentials: encryptedPat,
+        status: 'connected' as const,
         connectedBy: connectedBy ?? null,
-      },
-      update: {
-        project: input.project ?? null,
-        pat: encrypt(input.pat),
-        status: 'active',
-        connectedBy: connectedBy ?? null,
-      },
+        metadata: {
+          defaultProject: input.project ?? null,
+          credentialFormat: 'legacy_encrypted_pat',
+        },
+      };
+      await Promise.all([
+        tx.scmConnection.upsert({
+          where: { legacyAzureDevOpsConnectionId: legacy.id },
+          create: {
+            ...common,
+            provider: 'azure_devops',
+            capabilities: {
+              repositories: true,
+              branches: true,
+              checkout: true,
+              pipelines: true,
+              pullRequests: false,
+              webhooks: false,
+            },
+            legacyAzureDevOpsConnectionId: legacy.id,
+          },
+          update: common,
+        }),
+        tx.workItemConnection.upsert({
+          where: { legacyAzureDevOpsConnectionId: legacy.id },
+          create: {
+            ...common,
+            provider: 'azure_boards',
+            capabilities: {
+              read: true,
+              write: true,
+              webhooks: false,
+              attachments: true,
+              history: true,
+              stateTransitions: true,
+            },
+            legacyAzureDevOpsConnectionId: legacy.id,
+          },
+          update: common,
+        }),
+      ]);
+      return legacy;
     });
 
     return {
@@ -110,7 +163,15 @@ export class AzureIntegrationService {
   }
 
   async disconnect() {
-    const deleted = await prisma.azureDevOpsConnection.deleteMany({});
+    const deleted = await prisma.$transaction(async (tx) => {
+      await tx.scmConnection.deleteMany({
+        where: { legacyAzureDevOpsConnectionId: { not: null } },
+      });
+      await tx.workItemConnection.deleteMany({
+        where: { legacyAzureDevOpsConnectionId: { not: null } },
+      });
+      return tx.azureDevOpsConnection.deleteMany({});
+    });
     return { disconnected: true, count: deleted.count };
   }
 

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { normalizeAzureOrgSlug, normalizeAzureProject } from '../azure-utils.js';
 import { querySetSchema } from '../query-set.js';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX } from '../org-to-org-data.js';
+import { gitSourceConfigSchema, normalizeGitSourceConfig } from '../integrations.js';
 
 const dataRecordLimitSchema = z
   .number()
@@ -138,6 +139,7 @@ export const dataDeployConfigSchema = z.object({
 
 export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
   azureDeploy: azureDeployConfigSchema,
+  gitSource: gitSourceConfigSchema.optional(),
   automationRunId: z.string().uuid().optional(),
   sourceOrgId: z.string().uuid().optional(),
   dataDeploymentOrgId: z.string().uuid().optional(),
@@ -204,7 +206,7 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
   pipelineSteps: pipelineStepsConfigSchema.optional(),
   permissionSets: z.array(z.string()).optional(),
   templateId: z.string().uuid().optional(),
-});
+}).transform(normalizeGitSourceConfig);
 
 export const customSettingsLoadSchema = z.object({
   sourceOrgId: z.string().uuid(),
@@ -295,6 +297,7 @@ export const pipelineResumeSchema = z.object({
     repo: z.string().optional(),
     project: z.string().optional(),
   }).optional(),
+  gitSource: gitSourceConfigSchema.partial().optional(),
 });
 
 export const deploymentSchema = z.object({
