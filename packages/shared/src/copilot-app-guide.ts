@@ -40,12 +40,22 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     path: '/environment-center',
     label: 'Environment Center',
     module: 'environment',
-    description: 'Manage Salesforce org connections and scratch org lifecycle.',
+    description: 'Manage Salesforce environments, source control, and work-management integrations.',
     children: [
       {
         path: '/environment-center',
-        label: 'Integrations',
+        label: 'Salesforce',
         description: 'Connect Dev Hub and sandbox orgs via Salesforce CLI web login.',
+      },
+      {
+        path: '/environment-center?tab=source-control',
+        label: 'Source Control',
+        description: 'Connect Azure DevOps, GitHub, or Bitbucket and bind repositories.',
+      },
+      {
+        path: '/environment-center?tab=work-management',
+        label: 'Work Management',
+        description: 'Connect Jira or inspect paired Azure Boards and GitHub Issues capabilities.',
       },
       {
         path: '/environment-center/create-scratch-org',
@@ -64,9 +74,9 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     path: '/deployment-center',
     label: 'Deployment Center',
     module: 'deployment',
-    description: 'Hub for deployment workflows: Azure pipelines, Jenkins, org setup, data, provisioning.',
+    description: 'Hub for Git metadata deployment, Jenkins, org setup, data, and provisioning.',
     children: [
-      { path: '/deployment-center/azure', label: 'Azure Deploy', description: 'Trigger Azure DevOps metadata deployments.' },
+      { path: '/deployment-center/git', label: 'Git Metadata Deploy', description: 'Deploy from Azure DevOps, GitHub, or Bitbucket.' },
       { path: '/deployment-center/jenkins', label: 'Jenkins', description: 'Jenkins pipeline integration for deployments.' },
       { path: '/data-center', label: 'Data Center', description: 'SFDMU bulk data deploy and org-to-org replication.' },
       { path: '/org-setup', label: 'Org Setup', description: 'Assign permission sets and configure org setup steps.' },
@@ -90,7 +100,7 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     path: '/defects-command-centre',
     label: 'AI Defects Command Centre',
     module: 'defects',
-    description: 'View Azure DevOps defects and user stories assigned to you, update status, read comments, and investigate with AI.',
+    description: 'View provider work items assigned to you, update status, read comments, and investigate with AI.',
   },
   {
     path: '/admin/users',
@@ -107,7 +117,7 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
     keywords: ['connect', 'dev hub', 'authorize', 'login', 'integration', 'org connection'],
     module: 'environment',
     steps: [
-      'Open **Environment** in the sidebar → **Integrations** tab.',
+      'Open **Environment Center** in the sidebar → **Salesforce**.',
       'Click **Connect Org** and complete Salesforce web login for your Dev Hub or sandbox.',
       'After auth, the org appears in the connected orgs list and is available in deployment forms.',
     ],
@@ -119,7 +129,7 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
     keywords: ['scratch org', 'scratch', 'provision', 'create org'],
     module: 'environment',
     steps: [
-      'Ensure a Dev Hub is connected under **Environment → Integrations**.',
+      'Ensure a Dev Hub is connected under **Environment Center → Salesforce**.',
       'Go to **Environment → Create Scratch Org** (or sidebar **Environment** child link).',
       'Fill alias, duration (days), Dev Hub alias, scratch definition template, and optional packages.',
       'Submit and track progress in **Monitoring**.',
@@ -139,16 +149,16 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
     relatedPaths: ['/metadata-deployment'],
   },
   {
-    id: 'azure-deploy',
-    title: 'Run an Azure deployment',
-    keywords: ['azure', 'pipeline', 'ado', 'devops pipeline'],
+    id: 'git-metadata-deploy',
+    title: 'Run a Git metadata deployment',
+    keywords: ['git', 'metadata source', 'azure', 'github', 'bitbucket', 'repository deploy'],
     module: 'deployment',
     steps: [
-      'Open **Deployment** in the sidebar → **Azure Deploy** tab.',
-      'Connect Azure DevOps if not already configured under integrations.',
-      'Select project, pipeline, and parameters, then trigger the run.',
+      'Connect Azure DevOps, GitHub, or Bitbucket under **Environment Center → Source Control**.',
+      'Open **Deployment** → **Git Metadata Deploy**.',
+      'Select provider, account, repository, branch, manifest, and target org, then deploy.',
     ],
-    relatedPaths: ['/deployment-center/azure', '/deployment-center'],
+    relatedPaths: ['/deployment-center/git', '/deployment-center'],
   },
   {
     id: 'data-replication',
@@ -207,7 +217,8 @@ const PATH_TITLES: Array<{ prefix: string; title: string }> = [
   { prefix: '/environment-center/create-scratch-org', title: 'Create Scratch Org' },
   { prefix: '/environment-center', title: 'Environment Center' },
   { prefix: '/scratch-templates', title: 'Scratch Templates' },
-  { prefix: '/deployment-center/azure', title: 'Azure Deploy' },
+  { prefix: '/deployment-center/git', title: 'Git Metadata Deploy' },
+  { prefix: '/deployment-center/azure', title: 'Git Metadata Deploy' },
   { prefix: '/deployment-center/jenkins', title: 'Jenkins' },
   { prefix: '/deployment-center', title: 'Deployment Center' },
   { prefix: '/data-center', title: 'Data Center' },
@@ -229,7 +240,7 @@ const QUICK_PROMPTS: Array<{ prefix: string; prompts: string[] }> = [
   },
   {
     prefix: '/deployment-center',
-    prompts: ['How do I start a deployment?', 'What is the difference between Azure and Metadata deployment?'],
+    prompts: ['How do I deploy from Git?', 'Where do I connect a source-control provider?'],
   },
   { prefix: '/metadata-deployment', prompts: ['How do I deploy metadata?', 'Where is deployment history?'] },
   { prefix: '/data-center', prompts: ['How do I replicate data between orgs?', 'What is SFDMU in this app?'] },
@@ -258,8 +269,8 @@ const NAV_KEYWORDS: Array<{
     action: { type: 'navigate', href: '/metadata-deployment', label: 'Metadata Deployment' },
   },
   {
-    patterns: /\b(azure|ado\s+pipeline)\b/i,
-    action: { type: 'navigate', href: '/deployment-center/azure', label: 'Azure Deploy' },
+    patterns: /\b(git\s+metadata|repository\s+deploy|azure|github|bitbucket|ado\s+pipeline)\b/i,
+    action: { type: 'navigate', href: '/deployment-center/git', label: 'Git Metadata Deploy' },
   },
   {
     patterns: /\b(jenkins)\b/i,

@@ -1,11 +1,12 @@
 'use client';
 
 import type { ScratchOrgFormState } from '@/components/scratch-org/types';
+import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 
 interface ScratchOrgReviewProps {
   form: ScratchOrgFormState;
   installPackage: boolean;
-  azureConnected: boolean;
+  sourceControlConnected: boolean;
   templateMeta?: { name: string; config: Record<string, unknown> } | null;
   sourceOrgAlias?: string;
 }
@@ -13,7 +14,7 @@ interface ScratchOrgReviewProps {
 export function ScratchOrgReview({
   form,
   installPackage,
-  azureConnected,
+  sourceControlConnected,
   templateMeta,
   sourceOrgAlias,
 }: ScratchOrgReviewProps) {
@@ -42,7 +43,12 @@ export function ScratchOrgReview({
   if (sourceOrgAlias || form.sourceOrgId) {
     rows.push(['Source org', sourceOrgAlias ?? form.sourceOrgId]);
   }
-  if (azureConnected) rows.push(['Azure', `${form.azureRepo} / ${form.azureBranch}`]);
+  if (sourceControlConnected) {
+    rows.push([
+      'Metadata source',
+      `${form.gitProvider ? SCM_PROVIDER_LABELS[form.gitProvider] : 'Git'} · ${form.azureRepo} / ${form.azureBranch}`,
+    ]);
+  }
   if (form.azureManifestPath) rows.push(['Manifest', form.azureManifestPath]);
   rows.push(['Install package', installPackage ? 'Yes' : 'No']);
 

@@ -33,6 +33,9 @@ import {
   UsersTableSection,
 } from './components/users-table-section';
 import type { UserProvisionSlot, UserProvisionTemplate } from '@sfcc/shared';
+import type { ScmProvider } from '@sfcc/shared';
+import type { PublicIntegrationConnection } from '@/modules/environment-center/integrations/types';
+import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import {
   DEFAULT_TEMPLATE_CONFIG,
   TEMPLATE_WIZARD_STEPS,
@@ -45,6 +48,18 @@ const DRAFT_KEY = 'scratch-template-draft';
 interface Org {
   id: string;
   alias: string;
+}
+
+function withCanonicalGitSource(config: TemplateConfigState): TemplateConfigState {
+  if (config.gitSource) return config;
+  if (!config.azureDeploy) return config;
+  return {
+    ...config,
+    gitSource: {
+      provider: 'azure_devops',
+      manifestPath: config.azureDeploy.manifestPath,
+    },
+  };
 }
 
 export function ScratchTemplateForm({
@@ -67,6 +82,7 @@ export function ScratchTemplateForm({
   const [partnerFile, setPartnerFile] = useState<File | null>(null);
   const [storedPartnerName, setStoredPartnerName] = useState<string | undefined>();
   const [orgs, setOrgs] = useState<Org[]>([]);
+  const [scmConnections, setScmConnections] = useState<PublicIntegrationConnection[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!templateId);
@@ -92,6 +108,14 @@ export function ScratchTemplateForm({
 
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
+    void api<{ scm: PublicIntegrationConnection[] }>('/integrations/admin/connections')
+      .then(({ scm }) =>
+        setScmConnections(
+          scm.filter((connection) =>
+            connection.status === 'connected' || connection.status === 'degraded'),
+        ),
+      )
+      .catch(() => setScmConnections([]));
 
     if (templateId) {
       api<{
@@ -102,7 +126,7 @@ export function ScratchTemplateForm({
         .then((t) => {
           setName(t.name);
           setDescription(t.description ?? '');
-          setConfig({ ...DEFAULT_TEMPLATE_CONFIG, ...t.config });
+          setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...t.config }));
           setPermissionSetsText(formatPermissionSets(t.config.permissionSets));
           setUsers(apiUsersToRows(t.config.userProvisioning?.users));
           setUserTemplates(t.config.userProvisioning?.templates ?? []);
@@ -133,7 +157,9 @@ export function ScratchTemplateForm({
         };
         if (draft.name) setName(draft.name);
         if (draft.description) setDescription(draft.description);
-        if (draft.config) setConfig({ ...DEFAULT_TEMPLATE_CONFIG, ...draft.config });
+        if (draft.config) {
+          setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...draft.config }));
+        }
         if (draft.permissionSetsText) setPermissionSetsText(draft.permissionSetsText);
         if (draft.users) setUsers(draft.users);
         if (draft.customJson) setCustomJson(draft.customJson);
@@ -147,6 +173,27 @@ export function ScratchTemplateForm({
   useEffect(() => {
     persistDraft();
   }, [persistDraft]);
+
+  useEffect(() => {
+    if (!scmConnections.length) return;
+    const current = scmConnections.find((connection) =>
+      connection.id === config.gitSource?.connectionId ||
+      connection.provider === config.gitSource?.provider);
+    const selected = current ?? scmConnections[0];
+    if (!selected || (
+      config.gitSource?.provider === selected.provider &&
+      config.gitSource?.connectionId === selected.id
+    )) return;
+    setConfig((value) => ({
+      ...value,
+      gitSource: {
+        ...value.gitSource,
+        provider: selected.provider as ScmProvider,
+        connectionId: selected.id,
+        namespace: selected.namespace ?? undefined,
+      },
+    }));
+  }, [scmConnections, config.gitSource?.connectionId, config.gitSource?.provider]);
 
   const save = async () => {
     setSaving(true);
@@ -173,8 +220,16 @@ export function ScratchTemplateForm({
           template: config.template,
           duration: config.duration,
           installPackage: config.installPackage,
-          ...(config.azureDeploy?.manifestPath
-            ? { azureDeploy: { manifestPath: config.azureDeploy.manifestPath } }
+          ...(config.gitSource
+            ? {
+                gitSource: {
+                  provider: config.gitSource.provider,
+                  connectionId: config.gitSource.connectionId,
+                  namespace: config.gitSource.namespace,
+                  project: config.gitSource.project,
+                  manifestPath: config.gitSource.manifestPath,
+                },
+              }
             : {}),
           permissionSets: parsePermissionSets(permissionSetsText),
           orgConfig: config.orgConfig,
@@ -362,21 +417,91 @@ export function ScratchTemplateForm({
                       />
                       Pre-install Error Logger package
                     </label>
-                    <div>
-                      <Label htmlFor="scratch-template-manifest">Default manifest path</Label>
-                      <Input
-                        id="scratch-template-manifest"
-                        value={config.azureDeploy?.manifestPath ?? DEFAULT_AZURE_MANIFEST_PATH}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            azureDeploy: { manifestPath: e.target.value },
-                          })
-                        }
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Pre-fills Create Scratch Org. Repository and branch are chosen per run.
-                      </p>
+                    <div className="space-y-3 rounded-lg border border-border/60 p-4">
+                      <div>
+                        <h3 className="text-sm font-medium">Metadata Source</h3>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Store a provider/account default. Repository and branch are selected per run.
+                        </p>
+                      </div>
+                      {scmConnections.length === 0 ? (
+                        <InlineAlert variant="warning">
+                          No connected source-control provider is available. Connect one in Environment Center.
+                        </InlineAlert>
+                      ) : (
+                        <div className="grid sm:grid-cols-2 gap-3">
+                          <div>
+                            <Label htmlFor="scratch-template-provider">Provider</Label>
+                            <Select
+                              id="scratch-template-provider"
+                              value={config.gitSource?.provider ?? ''}
+                              onChange={(event) => {
+                                const provider = event.target.value as ScmProvider;
+                                const connection = scmConnections.find((item) => item.provider === provider);
+                                setConfig({
+                                  ...config,
+                                  gitSource: {
+                                    ...config.gitSource,
+                                    provider,
+                                    connectionId: connection?.id,
+                                    namespace: connection?.namespace ?? undefined,
+                                  },
+                                });
+                              }}
+                            >
+                              {[...new Set(scmConnections.map((item) => item.provider as ScmProvider))].map((provider) => (
+                                <option key={provider} value={provider}>{SCM_PROVIDER_LABELS[provider]}</option>
+                              ))}
+                            </Select>
+                          </div>
+                          <div>
+                            <Label htmlFor="scratch-template-connection">Account / connection</Label>
+                            <Select
+                              id="scratch-template-connection"
+                              value={config.gitSource?.connectionId ?? ''}
+                              onChange={(event) => {
+                                const connection = scmConnections.find((item) => item.id === event.target.value);
+                                setConfig({
+                                  ...config,
+                                  gitSource: {
+                                    ...config.gitSource,
+                                    provider: (connection?.provider as ScmProvider | undefined) ?? config.gitSource?.provider,
+                                    connectionId: event.target.value,
+                                    namespace: connection?.namespace ?? undefined,
+                                  },
+                                });
+                              }}
+                            >
+                              {scmConnections
+                                .filter((item) => item.provider === config.gitSource?.provider)
+                                .map((connection) => (
+                                  <option key={connection.id} value={connection.id}>{connection.displayName}</option>
+                                ))}
+                            </Select>
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <Label htmlFor="scratch-template-manifest">Default manifest path</Label>
+                        <Input
+                          id="scratch-template-manifest"
+                          value={
+                            config.gitSource?.manifestPath ??
+                            config.azureDeploy?.manifestPath ??
+                            DEFAULT_AZURE_MANIFEST_PATH
+                          }
+                          onChange={(event) =>
+                            setConfig({
+                              ...config,
+                              gitSource: {
+                                ...config.gitSource,
+                                provider: config.gitSource?.provider ?? 'azure_devops',
+                                manifestPath: event.target.value,
+                              },
+                            })
+                          }
+                        />
+                      </div>
                     </div>
                   </div>
                 </FormSection>

@@ -2,13 +2,13 @@
 
 import { InlineAlert, PageSkeleton } from '@/components/studio';
 import { useAzureDeploy } from './azure/use-azure-deploy';
-import { AzurePageHeader } from './azure/azure-page-header';
+import { GitMetadataPageHeader } from './azure/azure-page-header';
 import { AzureDeploymentStats } from './azure/azure-deployment-stats';
-import { AzureDeploymentForm, DEPLOY_CARD_HEIGHT } from './azure/azure-deployment-form';
+import { GitMetadataDeploymentForm, DEPLOY_CARD_HEIGHT } from './git-metadata-deployment-form';
 import { AzureLiveConsole } from './azure/azure-live-console';
 import { AzureRecentDeployments } from './azure/azure-recent-deployments';
 
-export function AzureDeployWorkspace() {
+export function GitMetadataDeployWorkspace() {
   const d = useAzureDeploy();
   const showDataSkeleton = d.loading;
 
@@ -16,7 +16,10 @@ export function AzureDeployWorkspace() {
 
   return (
     <div className="p-4 md:p-6 space-y-5 min-h-0">
-      <AzurePageHeader azureStatus={d.azureStatus} project={d.form.project} />
+      <GitMetadataPageHeader
+        connected={d.metadataSource.connected}
+        provider={d.metadataSource.source.provider}
+      />
 
       {d.deployError && (
         <InlineAlert variant="error" onDismiss={() => d.setDeployError(null)}>
@@ -34,18 +37,15 @@ export function AzureDeployWorkspace() {
       />
 
       <div className="grid gap-5 lg:grid-cols-2 items-stretch">
-        <AzureDeploymentForm
+        <GitMetadataDeploymentForm
           form={d.form}
           setForm={d.setForm}
           orgs={d.orgs}
-          repos={d.repos}
-          branches={d.branches}
-          azureStatus={d.azureStatus}
+          metadataSource={d.metadataSource}
           targetOrgAlias={d.targetOrgAlias}
           isRunning={d.isRunning}
           canDeploy={d.canDeploy}
           deploying={d.deploying}
-          onRepoChange={d.onRepoChange}
           onDeploy={d.deploy}
         />
 

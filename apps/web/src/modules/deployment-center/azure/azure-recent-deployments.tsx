@@ -7,6 +7,7 @@ import { cn } from '@/utils/cn';
 import type { DeploymentRow, HistoryFilter } from './types';
 import { ACTIVE_STATUSES } from './types';
 import { deploymentDuration, matchesHistoryFilter, relativeTime } from './log-utils';
+import { providerFromDeployment, SCM_PROVIDER_SHORT_LABELS } from '@/modules/source-control/provider-config';
 
 interface AzureRecentDeploymentsProps {
   history: DeploymentRow[];
@@ -93,7 +94,10 @@ export function AzureRecentDeployments({
             const title = isOrgToOrg && sourceAlias
               ? `${sourceAlias} → ${alias}`
               : `Deploy to ${alias}`;
-            const subtitle = isOrgToOrg ? 'Org-to-org metadata' : d.branch;
+            const provider = providerFromDeployment(d);
+            const subtitle = isOrgToOrg
+              ? 'Org-to-org metadata'
+              : `${provider ? `${SCM_PROVIDER_SHORT_LABELS[provider]} · ` : ''}${d.branch}`;
             const dur = deploymentDuration(d);
             const isSelecting = selectingDeploymentId === d.id;
             const accent = statusAccentColor(d.status);
@@ -127,6 +131,11 @@ export function AzureRecentDeployments({
                 </div>
                 <p className="text-sm font-medium truncate">{title}</p>
                 <p className="text-xs text-muted-foreground truncate mt-0.5">{subtitle}</p>
+                {d.metadata?.error && (
+                  <p className="text-[11px] text-destructive truncate mt-1" title={d.metadata.error}>
+                    {provider ? SCM_PROVIDER_SHORT_LABELS[provider] : 'Provider'}: {d.metadata.error}
+                  </p>
+                )}
                 <div className="flex items-center justify-between mt-3 text-[11px] text-muted-foreground">
                   <span>{relativeTime(d.createdAt)}</span>
                   {dur && <span>{dur}</span>}

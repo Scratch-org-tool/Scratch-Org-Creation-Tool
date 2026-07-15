@@ -1,10 +1,11 @@
 import type { ScratchOrgSkipStepKey } from '@sfcc/shared';
+import type { ScmProvider } from '@sfcc/shared';
 
 export const PIPELINE_STEPS_UI = [
   'Create Scratch Org',
   'Generate Password',
   'Install Package',
-  'Azure Metadata Deploy',
+  'Git Metadata Deploy',
   'Assign Permission Set',
   'Load Custom Settings',
   'Load Org Config',
@@ -17,8 +18,8 @@ export type StepState = 'done' | 'active' | 'pending' | 'skipped' | 'failed';
 
 export const PIPELINE_STEP_LABEL_BY_ID: Record<string, PipelineStepLabel> = {
   scratch_org_create: 'Create Scratch Org',
-  git_metadata_deploy: 'Azure Metadata Deploy',
-  azure_metadata_deploy: 'Azure Metadata Deploy',
+  git_metadata_deploy: 'Git Metadata Deploy',
+  azure_metadata_deploy: 'Git Metadata Deploy',
   assign_permission_set: 'Assign Permission Set',
   load_org_config: 'Load Org Config',
   load_custom_settings: 'Load Custom Settings',
@@ -62,6 +63,10 @@ export interface ScratchOrgFormState {
   azureRepo: string;
   azureBranch: string;
   azureManifestPath: string;
+  gitProvider: ScmProvider | '';
+  gitConnectionId: string;
+  gitNamespace: string;
+  gitRepositoryId: string;
   templateId: string;
   sourceOrgId: string;
 }
@@ -113,10 +118,10 @@ export function getStepStates(
     run: AutomationRunView | null;
     scratchJobStep?: string;
     skippedSteps: Set<SkipStepKey>;
-    azureConnected: boolean;
+    sourceControlConnected: boolean;
   },
 ): StepState {
-  const { run, scratchJobStep, skippedSteps, azureConnected } = opts;
+  const { run, scratchJobStep, skippedSteps, sourceControlConnected } = opts;
   const idx = PIPELINE_STEPS_UI.indexOf(label);
   const completed = run?.checkpoint?.completedSteps ?? [];
   const scratchDone = completed.includes('scratch_org_create');
@@ -135,7 +140,7 @@ export function getStepStates(
   if (runPaused && failedUiLabel === label) return 'failed';
 
   if (label === 'Install Package' && skippedSteps.has('installPackages')) return 'skipped';
-  if ((label === 'Azure Metadata Deploy' || label === 'Assign Permission Set') && !azureConnected) {
+  if ((label === 'Git Metadata Deploy' || label === 'Assign Permission Set') && !sourceControlConnected) {
     return 'pending';
   }
 
@@ -156,7 +161,7 @@ export function getStepStates(
     return 'pending';
   }
 
-  if (label === 'Azure Metadata Deploy') {
+  if (label === 'Git Metadata Deploy') {
     if (azureDone || permDone) return 'done';
     if (
       metaRunning &&

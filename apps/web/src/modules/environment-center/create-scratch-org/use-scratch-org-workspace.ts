@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/services/api';
 import { fetchOrgsList } from '@/hooks/use-orgs';
 import { useJobEventStream } from '@/hooks/use-job-event-stream';
+import { useGitMetadataSource } from '@/modules/source-control/use-git-metadata-source';
+import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import {
   buildSkipSteps,
   getStepStates,
@@ -76,8 +78,8 @@ function sleep(ms: number): Promise<void> {
 
 function mapMetaSubtext(step?: string): string | undefined {
   if (!step) return undefined;
-  if (step.includes('Connecting')) return 'Connecting to Azure DevOps…';
-  if (step.includes('Fetching')) return 'Fetching repository from Azure…';
+  if (step.includes('Connecting')) return 'Connecting to source control…';
+  if (step.includes('Fetching')) return 'Fetching metadata repository…';
   if (step.includes('Deploying')) return 'Deploying metadata to scratch org…';
   if (step.includes('Deployment Completed')) return 'Metadata deployment finished';
   if (step.includes('Assign')) return 'Assigning permission set…';
@@ -93,6 +95,18 @@ function formFromRunConfig(
   const azure = cfg.azureDeploy as
     | { project?: string; repo?: string; branch?: string; manifestPath?: string }
     | undefined;
+  const git = cfg.gitSource as
+    | {
+        provider?: ScratchOrgFormState['gitProvider'];
+        connectionId?: string;
+        namespace?: string;
+        project?: string;
+        repositoryId?: string;
+        repo?: string;
+        branch?: string;
+        manifestPath?: string;
+      }
+    | undefined;
   const scratchJob = run.jobs?.find((j) => j.type === 'scratch_org_workflow');
   const alias =
     (scratchJob && 'alias' in scratchJob ? (scratchJob as { alias?: string }).alias : undefined) ??
@@ -106,10 +120,14 @@ function formFromRunConfig(
     description: (cfg.description as string | undefined) ?? fallback.description,
     sourceOrgId: (cfg.sourceOrgId as string | undefined) ?? fallback.sourceOrgId,
     templateId: (cfg.templateId as string | undefined) ?? fallback.templateId,
-    azureProject: azure?.project ?? fallback.azureProject,
-    azureRepo: azure?.repo ?? fallback.azureRepo,
-    azureBranch: azure?.branch ?? fallback.azureBranch,
-    azureManifestPath: azure?.manifestPath ?? fallback.azureManifestPath,
+    gitProvider: git?.provider ?? (azure ? 'azure_devops' : fallback.gitProvider),
+    gitConnectionId: git?.connectionId ?? fallback.gitConnectionId,
+    gitNamespace: git?.namespace ?? git?.project ?? azure?.project ?? fallback.gitNamespace,
+    gitRepositoryId: git?.repositoryId ?? fallback.gitRepositoryId,
+    azureProject: git?.project ?? git?.namespace ?? azure?.project ?? fallback.azureProject,
+    azureRepo: git?.repo ?? azure?.repo ?? fallback.azureRepo,
+    azureBranch: git?.branch ?? azure?.branch ?? fallback.azureBranch,
+    azureManifestPath: git?.manifestPath ?? azure?.manifestPath ?? fallback.azureManifestPath,
   };
 }
 
@@ -121,6 +139,21 @@ export function useScratchOrgWorkspace() {
 
   const eagerSnapshot = useMemo(() => readEagerSnapshot(), []);
   const eagerRunId = getUrlRunId() ?? eagerSnapshot?.automationRunId ?? null;
+  const metadataSource = useGitMetadataSource({
+    defaultManifestPath: eagerSnapshot?.form.azureManifestPath ?? DEFAULT_FORM.azureManifestPath,
+    initial: eagerSnapshot?.form
+      ? {
+          provider: eagerSnapshot.form.gitProvider || undefined,
+          connectionId: eagerSnapshot.form.gitConnectionId || undefined,
+          namespace: eagerSnapshot.form.gitNamespace || undefined,
+          project: eagerSnapshot.form.azureProject || undefined,
+          repositoryId: eagerSnapshot.form.gitRepositoryId || undefined,
+          repo: eagerSnapshot.form.azureRepo || undefined,
+          branch: eagerSnapshot.form.azureBranch || undefined,
+          manifestPath: eagerSnapshot.form.azureManifestPath || undefined,
+        }
+      : undefined,
+  });
 
   const isMountedRef = useRef(true);
   const formRef = useRef<ScratchOrgFormState>({ ...DEFAULT_FORM });
@@ -166,6 +199,33 @@ export function useScratchOrgWorkspace() {
   } | null>(null);
 
   formRef.current = form;
+
+  useEffect(() => {
+    const selected = metadataSource.source;
+    setForm((current) => {
+      if (
+        current.gitProvider === selected.provider &&
+        current.gitConnectionId === selected.connectionId &&
+        current.gitNamespace === selected.namespace &&
+        current.gitRepositoryId === selected.repositoryId &&
+        current.azureProject === selected.project &&
+        current.azureRepo === selected.repo &&
+        current.azureBranch === selected.branch &&
+        current.azureManifestPath === selected.manifestPath
+      ) return current;
+      return {
+        ...current,
+        gitProvider: selected.provider,
+        gitConnectionId: selected.connectionId,
+        gitNamespace: selected.namespace,
+        gitRepositoryId: selected.repositoryId,
+        azureProject: selected.project,
+        azureRepo: selected.repo,
+        azureBranch: selected.branch,
+        azureManifestPath: selected.manifestPath,
+      };
+    });
+  }, [metadataSource.source]);
 
   const jobIds = useMemo(() => run?.jobs?.map((j) => j.id) ?? [], [run?.jobs]);
   const jobIdsKey = jobIds.join(',');
@@ -224,31 +284,9 @@ export function useScratchOrgWorkspace() {
   );
 
   const loadDefaults = useCallback(async () => {
-    const defaults = await api<AzureDefaults>('/environment/azure-defaults');
-    setForm((f) => ({
-      ...f,
-      template: 'config/project-scratch-def.json',
-      azureManifestPath: defaults.manifestPath ?? f.azureManifestPath,
-    }));
-    if (azureStatus.connected && repos.length) {
-      const preferred =
-        repos.find((r) => r.name === defaults.repo) ??
-        repos.find((r) => defaults.repo && r.id === defaults.repo) ??
-        repos[0];
-      if (preferred) {
-        const branchList = await loadRepoBranches(repos, preferred.name, preferred.project);
-        setBranches(branchList);
-        setForm((f) => ({
-          ...f,
-          azureProject: preferred.project || f.azureProject,
-          azureRepo: preferred.name,
-          azureBranch:
-            branchList.find((b) => b === defaults.branch) ?? branchList[0] ?? defaults.branch ?? '',
-          azureManifestPath: defaults.manifestPath ?? f.azureManifestPath,
-        }));
-      }
-    }
-  }, [azureStatus.connected, repos]);
+    setForm((current) => ({ ...current, template: 'config/project-scratch-def.json' }));
+    await metadataSource.reloadRepositories();
+  }, [metadataSource]);
 
   const refreshRun = useCallback(async (runId: string) => {
     const r = await api<AutomationRunView>(`/environment/automation-runs/${runId}`);
@@ -408,12 +446,10 @@ export function useScratchOrgWorkspace() {
   );
 
   const loadInitial = useCallback(async () => {
-    const [hubList, azure, defaults, templateList, allOrgs] = await Promise.all([
+    const [hubList, templateList, allOrgs] = await Promise.all([
       api<ConnectedOrgRow[]>('/environment/connected-orgs/refresh', { method: 'POST' }).catch(
         () => api<ConnectedOrgRow[]>('/environment/connected-orgs'),
       ),
-      api<AzureStatus>('/environment/azure-connection').catch(() => ({ connected: false })),
-      api<AzureDefaults>('/environment/azure-defaults'),
       api<Array<{ id: string; name: string; isSystem: boolean }>>('/environment/scratch-templates').catch(() => []),
       fetchOrgsList().catch(() => []),
     ]);
@@ -422,41 +458,16 @@ export function useScratchOrgWorkspace() {
     setOrgs(hubList);
     setTemplates(templateList);
     setSourceOrgs(allOrgs);
-    setAzureStatus(azure);
+    setAzureStatus({ connected: metadataSource.connected });
     const hubs = hubList.filter((o) => o.isDevHub || o.orgType === 'Dev Hub');
-    const azureProject = ('project' in azure ? azure.project : null) ?? defaults.project ?? '';
     setForm((f) => ({
       ...f,
       devHubAlias: hubs.find((h) => h.isDefaultDevHub)?.alias ?? hubs[0]?.alias ?? f.devHubAlias,
-      azureProject,
       templateId:
         urlTemplateId ??
         templateList.find((t) => t.isSystem)?.id ??
         f.templateId,
     }));
-
-    if (azure.connected) {
-      const repoList = await api<AzureRepo[]>('/environment/azure-repos').catch(() => []);
-      if (!isMountedRef.current) return;
-      setRepos(repoList);
-      const preferred =
-        repoList.find((r) => r.name === defaults.repo) ??
-        repoList.find((r) => defaults.repo && r.id === defaults.repo) ??
-        repoList[0];
-      if (preferred) {
-        const branchList = await loadRepoBranches(repoList, preferred.name, preferred.project);
-        if (!isMountedRef.current) return;
-        setBranches(branchList);
-        setForm((f) => ({
-          ...f,
-          azureProject: preferred.project || azureProject,
-          azureRepo: preferred.name,
-          azureBranch:
-            branchList.find((b) => b === defaults.branch) ?? branchList[0] ?? defaults.branch ?? '',
-          azureManifestPath: defaults.manifestPath ?? f.azureManifestPath,
-        }));
-      }
-    }
 
     const snapshot = loadWorkspaceSnapshot();
     const resolvedRunId = urlRunId ?? snapshot?.automationRunId ?? null;
@@ -478,7 +489,7 @@ export function useScratchOrgWorkspace() {
     }
 
     if (isMountedRef.current) setInitialLoading(false);
-  }, [restoreRun, urlRunId, urlTemplateId]);
+  }, [restoreRun, urlRunId, urlTemplateId, metadataSource.connected]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -504,13 +515,35 @@ export function useScratchOrgWorkspace() {
         setTemplateMeta({ name: t.name, config: t.config });
         const cfg = t.config;
         const azureCfg = cfg.azureDeploy as { manifestPath?: string } | undefined;
+        const gitCfg = cfg.gitSource as {
+          provider?: ScratchOrgFormState['gitProvider'];
+          connectionId?: string;
+          namespace?: string;
+          project?: string;
+          manifestPath?: string;
+        } | undefined;
+        const manifestPath = gitCfg?.manifestPath ?? azureCfg?.manifestPath;
         setForm((f) => ({
           ...f,
           duration: (cfg.duration as number | undefined) ?? f.duration,
           template: (cfg.template as string | undefined) ?? f.template,
           sourceOrgId: (cfg.sourceOrgId as string | undefined) || f.sourceOrgId,
-          azureManifestPath: azureCfg?.manifestPath ?? f.azureManifestPath,
+          gitProvider: gitCfg?.provider ?? f.gitProvider,
+          gitConnectionId: gitCfg?.connectionId ?? f.gitConnectionId,
+          gitNamespace: gitCfg?.namespace ?? gitCfg?.project ?? f.gitNamespace,
+          azureProject: gitCfg?.project ?? f.azureProject,
+          azureManifestPath: manifestPath ?? f.azureManifestPath,
         }));
+        if (gitCfg?.provider || manifestPath) {
+          metadataSource.setSource((current) => ({
+            ...current,
+            provider: gitCfg?.provider ?? current.provider,
+            connectionId: gitCfg?.connectionId ?? current.connectionId,
+            namespace: gitCfg?.namespace ?? current.namespace,
+            project: gitCfg?.project ?? current.project,
+            manifestPath: manifestPath ?? current.manifestPath,
+          }));
+        }
         if (typeof cfg.installPackage === 'boolean') setInstallPackage(cfg.installPackage);
       })
       .catch(() => {
@@ -519,7 +552,7 @@ export function useScratchOrgWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [form.templateId]);
+  }, [form.templateId, metadataSource.setSource]);
 
   useEffect(() => {
     if (!automationRunId) return;
@@ -598,9 +631,7 @@ export function useScratchOrgWorkspace() {
   const canLaunch =
     !!form.alias &&
     !!form.devHubAlias &&
-    azureStatus.connected &&
-    !!form.azureRepo &&
-    !!form.azureBranch;
+    !!metadataSource.gitSource;
 
   const launchPipeline = async () => {
     setSubmitting(true);
@@ -620,12 +651,7 @@ export function useScratchOrgWorkspace() {
         description: form.description || undefined,
         sourceOrgId: form.sourceOrgId || undefined,
         templateId: form.templateId || undefined,
-        azureDeploy: {
-          project: form.azureProject || undefined,
-          repo: form.azureRepo,
-          branch: form.azureBranch,
-          manifestPath: form.azureManifestPath || undefined,
-        },
+        gitSource: metadataSource.gitSource,
         skipSteps: buildSkipSteps({ installPackage }),
       };
 
@@ -635,8 +661,14 @@ export function useScratchOrgWorkspace() {
         );
         const cfg = tmpl.config;
         const tmplAzure = cfg.azureDeploy as { manifestPath?: string } | undefined;
+        const tmplGit = cfg.gitSource as { manifestPath?: string } | undefined;
+        const {
+          azureDeploy: _legacyAzureDeploy,
+          gitSource: _templateGitSource,
+          ...templateConfig
+        } = cfg;
         payload = {
-          ...cfg,
+          ...templateConfig,
           alias: form.alias,
           duration: form.duration,
           devHubAlias: form.devHubAlias,
@@ -645,13 +677,16 @@ export function useScratchOrgWorkspace() {
           definitionFile: (cfg.template as string) ?? form.template,
           sourceOrgId: form.sourceOrgId || (cfg.sourceOrgId as string) || undefined,
           templateId: form.templateId,
-          azureDeploy: {
-            project: form.azureProject || undefined,
-            repo: form.azureRepo,
-            branch: form.azureBranch,
-            manifestPath:
-              form.azureManifestPath || tmplAzure?.manifestPath || undefined,
-          },
+          gitSource: metadataSource.gitSource
+            ? {
+                ...metadataSource.gitSource,
+                manifestPath:
+                  form.azureManifestPath ||
+                  tmplGit?.manifestPath ||
+                  tmplAzure?.manifestPath ||
+                  undefined,
+              }
+            : undefined,
           skipSteps: buildSkipSteps({
             installPackage: (cfg.installPackage as boolean | undefined) ?? installPackage,
           }),
@@ -706,11 +741,7 @@ export function useScratchOrgWorkspace() {
       await api(`/environment/automation-runs/${automationRunId}/resume`, {
         method: 'POST',
         body: JSON.stringify({
-          azureDeploy: {
-            repo: form.azureRepo || undefined,
-            branch: form.azureBranch || undefined,
-            project: form.azureProject || undefined,
-          },
+          gitSource: metadataSource.gitSource ?? undefined,
         }),
       });
       await refreshRun(automationRunId);
@@ -773,7 +804,7 @@ export function useScratchOrgWorkspace() {
       run,
       scratchJobStep: scratchJob?.currentStep,
       skippedSteps,
-      azureConnected: azureStatus.connected,
+      sourceControlConnected: metadataSource.connected,
     });
 
   void tick;
@@ -787,6 +818,7 @@ export function useScratchOrgWorkspace() {
     templateMeta,
     sourceOrgs,
     azureStatus,
+    metadataSource,
     repos,
     branches,
     form,

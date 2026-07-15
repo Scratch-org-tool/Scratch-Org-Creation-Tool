@@ -250,9 +250,10 @@ export class AtlassianConnectionStore {
       displayName: row.displayName,
       namespace: row.namespace,
       baseUrl: row.baseUrl,
+      source: 'database' as 'database' | 'environment',
       status: row.status,
       capabilities: row.capabilities,
-      connectedAt: row.createdAt.toISOString(),
+      connectedAt: row.createdAt.toISOString() as string | null,
       lastVerifiedAt: row.lastVerifiedAt?.toISOString() ?? null,
     };
   }

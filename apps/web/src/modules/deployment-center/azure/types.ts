@@ -40,10 +40,17 @@ export interface DeploymentRow {
   branch: string;
   status: string;
   strategy: string;
+  provider?: string | null;
   createdAt: string;
   sourceOrgId?: string | null;
   jobId?: string | null;
-  metadata?: { error?: string; manifestPath?: string; deployMode?: string } | null;
+  metadata?: {
+    error?: string;
+    manifestPath?: string;
+    deployMode?: string;
+    provider?: string;
+    gitSource?: { provider?: string; namespace?: string; repo?: string; branch?: string };
+  } | null;
   job?: DeploymentJob | null;
   targetOrg?: { alias: string; username?: string | null } | null;
   sourceOrg?: { alias: string; username?: string | null } | null;

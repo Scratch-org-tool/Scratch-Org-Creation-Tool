@@ -1,7 +1,5 @@
-'use client';
-
-import { AzureDeployWorkspace } from '@/modules/deployment-center/azure-deploy-workspace';
+import { redirect } from 'next/navigation';
 
 export default function AzureDeploymentPage() {
-  return <AzureDeployWorkspace />;
+  redirect('/deployment-center/git');
 }

@@ -31,11 +31,13 @@ export const APP_NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, module: 'dashboard' },
   {
     href: '/environment-center',
-    label: 'Environment',
+    label: 'Environment Center',
     icon: Cloud,
     module: 'environment',
     children: [
-      { href: '/environment-center', label: 'Integrations' },
+      { href: '/environment-center?tab=salesforce', label: 'Salesforce' },
+      { href: '/environment-center?tab=source-control', label: 'Source Control' },
+      { href: '/environment-center?tab=work-management', label: 'Work Management' },
       { href: '/environment-center/create-scratch-org', label: 'Create Scratch Org' },
     ],
     activePrefixes: ['/scratch-templates'],

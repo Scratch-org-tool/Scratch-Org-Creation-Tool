@@ -32,7 +32,10 @@ export const DEFAULT_TEMPLATE_CONFIG: TemplateConfigState = {
   template: 'config/project-scratch-def.json',
   duration: 7,
   installPackage: true,
-  azureDeploy: { manifestPath: 'CoreFlex Onboarding/manifest/package.xml' },
+  gitSource: {
+    provider: 'azure_devops',
+    manifestPath: 'CoreFlex Onboarding/manifest/package.xml',
+  },
   permissionSets: [],
   permissionSetsText: '',
   orgConfig: {

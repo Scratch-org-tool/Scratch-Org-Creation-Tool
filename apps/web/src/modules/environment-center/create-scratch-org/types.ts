@@ -22,6 +22,10 @@ export const DEFAULT_FORM = {
   azureRepo: '',
   azureBranch: '',
   azureManifestPath: 'CoreFlex Onboarding/manifest/package.xml',
+  gitProvider: '',
+  gitConnectionId: '',
+  gitNamespace: '',
+  gitRepositoryId: '',
   templateId: '',
   sourceOrgId: '',
 } as const;

@@ -10,6 +10,7 @@ import type {
   ConnectedOrg,
   IntegrationTab,
   SalesforceConnectForm,
+  ScmProvider,
   ScratchOrg,
   ScratchOrgCredentials,
   OrgConnectType,
@@ -54,7 +55,17 @@ export function useIntegrationsWorkspace() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const activeTab: IntegrationTab = tabParam === 'azure' ? 'azure' : 'salesforce';
+  const activeTab: IntegrationTab =
+    tabParam === 'azure' ||
+    tabParam === 'github' ||
+    tabParam === 'bitbucket' ||
+    tabParam === 'source-control'
+      ? 'source-control'
+      : tabParam === 'jira' || tabParam === 'work-management'
+        ? 'work-management'
+        : 'salesforce';
+  const sourceProvider: ScmProvider =
+    tabParam === 'github' ? 'github' : tabParam === 'bitbucket' ? 'bitbucket' : 'azure_devops';
 
   const cached = getSessionCache<IntegrationsCache>(INTEGRATIONS_CACHE_KEY);
   const [initialLoading, setInitialLoading] = useState(!cached);
@@ -412,6 +423,7 @@ export function useIntegrationsWorkspace() {
   return {
     router,
     activeTab,
+    sourceProvider,
     setTab,
     initialLoading,
     refreshing,

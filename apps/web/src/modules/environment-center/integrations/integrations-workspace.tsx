@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { Suspense } from 'react';
-import { RefreshCw, Rocket, Cloud, CloudCog, Star } from 'lucide-react';
+import { RefreshCw, Rocket, Cloud, GitBranch, BriefcaseBusiness, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   ConfirmBanner,
@@ -15,7 +15,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/utils/cn';
 import { IntegrationsPageHeader } from './integrations-page-header';
 import { SalesforceIntegrationPanel } from './salesforce-integration-panel';
-import { AzureIntegrationPanel } from './azure-integration-panel';
+import {
+  SourceControlIntegrationPanel,
+  WorkManagementIntegrationPanel,
+} from './provider-integrations-panel';
 import { ScratchOrgCredentialsDrawer } from './scratch-org-credentials-drawer';
 import { useIntegrationsWorkspace } from './use-integrations-workspace';
 
@@ -33,6 +36,8 @@ function TabButton({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={cn(
         'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors',
@@ -95,16 +100,16 @@ function IntegrationsWorkspaceInner() {
             <StatCard label="Dev Hubs" value={w.devHubCount} icon={Star} iconClass="text-amber-400" />
             <StatCard label="Scratch Orgs" value={w.scratchOrgs.length} icon={Rocket} iconClass="text-violet-400" />
             <StatCard
-              label="Azure DevOps"
-              value={w.azureStatus?.connected ? 'Connected' : 'Not linked'}
-              icon={CloudCog}
-              iconClass={w.azureStatus?.connected ? 'text-green-400' : 'text-muted-foreground'}
+              label="Source Control"
+              value="3 providers"
+              icon={GitBranch}
+              iconClass="text-blue-400"
             />
           </>
         )}
       </StatCardGrid>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Environment Center">
         <TabButton
           active={w.activeTab === 'salesforce'}
           onClick={() => w.setTab('salesforce')}
@@ -117,15 +122,18 @@ function IntegrationsWorkspaceInner() {
           Salesforce
         </TabButton>
         <TabButton
-          active={w.activeTab === 'azure'}
-          onClick={() => w.setTab('azure')}
-          badge={
-            w.azureStatus?.connected ? (
-              <span className="w-2 h-2 rounded-full bg-green-400" />
-            ) : undefined
-          }
+          active={w.activeTab === 'source-control'}
+          onClick={() => w.setTab('source-control')}
         >
-          Azure DevOps
+          <GitBranch className="w-3.5 h-3.5" />
+          Source Control
+        </TabButton>
+        <TabButton
+          active={w.activeTab === 'work-management'}
+          onClick={() => w.setTab('work-management')}
+        >
+          <BriefcaseBusiness className="w-3.5 h-3.5" />
+          Work Management
         </TabButton>
       </div>
 
@@ -162,8 +170,10 @@ function IntegrationsWorkspaceInner() {
         <Skeleton className="h-[480px] w-full rounded-xl" />
       ) : w.activeTab === 'salesforce' ? (
         <SalesforceIntegrationPanel w={w} />
+      ) : w.activeTab === 'source-control' ? (
+        <SourceControlIntegrationPanel initialProvider={w.sourceProvider} />
       ) : (
-        <AzureIntegrationPanel w={w} />
+        <WorkManagementIntegrationPanel />
       )}
 
       <ScratchOrgCredentialsDrawer

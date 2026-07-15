@@ -32,8 +32,54 @@ export class IntegrationAdminService {
     @Optional() private readonly github?: GitHubIntegrationService,
   ) {}
 
-  listConnections() {
-    return this.store.listPublicConnections();
+  async listConnections() {
+    const [connections, azure] = await Promise.all([
+      this.store.listPublicConnections(),
+      this.azure.getStatus(),
+    ]);
+    if (azure.connected && azure.source === 'environment') {
+      const base = {
+        id: 'environment-azure-devops',
+        externalAccountId: azure.orgSlug,
+        displayName: azure.orgSlug ?? 'Azure DevOps',
+        namespace: azure.orgSlug,
+        baseUrl: azure.orgSlug ? `https://dev.azure.com/${azure.orgSlug}` : null,
+        source: 'environment' as const,
+        status: 'connected' as const,
+        connectedAt: null,
+        lastVerifiedAt: null,
+      };
+      if (!connections.scm.some((connection) => connection.provider === 'azure_devops')) {
+        connections.scm.unshift({
+          ...base,
+          provider: 'azure_devops',
+          capabilities: {
+            repositories: true,
+            branches: true,
+            checkout: true,
+            pipelines: true,
+            pullRequests: false,
+            webhooks: false,
+          },
+        });
+      }
+      if (!connections.workItems.some((connection) => connection.provider === 'azure_boards')) {
+        connections.workItems.unshift({
+          ...base,
+          id: 'environment-azure-boards',
+          provider: 'azure_boards',
+          capabilities: {
+            read: true,
+            write: true,
+            webhooks: false,
+            attachments: true,
+            history: true,
+            stateTransitions: true,
+          },
+        });
+      }
+    }
+    return connections;
   }
 
   async connectScm(provider: string, body: unknown, connectedBy?: string) {

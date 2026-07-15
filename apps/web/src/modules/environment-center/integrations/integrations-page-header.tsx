@@ -23,9 +23,9 @@ export function IntegrationsPageHeader({ actions }: IntegrationsPageHeaderProps)
         <Breadcrumbs className="mb-2" />
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Integrations</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Environment Center</h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-              Manage Salesforce orgs, scratch orgs, and Azure DevOps connections.
+              Manage Salesforce environments, source-control providers, and work-management connections.
             </p>
           </div>
           {actions && <div className="flex flex-wrap gap-2 shrink-0">{actions}</div>}
