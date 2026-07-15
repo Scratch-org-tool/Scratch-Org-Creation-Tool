@@ -10,7 +10,7 @@ import type { AccountSeedRow } from '../types';
 import { FileDropzone } from './file-dropzone';
 
 type Dataset = 'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts';
-type DataSeedMode = 'automatic' | 'query_json' | 'hybrid';
+type DataSeedMode = 'automatic' | 'query_json' | 'hybrid' | 'query_section';
 
 const DATASETS: Dataset[] = ['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'];
 

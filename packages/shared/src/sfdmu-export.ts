@@ -3,10 +3,8 @@ import { gitSourceConfigSchema } from './integrations.js';
 import { extractObjectFromSoql } from './query-set.js';
 import { bottlerSalesOfficeConfigSchema } from './bottler-sales-office-config.js';
 import { dataSeedQuerySetSchema } from './data-seed-query-set.js';
-import {
-  userProvisionSlotSchema,
-  userProvisionTemplateSchema,
-} from './user-provision-template.js';
+import { querySectionSchema } from './query-section.js';
+import { userProvisioningConfigSchema } from './user-provision-template.js';
 
 export const sfdmuExportObjectSchema = z.object({
   query: z.string().min(1),
@@ -39,7 +37,35 @@ export const scratchPipelineTemplateAzureSchema = z.object({
   manifestPath: z.string().optional(),
 }).optional();
 
-export const scratchPipelineTemplateConfigSchema = z.object({
+export const accountSeedRowSchema = z.object({
+  accountGroup: z.enum(['Z001', 'ZFSV', 'Z003']),
+  bottler: z.enum(['5000', '4900', '4600']),
+  distributionChannel: z.enum(['Z1', 'Z3']),
+  limit: z.number().int().positive(),
+});
+
+export const dataSeedConfigSchema = z.object({
+  datasets: z.array(z.enum(['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'])).optional(),
+  mode: z.enum(['automatic', 'query_json', 'hybrid', 'query_section']).default('hybrid'),
+  querySet: dataSeedQuerySetSchema.optional(),
+  querySection: querySectionSchema.optional(),
+});
+
+export const partnerImportConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  mode: z
+    .enum(['excel', 'org_to_org', 'org_to_org_matched', 'query_section'])
+    .default('org_to_org_matched'),
+  bottler: z.enum(['5000', '4900', '4600', 'all']).default('5000'),
+  perOffice: z.number().int().positive().default(20),
+  matchOrgDistribution: z.boolean().default(true),
+  salesOfficeConfig: bottlerSalesOfficeConfigSchema.optional(),
+  partnerExcelBase64: z.string().optional(),
+  sheet: z.string().optional(),
+});
+
+const scratchPipelineTemplateConfigBaseSchema = z.object({
+  version: z.union([z.literal(1), z.literal(2)]).optional(),
   template: z.string().optional().default('config/project-scratch-def.json'),
   duration: z.number().int().positive().optional().default(7),
   installPackage: z.boolean().default(true),
@@ -56,42 +82,45 @@ export const scratchPipelineTemplateConfigSchema = z.object({
   sourceOrgId: z.string().uuid().optional(),
   dataDeploymentOrgId: z.string().uuid().optional(),
   customSettingsOrgId: z.string().uuid().optional(),
-  dataSeed: z.object({
-    datasets: z.array(z.enum(['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'])).optional(),
-    mode: z.enum(['automatic', 'query_json', 'hybrid']).default('hybrid'),
-    querySet: dataSeedQuerySetSchema.optional(),
-  }).optional(),
-  accountSeedRows: z.array(z.object({
-    accountGroup: z.enum(['Z001', 'ZFSV', 'Z003']),
-    bottler: z.enum(['5000', '4900', '4600']),
-    distributionChannel: z.enum(['Z1', 'Z3']),
-    limit: z.number().int().positive(),
-  })).optional(),
-  partnerImport: z.object({
-    enabled: z.boolean().default(false),
-    mode: z.enum(['excel', 'org_to_org', 'org_to_org_matched']).default('org_to_org_matched'),
-    bottler: z.enum(['5000', '4900', '4600', 'all']).default('5000'),
-    perOffice: z.number().int().positive().default(20),
-    matchOrgDistribution: z.boolean().default(true),
-    salesOfficeConfig: bottlerSalesOfficeConfigSchema.optional(),
-    partnerExcelBase64: z.string().optional(),
-    sheet: z.string().optional(),
-  }).optional(),
-  userProvisioning: z.object({
-    users: z.array(z.object({
-      role: z.string(),
-      bottler: z.string(),
-      modules: z.array(z.string()).optional(),
-      locations: z.array(z.string()).optional(),
-      email: z.string().email(),
-      firstName: z.string(),
-      lastName: z.string(),
-    })).optional(),
-    templates: z.array(userProvisionTemplateSchema).optional(),
-    slots: z.array(userProvisionSlotSchema).optional(),
-  }).optional(),
+  dataSeed: dataSeedConfigSchema.optional(),
+  accountSeedRows: z.array(accountSeedRowSchema).optional(),
+  partnerImport: partnerImportConfigSchema.optional(),
+  userProvisioning: userProvisioningConfigSchema.optional(),
   pipelineSteps: pipelineStepsConfigSchema.optional(),
 });
+
+export const scratchPipelineTemplateConfigSchema =
+  scratchPipelineTemplateConfigBaseSchema.superRefine((config, context) => {
+    if (
+      config.version === 2
+      && config.customSettings?.mode === 'custom'
+      && !config.customSettings.exportConfig
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'V2 custom settings mode requires exportConfig',
+        path: ['customSettings', 'exportConfig'],
+      });
+    }
+    if (config.version === 2 && config.dataSeed?.mode === 'query_section' && !config.dataSeed.querySection) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'V2 query_section data seed mode requires querySection',
+        path: ['dataSeed', 'querySection'],
+      });
+    }
+    if (
+      config.version === 2
+      && config.partnerImport?.mode === 'query_section'
+      && !config.dataSeed?.querySection?.accountPartnerPlan
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'query_section partner mode requires dataSeed.querySection.accountPartnerPlan',
+        path: ['dataSeed', 'querySection', 'accountPartnerPlan'],
+      });
+    }
+  });
 
 export type ScratchPipelineTemplateConfig = z.infer<typeof scratchPipelineTemplateConfigSchema>;
 

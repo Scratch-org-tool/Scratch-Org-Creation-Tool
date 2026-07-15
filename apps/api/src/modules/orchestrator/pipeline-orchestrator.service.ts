@@ -556,6 +556,9 @@ export class PipelineOrchestratorService {
           bottler: '5000' as const,
           perOffice: 20,
           matchOrgDistribution: true,
+          salesOfficeConfig: undefined,
+          excelPath: undefined,
+          sheet: undefined,
         };
         const sourceOrgId = getDataDeploymentOrgId({
           dataDeploymentOrgId: config.dataDeploymentOrgId,

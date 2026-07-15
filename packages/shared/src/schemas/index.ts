@@ -12,10 +12,13 @@ const dataRecordLimitSchema = z
   .default(200);
 import {
   customSettingsConfigSchema,
+  dataSeedConfigSchema,
+  partnerImportConfigSchema,
   pipelineStepsConfigSchema,
   sfdmuExportSchema,
   scratchPipelineTemplateConfigSchema,
 } from '../sfdmu-export.js';
+import { userProvisioningConfigSchema } from '../user-provision-template.js';
 
 export * from './auth.js';
 
@@ -138,6 +141,7 @@ export const dataDeployConfigSchema = z.object({
 });
 
 export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
+  version: z.union([z.literal(1), z.literal(2)]).optional(),
   azureDeploy: azureDeployConfigSchema.optional(),
   gitSource: gitSourceConfigSchema.optional(),
   automationRunId: z.string().uuid().optional(),
@@ -158,57 +162,34 @@ export const scratchOrgPipelineSchema = scratchOrgCreateSchema.extend({
     (rows) => !rows.some((r) => r.accountGroup === 'ZFSV' && r.bottler === '5000'),
     { message: 'ZFSV accounts are not available for bottler 5000' },
   ).optional(),
-  userProvisioning: z.object({
-    users: z.array(z.object({
-      role: z.string(),
-      bottler: z.string(),
-      modules: z.array(z.string()).optional(),
-      locations: z.array(z.string()).optional(),
-      email: z.string().email(),
-      firstName: z.string(),
-      lastName: z.string(),
-    })).optional(),
-    templates: z.array(z.object({
-      id: z.string().min(1),
-      label: z.string().min(1),
-      bottler: z.enum(['5000', '4900', '4600']),
-      role: z.string().min(1),
-      modules: z.array(z.string()).default([]),
-      locations: z.array(z.string()).default([]),
-    })).optional(),
-    slots: z.array(z.object({
-      templateId: z.string().min(1),
-      firstName: z.string().min(1),
-      lastName: z.string().min(1),
-      email: z.string().email(),
-      role: z.string().optional(),
-      bottler: z.enum(['5000', '4900', '4600']).optional(),
-      modules: z.array(z.string()).optional(),
-      locations: z.array(z.string()).optional(),
-    })).optional(),
-  }).optional(),
-  dataSeed: z.object({
-    datasets: z.array(z.enum(['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'])).optional(),
-    mode: z.enum(['automatic', 'query_json', 'hybrid']).default('hybrid'),
-    querySet: z.record(z.unknown()).optional(),
-  }).optional(),
-  partnerImport: z.object({
-    mode: z.enum(['excel', 'org_to_org', 'org_to_org_matched']),
-    bottler: z.enum(['5000', '4900', '4600', 'all']),
-    perOffice: z.number().int().positive().default(20),
-    matchOrgDistribution: z.boolean().default(true),
-    salesOfficeConfig: z.record(z.unknown()).optional(),
+  userProvisioning: userProvisioningConfigSchema.optional(),
+  dataSeed: dataSeedConfigSchema.optional(),
+  partnerImport: partnerImportConfigSchema.extend({
     excelPath: z.string().optional(),
-    sheet: z.string().optional(),
-    partnerExcelBase64: z.string().optional(),
   }).optional(),
   customSettings: customSettingsConfigSchema.optional(),
   pipelineSteps: pipelineStepsConfigSchema.optional(),
   permissionSets: z.array(z.string()).optional(),
   templateId: z.string().uuid().optional(),
-}).refine((value) => Boolean(value.gitSource || value.azureDeploy), {
-  message: 'gitSource or azureDeploy is required',
-  path: ['gitSource'],
+}).superRefine((value, context) => {
+  if (!value.gitSource && !value.azureDeploy) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'gitSource or azureDeploy is required',
+      path: ['gitSource'],
+    });
+  }
+  if (
+    value.version === 2
+    && value.customSettings?.mode === 'custom'
+    && !value.customSettings.exportConfig
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'V2 custom settings mode requires exportConfig',
+      path: ['customSettings', 'exportConfig'],
+    });
+  }
 }).transform(normalizeGitSourceConfig);
 
 export const customSettingsLoadSchema = z.object({
