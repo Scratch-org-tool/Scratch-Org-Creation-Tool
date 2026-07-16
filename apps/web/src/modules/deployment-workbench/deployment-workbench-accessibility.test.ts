@@ -46,4 +46,12 @@ describe('deployment workbench component semantics', () => {
     expect(source).toContain('variant="warning"');
     expect(source).toContain('disabled={production}');
   });
+
+  it('starts org comparison on Components entry and retains it after execution', () => {
+    expect(hookSource).toContain('step !== 1');
+    expect(hookSource).toContain("form.sourceMode !== 'org_compare'");
+    expect(hookSource).toContain('void startComparison()');
+    expect(source).toContain("['passed', 'failed', 'cancelled', 'rejected'].includes(w.status.status)");
+    expect(source).toContain('<ComponentsStep w={w} />');
+  });
 });

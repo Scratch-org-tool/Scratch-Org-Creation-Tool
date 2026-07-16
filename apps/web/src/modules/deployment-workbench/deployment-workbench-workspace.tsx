@@ -338,6 +338,9 @@ function ComponentsStep({ w }: { w: DeploymentWorkbenchState }) {
     );
   }
 
+  const sourceLabel = w.orgs.find((org) => org.id === w.form.sourceOrgId)?.alias ?? 'Source org';
+  const targetLabel = w.orgs.find((org) => org.id === w.form.targetOrgId)?.alias ?? 'Target org';
+
   return (
     <GlassCard
       title="Component comparison"
@@ -350,11 +353,16 @@ function ComponentsStep({ w }: { w: DeploymentWorkbenchState }) {
         items={w.compareItems}
         selectedKeys={w.selectedKeys}
         comparing={w.comparing}
-        sourceOrgId={w.form.sourceOrgId}
-        targetOrgId={w.form.targetOrgId}
-        onStartComparison={w.startComparison}
+        selectedItem={w.selectedCompareItem}
+        itemDiff={w.compareItemDiff}
+        itemDiffLoading={w.compareItemDiffLoading}
+        itemDiffError={w.compareItemDiffError}
+        sourceLabel={sourceLabel}
+        targetLabel={targetLabel}
+        onRetryComparison={w.retryComparison}
         onToggleItem={w.toggleCompareItem}
         onSelectItems={w.selectCompareItems}
+        onSelectItem={(item) => void w.loadCompareItemDiff(item)}
       />
       {componentCount(w.form.destructiveSelections) > 0 && !w.capabilities?.supports.destructiveChanges && (
         <InlineAlert variant="error" title="Destructive plan blocked">
@@ -1107,6 +1115,21 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
           </div>
         )}
       </GlassCard>
+
+      {w.form.sourceMode === 'org_compare'
+        && w.form.comparisonId
+        && ['passed', 'failed', 'cancelled', 'rejected'].includes(w.status.status) && (
+        <div className="space-y-3">
+          <InlineAlert
+            variant={w.status.status === 'passed' ? 'success' : 'warning'}
+            title={w.status.status === 'passed' ? 'Deployment successful' : 'Deployment finished'}
+          >
+            The comparison remains available below so you can inspect the deployed selection and
+            source-versus-target XML without starting another comparison.
+          </InlineAlert>
+          <ComponentsStep w={w} />
+        </div>
+      )}
 
       {w.progress?.totalBatches ? (
         <GlassCard title="Intelligent batches">

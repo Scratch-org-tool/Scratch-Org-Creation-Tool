@@ -15,7 +15,6 @@ import {
   Filter,
   Layers,
   ListTree,
-  RefreshCw,
   Search,
   Square,
   Trash2,
@@ -26,10 +25,12 @@ import { Input } from '@/components/ui/input';
 import { InlineAlert } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import { api } from '@/services/api';
+import { MetadataXmlDiffViewer } from '@/modules/metadata-deployment/metadata-item-diff-panel';
 import type {
   CompareDiffType,
   CompareFilters,
   CompareItem,
+  CompareItemDiff,
   CompareRelatedChildren,
   CompareSummary,
   CompareTypeSummary,
@@ -59,16 +60,35 @@ const DIFF_CONFIG: Record<CompareDiffType, { label: string; chip: string; color:
     color: 'bg-red-500/15 text-red-300 border-red-500/30',
   },
   same: {
-    label: 'Same',
-    chip: 'Same',
+    label: 'No difference',
+    chip: 'No difference',
     color: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
   },
   unknown: {
-    label: 'Unknown',
-    chip: 'Unknown',
+    label: 'Not inspected',
+    chip: 'Not inspected',
     color: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
   },
 };
+
+const EXACT_OBJECT_CHILD_TYPES = new Set([
+  'AssignmentRules',
+  'AutoResponseRules',
+  'EscalationRules',
+  'MatchingRules',
+  'SharingRules',
+  'Workflow',
+]);
+
+function isObjectChild(item: CompareItem, objectName: string): boolean {
+  if (EXACT_OBJECT_CHILD_TYPES.has(item.metadataType)) return item.fullName === objectName;
+  if (item.metadataType === 'Layout') {
+    return item.fullName === objectName
+      || item.fullName.startsWith(`${objectName}-`)
+      || item.fullName.startsWith(`${objectName}.`);
+  }
+  return item.fullName.startsWith(`${objectName}.`);
+}
 
 interface ComponentsComparisonWindowProps {
   comparisonId: string | undefined;
@@ -77,11 +97,16 @@ interface ComponentsComparisonWindowProps {
   items: CompareItem[];
   selectedKeys: Set<string>;
   comparing: boolean;
-  sourceOrgId: string;
-  targetOrgId: string;
-  onStartComparison: () => void;
+  selectedItem: CompareItem | null;
+  itemDiff: CompareItemDiff | null;
+  itemDiffLoading: boolean;
+  itemDiffError: string | null;
+  sourceLabel: string;
+  targetLabel: string;
+  onRetryComparison: () => void;
   onToggleItem: (item: CompareItem) => void;
   onSelectItems: (items: CompareItem[], selected: boolean) => void;
+  onSelectItem: (item: CompareItem) => void;
 }
 
 export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProps) {
@@ -92,17 +117,23 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
     items,
     selectedKeys,
     comparing,
-    sourceOrgId,
-    targetOrgId,
-    onStartComparison,
+    selectedItem,
+    itemDiff,
+    itemDiffLoading,
+    itemDiffError,
+    sourceLabel,
+    targetLabel,
+    onRetryComparison,
     onToggleItem,
     onSelectItems,
+    onSelectItem,
   } = props;
 
   const [filters, setFilters] = useState<CompareFilters>({
     metadataType: '',
-    diffTypes: ['new', 'changed', 'deleted'],
+    diffTypes: [...DIFF_ORDER],
     search: '',
+    selectedOnly: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
@@ -115,12 +146,17 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   const typeSummaries = useMemo(() => compareTypeSummaries(items), [items]);
 
   const filteredItems = useMemo(
-    () => filterCompareItems(items, {
-      metadataType: filters.metadataType,
-      diffTypes: filters.diffTypes,
-      search: filters.search,
-    }),
-    [items, filters],
+    () => {
+      const matching = filterCompareItems(items, {
+        metadataType: filters.metadataType,
+        diffTypes: filters.diffTypes,
+        search: filters.search,
+      });
+      return filters.selectedOnly
+        ? matching.filter((item) => selectedKeys.has(buildCompareKey(item.metadataType, item.fullName)))
+        : matching;
+    },
+    [items, filters, selectedKeys],
   );
 
   const totalPages = useMemo(
@@ -135,7 +171,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filters.metadataType, filters.diffTypes, filters.search]);
+  }, [filters.metadataType, filters.diffTypes, filters.search, filters.selectedOnly]);
 
   const selectedSummary = useMemo(() => {
     const selectedItems = items.filter((item) => selectedKeys.has(buildCompareKey(item.metadataType, item.fullName)));
@@ -145,11 +181,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
     return { byType, deployable, destructive, total: selectedItems.length };
   }, [items, selectedKeys]);
 
-  const activeMetadataType = useMemo(() => {
-    if (filters.metadataType) return filters.metadataType;
-    if (typeSummaries.length) return typeSummaries[0].metadataType;
-    return '';
-  }, [filters.metadataType, typeSummaries]);
+  const activeMetadataType = filters.metadataType;
 
   const activeSummary = useMemo(
     () => typeSummaries.find((type) => type.metadataType === activeMetadataType) ?? null,
@@ -158,12 +190,16 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
 
   const visibleCounts = useMemo(() => {
     const counts = { new: 0, changed: 0, deleted: 0, same: 0, unknown: 0, total: 0 };
-    for (const item of filteredItems) {
+    const typeAndSearchItems = filterCompareItems(items, {
+      metadataType: filters.metadataType,
+      search: filters.search,
+    });
+    for (const item of typeAndSearchItems) {
       counts[item.diffType] += 1;
       counts.total += 1;
     }
     return counts;
-  }, [filteredItems]);
+  }, [filters.metadataType, filters.search, items]);
 
   const toggleDiffType = useCallback((diffType: CompareDiffType) => {
     setFilters((current) => {
@@ -193,7 +229,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   }, [activeMetadataType, filteredItems, onSelectItems]);
 
   const clearFilters = useCallback(() => {
-    setFilters({ metadataType: '', diffTypes: ['new', 'changed', 'deleted'], search: '' });
+    setFilters({ metadataType: '', diffTypes: [...DIFF_ORDER], search: '', selectedOnly: false });
   }, []);
 
   const loadRelatedChildren = useCallback(async (objectName: string) => {
@@ -222,7 +258,6 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   const isObjectRelated = (item: CompareItem) =>
     item.metadataType === 'CustomObject' && !item.fullName.includes('.');
 
-  const compareReady = Boolean(sourceOrgId && targetOrgId && sourceOrgId !== targetOrgId);
   const running = comparisonStatus === 'running' || comparing;
   const empty = !items.length && !running;
   const anySelected = selectedKeys.size > 0;
@@ -234,51 +269,70 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
           <Layers className="size-4 text-primary" aria-hidden="true" />
           <div>
             <p className="text-sm font-medium">Metadata comparison</p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground" aria-live="polite">
               {comparisonSummary
                 ? `${comparisonSummary.total} components inspected · ${comparisonSummary.new} new · ${comparisonSummary.changed} changed · ${comparisonSummary.deleted} deleted`
-                : 'Run a comparison to discover changes between orgs.'}
+                : running
+                  ? 'Discovering metadata types and components from both orgs…'
+                  : 'Metadata is loaded automatically from the selected source and target orgs.'}
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            loading={running}
-            disabled={!compareReady}
-            onClick={() => void onStartComparison()}
-          >
-            <RefreshCw className="mr-2 size-4" />
-            {comparisonId ? 'Compare again' : 'Run comparison'}
+        {anySelected && (
+          <Button size="sm" variant="outline" onClick={clearAllVisible}>
+            Clear {selectedKeys.size} selected
           </Button>
-          {anySelected && (
-            <Button size="sm" variant="outline" onClick={clearAllVisible}>
-              Clear {selectedKeys.size} selected
-            </Button>
-          )}
-        </div>
+        )}
       </div>
 
       {running && (
         <InlineAlert variant="info">
-          Comparison is running in the background. Results update automatically.
+          {comparisonSummary?.progress?.phase === 'resolving_xml'
+            ? `Inspecting source and target XML (${comparisonSummary.progress.resolvedItems ?? 0} of ${comparisonSummary.progress.totalItems ?? 0}). Results update automatically.`
+            : comparisonSummary?.progress?.totalTypes
+              ? `Loading metadata types (${comparisonSummary.progress.completedTypes} of ${comparisonSummary.progress.totalTypes}). Results appear as each type completes.`
+              : 'Discovering all supported metadata types. Results appear automatically.'}
+        </InlineAlert>
+      )}
+
+      {comparisonStatus === 'failed' && (
+        <InlineAlert variant="error" title="Metadata loading failed">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>The org metadata could not be loaded. Check the org connections and retry.</span>
+            <Button size="sm" variant="outline" onClick={onRetryComparison}>
+              Retry metadata loading
+            </Button>
+          </div>
         </InlineAlert>
       )}
 
       {comparisonSummary && comparisonSummary.typeErrors && (
         <InlineAlert variant="warning" title="Some metadata types could not be compared">
           {Array.isArray(comparisonSummary.typeErrors)
-            ? comparisonSummary.typeErrors.map((error) => `${error.metadataType} (${error.org}): ${error.error}`).join('; ')
+            ? `${comparisonSummary.typeErrors
+                .slice(0, 5)
+                .map((error) => `${error.metadataType} (${error.org}): ${error.error}`)
+                .join('; ')}${comparisonSummary.typeErrors.length > 5
+                ? `; and ${comparisonSummary.typeErrors.length - 5} more type errors`
+                : ''}`
             : 'One or more metadata types returned errors from the orgs.'}
+        </InlineAlert>
+      )}
+
+      {comparisonStatus === 'partial' && Boolean(comparisonSummary?.progress?.failedItems) && (
+        <InlineAlert variant="warning" title="Some XML could not be inspected">
+          {comparisonSummary?.progress?.failedItems} component
+          {comparisonSummary?.progress?.failedItems === 1 ? '' : 's'} could not be classified.
+          They remain under Not inspected and are not deployable until their XML can be loaded.
         </InlineAlert>
       )}
 
       {empty && !running && (
         <div className="rounded-lg border border-dashed border-border p-10 text-center">
           <ListTree className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true" />
-          <p className="text-sm font-medium">No comparison results yet</p>
+          <p className="text-sm font-medium">No metadata components found</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Choose a source and target org, then run the comparison to select components.
+            Return to Source and confirm that both connected orgs are available.
           </p>
         </div>
       )}
@@ -349,6 +403,24 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
                       onClick={() => toggleDiffType(diffType)}
                     />
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => setFilters((current) => ({
+                      ...current,
+                      selectedOnly: !current.selectedOnly,
+                    }))}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors',
+                      filters.selectedOnly
+                        ? 'border border-primary/40 bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:bg-muted/40',
+                    )}
+                    aria-pressed={filters.selectedOnly}
+                  >
+                    <CheckSquare className="size-3.5" aria-hidden="true" />
+                    Selected
+                    <span className="text-muted-foreground">{selectedKeys.size}</span>
+                  </button>
                 </div>
               </div>
 
@@ -358,7 +430,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
                   <span>
                     {filters.metadataType ? `Type: ${filters.metadataType}` : 'All types'}
                     {' · '}
-                    {visibleCounts.total} shown
+                    {filteredItems.length} shown
                   </span>
                   {selectedSummary.total > 0 && (
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-primary">
@@ -438,7 +510,10 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
                             key={key}
                             item={item}
                             selected={selected}
+                            active={selectedItem?.metadataType === item.metadataType
+                              && selectedItem.fullName === item.fullName}
                             onToggle={() => onToggleItem(item)}
+                            onOpen={() => onSelectItem(item)}
                             onShowRelated={() => loadRelatedChildren(item.fullName)}
                             showRelated={isObjectRelated(item)}
                             activeRelated={selectedItemKey === item.fullName}
@@ -475,6 +550,20 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
                   </div>
                 </div>
               )}
+
+              {itemDiffError && (
+                <InlineAlert variant="error" title="Could not load component XML">
+                  {itemDiffError}
+                </InlineAlert>
+              )}
+
+              <MetadataXmlDiffViewer
+                selectedItem={selectedItem}
+                itemDiff={itemDiff}
+                loading={itemDiffLoading}
+                sourceLabel={sourceLabel}
+                targetLabel={targetLabel}
+              />
             </div>
           </section>
         </div>
@@ -531,7 +620,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
           onClose={closeRelatedPanel}
           onAddChild={(childType) => {
             const children = items.filter(
-              (item) => item.metadataType === childType && item.fullName.startsWith(`${selectedItemKey}.`),
+              (item) => item.metadataType === childType && isObjectChild(item, selectedItemKey),
             );
             onSelectItems(children, true);
           }}
@@ -641,25 +730,29 @@ function DiffTypeToggle({
 function CompareRow({
   item,
   selected,
+  active,
   onToggle,
+  onOpen,
   onShowRelated,
   showRelated,
   activeRelated,
 }: {
   item: CompareItem;
   selected: boolean;
+  active: boolean;
   onToggle: () => void;
+  onOpen: () => void;
   onShowRelated: () => void;
   showRelated: boolean;
   activeRelated: boolean;
 }) {
-  const key = buildCompareKey(item.metadataType, item.fullName);
   const destructive = item.diffType === 'deleted';
   return (
     <tr
       className={cn(
         'border-b border-border/40 last:border-0 transition-colors',
         selected && 'bg-primary/5',
+        active && 'bg-primary/10',
         activeRelated && 'bg-primary/10',
       )}
     >
@@ -672,7 +765,17 @@ function CompareRow({
         />
       </td>
       <td className="p-2 font-medium">
-        <span className={cn(destructive && 'line-through opacity-70')}>{item.fullName}</span>
+        <button
+          type="button"
+          onClick={onOpen}
+          className={cn(
+            'text-left text-primary hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            destructive && 'line-through opacity-70',
+          )}
+          aria-pressed={active}
+        >
+          {item.fullName}
+        </button>
       </td>
       <td className="p-2 text-muted-foreground">{item.metadataType}</td>
       <td className="p-2">

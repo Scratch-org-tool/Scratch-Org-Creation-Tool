@@ -31,9 +31,54 @@ function collapseLongDiffText(text: string): string {
 }
 
 export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
+  return (
+    <MetadataXmlDiffViewer
+      selectedItem={w.selectedItem}
+      itemDiff={w.itemDiff}
+      loading={w.diffLoading}
+      sourceLabel={w.orgById(w.form.sourceOrgId)?.alias ?? 'Source'}
+      targetLabel={w.orgById(w.form.targetOrgId)?.alias ?? 'Target'}
+    />
+  );
+}
+
+export interface MetadataXmlDiffItem {
+  fullName: string;
+  metadataType: string;
+  diffType: 'new' | 'changed' | 'deleted' | 'same' | 'unknown';
+}
+
+export interface MetadataXmlDiffPayload {
+  sourceXml: string;
+  targetXml: string;
+  diffLines?: DiffLine[];
+  contentDiffers: boolean;
+  loadStatus?: 'ok' | 'partial' | 'failed';
+  retrieveWarnings?: { source?: string; target?: string };
+  truncated?: boolean;
+}
+
+/**
+ * Reusable source/target metadata XML viewer. The deployment workbench and
+ * legacy metadata workspace share this rendering so change colors, hunk
+ * navigation, truncation behavior, and accessibility stay consistent.
+ */
+export function MetadataXmlDiffViewer({
+  selectedItem,
+  itemDiff,
+  loading,
+  sourceLabel,
+  targetLabel,
+}: {
+  selectedItem: MetadataXmlDiffItem | null;
+  itemDiff: MetadataXmlDiffPayload | null;
+  loading: boolean;
+  sourceLabel: string;
+  targetLabel: string;
+}) {
   const [expanded, setExpanded] = useState(false);
 
-  if (!w.selectedItem) {
+  if (!selectedItem) {
     return (
       <GlassCard
         title={
@@ -50,7 +95,7 @@ export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
     );
   }
 
-  if (w.diffLoading) {
+  if (loading) {
     return (
       <GlassCard title="Source vs target diff">
         <p className="text-xs text-muted-foreground text-center py-8">Loading XML diff…</p>
@@ -58,29 +103,27 @@ export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
     );
   }
 
-  const sourceOrg = w.orgById(w.form.sourceOrgId)?.alias ?? 'Source';
-  const targetOrg = w.orgById(w.form.targetOrgId)?.alias ?? 'Target';
-  const failed = w.itemDiff?.loadStatus === 'failed';
-  const empty = !w.itemDiff?.sourceXml && !w.itemDiff?.targetXml;
-  const sourceXml = w.itemDiff?.sourceXml ?? '';
-  const targetXml = w.itemDiff?.targetXml ?? '';
-  const diffLines = w.itemDiff?.diffLines;
-  const diffKey = `${w.selectedItem.metadataType}::${w.selectedItem.fullName}`;
+  const failed = itemDiff?.loadStatus === 'failed';
+  const empty = !itemDiff?.sourceXml && !itemDiff?.targetXml;
+  const sourceXml = itemDiff?.sourceXml ?? '';
+  const targetXml = itemDiff?.targetXml ?? '';
+  const diffLines = itemDiff?.diffLines;
+  const diffKey = `${selectedItem.metadataType}::${selectedItem.fullName}`;
 
   const statusBadge =
-    w.itemDiff?.contentDiffers !== undefined && !failed && !empty ? (
+    itemDiff?.contentDiffers !== undefined && !failed && !empty ? (
       <span
         className={`text-[10px] px-1.5 py-0.5 rounded ${
-          w.itemDiff.contentDiffers
+          itemDiff.contentDiffers
             ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
             : 'bg-muted text-muted-foreground'
         }`}
       >
-        {w.selectedItem.diffType === 'new'
+        {selectedItem.diffType === 'new'
           ? 'New in source'
-          : w.selectedItem.diffType === 'deleted'
+          : selectedItem.diffType === 'deleted'
             ? 'Only in target'
-            : w.itemDiff.contentDiffers
+            : itemDiff.contentDiffers
               ? 'Content differs'
               : 'Identical content'}
       </span>
@@ -92,7 +135,7 @@ export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
         title={
           <span className="inline-flex items-center gap-2 text-sm font-mono truncate">
             <GitCompare className="w-4 h-4 text-primary shrink-0" />
-            {w.selectedItem.fullName}
+            {selectedItem.fullName}
           </span>
         }
         headerAction={
@@ -113,13 +156,13 @@ export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
           </div>
         }
       >
-        {(failed || w.itemDiff?.retrieveWarnings?.source || w.itemDiff?.retrieveWarnings?.target) && (
+        {(failed || itemDiff?.retrieveWarnings?.source || itemDiff?.retrieveWarnings?.target) && (
           <InlineAlert variant="warning" className="mb-3">
-            {w.itemDiff?.retrieveWarnings?.source && (
-              <p className="text-xs">Source: {w.itemDiff.retrieveWarnings.source}</p>
+            {itemDiff?.retrieveWarnings?.source && (
+              <p className="text-xs">Source: {itemDiff.retrieveWarnings.source}</p>
             )}
-            {w.itemDiff?.retrieveWarnings?.target && (
-              <p className="text-xs">Target: {w.itemDiff.retrieveWarnings.target}</p>
+            {itemDiff?.retrieveWarnings?.target && (
+              <p className="text-xs">Target: {itemDiff.retrieveWarnings.target}</p>
             )}
             {failed && empty && (
               <p className="text-xs">Could not retrieve metadata XML from one or both orgs.</p>
@@ -128,19 +171,24 @@ export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
         )}
         <DiffView
           diffKey={diffKey}
-          sourceLabel={sourceOrg}
-          targetLabel={targetOrg}
+          sourceLabel={sourceLabel}
+          targetLabel={targetLabel}
           sourceXml={sourceXml}
           targetXml={targetXml}
           diffLines={diffLines}
           heightClass="h-[28rem]"
         />
-        {w.itemDiff?.contentDiffers && w.selectedItem.diffType === 'same' && (
+        {itemDiff?.truncated && (
+          <p className="mt-2 text-[10px] text-amber-600">
+            This XML comparison is truncated for performance. Deployment still uses the complete metadata component.
+          </p>
+        )}
+        {itemDiff?.contentDiffers && selectedItem.diffType === 'same' && (
           <p className="text-[10px] text-amber-600 mt-2">
             Content differs — item upgraded to Changed. You can now select it for deploy.
           </p>
         )}
-        {!w.itemDiff?.contentDiffers && !failed && !empty && w.selectedItem.diffType !== 'new' && (
+        {!itemDiff?.contentDiffers && !failed && !empty && selectedItem.diffType !== 'new' && (
           <p className="text-[10px] text-muted-foreground mt-2">
             Source and target content are identical — no deploy needed.
           </p>
@@ -149,10 +197,10 @@ export function MetadataItemDiffPanel({ w }: { w: MetadataCompareHook }) {
 
       {expanded && (
         <DiffFullscreen
-          title={w.selectedItem.fullName}
+          title={selectedItem.fullName}
           diffKey={diffKey}
-          sourceLabel={sourceOrg}
-          targetLabel={targetOrg}
+          sourceLabel={sourceLabel}
+          targetLabel={targetLabel}
           sourceXml={sourceXml}
           targetXml={targetXml}
           diffLines={diffLines}

@@ -67,15 +67,7 @@ export class MetadataBrowseService {
   }
 
   async listTypes(orgId: string, userId: string, search?: string, page = 1, pageSize = 100) {
-    const alias = await this.resolveAlias(orgId, userId);
-    const cacheKey = `types:${orgId}`;
-    let types = this.getCached<Array<{ xmlName: string; directoryName?: string; inFolder?: boolean }>>(cacheKey);
-    if (!types) {
-      const result = await this.sfCli.listMetadataTypes(alias);
-      if (!result.success) this.handleCliError(result.error, alias);
-      types = result.data?.result?.metadataObjects ?? [];
-      this.setCached(cacheKey, types);
-    }
+    const types = await this.listTypesRaw(orgId, userId);
 
     let filtered = types;
     if (search?.trim()) {
@@ -93,6 +85,23 @@ export class MetadataBrowseService {
       page,
       pageSize,
     };
+  }
+
+  /** Complete org metadata type catalog for automatic comparison planning. */
+  async listTypesRaw(
+    orgId: string,
+    userId: string,
+  ): Promise<Array<{ xmlName: string; directoryName?: string; inFolder?: boolean }>> {
+    const alias = await this.resolveAlias(orgId, userId);
+    const cacheKey = `types:${orgId}`;
+    let types = this.getCached<Array<{ xmlName: string; directoryName?: string; inFolder?: boolean }>>(cacheKey);
+    if (!types) {
+      const result = await this.sfCli.listMetadataTypes(alias);
+      if (!result.success) this.handleCliError(result.error, alias);
+      types = result.data?.result?.metadataObjects ?? [];
+      this.setCached(cacheKey, types);
+    }
+    return types;
   }
 
   async listComponents(

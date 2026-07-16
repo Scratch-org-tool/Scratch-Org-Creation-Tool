@@ -33,6 +33,8 @@ interface DiffCacheEntry {
 const MAX_DIFF_CACHE_ENTRIES = 40;
 const MAX_DIFF_XML_CHARS = 200_000;
 const MAX_DIFF_PARTS = 5_000;
+const COMPARISON_TYPE_CONCURRENCY = 4;
+const RUNNING_COMPARISON_REUSE_MS = 15 * 60 * 1_000;
 
 interface ProblemFix {
   id: string;
@@ -72,23 +74,85 @@ export class MetadataCompareService {
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
 
-    const types = input.types?.length ? input.types : [...CURATED_COMPARE_TYPES];
-    const session = await prisma.metadataComparison.create({
-      data: {
-        sourceOrgId: input.sourceOrgId,
-        targetOrgId: input.targetOrgId,
-        status: 'running',
-        createdBy: userId,
-      },
+    const requestedTypes = input.types?.length
+      ? [...new Set(input.types.map((type) => type.trim()).filter(Boolean))].sort()
+      : undefined;
+    const comparisonLockKey = [
+      'metadata-comparison',
+      userId,
+      input.sourceOrgId,
+      input.targetOrgId,
+    ].join(':');
+    const claimed = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        comparisonLockKey,
+      );
+      const existing = await tx.metadataComparison.findFirst({
+        where: {
+          sourceOrgId: input.sourceOrgId,
+          targetOrgId: input.targetOrgId,
+          createdBy: userId,
+          status: 'running',
+          createdAt: { gte: new Date(Date.now() - RUNNING_COMPARISON_REUSE_MS) },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (existing) return { session: existing, reused: true as const };
+      const session = await tx.metadataComparison.create({
+        data: {
+          sourceOrgId: input.sourceOrgId,
+          targetOrgId: input.targetOrgId,
+          status: 'running',
+          createdBy: userId,
+          summary: {
+            total: 0,
+            new: 0,
+            changed: 0,
+            deleted: 0,
+            same: 0,
+            unknown: 0,
+            byType: {},
+            progress: {
+              phase: requestedTypes ? 'listing_components' : 'discovering_types',
+              completedTypes: 0,
+              totalTypes: requestedTypes?.length ?? 0,
+            },
+          },
+        },
+      });
+      return { session, reused: false as const };
     });
+    if (claimed.reused) {
+      return {
+        comparisonId: claimed.session.id,
+        status: 'running' as const,
+        reused: true,
+      };
+    }
+    const session = claimed.session;
 
-    void this.runComparison(session.id, input.sourceOrgId, input.targetOrgId, userId, types).catch(
+    void this.runComparison(
+      session.id,
+      input.sourceOrgId,
+      input.targetOrgId,
+      userId,
+      requestedTypes,
+    ).catch(
       async (err) => {
         await prisma.metadataComparison.update({
           where: { id: session.id },
           data: {
             status: 'failed',
-            summary: { error: err instanceof Error ? err.message : String(err) },
+            summary: {
+              ...summarizeComparisonItems([]),
+              error: err instanceof Error ? err.message : String(err),
+              progress: {
+                phase: 'completed',
+                completedTypes: 0,
+                totalTypes: 0,
+              },
+            },
           },
         });
       },
@@ -97,7 +161,7 @@ export class MetadataCompareService {
     return {
       comparisonId: session.id,
       status: 'running' as const,
-      types,
+      ...(requestedTypes ? { types: requestedTypes } : { discovery: 'all_supported_types' as const }),
     };
   }
 
@@ -106,7 +170,7 @@ export class MetadataCompareService {
     sourceOrgId: string,
     targetOrgId: string,
     userId: string,
-    types: string[],
+    requestedTypes?: string[],
   ) {
     const allItems: MetadataCompareItem[] = [];
     // Per-type list failures are surfaced in the summary instead of being
@@ -114,26 +178,65 @@ export class MetadataCompareService {
     // new/deleted results).
     const typeErrors: Array<{ metadataType: string; org: 'source' | 'target'; error: string }> = [];
 
-    for (const metadataType of types) {
-      const [sourceResult, targetResult] = await Promise.all([
-        this.browseService.listComponentsRaw(sourceOrgId, userId, metadataType)
-          .then((list) => ({ list, error: null as string | null }))
-          .catch((err: unknown) => ({ list: null, error: err instanceof Error ? err.message : String(err) })),
-        this.browseService.listComponentsRaw(targetOrgId, userId, metadataType)
-          .then((list) => ({ list, error: null as string | null }))
-          .catch((err: unknown) => ({ list: null, error: err instanceof Error ? err.message : String(err) })),
-      ]);
-      if (sourceResult.error) {
-        typeErrors.push({ metadataType, org: 'source', error: sourceResult.error });
+    const types = requestedTypes ?? await this.discoverComparisonTypes(sourceOrgId, targetOrgId, userId);
+    if (!types.length) throw new BadRequestException('No supported metadata types were discovered');
+
+    await prisma.metadataComparison.update({
+      where: { id: comparisonId },
+      data: {
+        summary: {
+          ...summarizeComparisonItems([]),
+          progress: {
+            phase: 'listing_components',
+            completedTypes: 0,
+            totalTypes: types.length,
+          },
+        },
+      },
+    });
+
+    for (let offset = 0; offset < types.length; offset += COMPARISON_TYPE_CONCURRENCY) {
+      const batch = types.slice(offset, offset + COMPARISON_TYPE_CONCURRENCY);
+      const results = await Promise.all(batch.map(async (metadataType) => {
+        const [sourceResult, targetResult] = await Promise.all([
+          this.browseService.listComponentsRaw(sourceOrgId, userId, metadataType)
+            .then((list) => ({ list, error: null as string | null }))
+            .catch((err: unknown) => ({ list: null, error: err instanceof Error ? err.message : String(err) })),
+          this.browseService.listComponentsRaw(targetOrgId, userId, metadataType)
+            .then((list) => ({ list, error: null as string | null }))
+            .catch((err: unknown) => ({ list: null, error: err instanceof Error ? err.message : String(err) })),
+        ]);
+        return { metadataType, sourceResult, targetResult };
+      }));
+      for (const { metadataType, sourceResult, targetResult } of results) {
+        if (sourceResult.error) {
+          typeErrors.push({ metadataType, org: 'source', error: sourceResult.error });
+        }
+        if (targetResult.error) {
+          typeErrors.push({ metadataType, org: 'target', error: targetResult.error });
+        }
+        // Only compare types where both sides listed successfully; comparing a
+        // real list against a failed (empty) one would fabricate diffs.
+        if (sourceResult.list && targetResult.list) {
+          allItems.push(...buildComparisonItems(metadataType, sourceResult.list, targetResult.list));
+        }
       }
-      if (targetResult.error) {
-        typeErrors.push({ metadataType, org: 'target', error: targetResult.error });
-      }
-      // Only compare types where both sides listed successfully; comparing a
-      // real list against a failed (empty) one would fabricate diffs.
-      if (sourceResult.list && targetResult.list) {
-        allItems.push(...buildComparisonItems(metadataType, sourceResult.list, targetResult.list));
-      }
+      const completedTypes = Math.min(offset + batch.length, types.length);
+      await prisma.metadataComparison.update({
+        where: { id: comparisonId },
+        data: {
+          items: allItems as unknown as object,
+          summary: {
+            ...summarizeComparisonItems(allItems),
+            ...(typeErrors.length ? { typeErrors } : {}),
+            progress: {
+              phase: 'listing_components',
+              completedTypes,
+              totalTypes: types.length,
+            },
+          } as unknown as object,
+        },
+      });
     }
 
     const summary = {
@@ -150,12 +253,38 @@ export class MetadataCompareService {
             ? 'running'
             : 'completed',
         items: allItems as unknown as object,
-        summary: summary as unknown as object,
+        summary: {
+          ...summary,
+          progress: {
+            phase: unknownItems.length ? 'resolving_xml' : 'completed',
+            completedTypes: types.length,
+            totalTypes: types.length,
+            resolvedItems: 0,
+            totalItems: unknownItems.length,
+            failedItems: 0,
+          },
+        } as unknown as object,
       },
     });
-    if (unknownItems.length) {
+    if (unknownItems.length && allItems.length > 0) {
       await this.runBulkResolution(comparisonId, userId, unknownItems);
     }
+  }
+
+  private async discoverComparisonTypes(
+    sourceOrgId: string,
+    targetOrgId: string,
+    userId: string,
+  ): Promise<string[]> {
+    const [sourceTypes, targetTypes] = await Promise.all([
+      this.browseService.listTypesRaw(sourceOrgId, userId),
+      this.browseService.listTypesRaw(targetOrgId, userId),
+    ]);
+    return [...new Set(
+      [...sourceTypes, ...targetTypes]
+        .map((type) => type.xmlName?.trim())
+        .filter((type): type is string => Boolean(type)),
+    )].sort();
   }
 
   async getSession(
@@ -178,8 +307,8 @@ export class MetadataCompareService {
       const q = query.search.trim().toLowerCase();
       filtered = filtered.filter((i) => i.fullName.toLowerCase().includes(q));
     }
-    const page = query.page ?? 1;
-    const pageSize = query.pageSize ?? 100;
+    const page = Math.max(1, Math.trunc(query.page ?? 1));
+    const pageSize = Math.min(100_000, Math.max(1, Math.trunc(query.pageSize ?? 100)));
     const start = (page - 1) * pageSize;
     return {
       id: session.id,
@@ -388,6 +517,20 @@ export class MetadataCompareService {
             summary: {
               ...((current?.summary as Record<string, unknown> | null) ?? {}),
               bulkResolution: { total: items.length, completed, failed },
+              progress: {
+                phase: 'resolving_xml',
+                completedTypes: numberFrom(
+                  (current?.summary as Record<string, unknown> | null)?.progress,
+                  'completedTypes',
+                ),
+                totalTypes: numberFrom(
+                  (current?.summary as Record<string, unknown> | null)?.progress,
+                  'totalTypes',
+                ),
+                resolvedItems: completed,
+                totalItems: items.length,
+                failedItems: failed,
+              },
             },
           },
         });
@@ -398,13 +541,25 @@ export class MetadataCompareService {
       select: { items: true, summary: true },
     });
     const resolvedItems = (refreshed?.items as MetadataCompareItem[] | null) ?? [];
+    const previousSummary = (refreshed?.summary as Record<string, unknown> | null) ?? {};
     await prisma.metadataComparison.update({
       where: { id: comparisonId },
       data: {
-        status: failed === items.length && items.length > 0 ? 'failed' : 'completed',
+        status: failed > 0 ? 'partial' : 'completed',
         summary: {
           ...summarizeComparisonItems(resolvedItems),
+          ...(Array.isArray(previousSummary.typeErrors)
+            ? { typeErrors: previousSummary.typeErrors }
+            : {}),
           bulkResolution: { total: items.length, completed, failed },
+          progress: {
+            phase: 'completed',
+            completedTypes: numberFrom(previousSummary.progress, 'completedTypes'),
+            totalTypes: numberFrom(previousSummary.progress, 'totalTypes'),
+            resolvedItems: completed,
+            totalItems: items.length,
+            failedItems: failed,
+          },
         },
       },
     });
@@ -465,12 +620,43 @@ export class MetadataCompareService {
       return items.length;
     };
 
+    const dotChildTypes = [
+      'BusinessProcess',
+      'CompactLayout',
+      'CustomField',
+      'FieldSet',
+      'Index',
+      'ListView',
+      'RecordType',
+      'SharingReason',
+      'ValidationRule',
+      'WebLink',
+    ];
+    const exactObjectTypes = [
+      'AssignmentRules',
+      'AutoResponseRules',
+      'EscalationRules',
+      'MatchingRules',
+      'SharingRules',
+      'Workflow',
+    ];
     const childTypes = [
-      { type: 'CustomField', count: countByType('CustomField', (n) => n.startsWith(prefix)) },
-      { type: 'Layout', count: countByType('Layout', (n) => n.includes(decoded)) },
-      { type: 'ValidationRule', count: countByType('ValidationRule', (n) => n.startsWith(prefix)) },
-      { type: 'ListView', count: countByType('ListView', (n) => n.startsWith(prefix)) },
-    ].filter((c) => c.count > 0);
+      ...dotChildTypes.map((type) => ({
+        type,
+        count: countByType(type, (name) => name.startsWith(prefix)),
+      })),
+      {
+        type: 'Layout',
+        count: countByType('Layout', (name) =>
+          name === decoded || name.startsWith(`${decoded}-`) || name.startsWith(prefix)),
+      },
+      ...exactObjectTypes.map((type) => ({
+        type,
+        count: countByType(type, (name) => name === decoded),
+      })),
+    ]
+      .filter((child) => child.count > 0)
+      .sort((left, right) => left.type.localeCompare(right.type));
 
     return { objectName: decoded, childTypes };
   }
@@ -642,4 +828,11 @@ export class MetadataCompareService {
     if (!session) throw new NotFoundException(`Comparison session ${comparisonId} not found`);
     return session;
   }
+}
+
+function numberFrom(value: unknown, key: string): number {
+  const candidate = value && typeof value === 'object' && !Array.isArray(value)
+    ? Number((value as Record<string, unknown>)[key])
+    : 0;
+  return Number.isFinite(candidate) ? candidate : 0;
 }
