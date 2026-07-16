@@ -22,6 +22,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/data-center/deployment': 'Data Deployment',
   '/data-center/replication': 'Data Replication',
   '/data-center/templates': 'Query Templates',
+  '/data-deploy': 'Org-to-Org Data Deploy',
   '/scratch-templates': 'Templates',
   '/custom-settings-load': 'Custom Settings Load',
   '/org-setup': 'Org & Users',
@@ -47,6 +48,7 @@ function environmentScopedCrumbs(pathname: string): BreadcrumbItem[] | null {
 
 function deploymentScopedCrumbs(pathname: string): BreadcrumbItem[] | null {
   const underData = pathname === '/data-center' || pathname.startsWith('/data-center/');
+  const isDataDeploy = pathname === '/data-deploy' || pathname.startsWith('/data-deploy/');
   const isOrgSetup = pathname === '/org-setup' || pathname.startsWith('/org-setup/');
   const isProvisioning =
     pathname === '/user-provisioning' || pathname.startsWith('/user-provisioning/');
@@ -54,7 +56,7 @@ function deploymentScopedCrumbs(pathname: string): BreadcrumbItem[] | null {
   const isCustomSettings =
     pathname === '/custom-settings-load' || pathname.startsWith('/custom-settings-load/');
 
-  if (!underData && !isOrgSetup && !isProvisioning && !isCustomSettings) return null;
+  if (!underData && !isDataDeploy && !isOrgSetup && !isProvisioning && !isCustomSettings) return null;
 
   const leafLabel = ROUTE_LABELS[pathname];
   if (!leafLabel) return null;

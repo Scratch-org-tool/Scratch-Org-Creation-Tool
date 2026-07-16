@@ -1,14 +1,13 @@
 'use client';
 
 import { Suspense } from 'react';
-import { Database, FileCode, RefreshCw, Sprout, ArrowLeftRight } from 'lucide-react';
+import { Database, FileCode, RefreshCw, Sprout } from 'lucide-react';
 import { PageSkeleton, TabbedWorkspaceShell, type WorkspaceTab } from '@/components/studio';
 import { DataCenterPageHeader } from './data-center-page-header';
 import { ConaSeedDeploymentForm } from './cona-seed-deployment-form';
 import { GenericDeployPanel } from './generic-deploy-panel';
 import { ReplicationPanel } from './replication-panel';
 import { QueryTemplatesPanel } from './query-templates-panel';
-import { OrgToOrgDeployPanel } from './org-to-org-deploy-panel';
 import { useDataCenterWorkspace } from './use-data-center-workspace';
 import type { DataCenterTab } from './types';
 
@@ -34,14 +33,6 @@ const TABS: WorkspaceTab[] = [
     icon: RefreshCw,
     title: 'Data replication',
     description: 'Replicate onboarding configurations between orgs.',
-  },
-  {
-    id: 'org-to-org',
-    label: 'Org-to-org',
-    icon: ArrowLeftRight,
-    title: 'Org-to-Org Data Deploy',
-    description:
-      'Compare source vs target records, then deploy with insert or upsert — scratch orgs supported as source.',
   },
   {
     id: 'templates',
@@ -70,9 +61,6 @@ function DataCenterWorkspaceInner() {
       </div>
       <div hidden={w.activeTab !== 'replication'}>
         <ReplicationPanel />
-      </div>
-      <div hidden={w.activeTab !== 'org-to-org'}>
-        <OrgToOrgDeployPanel />
       </div>
       <div hidden={w.activeTab !== 'templates'}>
         <QueryTemplatesPanel />

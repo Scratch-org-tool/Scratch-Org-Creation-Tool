@@ -10,7 +10,7 @@ import {
   Shield,
 } from 'lucide-react';
 import { canAccessModule, type AppModule } from '@/lib/auth-utils';
-import { DEPLOYMENT_LINKS } from '@/lib/deployment-links';
+import { DEPLOYMENT_LINKS, DEPLOYMENT_SECTIONS } from '@/lib/deployment-links';
 import type { LucideIcon } from 'lucide-react';
 
 export interface NavChild {
@@ -22,6 +22,8 @@ export interface NavChild {
   locked?: boolean;
   /** Extra path prefixes that mark this child active. */
   activePrefixes?: string[];
+  /** Group heading rendered above this child when it differs from the previous child. */
+  group?: string;
 }
 
 export interface NavItem {
@@ -35,13 +37,16 @@ export interface NavItem {
 }
 
 /** Deployment submenu + active prefixes, derived from the shared link source. */
-const DEPLOYMENT_CHILDREN: NavChild[] = DEPLOYMENT_LINKS.map((link) => ({
-  href: link.href,
-  label: link.label,
-  modules: link.modules,
-  locked: link.locked,
-  activePrefixes: link.activePrefixes,
-}));
+const DEPLOYMENT_CHILDREN: NavChild[] = DEPLOYMENT_SECTIONS.flatMap((section) =>
+  section.links.map((link) => ({
+    href: link.href,
+    label: link.label,
+    modules: link.modules,
+    locked: link.locked,
+    activePrefixes: link.activePrefixes,
+    group: section.shortTitle,
+  })),
+);
 
 const DEPLOYMENT_ACTIVE_PREFIXES = Array.from(
   new Set([

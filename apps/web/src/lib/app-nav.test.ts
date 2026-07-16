@@ -39,8 +39,8 @@ describe('deployment sidebar navigation', () => {
     expect(childHrefs).toContain('/metadata-deployment');
     expect(childHrefs).toContain('/deployment-center/automations');
     expect(childHrefs).toContain('/deployment-center/jenkins');
-    expect(childHrefs).toContain('/data-center?tab=cona');
-    expect(childHrefs).toContain('/data-center?tab=org-to-org');
+    expect(childHrefs).toContain('/data-center');
+    expect(childHrefs).toContain('/data-deploy');
     expect(childHrefs).toContain('/custom-settings-load');
     expect(childHrefs).toContain('/org-setup');
     expect(APP_NAV.some((item) => item.href === '/deployment-workbench')).toBe(false);
@@ -49,6 +49,14 @@ describe('deployment sidebar navigation', () => {
   it('has no duplicate child links', () => {
     const hrefs = deployment!.children!.map((child) => child.href);
     expect(new Set(hrefs).size).toBe(hrefs.length);
+  });
+
+  it('groups every submenu child under a labeled section', () => {
+    for (const child of deployment!.children!) {
+      expect(child.group, `${child.href} should carry a section group`).toBeTruthy();
+    }
+    const groups = [...new Set(deployment!.children!.map((child) => child.group))];
+    expect(groups).toEqual(['CI/CD', 'Data', 'Org & users']);
   });
 
   it('keeps the parent active across every deployment sub-route', () => {
@@ -60,6 +68,7 @@ describe('deployment sidebar navigation', () => {
       '/deployment-center/jenkins',
       '/metadata-deployment',
       '/data-center',
+      '/data-deploy',
       '/custom-settings-load',
       '/org-setup',
       '/user-provisioning',
@@ -81,7 +90,8 @@ describe('canAccessNavChild', () => {
   });
 
   it('shows data children to default users (data is a default module)', () => {
-    expect(canAccessNavChild(profile(), child('/data-center?tab=cona'))).toBe(true);
+    expect(canAccessNavChild(profile(), child('/data-center'))).toBe(true);
+    expect(canAccessNavChild(profile(), child('/data-deploy'))).toBe(true);
   });
 
   it('shows Org & Users to org-setup OR provisioning users', () => {

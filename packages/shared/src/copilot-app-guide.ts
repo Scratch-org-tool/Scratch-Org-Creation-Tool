@@ -78,6 +78,7 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     children: [
       { path: '/deployment-center/git', label: 'Git Metadata Deploy', description: 'Deploy from Azure DevOps, GitHub, or Bitbucket.' },
       { path: '/deployment-center/jenkins', label: 'Jenkins', description: 'Jenkins pipeline integration for deployments.' },
+      { path: '/data-deploy', label: 'Org-to-Org Data Deploy', description: 'Pick objects, compare source vs target records, and insert or upsert between orgs with history.' },
       { path: '/data-center', label: 'Data Center', description: 'SFDMU bulk data deploy and org-to-org replication.' },
       { path: '/org-setup', label: 'Org Setup', description: 'Assign permission sets and configure org setup steps.' },
       { path: '/user-provisioning', label: 'User Provisioning', description: 'Bulk create or update Salesforce users.' },
@@ -161,9 +162,23 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
     relatedPaths: ['/deployment-center/git', '/deployment-center'],
   },
   {
+    id: 'org-to-org-data-deploy',
+    title: 'Deploy records from one org to another',
+    keywords: ['org to org', 'data deploy', 'insert', 'upsert', 'records', 'compare records'],
+    module: 'data',
+    steps: [
+      'Open **Deployment** → **Org-to-Org Data Deploy** (`/data-deploy`).',
+      'Pick source org, target org, and strategy (upsert updates matches; insert always creates).',
+      'Check the objects to move, then adjust filters, deploy fields, or custom SOQL per object.',
+      'Click **Review & compare** to see matching records and the target impact (new vs existing).',
+      'Run **Preflight & deploy**; track progress live and later under the **History** tab.',
+    ],
+    relatedPaths: ['/data-deploy', '/deployment-center'],
+  },
+  {
     id: 'data-replication',
     title: 'Replicate data between orgs',
-    keywords: ['sfdmu', 'data deploy', 'replicate', 'onboarding', 'bulk data'],
+    keywords: ['sfdmu', 'replicate', 'onboarding', 'bulk data'],
     module: 'data',
     steps: [
       'Open **Deployment** → **Data Center** (or **Data Center** from deployment hub).',
@@ -221,6 +236,7 @@ const PATH_TITLES: Array<{ prefix: string; title: string }> = [
   { prefix: '/deployment-center/azure', title: 'Git Metadata Deploy' },
   { prefix: '/deployment-center/jenkins', title: 'Jenkins' },
   { prefix: '/deployment-center', title: 'Deployment Center' },
+  { prefix: '/data-deploy', title: 'Org-to-Org Data Deploy' },
   { prefix: '/data-center', title: 'Data Center' },
   { prefix: '/org-setup', title: 'Org Setup' },
   { prefix: '/user-provisioning', title: 'User Provisioning' },
@@ -243,6 +259,7 @@ const QUICK_PROMPTS: Array<{ prefix: string; prompts: string[] }> = [
     prompts: ['How do I deploy from Git?', 'Where do I connect a source-control provider?'],
   },
   { prefix: '/metadata-deployment', prompts: ['How do I deploy metadata?', 'Where is deployment history?'] },
+  { prefix: '/data-deploy', prompts: ['How do I deploy records to another org?', 'What is the difference between insert and upsert?'] },
   { prefix: '/data-center', prompts: ['How do I replicate data between orgs?', 'What is SFDMU in this app?'] },
   { prefix: '/monitoring', prompts: ['How do I find a failed job?', 'How do I read job logs?'] },
   {
@@ -277,7 +294,11 @@ const NAV_KEYWORDS: Array<{
     action: { type: 'navigate', href: '/deployment-center/jenkins', label: 'Jenkins' },
   },
   {
-    patterns: /\b(data\s+center|sfdmu|data\s+deploy)\b/i,
+    patterns: /\b(org.to.org\s+data|data\s+deploy)\b/i,
+    action: { type: 'navigate', href: '/data-deploy', label: 'Org-to-Org Data Deploy' },
+  },
+  {
+    patterns: /\b(data\s+center|sfdmu)\b/i,
     action: { type: 'navigate', href: '/data-center', label: 'Data Center' },
   },
   {

@@ -1,4 +1,4 @@
-import { Activity, Cloud, Database, Rocket } from 'lucide-react';
+import { Activity, ArrowLeftRight, Cloud, Database, Rocket } from 'lucide-react';
 import type { QuickActionItem } from '@/components/studio';
 
 export const DASHBOARD_QUICK_ACTIONS: QuickActionItem[] = [
@@ -29,8 +29,8 @@ export const DASHBOARD_QUICK_ACTIONS: QuickActionItem[] = [
   {
     label: 'Org-to-Org Data',
     description: 'Compare and deploy data between orgs',
-    href: '/data-center?tab=org-to-org',
-    icon: Database,
+    href: '/data-deploy',
+    icon: ArrowLeftRight,
     border: 'border-l-indigo-500',
     iconBg: 'bg-indigo-500/10 text-indigo-400',
   },

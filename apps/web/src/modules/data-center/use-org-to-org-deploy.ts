@@ -11,9 +11,11 @@ import { api } from '@/services/api';
 import { fetchOrgsList } from '@/hooks/use-orgs';
 import type {
   Org,
+  OrgToOrgCompareResult,
   OrgToOrgDeployBatchResult,
   OrgToOrgFilterPreviewResult,
   OrgToOrgFormState,
+  OrgToOrgObjectCompareState,
   OrgToOrgObjectDeployConfig,
   OrgToOrgObjectInfo,
   OrgToOrgObjectMeta,
@@ -78,6 +80,9 @@ export function useOrgToOrgDeploy() {
   const [objectConfigs, setObjectConfigs] = useState<Map<string, OrgToOrgObjectDeployConfig>>(new Map());
   const [objectMetaCache, setObjectMetaCache] = useState<Map<string, OrgToOrgObjectMeta>>(new Map());
   const [selectedRecordIds, setSelectedRecordIds] = useState<Map<string, Set<string>>>(new Map());
+  const [targetCompare, setTargetCompare] = useState<Map<string, OrgToOrgObjectCompareState>>(new Map());
+  const [loadingCompare, setLoadingCompare] = useState(false);
+  const [resetRevision, setResetRevision] = useState(0);
   const [wizardStep, setWizardStep] = useState<OrgToOrgWizardStep>('configure');
   const [loadingObjects, setLoadingObjects] = useState(false);
   const [loadingMeta, setLoadingMeta] = useState(false);
@@ -100,6 +105,7 @@ export function useOrgToOrgDeploy() {
   const jobPollGenerationRef = useRef(0);
   const preflightRequestRef = useRef(0);
   const deployRequestRef = useRef(0);
+  const compareRequestRef = useRef(0);
 
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
@@ -214,6 +220,7 @@ export function useOrgToOrgDeploy() {
     orgGenerationRef.current += 1;
     preflightRequestRef.current += 1;
     deployRequestRef.current += 1;
+    compareRequestRef.current += 1;
     objectsRequestRef.current += 1;
     metaRequestRef.current.clear();
     previewRequestRef.current.clear();
@@ -225,6 +232,8 @@ export function useOrgToOrgDeploy() {
     setObjectConfigs(new Map());
     setObjectMetaCache(new Map());
     setSelectedRecordIds(new Map());
+    setTargetCompare(new Map());
+    setLoadingCompare(false);
     setWizardStep('configure');
     setPreflightResult(null);
     setPreflightPayloadKey(null);
@@ -236,11 +245,14 @@ export function useOrgToOrgDeploy() {
     setDeployJobError(null);
     setLogs([]);
     if (orgsReady) void loadObjects();
-  }, [form.sourceOrgId, form.targetOrgId, orgsReady, loadObjects]);
+  }, [form.sourceOrgId, form.targetOrgId, orgsReady, loadObjects, resetRevision]);
 
   const runPreviewForObject = useCallback(
-    async (objectName: string, config: OrgToOrgObjectDeployConfig) => {
-      if (!form.sourceOrgId) return;
+    async (
+      objectName: string,
+      config: OrgToOrgObjectDeployConfig,
+    ): Promise<OrgToOrgFilterPreviewResult | null> => {
+      if (!form.sourceOrgId) return null;
       const sourceOrgId = form.sourceOrgId;
       const generation = orgGenerationRef.current;
       const request = (previewRequestRef.current.get(objectName) ?? 0) + 1;
@@ -254,7 +266,7 @@ export function useOrgToOrgDeploy() {
         if (
           orgGenerationRef.current !== generation
           || previewRequestRef.current.get(objectName) !== request
-        ) return;
+        ) return null;
         setObjectConfigs((prev) => {
           const next = new Map(prev);
           const existing = next.get(objectName) ?? config;
@@ -263,15 +275,18 @@ export function useOrgToOrgDeploy() {
             matchCount: result.matchCount,
             previewRecords: result.records,
             displayFields: result.displayFields,
+            previewSoql: result.soql,
           });
           return next;
         });
+        return result;
       } catch (err) {
         if (
           orgGenerationRef.current !== generation
           || previewRequestRef.current.get(objectName) !== request
-        ) return;
+        ) return null;
         setError(err instanceof Error ? err.message : 'Filter preview failed');
+        return null;
       } finally {
         if (
           orgGenerationRef.current === generation
@@ -280,6 +295,58 @@ export function useOrgToOrgDeploy() {
       }
     },
     [form.sourceOrgId],
+  );
+
+  /**
+   * Compare source vs target keys for each object so the review step can show
+   * how many records will be created vs matched in the target org.
+   */
+  const runTargetCompare = useCallback(
+    async (entries: Array<{ objectName: string; soql: string; matchField: string }>) => {
+      if (!form.sourceOrgId || !form.targetOrgId || entries.length === 0) return;
+      const { sourceOrgId, targetOrgId } = form;
+      const generation = orgGenerationRef.current;
+      const request = ++compareRequestRef.current;
+      setLoadingCompare(true);
+      setTargetCompare(new Map());
+      try {
+        const results = await Promise.all(
+          entries.map(async (entry): Promise<[string, OrgToOrgObjectCompareState]> => {
+            try {
+              const result = await api<OrgToOrgCompareResult>('/data/org-to-org/compare', {
+                method: 'POST',
+                body: JSON.stringify({
+                  sourceOrgId,
+                  targetOrgId,
+                  objectName: entry.objectName,
+                  soql: entry.soql,
+                  matchField: entry.matchField,
+                  page: 1,
+                  pageSize: 1,
+                }),
+              });
+              return [entry.objectName, {
+                summary: result.summary,
+                matchField: result.matchField,
+                truncated: result.truncated,
+                warning: result.warning,
+              }];
+            } catch (err) {
+              return [entry.objectName, {
+                error: err instanceof Error ? err.message : 'Comparison failed',
+              }];
+            }
+          }),
+        );
+        if (generation !== orgGenerationRef.current || request !== compareRequestRef.current) return;
+        setTargetCompare(new Map(results));
+      } finally {
+        if (generation === orgGenerationRef.current && request === compareRequestRef.current) {
+          setLoadingCompare(false);
+        }
+      }
+    },
+    [form],
   );
 
   const loadObjectMeta = useCallback(
@@ -598,11 +665,24 @@ export function useOrgToOrgDeploy() {
     if (!canGoNext) return;
     setWizardStep('preview');
     setError(null);
+    const compareEntries: Array<{ objectName: string; soql: string; matchField: string }> = [];
     for (const apiName of checkedObjects) {
       const config = objectConfigs.get(apiName);
-      if (config) await runPreviewForObject(apiName, config);
+      if (!config) continue;
+      const result = await runPreviewForObject(apiName, config);
+      if (result?.soql) {
+        compareEntries.push({
+          objectName: apiName,
+          soql: result.soql,
+          matchField:
+            config.matchField
+            || objectMetaCache.get(apiName)?.matchField
+            || 'Name',
+        });
+      }
     }
-  }, [canGoNext, checkedObjects, objectConfigs, runPreviewForObject]);
+    void runTargetCompare(compareEntries);
+  }, [canGoNext, checkedObjects, objectConfigs, objectMetaCache, runPreviewForObject, runTargetCompare]);
 
   const buildDeployPayload = useCallback((dryRun: boolean) => {
     const configured = objectOrder.map((objectName, order) => {
@@ -759,10 +839,21 @@ export function useOrgToOrgDeploy() {
       ? new Date(sourceOrg.expiresAt).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000
       : false;
 
+  const swapOrgs = useCallback(() => {
+    setForm((f) => ({ ...f, sourceOrgId: f.targetOrgId, targetOrgId: f.sourceOrgId }));
+  }, []);
+
+  /** Return to a clean configure step (e.g. "Start another deployment"). */
+  const startNewDeployment = useCallback(() => {
+    setResetRevision((revision) => revision + 1);
+  }, []);
+
   return {
     orgs,
     form,
     setForm,
+    swapOrgs,
+    startNewDeployment,
     sourceOrg,
     targetOrg,
     objects,
@@ -802,6 +893,8 @@ export function useOrgToOrgDeploy() {
     goToPreview,
     deploy,
     prepareDeploy,
+    targetCompare,
+    loadingCompare,
     preflightResult,
     confirmingDeploy,
     setConfirmingDeploy,

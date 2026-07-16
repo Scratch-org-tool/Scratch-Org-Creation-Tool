@@ -214,34 +214,52 @@ function NavEntry({
           exit={{ opacity: 0, height: 0 }}
           className="ml-3 flex flex-col gap-0.5 border-l border-white/10 pl-3 overflow-hidden"
         >
-          {visibleChildren.map((child) => {
+          {visibleChildren.map((child, index) => {
+            const showHeading =
+              Boolean(child.group) &&
+              child.group !== visibleChildren[index - 1]?.group &&
+              visibleChildren.some((other) => other.group !== child.group);
+            const heading = showHeading ? (
+              <p
+                className={cn(
+                  'px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/35',
+                  index > 0 && 'pt-2',
+                )}
+              >
+                {child.group}
+              </p>
+            ) : null;
             if (child.locked) {
               return (
-                <div
-                  key={child.href}
-                  aria-disabled="true"
-                  title="Coming soon"
-                  className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-white/35 cursor-not-allowed"
-                >
-                  <span className="truncate">{child.label}</span>
-                  <Lock className="size-3 shrink-0 opacity-60" />
+                <div key={child.href}>
+                  {heading}
+                  <div
+                    aria-disabled="true"
+                    title="Coming soon"
+                    className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-white/35 cursor-not-allowed"
+                  >
+                    <span className="truncate">{child.label}</span>
+                    <Lock className="size-3 shrink-0 opacity-60" />
+                  </div>
                 </div>
               );
             }
             const childActive = isNavChildActive(pathname, search, child);
             return (
-              <button
-                key={child.href}
-                type="button"
-                onClick={() => onNavigate(child.href)}
-                aria-current={childActive ? 'page' : undefined}
-                className={cn(
-                  'rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-white/10',
-                  childActive ? 'text-white font-medium' : 'text-white/55',
-                )}
-              >
-                {child.label}
-              </button>
+              <div key={child.href} className="flex flex-col">
+                {heading}
+                <button
+                  type="button"
+                  onClick={() => onNavigate(child.href)}
+                  aria-current={childActive ? 'page' : undefined}
+                  className={cn(
+                    'rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-white/10',
+                    childActive ? 'text-white font-medium' : 'text-white/55',
+                  )}
+                >
+                  {child.label}
+                </button>
+              </div>
             );
           })}
         </motion.div>
