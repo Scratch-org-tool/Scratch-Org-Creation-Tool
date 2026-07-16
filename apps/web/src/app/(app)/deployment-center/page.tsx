@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Boxes, Database, Layers, Rocket, Users, Wrench } from 'lucide-react';
+import { Boxes, CalendarClock, Database, Layers, Rocket, Users, Wrench } from 'lucide-react';
 import {
   DeploymentHubSection,
   DeploymentPageHeader,
@@ -31,6 +31,13 @@ const DEPLOY_ACTIONS: HubActionItem[] = [
     href: '/metadata-deployment',
     icon: Layers,
     iconBg: 'bg-violet-500/10 text-violet-400',
+  },
+  {
+    label: 'Deployment Automations',
+    description: 'Schedule saved deployment plans to run automatically and track run history.',
+    href: '/deployment-center/automations',
+    icon: CalendarClock,
+    iconBg: 'bg-pink-500/10 text-pink-400',
   },
   {
     label: 'Jenkins',

@@ -4,8 +4,10 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { PlansService } from './plans.service';
@@ -51,5 +53,23 @@ export class PlansController {
   @Post(':id/execute')
   execute(@Param('id') id: string, @CurrentUser() userId: string) {
     return this.plansService.execute(id, userId);
+  }
+
+  @Patch(':id/schedule')
+  updateSchedule(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    return this.plansService.updateSchedule(id, body, userId);
+  }
+
+  @Get(':id/runs')
+  listRuns(
+    @Param('id') id: string,
+    @CurrentUser() userId: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.plansService.listRuns(id, userId, limit ? parseInt(limit, 10) : 20);
   }
 }

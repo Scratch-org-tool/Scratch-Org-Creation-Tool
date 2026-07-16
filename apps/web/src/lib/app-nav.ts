@@ -4,6 +4,7 @@ import {
   Bug,
   Cloud,
   FileStack,
+  GitCompare,
   Layers,
   LayoutDashboard,
   Rocket,
@@ -65,6 +66,7 @@ export const APP_NAV: NavItem[] = [
     module: 'deployment',
     activePrefixes: ['/metadata-deployment'],
   },
+  { href: '/drift', label: 'Drift Monitoring', icon: GitCompare, module: 'deployment' },
   { href: '/monitoring', label: 'Monitoring', icon: Activity, module: 'monitoring' },
   { href: '/defects-command-centre', label: 'Developer Board', icon: Bug, module: 'defects' },
 ];

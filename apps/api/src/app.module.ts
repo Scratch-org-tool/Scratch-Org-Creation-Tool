@@ -8,6 +8,8 @@ import { DataModule } from './modules/data/data.module';
 import { MetadataModule } from './modules/metadata/metadata.module';
 import { DeploymentModule } from './modules/deployment/deployment.module';
 import { PlansModule } from './modules/plans/plans.module';
+import { DriftModule } from './modules/drift/drift.module';
+import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { OrgSetupModule } from './modules/org-setup/org-setup.module';
 import { ProvisioningModule } from './modules/provisioning/provisioning.module';
 import { CopilotModule } from './modules/copilot/copilot.module';
@@ -48,7 +50,9 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     DataModule,
     DeploymentModule,
     PlansModule,
+    DriftModule,
     MetadataModule,
+    SchedulerModule,
     OrgSetupModule,
     ProvisioningModule,
     CopilotModule,
