@@ -44,7 +44,7 @@ CREATE TABLE "DriftMonitor" (
     "description" TEXT,
     "sourceOrgId" TEXT NOT NULL,
     "targetOrgId" TEXT NOT NULL,
-    "metadataTypes" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "metadataTypes" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     "schedule" JSONB,
     "scheduleEnabled" BOOLEAN NOT NULL DEFAULT false,
     "enabled" BOOLEAN NOT NULL DEFAULT true,
