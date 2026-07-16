@@ -1,5 +1,11 @@
-import { BadRequestException, ForbiddenException, HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpStatus,
+  NotFoundException,
+} from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTH_ACCESS_LAST_ADMIN, AUTH_ACCESS_SELF_FORBIDDEN } from '@sfcc/shared';
 import type { AuthAuditService } from './auth-audit.service';
 import type { AuthSecurityService } from './auth-security.service';
 import type { FirebaseIdentityService } from './firebase-identity.service';
@@ -12,8 +18,9 @@ const firebaseAdmin = vi.hoisted(() => ({
 }));
 
 const users = vi.hoisted(() => ({
+  getAppUser: vi.fn(),
   getAppUserByFirebaseUid: vi.fn(),
-  getUserAccessStats: vi.fn(),
+  countActiveAdminUsers: vi.fn(),
   listAppUsers: vi.fn(),
   touchLastActive: vi.fn(),
   updateAppUser: vi.fn(),
@@ -442,5 +449,160 @@ describe('AuthService self-service accounts', () => {
     });
     expect(firebaseAdmin.revokeFirebaseRefreshTokens).toHaveBeenCalledWith('uid-1');
     expect(security.recordAccountActionFailure).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthService admin user access', () => {
+  const admin = {
+    id: 'DPT_admin',
+    email: 'admin@example.test',
+    displayName: 'Admin',
+    role: 'admin' as const,
+    grantedModules: [],
+    status: 'active' as const,
+    lastActiveAt: null,
+    createdAt: '2026-07-15T00:00:00.000Z',
+    updatedAt: '2026-07-15T00:00:00.000Z',
+  };
+  const otherAdmin = { ...admin, id: 'DPT_other-admin', email: 'other@example.test' };
+  const regular = { ...admin, id: 'DPT_user', email: 'user@example.test', role: 'user' as const };
+  const context = { ip: '203.0.113.10', userAgent: 'spec-agent' };
+
+  let audit: { record: ReturnType<typeof vi.fn>; listEvents: ReturnType<typeof vi.fn> };
+  let service: AuthService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    users.getAppUserByFirebaseUid.mockResolvedValue(admin);
+    users.countActiveAdminUsers.mockResolvedValue(2);
+    audit = {
+      record: vi.fn().mockResolvedValue(undefined),
+      listEvents: vi
+        .fn()
+        .mockResolvedValue({ events: [], total: 0, limit: 25, offset: 0 }),
+    };
+    service = new AuthService(
+      {} as unknown as FirebaseIdentityService,
+      {} as unknown as AuthSecurityService,
+      audit as unknown as AuthAuditService,
+    );
+  });
+
+  it('rejects a non-admin requester', async () => {
+    users.getAppUserByFirebaseUid.mockResolvedValue(regular);
+    await expect(
+      service.updateUserAccess('uid', otherAdmin.id, { role: 'user' }, context),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(users.updateAppUser).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the target user does not exist', async () => {
+    users.getAppUser.mockResolvedValue(null);
+    await expect(
+      service.updateUserAccess('uid', 'DPT_missing', { role: 'user' }, context),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('forbids an admin from changing their own access and audits the denial', async () => {
+    users.getAppUser.mockResolvedValue(admin);
+    await expect(
+      service.updateUserAccess('uid', admin.id, { role: 'user' }, context),
+    ).rejects.toMatchObject({ message: AUTH_ACCESS_SELF_FORBIDDEN });
+    expect(users.updateAppUser).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      admin.id,
+      'user_access_update_denied',
+      expect.anything(),
+      expect.objectContaining({ reason: 'self' }),
+    );
+  });
+
+  it('blocks demoting the last active admin', async () => {
+    users.getAppUser.mockResolvedValue(otherAdmin);
+    users.countActiveAdminUsers.mockResolvedValue(1);
+    await expect(
+      service.updateUserAccess('uid', otherAdmin.id, { role: 'user' }, context),
+    ).rejects.toMatchObject({ message: AUTH_ACCESS_LAST_ADMIN });
+    expect(users.updateAppUser).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      admin.id,
+      'user_access_update_denied',
+      expect.anything(),
+      expect.objectContaining({ reason: 'last_admin' }),
+    );
+  });
+
+  it('blocks deactivating the last active admin', async () => {
+    users.getAppUser.mockResolvedValue(otherAdmin);
+    users.countActiveAdminUsers.mockResolvedValue(1);
+    await expect(
+      service.updateUserAccess('uid', otherAdmin.id, { status: 'inactive' }, context),
+    ).rejects.toMatchObject({ message: AUTH_ACCESS_LAST_ADMIN });
+  });
+
+  it('demotes an admin when others remain and records the change with the actor', async () => {
+    users.getAppUser.mockResolvedValue(otherAdmin);
+    users.countActiveAdminUsers.mockResolvedValue(2);
+    users.updateAppUser.mockResolvedValue({ ...otherAdmin, role: 'user' });
+
+    const result = await service.updateUserAccess(
+      'uid',
+      otherAdmin.id,
+      { role: 'user' },
+      context,
+    );
+
+    expect(users.updateAppUser).toHaveBeenCalledWith(otherAdmin.id, { role: 'user' });
+    expect(result).toMatchObject({ role: 'user' });
+    expect(audit.record).toHaveBeenCalledWith(
+      otherAdmin.id,
+      'user_access_updated',
+      expect.anything(),
+      expect.objectContaining({ actorId: admin.id, roleChanged: true }),
+    );
+  });
+
+  it('updates a standard user and reports module changes without leaking PII', async () => {
+    users.getAppUser.mockResolvedValue(regular);
+    users.updateAppUser.mockResolvedValue({ ...regular, grantedModules: ['deployment'] });
+
+    const result = await service.updateUserAccess(
+      'uid',
+      regular.id,
+      { grantedModules: ['deployment'] },
+      context,
+    );
+
+    expect(result.grantedModules).toEqual(['deployment']);
+    expect(audit.record).toHaveBeenCalledWith(
+      regular.id,
+      'user_access_updated',
+      expect.anything(),
+      expect.objectContaining({ modulesChanged: true, moduleCount: 1 }),
+    );
+    // The metadata payload we build must never carry raw request identifiers
+    // (the IP/UA context is hashed inside AuthAuditService, not stored here).
+    const recordedMetadata = JSON.stringify(audit.record.mock.calls.at(-1)?.[3]);
+    expect(recordedMetadata).not.toContain('203.0.113.10');
+    expect(recordedMetadata).not.toContain('spec-agent');
+  });
+
+  it('lists audit events for admins and forbids non-admins', async () => {
+    await service.listAuditEvents('uid', { limit: 25, offset: 0 });
+    expect(audit.listEvents).toHaveBeenCalledWith({ limit: 25, offset: 0 });
+
+    users.getAppUserByFirebaseUid.mockResolvedValue(regular);
+    await expect(
+      service.listAuditEvents('uid', { limit: 25, offset: 0 }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('derives overview stats from a single user fetch', async () => {
+    users.listAppUsers.mockResolvedValue([admin, otherAdmin, regular]);
+    const overview = await service.getUsersOverview('uid');
+    expect(users.listAppUsers).toHaveBeenCalledTimes(1);
+    expect(overview.stats.total).toBe(3);
+    expect(overview.stats.admins).toBe(2);
+    expect(overview.users).toHaveLength(3);
   });
 });
