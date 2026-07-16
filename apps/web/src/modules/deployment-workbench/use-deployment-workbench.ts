@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { CURATED_COMPARE_TYPES } from '@sfcc/shared';
 import type {
   DeploymentEnvironment,
   DeploymentWorkbenchInput,
@@ -130,6 +131,10 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const [compareItems, setCompareItems] = useState<CompareItem[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [comparing, setComparing] = useState(false);
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [availableTypesLoading, setAvailableTypesLoading] = useState(false);
+  const [availableTypesError, setAvailableTypesError] = useState<string | null>(null);
+  const [compareTypes, setCompareTypesState] = useState<string[]>([]);
   const [selectedCompareItem, setSelectedCompareItem] = useState<CompareItem | null>(null);
   const [compareItemDiff, setCompareItemDiff] = useState<CompareItemDiff | null>(null);
   const [compareItemDiffLoading, setCompareItemDiffLoading] = useState(false);
@@ -163,6 +168,9 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const comparisonAbort = useRef<AbortController | null>(null);
   const comparisonAttemptKey = useRef<string | null>(null);
   const comparisonDraftRestored = useRef(false);
+  const compareTypesTouched = useRef(false);
+  const availableTypesKey = useRef<string | null>(null);
+  const availableTypesAbort = useRef<AbortController | null>(null);
   const diffRequest = useRef(0);
   const diffAbort = useRef<AbortController | null>(null);
   const previewRequest = useRef(0);
@@ -179,6 +187,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     previewAbort.current?.abort();
     runAbort.current?.abort();
     historyAbort.current?.abort();
+    availableTypesAbort.current?.abort();
   }, []);
 
   const clearPlanResolution = useCallback(() => {
@@ -398,8 +407,100 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     };
   }, [comparisonStatus, form.comparisonId, refreshComparison]);
 
+  const curatedAvailable = useMemo(() => {
+    if (!availableTypes.length) return [] as string[];
+    const available = new Set(availableTypes);
+    const curated = (CURATED_COMPARE_TYPES as readonly string[]).filter((type) => available.has(type));
+    return curated.length ? curated : availableTypes;
+  }, [availableTypes]);
+
+  const setCompareTypes = useCallback((next: string[]) => {
+    compareTypesTouched.current = true;
+    setCompareTypesState(next);
+  }, []);
+
+  const toggleCompareType = useCallback((type: string) => {
+    compareTypesTouched.current = true;
+    setCompareTypesState((current) =>
+      current.includes(type) ? current.filter((item) => item !== type) : [...current, type]);
+  }, []);
+
+  const selectCommonCompareTypes = useCallback(() => {
+    compareTypesTouched.current = true;
+    setCompareTypesState(curatedAvailable);
+  }, [curatedAvailable]);
+
+  const selectAllCompareTypes = useCallback(() => {
+    compareTypesTouched.current = true;
+    setCompareTypesState(availableTypes);
+  }, [availableTypes]);
+
+  const clearCompareTypes = useCallback(() => {
+    compareTypesTouched.current = true;
+    setCompareTypesState([]);
+  }, []);
+
+  // Load the metadata type catalog (union of both orgs) so the user can choose
+  // exactly which types to compare instead of comparing every supported type.
+  useEffect(() => {
+    if (form.sourceMode !== 'org_compare') return;
+    const sourceOrgId = form.sourceOrgId;
+    const targetOrgId = form.targetOrgId;
+    if (!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId) return;
+    const key = `${sourceOrgId}:${targetOrgId}`;
+    if (availableTypesKey.current === key) return;
+    availableTypesKey.current = key;
+    availableTypesAbort.current?.abort();
+    const controller = new AbortController();
+    availableTypesAbort.current = controller;
+    setAvailableTypesLoading(true);
+    setAvailableTypesError(null);
+    void Promise.all([
+      api<{ types: Array<{ xmlName: string }> }>(
+        `/metadata/org/${sourceOrgId}/types?pageSize=2000`,
+        { signal: controller.signal },
+      ).catch(() => null),
+      api<{ types: Array<{ xmlName: string }> }>(
+        `/metadata/org/${targetOrgId}/types?pageSize=2000`,
+        { signal: controller.signal },
+      ).catch(() => null),
+    ]).then(([source, target]) => {
+      if (controller.signal.aborted) return;
+      const merged = [...new Set(
+        [...(source?.types ?? []), ...(target?.types ?? [])]
+          .map((type) => type.xmlName?.trim())
+          .filter((name): name is string => Boolean(name)),
+      )].sort((left, right) => left.localeCompare(right));
+      if (merged.length) {
+        setAvailableTypes(merged);
+        if (!source || !target) {
+          setAvailableTypesError('Some metadata types could not be read from one org, so the list may be incomplete.');
+        }
+        if (!compareTypesTouched.current) {
+          const curated = merged.filter((type) => (CURATED_COMPARE_TYPES as readonly string[]).includes(type));
+          setCompareTypesState(curated.length ? curated : merged);
+        }
+      } else {
+        const fallback = [...CURATED_COMPARE_TYPES];
+        setAvailableTypes(fallback);
+        setAvailableTypesError('Could not load metadata types from the orgs. Showing common types you can compare.');
+        if (!compareTypesTouched.current) setCompareTypesState(fallback);
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setAvailableTypesLoading(false);
+    });
+  }, [form.sourceMode, form.sourceOrgId, form.targetOrgId]);
+
+  // Changing the selected types after a comparison exists makes it stale, so
+  // invalidate it and let the user re-run with the new scope. Guarded by the
+  // "touched" ref so the initial system default never wipes a restored draft.
+  useEffect(() => {
+    if (compareTypesTouched.current && form.comparisonId) clearComparison();
+  }, [compareTypes, form.comparisonId, clearComparison]);
+
   const startComparison = useCallback(async () => {
     if (!form.sourceOrgId || !form.targetOrgId || form.sourceOrgId === form.targetOrgId) return;
+    if (!compareTypes.length) return;
     comparisonAttemptKey.current = `${form.sourceOrgId}:${form.targetOrgId}`;
     const request = ++compareRequest.current;
     comparisonAbort.current?.abort();
@@ -420,6 +521,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
         body: JSON.stringify({
           sourceOrgId: form.sourceOrgId,
           targetOrgId: form.targetOrgId,
+          types: compareTypes,
         }),
       });
       if (request !== compareRequest.current || controller.signal.aborted) return;
@@ -438,7 +540,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     } finally {
       if (request === compareRequest.current) setComparing(false);
     }
-  }, [form.sourceOrgId, form.targetOrgId, refreshComparison]);
+  }, [form.sourceOrgId, form.targetOrgId, compareTypes, refreshComparison]);
 
   useEffect(() => {
     if (
@@ -447,6 +549,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       || !form.sourceOrgId
       || !form.targetOrgId
       || form.sourceOrgId === form.targetOrgId
+      || !compareTypes.length
       || form.comparisonId
       || comparisonStatus !== 'idle'
       || comparing
@@ -458,6 +561,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   }, [
     comparing,
     comparisonStatus,
+    compareTypes.length,
     form.comparisonId,
     form.sourceMode,
     form.sourceOrgId,
@@ -953,6 +1057,16 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     compareItems,
     selectedKeys,
     comparing,
+    availableTypes,
+    availableTypesLoading,
+    availableTypesError,
+    compareTypes,
+    commonCompareTypes: curatedAvailable,
+    setCompareTypes,
+    toggleCompareType,
+    selectCommonCompareTypes,
+    selectAllCompareTypes,
+    clearCompareTypes,
     startComparison,
     retryComparison,
     refreshComparison,
