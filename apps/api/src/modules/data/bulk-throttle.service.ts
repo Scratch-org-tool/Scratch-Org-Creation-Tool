@@ -11,6 +11,10 @@ export interface BulkThrottleSlot {
   release: () => Promise<void>;
 }
 
+export interface SchedulerLease {
+  assertOwned: () => Promise<void>;
+}
+
 /**
  * Per-org Bulk API concurrency limiter backed by a Redis sorted set.
  * Each holder registers a slot member scored by its last heartbeat; slots from
@@ -73,5 +77,52 @@ export class BulkThrottleService {
         await redis.zrem(key, member).catch(() => undefined);
       },
     };
+  }
+
+  /** Serialize scheduler release decisions across API replicas. */
+  async withSchedulerLock<T>(
+    batchId: string,
+    callback: (lease: SchedulerLease) => Promise<T>,
+  ): Promise<T | null> {
+    const redis = this.queueService.getConnection();
+    const key = `sfcc:data-scheduler:${batchId}`;
+    const token = randomUUID();
+    const ttlMs = 30_000;
+    const acquired = await redis.set(key, token, 'PX', ttlMs, 'NX');
+    if (acquired !== 'OK') return null;
+    let lost = false;
+    const renew = async () => {
+      const renewed = await redis.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end',
+        1,
+        key,
+        token,
+        ttlMs,
+      ).catch(() => 0);
+      if (Number(renewed) !== 1) lost = true;
+    };
+    const heartbeat = setInterval(() => {
+      void renew();
+    }, Math.floor(ttlMs / 3));
+    heartbeat.unref?.();
+    const lease: SchedulerLease = {
+      assertOwned: async () => {
+        if (lost || await redis.get(key) !== token) {
+          lost = true;
+          throw new Error(`Data scheduler lease lost for batch ${batchId}`);
+        }
+      },
+    };
+    try {
+      return await callback(lease);
+    } finally {
+      clearInterval(heartbeat);
+      await redis.eval(
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end',
+        1,
+        key,
+        token,
+      ).catch(() => undefined);
+    }
   }
 }

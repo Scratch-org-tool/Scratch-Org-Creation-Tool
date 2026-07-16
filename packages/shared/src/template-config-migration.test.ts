@@ -174,6 +174,8 @@ describe('migrateTemplateConfigToV2', () => {
             object: 'cfs_ob__Onboarding_Config__c',
             soql: 'SELECT Name FROM cfs_ob__Onboarding_Config__c',
             limit: 75,
+            operation: 'upsert',
+            externalIdField: 'External_Key__c',
           }],
           accountRules: [{
             id: 'z001-rule',
@@ -230,6 +232,11 @@ describe('migrateTemplateConfigToV2', () => {
     assert.deepEqual(migrated.userProvisioning?.slots, legacy.userProvisioning?.slots);
     assert.deepEqual(migrated.userProvisioning?.users, legacy.userProvisioning?.users);
     assert.equal(migrated.dataSeed?.mode, 'query_section');
+    assert.equal(migrated.dataSeed?.querySection?.queries[0]?.operation, 'upsert');
+    assert.equal(
+      migrated.dataSeed?.querySection?.queries[0]?.externalIdField,
+      'External_Key__c',
+    );
     assert.deepEqual(
       migrated.dataSeed?.querySection?.queries.map((query) => query.id),
       ['onboarding', 'z001-rule', 'account-z003-4900-z3'],
@@ -281,6 +288,46 @@ describe('migrateTemplateConfigToV2', () => {
       },
     });
     assert.throws(() => migrateTemplateConfigToV2(legacy), /Insert custom settings/);
+  });
+
+  it('refuses to infer a legacy custom-settings upsert key', () => {
+    const legacy = scratchPipelineTemplateConfigSchema.parse({
+      version: 1,
+      customSettings: {
+        mode: 'custom',
+        exportConfig: {
+          objects: [{
+            query: 'SELECT Name FROM Example__c',
+            operation: 'Upsert',
+          }],
+        },
+      },
+    });
+    assert.throws(() => migrateTemplateConfigToV2(legacy), /explicit externalId/);
+  });
+
+  it('rejects unsafe legacy query operation inference', () => {
+    const legacy = scratchPipelineTemplateConfigSchema.parse({
+      version: 1,
+      dataSeed: {
+        mode: 'query_json',
+        querySet: {
+          version: 1,
+          defaultLimit: 20,
+          source: 'upload',
+          queries: [{
+            id: 'unsafe',
+            label: 'Unsafe',
+            object: 'Account',
+            soql: 'SELECT Name FROM Account',
+          }],
+        },
+      },
+    });
+    assert.throws(
+      () => migrateTemplateConfigToV2(legacy),
+      /operation is missing and no externalIdField was provided/,
+    );
   });
 
   it('uses deprecated sourceOrgId only when both dual source fields are absent', () => {

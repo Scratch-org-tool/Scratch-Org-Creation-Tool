@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/graph/algorithms.test.js dist/discovery/apex-reference.test.js",
+    "test": "npm run build && node --test dist/graph/algorithms.test.js dist/discovery/apex-reference.test.js dist/executor/execution-engine.test.js",
     "load-test": "npm run build && node scripts/load-test-plan.mjs"
   },
   "dependencies": {

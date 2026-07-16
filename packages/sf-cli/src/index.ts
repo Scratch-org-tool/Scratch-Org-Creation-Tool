@@ -820,6 +820,7 @@ export class SfCliClient extends EventEmitter {
         label?: string;
         type?: string;
         externalId?: boolean;
+        idLookup?: boolean;
         filterable?: boolean;
         createable?: boolean;
         updateable?: boolean;

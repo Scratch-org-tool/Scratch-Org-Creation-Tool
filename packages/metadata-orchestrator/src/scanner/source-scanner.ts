@@ -138,8 +138,17 @@ export class SourceScanner {
             const filePath = file && fs.existsSync(file) ? file : full;
             this.register(typeFromFolder, name, path.relative(projectRoot, filePath));
           } else if (entry.name.endsWith('-meta.xml')) {
-            const name = entry.name.replace(/-meta\.xml$/, '');
+            const name = this.metadataApiName(entry.name);
             this.register(typeFromFolder, name, path.relative(projectRoot, full));
+          } else {
+            const extension = this.primaryExtension(typeFromFolder);
+            if (extension && entry.name.endsWith(extension)) {
+              this.register(
+                typeFromFolder,
+                entry.name.slice(0, -extension.length),
+                path.relative(projectRoot, full),
+              );
+            }
           }
         }
         return;
@@ -181,6 +190,12 @@ export class SourceScanner {
       /* ignore */
     }
     return null;
+  }
+
+  private metadataApiName(fileName: string): string {
+    return fileName
+      .replace(/-meta\.xml$/, '')
+      .replace(/\.(cls|trigger|page|component|flow|layout|profile|permissionset|flexipage)$/, '');
   }
 
   private guessPath(projectRoot: string, metadataType: string, apiName: string): string {

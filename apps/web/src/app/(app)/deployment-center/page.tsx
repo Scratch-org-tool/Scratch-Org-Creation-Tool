@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Database, Layers, Rocket, Users, Wrench } from 'lucide-react';
+import { Boxes, Database, Layers, Rocket, Users, Wrench } from 'lucide-react';
 import {
   DeploymentHubSection,
   DeploymentPageHeader,
@@ -11,6 +11,13 @@ import { useAuth } from '@/contexts/auth-context';
 import { canAccessModule } from '@/lib/auth-utils';
 
 const DEPLOY_ACTIONS: HubActionItem[] = [
+  {
+    label: 'Deployment Workbench',
+    description: 'Unified planning, quality gates, intelligent execution, rollback, and audit.',
+    href: '/deployment-workbench',
+    icon: Boxes,
+    iconBg: 'bg-cyan-500/10 text-cyan-400',
+  },
   {
     label: 'Git Metadata Deploy',
     description: 'Deploy metadata from Azure DevOps, GitHub, or Bitbucket with live execution logs.',
@@ -107,7 +114,7 @@ export default function DeploymentCenterPage() {
           title="CI/CD deployment"
           description="Deploy Salesforce metadata from pipeline sources"
           actions={DEPLOY_ACTIONS}
-          columns={2}
+          columns={3}
         />
       )}
 

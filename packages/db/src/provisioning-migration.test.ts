@@ -122,3 +122,88 @@ describe('authentication audit migration', () => {
     );
   });
 });
+
+describe('deployment workbench foundation migration', () => {
+  const migrationPath =
+    'migrations/20260715180000_deployment_workbench_foundation/migration.sql';
+
+  it('is additive and leaves existing deployment rows untouched', () => {
+    const migration = prismaFile(migrationPath);
+
+    assert.doesNotMatch(
+      migration,
+      /\b(?:DROP TABLE|DELETE FROM|TRUNCATE TABLE|UPDATE "Deployment")\b/i,
+    );
+    assert.match(migration, /CREATE TABLE "DeploymentQualityRun"/);
+    assert.match(migration, /REFERENCES "Deployment"\("id"\)\s+ON DELETE SET NULL/);
+  });
+
+  it('persists stages, normalized findings, tests, and append-only audit links', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+
+    for (const model of [
+      'DeploymentQualityRun',
+      'DeploymentQualityStage',
+      'DeploymentQualityIssue',
+      'DeploymentQualityTestResult',
+      'DeploymentQualityAudit',
+    ]) {
+      assert.match(schema, new RegExp(`model ${model}`));
+      assert.match(migration, new RegExp(`CREATE TABLE "${model}"`));
+    }
+    assert.match(schema, /policySnapshot\s+Json/);
+    assert.match(schema, /validationId\s+String\?/);
+    assert.match(schema, /startedAt\s+DateTime\?/);
+    assert.match(schema, /artifacts\s+Json\?/);
+    assert.match(migration, /ON DELETE CASCADE/);
+  });
+});
+
+describe('deployment workbench review hardening migration', () => {
+  const migrationPath =
+    'migrations/20260715200000_workbench_review_fixes/migration.sql';
+
+  it('stores checksummed durable artifacts with retention', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+    assert.match(schema, /model DeploymentArtifact[\s\S]*content\s+Bytes/);
+    assert.match(schema, /model DeploymentArtifact[\s\S]*retainUntil\s+DateTime\?/);
+    assert.match(migration, /"content" BYTEA NOT NULL/);
+    assert.match(migration, /"checksum" TEXT NOT NULL/);
+    assert.match(migration, /"retainUntil" TIMESTAMP\(3\)/);
+  });
+
+  it('enforces one approval per run and actor atomically', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+    assert.match(
+      schema,
+      /model DeploymentQualityApproval[\s\S]*@@unique\(\[runId, actorId\]\)/,
+    );
+    assert.match(migration, /DeploymentQualityApproval_runId_actorId_key/);
+    assert.match(migration, /DeploymentDestructiveReview_runId_actorId_digest_key/);
+    assert.match(migration, /ADD COLUMN "executionLease" TEXT/);
+    assert.match(migration, /ON DELETE CASCADE/);
+  });
+});
+
+describe('durable Data Center rollback migration', () => {
+  const migrationPath =
+    'migrations/20260715193000_durable_data_rollback/migration.sql';
+
+  it('stores one encrypted, checksummed artifact per movement with retention', () => {
+    const schema = prismaFile('schema.prisma');
+    const migration = prismaFile(migrationPath);
+
+    assert.match(schema, /model DataRollbackArtifact/);
+    assert.match(schema, /movementId\s+String\s+@unique/);
+    assert.match(schema, /ciphertext\s+Bytes/);
+    assert.match(schema, /expiresAt\s+DateTime/);
+    assert.match(migration, /"ciphertext" BYTEA NOT NULL/);
+    assert.match(migration, /"sha256" TEXT NOT NULL/);
+    assert.match(migration, /DataRollbackArtifact_movementId_key/);
+    assert.match(migration, /ON DELETE CASCADE/);
+    assert.doesNotMatch(migration, /\b(?:DROP TABLE|DELETE FROM|TRUNCATE TABLE)\b/i);
+  });
+});

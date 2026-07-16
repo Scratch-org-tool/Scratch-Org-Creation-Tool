@@ -27,6 +27,7 @@ import { QUEUE_NAMES } from '@sfcc/shared';
 import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
 import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
+import { DeploymentArtifactStore } from './deployment-artifact.store';
 
 @Injectable()
 export class DeploymentService {
@@ -41,6 +42,7 @@ export class DeploymentService {
     private readonly jobsService: JobsService,
     private readonly processRegistry: JobProcessRegistryService,
     private readonly streamService: StreamService,
+    private readonly artifactStore: DeploymentArtifactStore = new DeploymentArtifactStore(),
   ) {}
 
   async listDeployments(userId: string) {
@@ -406,7 +408,12 @@ export class DeploymentService {
    * Real rollback: redeploy the pre-deploy snapshot that was retrieved from
    * the target org before the original deploy ran.
    */
-  async rollback(id: string, reason: string, userId: string) {
+  async rollback(
+    id: string,
+    reason: string,
+    userId: string,
+    testPolicy?: { testLevel: string; tests?: string[] },
+  ) {
     const deployment = await prisma.deployment.findUnique({
       where: { id },
       include: { targetOrg: true },
@@ -414,7 +421,15 @@ export class DeploymentService {
     assertResourceOwner(deployment, userId, 'Deployment');
     const dep = deployment!;
 
-    if (!dep.snapshotPath || !fs.existsSync(dep.snapshotPath)) {
+    const durableSnapshot = dep.snapshotPath?.startsWith('deployment-snapshot:')
+      ? dep.snapshotPath
+      : undefined;
+    if (durableSnapshot) {
+      await this.artifactStore.readBytes(durableSnapshot).catch(() => {
+        throw new BadRequestException('The durable rollback snapshot failed checksum verification');
+      });
+    }
+    if (!dep.snapshotPath || (!durableSnapshot && !fs.existsSync(dep.snapshotPath))) {
       throw new BadRequestException(
         'No pre-deploy snapshot exists for this deployment — rollback is not available',
       );
@@ -446,8 +461,10 @@ export class DeploymentService {
       deploymentId: rollbackDeployment.id,
       orgAlias: dep.targetOrg.username ?? dep.targetOrg.alias,
       deployMode: 'local_workspace',
-      localProjectRoot: dep.snapshotPath,
-      testLevel: 'NoTestRun',
+      localProjectRoot: durableSnapshot ? undefined : dep.snapshotPath,
+      sourceArtifactId: durableSnapshot,
+      testLevel: testPolicy?.testLevel ?? 'NoTestRun',
+      tests: testPolicy?.tests,
       createdBy: userId,
       intelligentDeployEnabled: false,
     });

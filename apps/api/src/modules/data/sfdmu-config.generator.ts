@@ -2,7 +2,12 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { QuerySetJson, SfdmuExportJson } from '@sfcc/shared';
-import { extractFieldsFromSoql, normalizeSfdmuExport } from '@sfcc/shared';
+import {
+  extractFieldsFromSoql,
+  normalizeSfdmuExport,
+  resolveDataWriteOperation,
+  type DataWriteOperation,
+} from '@sfcc/shared';
 
 function resolveSfdmuRunsRoot(): string {
   const configured = process.env.SFDMU_RUNS_DIR?.trim();
@@ -49,15 +54,14 @@ export interface SfdmuGenerateResult {
 export function generateSfdmuConfig(input: SfdmuGenerateInput): SfdmuGenerateResult {
   const runDir = resolveSfdmuRunDir(input.runId);
 
-  const objectFields = new Map<string, Set<string>>();
-  for (const q of input.querySet.queries) {
-    if (!objectFields.has(q.object)) objectFields.set(q.object, new Set());
-    const fields = extractFieldsFromSoql(q.soql);
-    for (const f of fields) objectFields.get(q.object)!.add(f);
-  }
-
-  const objects = Array.from(objectFields.entries()).map(([name, fields]) => {
-    const fieldList = Array.from(fields);
+  // Keep one SFDMU object entry per query. Grouping by object silently merged
+  // filters and external IDs and made multi-query replication non-deterministic.
+  const objects = input.querySet.queries.map((queryEntry) => {
+    const fieldList = extractFieldsFromSoql(queryEntry.soql);
+    const runtime = resolveDataWriteOperation(
+      queryEntry.operation,
+      queryEntry.externalIdField,
+    );
     const valueMapping =
       fieldList.some((f) => f.includes('RecordTypeId')) && input.recordTypeMappings
         ? {
@@ -69,10 +73,10 @@ export function generateSfdmuConfig(input: SfdmuGenerateInput): SfdmuGenerateRes
         : undefined;
 
     return {
-      name,
-      query: `SELECT ${fieldList.join(', ')} FROM ${name}`,
-      operation: 'Upsert',
-      externalId: 'Name',
+      name: queryEntry.object,
+      query: queryEntry.soql.trim().replace(/;+\s*$/, ''),
+      operation: runtime.operation === 'upsert' ? 'Upsert' : 'Insert',
+      ...(runtime.externalIdField ? { externalId: runtime.externalIdField } : {}),
       ...(valueMapping ? { valueMapping } : {}),
     };
   });
@@ -148,6 +152,7 @@ export interface SfdmuFromSoqlInput {
   targetOrgAlias: string;
   objectName: string;
   soql: string;
+  operation?: DataWriteOperation;
   externalId?: string;
   recordTypeMappings?: Record<string, string>;
 }
@@ -159,6 +164,7 @@ export function generateSfdmuConfigFromSoql(input: SfdmuFromSoqlInput): SfdmuGen
   const fields = extractFieldsFromSoql(input.soql);
   const fieldList = fields.length > 0 ? fields : ['Name'];
   const query = input.soql.trim().replace(/;+\s*$/, '');
+  const runtime = resolveDataWriteOperation(input.operation, input.externalId);
 
   const valueMapping =
     fieldList.some((f) => f.includes('RecordTypeId')) && input.recordTypeMappings
@@ -175,8 +181,8 @@ export function generateSfdmuConfigFromSoql(input: SfdmuFromSoqlInput): SfdmuGen
       {
         name: input.objectName,
         query,
-        operation: 'Upsert',
-        externalId: input.externalId ?? 'Name',
+        operation: runtime.operation === 'upsert' ? 'Upsert' : 'Insert',
+        ...(runtime.externalIdField ? { externalId: runtime.externalIdField } : {}),
         ...(valueMapping ? { valueMapping } : {}),
       },
     ],

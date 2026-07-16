@@ -1,11 +1,12 @@
 'use client';
 
-import { Input, Label } from '@/components/ui/input';
+import { Input, Label, Select } from '@/components/ui/input';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX, DATA_DEPLOY_CHUNK_SIZE, shouldChunkDeploy, chunkCountForLimit } from '@sfcc/shared';
 import { OrgToOrgDeployFieldsPicker } from './org-to-org-deploy-fields-picker';
 import { OrgToOrgFilterBuilder } from './org-to-org-filter-builder';
 import { OrgToOrgSoqlEditor } from './org-to-org-soql-editor';
 import type { OrgToOrgObjectDeployConfig, OrgToOrgObjectMeta, OrgToOrgQueryMode } from './types';
+import { externalIdOptions } from './data-center-contracts';
 
 interface OrgToOrgObjectSettingsProps {
   meta: OrgToOrgObjectMeta;
@@ -33,6 +34,7 @@ export function OrgToOrgObjectSettings({
   const isSoqlMode = config.queryMode === 'soql' && Boolean(config.customSoql?.trim());
   const willChunk = shouldChunkDeploy(config.recordLimit);
   const chunkCount = chunkCountForLimit(config.recordLimit);
+  const externalIds = externalIdOptions(meta);
 
   return (
     <div className="space-y-6 p-4 min-w-0 max-w-full overflow-y-auto overflow-x-hidden max-h-[40rem]">
@@ -48,6 +50,26 @@ export function OrgToOrgObjectSettings({
         onModeChange={onQueryModeChange}
         onClear={onClearSoql}
       />
+
+      <div>
+        <Label htmlFor={`org-object-external-id-${meta.objectName}`}>External ID mapping</Label>
+        <Select
+          id={`org-object-external-id-${meta.objectName}`}
+          value={config.matchField}
+          disabled={externalIds.length === 0}
+          onChange={(event) => onConfigChange({ matchField: event.target.value })}
+        >
+          <option value="">
+            {externalIds.length === 0 ? 'No external ID available' : 'Select external ID…'}
+          </option>
+          {externalIds.map((field) => <option key={field} value={field}>{field}</option>)}
+        </Select>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {externalIds.length > 0
+            ? 'Upsert matches source and target records with this field.'
+            : 'This object can only use insert until Salesforce metadata exposes an external ID.'}
+        </p>
+      </div>
 
       <div>
         <Label htmlFor="org-object-record-limit">Maximum number of records to deploy</Label>

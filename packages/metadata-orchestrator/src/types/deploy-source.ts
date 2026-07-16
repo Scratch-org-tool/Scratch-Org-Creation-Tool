@@ -9,6 +9,8 @@ export interface DeploySourceContext {
   manifestAbsolutePath: string;
   targetOrgAlias: string;
   testLevel?: string;
+  tests?: string[];
+  apiVersion?: string;
   sourceOrgAlias?: string;
   targetOrgProfile?: TargetOrgProfile;
 }
@@ -21,4 +23,6 @@ export interface OrchestratorRunContext {
   resumeCheckpoint?: import('./checkpoint').DeployCheckpoint;
   maxRetriesPerNode?: number;
   targetOrgProfile?: TargetOrgProfile;
+  /** Optional immutable allow-list; discovery may inspect other source but cannot execute it. */
+  approvedNodeIds?: string[];
 }

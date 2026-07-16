@@ -15,6 +15,7 @@ import { CheckpointStore } from './checkpoint/checkpoint-store';
 import type { OrchestratorRunContext } from './types/deploy-source';
 import type { FinalReport } from './types/plan';
 import type { MetadataNode } from './types/metadata-node';
+import { GraphEngine } from './graph/graph-engine';
 
 export interface IntelligentOrchestratorOptions {
   sfCli: SfCliClient;
@@ -51,7 +52,7 @@ export class IntelligentOrchestrator {
     callbacks: ExecutionCallbacks,
   ): Promise<FinalReport> {
     const started = Date.now();
-    const repo = new MetadataRepository();
+    let repo = new MetadataRepository();
     const source = ctx.source;
 
     const manifestAbs = source.manifestAbsolutePath;
@@ -62,17 +63,41 @@ export class IntelligentOrchestrator {
       repo.getOrCreate(comp.metadataType, comp.apiName, { filePath: comp.filePath });
     }
 
-    if (ctx.resumeCheckpoint) {
-      this.checkpointStore.applyToRepository(ctx.resumeCheckpoint, repo);
-    }
-
     const targetOrgProfile =
       ctx.targetOrgProfile ?? ctx.source.targetOrgProfile ?? 'incremental';
 
-    const graphEngine = dependencyDiscoveryEngine.discover(repo, components, {
+    let graphEngine = dependencyDiscoveryEngine.discover(repo, components, {
       projectRoot: source.projectRoot,
       targetOrgProfile,
     });
+
+    if (ctx.approvedNodeIds) {
+      const approved = new Set(ctx.approvedNodeIds);
+      const missing = [...approved].filter((id) => !repo.hasNode(id));
+      if (missing.length) {
+        throw new Error(`Approved deployment nodes are missing from source: ${missing.join(', ')}`);
+      }
+      const approvedRepo = new MetadataRepository();
+      for (const node of repo.allNodes()) {
+        if (approved.has(node.id)) {
+          approvedRepo.getOrCreate(node.metadataType, node.apiName, {
+            filePath: node.filePath ?? undefined,
+          });
+        }
+      }
+      for (const node of repo.allNodes()) {
+        if (!approved.has(node.id)) continue;
+        for (const dependency of node.dependencies) {
+          if (approved.has(dependency)) approvedRepo.addEdge(node.id, dependency, 'known_rule');
+        }
+      }
+      repo = approvedRepo;
+      graphEngine = GraphEngine.fromRepository(repo);
+    }
+
+    if (ctx.resumeCheckpoint) {
+      this.checkpointStore.applyToRepository(ctx.resumeCheckpoint, repo);
+    }
 
     if (ctx.resumeCheckpoint?.learnedEdges?.length) {
       repo.applyLearnedEdges(ctx.resumeCheckpoint.learnedEdges);
@@ -82,8 +107,12 @@ export class IntelligentOrchestrator {
     const planner = new DeploymentPlanner(config);
     let plan = planner.buildPlan(ctx.runId, repo, graphEngine);
     plan = new BatchOptimizer(config).optimize(plan);
+    await callbacks.onPlan?.(plan, repo.allNodes());
 
-    const manifestBuilder = new ManifestBuilder(path.join(this.workDir, 'manifests'));
+    const manifestBuilder = new ManifestBuilder(
+      path.join(this.workDir, 'manifests'),
+      source.apiVersion ?? parsed.apiVersion ?? '62.0',
+    );
     const engine = new ExecutionEngine(this.options.sfCli, manifestBuilder, this.checkpointStore);
 
     const startBatch = ctx.resumeCheckpoint
@@ -99,6 +128,7 @@ export class IntelligentOrchestrator {
         startBatch,
         maxRetries: ctx.maxRetriesPerNode ?? 3,
         testLevel: source.testLevel,
+        tests: source.tests,
       },
     );
 

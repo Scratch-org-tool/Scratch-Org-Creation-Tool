@@ -3,12 +3,14 @@
 import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Label, Select } from '@/components/ui/input';
-import { FormSection, InlineAlert, StatusBadge } from '@/components/studio';
+import { ConfirmDialog, FormSection, InlineAlert, StatusBadge } from '@/components/studio';
 import { OrgToOrgObjectSettings } from './org-to-org-object-settings';
 import { OrgToOrgObjectSidebar } from './org-to-org-object-sidebar';
 import { OrgToOrgPreviewStep } from './org-to-org-preview-step';
 import { useOrgToOrgDeploy } from './use-org-to-org-deploy';
 import { DataDeployBatchProgress } from './data-deploy-batch-progress';
+import { OrgToOrgDependencyEditor } from './org-to-org-dependency-editor';
+import { DataPreflightReportView } from './data-preflight-report';
 
 export function OrgToOrgDeployPanel() {
   const w = useOrgToOrgDeploy();
@@ -137,13 +139,35 @@ export function OrgToOrgDeployPanel() {
         )}
 
         {w.wizardStep === 'preview' && (
-          <OrgToOrgPreviewStep
-            checkedObjects={w.checkedObjectList}
-            objectConfigs={w.objectConfigs}
-            selectedRecordIds={w.selectedRecordIds}
-            onToggleRecord={w.toggleRecord}
-            onToggleAll={w.toggleAllRecordsForObject}
-          />
+          <div className="space-y-4">
+            <OrgToOrgDependencyEditor
+              objects={w.checkedObjectList}
+              configs={w.objectConfigs}
+              error={w.dependencyError}
+              onMove={w.moveObject}
+              onToggleDependency={w.toggleObjectDependency}
+            />
+            <OrgToOrgPreviewStep
+              checkedObjects={w.checkedObjectList}
+              objectConfigs={w.objectConfigs}
+              selectedRecordIds={w.selectedRecordIds}
+              onToggleRecord={w.toggleRecord}
+              onToggleAll={w.toggleAllRecordsForObject}
+            />
+            {w.preflightResult?.quotaSummary && (
+              <InlineAlert variant={w.preflightResult.quotaSummary.sufficient ? 'info' : 'error'}>
+                All-object plan: {w.preflightResult.quotaSummary.estimatedBulkBatches} estimated Bulk
+                batch(es), {w.preflightResult.quotaSummary.remaining ?? 'unknown'} remaining.
+              </InlineAlert>
+            )}
+            {w.preflightResult?.preflight?.map((item, index) => (
+              <DataPreflightReportView
+                key={item.id}
+                report={item.report}
+                title={`${index + 1}. ${item.objectName} preflight`}
+              />
+            ))}
+          </div>
         )}
 
         {w.wizardStep === 'deploy' && w.batchResult && (
@@ -209,14 +233,27 @@ export function OrgToOrgDeployPanel() {
                 </Button>
               )}
               {w.wizardStep === 'preview' && (
-                <Button onClick={() => void w.deploy()} loading={w.loadingDeploy} disabled={!w.canDeploy}>
-                  Deploy
+                <Button
+                  onClick={() => void w.prepareDeploy()}
+                  loading={w.loadingDeploy}
+                  disabled={!w.canDeploy}
+                >
+                  Preflight &amp; review
                 </Button>
               )}
             </div>
           </div>
         )}
       </FormSection>
+      <ConfirmDialog
+        open={w.confirmingDeploy}
+        title="Deploy this object dependency plan?"
+        message={`Deploy ${w.preflightResult?.preflight?.length ?? w.checkedObjects.size} object(s) in dependency order using ${w.preflightResult?.quotaSummary?.estimatedBulkBatches ?? 'an unknown number of'} estimated Bulk batch(es). ${w.form.strategy === 'upsert' ? 'Each displayed external ID makes retries idempotent.' : 'Insert is non-idempotent and failed chunks cannot be retried safely.'}`}
+        confirmLabel="Start deployment"
+        loading={w.loadingDeploy}
+        onOpenChange={w.setConfirmingDeploy}
+        onConfirm={() => void w.deploy()}
+      />
     </div>
   );
 }

@@ -29,6 +29,8 @@ import {
 import { PipelineStepError } from './metadata-deploy.worker.errors';
 import { MetadataDataChainService } from '../modules/metadata/metadata-data-chain.service';
 import { bootstrapOrgToOrgWorkspace } from '../integrations/azure/org-to-org-workspace.util';
+import { DeploymentWorkbenchRuntimeService } from '../modules/deployment/deployment-workbench-runtime.service';
+import { DeploymentArtifactStore } from '../modules/deployment/deployment-artifact.store';
 
 export { PipelineStepError } from './metadata-deploy.worker.errors';
 
@@ -46,9 +48,18 @@ export class MetadataDeployWorker {
     private readonly deploySourceResolver: DeploySourceResolver,
     private readonly intelligentOrchestrator: IntelligentOrchestratorService,
     private readonly metadataDataChain: MetadataDataChainService,
+    private readonly workbenchRuntime: DeploymentWorkbenchRuntimeService,
+    private readonly artifactStore: DeploymentArtifactStore,
   ) {}
 
   async process(job: Job) {
+    const workbenchRunId = (job.data as { workbenchRunId?: string }).workbenchRunId;
+    if (workbenchRunId) {
+      return this.workbenchRuntime.process({
+        workbenchRunId,
+        dbJobId: (job.data as { dbJobId: string }).dbJobId,
+      });
+    }
     const {
       orgAlias,
       manifestPath,
@@ -73,6 +84,7 @@ export class MetadataDeployWorker {
       destructiveChangesXml,
       quickDeployValidationId,
       localProjectRoot,
+      sourceArtifactId,
     } = job.data as {
       orgAlias: string;
       manifestPath?: string;
@@ -97,6 +109,7 @@ export class MetadataDeployWorker {
       destructiveChangesXml?: string;
       quickDeployValidationId?: string;
       localProjectRoot?: string;
+      sourceArtifactId?: string;
     };
     const gitSource = normalizeGitSourceConfig({
       gitSource: rawGitSource,
@@ -180,18 +193,56 @@ export class MetadataDeployWorker {
           ? 'Preparing org-to-org metadata retrieve and deploy...'
           : `Cloning ${gitSource?.repo}@${gitSource?.branch} from ${provider}...`);
 
-      const workspace = await this.deploySourceResolver.resolve({
-        orgAlias,
-        gitSource,
-        azureDeploy,
-        manifestPath: manifest,
-        manifestContent,
-        sourceOrgAlias: resolvedSourceOrgAlias,
-        deployMode,
-        localProjectRoot,
-      });
+      const durableSource = sourceArtifactId
+        ? await this.artifactStore.materializeDirectory(sourceArtifactId, 'sfcc-rollback-')
+        : undefined;
+      let workspace: Awaited<ReturnType<DeploySourceResolver['resolve']>>;
+      try {
+        workspace = await this.deploySourceResolver.resolve({
+          orgAlias,
+          gitSource,
+          azureDeploy,
+          manifestPath: manifest,
+          manifestContent,
+          sourceOrgAlias: resolvedSourceOrgAlias,
+          deployMode,
+          localProjectRoot: durableSource?.root ?? localProjectRoot,
+        });
+      } catch (error) {
+        await durableSource?.cleanup();
+        throw error;
+      }
+      if (durableSource) {
+        const resolverCleanup = workspace.cleanup;
+        workspace.cleanup = async () => {
+          await resolverCleanup?.();
+          await durableSource.cleanup();
+        };
+      }
 
       try {
+        // Capture rollback state before either execution strategy can mutate
+        // the target. Intelligent batches previously bypassed this safeguard.
+        if (deploymentId && !validateOnly && deployMode !== 'local_workspace') {
+          try {
+            await setStep('Snapshotting Target Org');
+            const snapshotPath = await this.captureTargetSnapshot(
+              orgAlias,
+              workspace.manifestAbsolutePath,
+              deploymentId,
+              log,
+            );
+            if (snapshotPath) {
+              await prisma.deployment.update({
+                where: { id: deploymentId },
+                data: { snapshotPath },
+              }).catch(() => undefined);
+            }
+          } catch (err) {
+            await log('stderr', `Snapshot failed (deploy continues, rollback unavailable): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
         if (useIntelligent) {
           const runId = intelligentDeployRunId ?? randomUUID();
           let resumeCheckpoint: DeployCheckpoint | undefined;
@@ -214,6 +265,7 @@ export class MetadataDeployWorker {
             workspace,
             orgAlias,
             testLevel,
+            tests,
             deploymentId,
             automationRunId,
             resumeCheckpoint,
@@ -252,30 +304,6 @@ export class MetadataDeployWorker {
           await log('stdout', `Intelligent deploy complete — ${report.deployedCount} components in ${report.totalBatches} batches`);
         } else {
           const sfCli = createSfCliClient({ cwd: workspace.projectRoot });
-
-          // Pre-deploy snapshot: retrieve the affected components from the
-          // target org so a failed/regressed deploy can be rolled back by
-          // redeploying the snapshot. Skipped for validate-only runs (no
-          // changes are applied) and rollback runs themselves.
-          if (deploymentId && !validateOnly && deployMode !== 'local_workspace') {
-            try {
-              await setStep('Snapshotting Target Org');
-              const snapshotPath = await this.captureTargetSnapshot(
-                orgAlias,
-                workspace.manifestAbsolutePath,
-                deploymentId,
-                log,
-              );
-              if (snapshotPath) {
-                await prisma.deployment.update({
-                  where: { id: deploymentId },
-                  data: { snapshotPath },
-                }).catch(() => undefined);
-              }
-            } catch (err) {
-              await log('stderr', `Snapshot failed (deploy continues, rollback unavailable): ${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
 
           let destructivePath: string | undefined;
           if (destructiveChangesXml?.trim()) {

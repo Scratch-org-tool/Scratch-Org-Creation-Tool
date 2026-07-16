@@ -140,14 +140,22 @@ export class MetadataCompareService {
       ...summarizeComparisonItems(allItems),
       ...(typeErrors.length ? { typeErrors } : {}),
     };
+    const unknownItems = allItems.filter((item) => item.diffType === 'unknown');
     await prisma.metadataComparison.update({
       where: { id: comparisonId },
       data: {
-        status: typeErrors.length > 0 && allItems.length === 0 ? 'failed' : 'completed',
+        status: typeErrors.length > 0 && allItems.length === 0
+          ? 'failed'
+          : unknownItems.length
+            ? 'running'
+            : 'completed',
         items: allItems as unknown as object,
         summary: summary as unknown as object,
       },
     });
+    if (unknownItems.length) {
+      await this.runBulkResolution(comparisonId, userId, unknownItems);
+    }
   }
 
   async getSession(
@@ -298,6 +306,108 @@ export class MetadataCompareService {
         fs.rmSync(baseDir, { recursive: true, force: true });
       } catch { /* best-effort cleanup */ }
     }
+  }
+
+  /**
+   * Resolve every unknown comparison item as one background operation. This
+   * removes the old requirement that a user open each row to classify it.
+   */
+  async resolveUnknowns(
+    comparisonId: string,
+    userId: string,
+    body?: { items?: Array<{ metadataType: string; fullName: string }> },
+  ) {
+    const session = await this.getOwnedSession(comparisonId, userId);
+    if (session.status === 'running') {
+      return { comparisonId, status: 'running' as const };
+    }
+    const allItems = (session.items as MetadataCompareItem[] | null) ?? [];
+    const requested = body?.items?.length
+      ? new Set(body.items.map((item) => `${item.metadataType}:${item.fullName}`))
+      : null;
+    const unknown = allItems.filter(
+      (item) => item.diffType === 'unknown'
+        && (!requested || requested.has(`${item.metadataType}:${item.fullName}`)),
+    );
+    await prisma.metadataComparison.update({
+      where: { id: comparisonId },
+      data: {
+        status: 'running',
+        summary: {
+          ...((session.summary as Record<string, unknown> | null) ?? {}),
+          bulkResolution: { total: unknown.length, completed: 0, failed: 0 },
+        },
+      },
+    });
+    void this.runBulkResolution(comparisonId, userId, unknown).catch(async (error) => {
+      await prisma.metadataComparison.update({
+        where: { id: comparisonId },
+        data: {
+          status: 'failed',
+          summary: {
+            ...((session.summary as Record<string, unknown> | null) ?? {}),
+            bulkResolution: {
+              total: unknown.length,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          },
+        },
+      });
+    });
+    return { comparisonId, status: 'running' as const, queued: unknown.length };
+  }
+
+  private async runBulkResolution(
+    comparisonId: string,
+    userId: string,
+    items: MetadataCompareItem[],
+  ) {
+    let completed = 0;
+    let failed = 0;
+    for (const item of items) {
+      try {
+        const diff = await this.getItemDiff(
+          comparisonId,
+          userId,
+          item.metadataType,
+          item.fullName,
+        );
+        if (diff.loadStatus === 'failed') failed += 1;
+      } catch {
+        failed += 1;
+      }
+      completed += 1;
+      if (completed % 10 === 0 || completed === items.length) {
+        const current = await prisma.metadataComparison.findUnique({
+          where: { id: comparisonId },
+          select: { summary: true },
+        });
+        await prisma.metadataComparison.update({
+          where: { id: comparisonId },
+          data: {
+            summary: {
+              ...((current?.summary as Record<string, unknown> | null) ?? {}),
+              bulkResolution: { total: items.length, completed, failed },
+            },
+          },
+        });
+      }
+    }
+    const refreshed = await prisma.metadataComparison.findUnique({
+      where: { id: comparisonId },
+      select: { items: true, summary: true },
+    });
+    const resolvedItems = (refreshed?.items as MetadataCompareItem[] | null) ?? [];
+    await prisma.metadataComparison.update({
+      where: { id: comparisonId },
+      data: {
+        status: failed === items.length && items.length > 0 ? 'failed' : 'completed',
+        summary: {
+          ...summarizeComparisonItems(resolvedItems),
+          bulkResolution: { total: items.length, completed, failed },
+        },
+      },
+    });
   }
 
   private boundDiffEntry(entry: DiffCacheEntry): DiffCacheEntry {

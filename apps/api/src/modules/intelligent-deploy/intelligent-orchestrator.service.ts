@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -179,6 +180,8 @@ export class IntelligentOrchestratorService {
     workspace: ResolvedDeployWorkspace;
     orgAlias: string;
     testLevel?: string;
+    tests?: string[];
+    apiVersion?: string;
     deploymentId?: string;
     automationRunId?: string;
     createdBy?: string;
@@ -187,6 +190,8 @@ export class IntelligentOrchestratorService {
     registerKill: (kill: () => void) => void;
     clearKill: () => void;
     targetOrgProfile?: TargetOrgProfile;
+    approvedNodeIds?: string[];
+    expectedPlanHash?: string;
   }): Promise<FinalReport> {
     const persistence = this.createPrismaPersistence(options.runId);
     const checkpointStore = new CheckpointStore(persistence);
@@ -212,6 +217,8 @@ export class IntelligentOrchestratorService {
       manifestAbsolutePath: options.workspace.manifestAbsolutePath,
       targetOrgAlias: options.orgAlias,
       testLevel: options.testLevel,
+      tests: options.tests,
+      apiVersion: options.apiVersion,
       targetOrgProfile: options.targetOrgProfile,
     };
 
@@ -234,11 +241,46 @@ export class IntelligentOrchestratorService {
           automationRunId: options.automationRunId,
           resumeCheckpoint: options.resumeCheckpoint,
           targetOrgProfile: options.targetOrgProfile,
+          approvedNodeIds: options.approvedNodeIds,
         },
         {
           ...options.callbacks,
           registerKill: options.registerKill,
           clearKill: options.clearKill,
+          onPlan: async (plan, nodes) => {
+            if (
+              options.expectedPlanHash
+              && planHash(plan.batches.map((batch) => batch.nodeIds)) !== options.expectedPlanHash
+            ) {
+              throw new Error('Intelligent execution plan differs from the approved preview batches');
+            }
+            await options.callbacks.onPlan?.(plan, nodes);
+            await prisma.intelligentDeployRun.update({
+              where: { id: options.runId },
+              data: { plan: plan as unknown as Prisma.InputJsonValue },
+            });
+            for (const node of nodes) {
+              await prisma.intelligentDeployNode.upsert({
+                where: {
+                  runId_nodeKey: { runId: options.runId, nodeKey: node.id },
+                },
+                create: {
+                  runId: options.runId,
+                  nodeKey: node.id,
+                  metadataType: node.metadataType,
+                  apiName: node.apiName,
+                  deploymentState: node.deploymentState,
+                  batchNumber: node.batchNumber,
+                  retryCount: node.retryCount,
+                },
+                update: {
+                  deploymentState: node.deploymentState,
+                  batchNumber: node.batchNumber,
+                  retryCount: node.retryCount,
+                },
+              });
+            }
+          },
           onBatchStart: async (batch, index, total) => {
             await options.callbacks.onBatchStart?.(batch, index, total);
             await prisma.intelligentDeployBatch.upsert({
@@ -255,13 +297,23 @@ export class IntelligentOrchestratorService {
           },
           onBatchComplete: async (outcome) => {
             await options.callbacks.onBatchComplete?.(outcome);
-            await prisma.intelligentDeployBatch.update({
-              where: { runId_batchNumber: { runId: options.runId, batchNumber: outcome.batchNumber } },
-              data: {
-                status: outcome.success ? 'completed' : 'failed',
-                durationMs: outcome.durationMs,
-              },
-            });
+            await prisma.$transaction([
+              prisma.intelligentDeployBatch.update({
+                where: { runId_batchNumber: { runId: options.runId, batchNumber: outcome.batchNumber } },
+                data: {
+                  status: outcome.success ? 'completed' : 'failed',
+                  durationMs: outcome.durationMs,
+                },
+              }),
+              prisma.intelligentDeployNode.updateMany({
+                where: { runId: options.runId, nodeKey: { in: outcome.deployedNodeIds } },
+                data: { deploymentState: 'DEPLOYED', batchNumber: outcome.batchNumber },
+              }),
+              prisma.intelligentDeployNode.updateMany({
+                where: { runId: options.runId, nodeKey: { in: outcome.failedNodeIds } },
+                data: { deploymentState: 'FAILED', batchNumber: outcome.batchNumber },
+              }),
+            ]);
           },
         },
       );
@@ -276,6 +328,29 @@ export class IntelligentOrchestratorService {
         metrics: report as unknown as Prisma.InputJsonValue,
       },
     });
+
+    const checkpoint = await checkpointStore.load(options.runId);
+    for (const edge of checkpoint?.learnedEdges ?? []) {
+      await prisma.learnedDependency.upsert({
+        where: {
+          fromNodeKey_toNodeKey: {
+            fromNodeKey: edge.from,
+            toNodeKey: edge.to,
+          },
+        },
+        create: {
+          fromNodeKey: edge.from,
+          toNodeKey: edge.to,
+          source: edge.source,
+          confidence: edge.confidence,
+        },
+        update: {
+          source: edge.source,
+          confidence: edge.confidence,
+          hitCount: { increment: 1 },
+        },
+      });
+    }
 
     if (options.deploymentId) {
       const existing = await prisma.deployment.findUnique({
@@ -373,4 +448,8 @@ export async function resolveTargetOrgProfile(
     select: { type: true },
   });
   return org?.type === 'scratch' ? 'greenfield' : 'incremental';
+}
+
+function planHash(batches: string[][]) {
+  return createHash('sha256').update(JSON.stringify(batches)).digest('hex');
 }

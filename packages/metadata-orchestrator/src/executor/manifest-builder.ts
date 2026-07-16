@@ -4,14 +4,17 @@ import type { MetadataRepository } from '../repository/metadata-repository';
 import type { DeploymentBatch } from '../types/plan';
 
 export class ManifestBuilder {
-  constructor(private readonly workDir: string) {
+  constructor(
+    private readonly workDir: string,
+    private readonly apiVersion = '62.0',
+  ) {
     fs.mkdirSync(workDir, { recursive: true });
   }
 
   buildBatchManifest(
     batch: DeploymentBatch,
     repo: MetadataRepository,
-    apiVersion = '59.0',
+    apiVersion = this.apiVersion,
   ): string {
     const byType = new Map<string, string[]>();
     for (const nodeId of batch.nodeIds) {

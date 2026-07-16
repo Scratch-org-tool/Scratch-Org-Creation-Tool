@@ -1,4 +1,5 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Subject, Observable } from 'rxjs';
 import { filter, map } from 'rxjs/operators';
 import type IORedis from 'ioredis';
@@ -7,13 +8,16 @@ import type { StreamEvent } from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
 
 const OWNER_CACHE_MAX = 2000;
+const EVENT_DEDUP_MAX = 5000;
 
 @Injectable()
 export class StreamService implements OnModuleInit {
   private readonly events$ = new Subject<StreamEvent>();
   private subscriber: IORedis | null = null;
+  private redisReady = false;
   /** Resource key -> owning app-user id (bounded to avoid a DB hit per event). */
   private readonly ownerCache = new Map<string, string>();
+  private readonly seenEventIds = new Set<string>();
 
   constructor(private readonly queueService: QueueService) {}
 
@@ -25,10 +29,16 @@ export class StreamService implements OnModuleInit {
     const redis = this.queueService.getConnection();
     if (!redis) return;
     const sub = redis.duplicate();
-    sub.subscribe('sfcc:events');
+    void sub.subscribe('sfcc:events').then(() => {
+      this.redisReady = true;
+    }).catch(() => {
+      this.redisReady = false;
+    });
     sub.on('message', (_channel, message) => {
       try {
         const event = JSON.parse(message) as StreamEvent;
+        if (event.id && this.seenEventIds.has(event.id)) return;
+        if (event.id) this.rememberEvent(event.id);
         this.events$.next(event);
       } catch {
         // ignore malformed messages
@@ -44,15 +54,21 @@ export class StreamService implements OnModuleInit {
   ): Promise<void> {
     const resolvedOwner = ownerId ?? (await this.resolveOwner(payload));
     const event: StreamEvent = {
+      id: randomUUID(),
       type,
       payload,
       timestamp: new Date().toISOString(),
       ...(resolvedOwner ? { ownerId: resolvedOwner } : {}),
     };
-    this.events$.next(event);
     const redis = this.queueService.getConnection();
     if (redis) {
+      if (!this.redisReady) {
+        this.rememberEvent(event.id!);
+        this.events$.next(event);
+      }
       await redis.publish('sfcc:events', JSON.stringify(event));
+    } else {
+      this.events$.next(event);
     }
   }
 
@@ -136,5 +152,13 @@ export class StreamService implements OnModuleInit {
       if (firstKey) this.ownerCache.delete(firstKey);
     }
     this.ownerCache.set(key, owner);
+  }
+
+  private rememberEvent(id: string): void {
+    if (this.seenEventIds.size >= EVENT_DEDUP_MAX) {
+      const oldest = this.seenEventIds.values().next().value;
+      if (oldest) this.seenEventIds.delete(oldest);
+    }
+    this.seenEventIds.add(id);
   }
 }

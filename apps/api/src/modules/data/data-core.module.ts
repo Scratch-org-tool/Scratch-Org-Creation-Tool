@@ -9,10 +9,12 @@ import { DataDeployOrchestratorService } from './data-deploy-orchestrator.servic
 import { DataPreflightService } from './data-preflight.service';
 import { BulkThrottleService } from './bulk-throttle.service';
 import { QuerySectionRuntimeService } from './query-section-runtime.service';
+import { DataRollbackService } from './data-rollback.service';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
+import { JobsModule } from '../jobs/jobs.module';
 
 @Module({
-  imports: [forwardRef(() => OrchestratorModule)],
+  imports: [forwardRef(() => OrchestratorModule), JobsModule],
   providers: [
     RecordTypeMapperService,
     QuerySetService,
@@ -24,6 +26,7 @@ import { OrchestratorModule } from '../orchestrator/orchestrator.module';
     DataPreflightService,
     BulkThrottleService,
     QuerySectionRuntimeService,
+    DataRollbackService,
   ],
   exports: [
     RecordTypeMapperService,
@@ -36,6 +39,7 @@ import { OrchestratorModule } from '../orchestrator/orchestrator.module';
     DataPreflightService,
     BulkThrottleService,
     QuerySectionRuntimeService,
+    DataRollbackService,
   ],
 })
 export class DataCoreModule {}

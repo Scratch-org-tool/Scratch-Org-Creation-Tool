@@ -10,12 +10,22 @@ import { JobsModule } from '../jobs/jobs.module';
 import { StreamModule } from '../stream/stream.module';
 import { IntelligentDeployModule } from '../intelligent-deploy/intelligent-deploy.module';
 import { MetadataDataChainService } from '../metadata/metadata-data-chain.service';
+import { DeploymentWorkbenchController } from './deployment-workbench.controller';
+import { DeploymentWorkbenchService } from './deployment-workbench.service';
+import { DeploymentWorkbenchRuntimeService } from './deployment-workbench-runtime.service';
+import { SafeExecFileAdapter, StaticAnalysisService } from './static-analysis.service';
+import { DeploymentArtifactStore } from './deployment-artifact.store';
 
 @Module({
   imports: [JobsModule, StreamModule, IntelligentDeployModule],
-  controllers: [DeploymentController],
+  controllers: [DeploymentController, DeploymentWorkbenchController],
   providers: [
     DeploymentService,
+    DeploymentWorkbenchService,
+    DeploymentWorkbenchRuntimeService,
+    SafeExecFileAdapter,
+    StaticAnalysisService,
+    DeploymentArtifactStore,
     MetadataDeployQueueService,
     MetadataDeployJobService,
     MetadataDataChainService,
@@ -23,6 +33,15 @@ import { MetadataDataChainService } from '../metadata/metadata-data-chain.servic
     AzureService,
     JenkinsService,
   ],
-  exports: [MetadataDeployQueueService, MetadataDeployJobService, DeploymentService, MetadataDataChainService],
+  exports: [
+    MetadataDeployQueueService,
+    MetadataDeployJobService,
+    DeploymentService,
+    DeploymentWorkbenchService,
+    DeploymentWorkbenchRuntimeService,
+    StaticAnalysisService,
+    DeploymentArtifactStore,
+    MetadataDataChainService,
+  ],
 })
 export class DeploymentModule {}

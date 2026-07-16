@@ -9,6 +9,7 @@ import { OrgToOrgCompareService } from './org-to-org-compare.service';
 import { OrgToOrgBrowseService } from './org-to-org-browse.service';
 import { DataPreflightService } from './data-preflight.service';
 import { QuerySectionRuntimeService } from './query-section-runtime.service';
+import { DataRollbackService } from './data-rollback.service';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
@@ -37,6 +38,7 @@ export class DataController {
     private readonly orgToOrgBrowseService: OrgToOrgBrowseService,
     private readonly dataPreflightService: DataPreflightService,
     private readonly querySectionRuntime: QuerySectionRuntimeService,
+    private readonly dataRollback: DataRollbackService,
   ) {}
 
   @Get('custom-settings/template')
@@ -131,9 +133,54 @@ export class DataController {
     return this.dataService.retryFailedChunks(id, userId);
   }
 
+  @Post('batches/:id/cancel')
+  cancelBatch(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.dataService.cancelDeployBatch(id, userId);
+  }
+
+  @Post('batches/:id/rollback')
+  rollbackBatch(
+    @Param('id') id: string,
+    @Body() body: { deleteInserted?: boolean },
+    @CurrentUser() userId: string,
+  ) {
+    return this.dataRollback.rollbackBatch(id, userId, {
+      deleteInserted: body?.deleteInserted === true,
+    });
+  }
+
+  @Post('movements/:id/rollback')
+  rollbackMovement(
+    @Param('id') id: string,
+    @Body() body: { deleteInserted?: boolean },
+    @CurrentUser() userId: string,
+  ) {
+    return this.dataRollback.rollbackMovement(id, userId, {
+      deleteInserted: body?.deleteInserted === true,
+    });
+  }
+
+  @Get('movements/:id/rollback')
+  getMovementRollbackStatus(
+    @Param('id') id: string,
+    @CurrentUser() userId: string,
+  ) {
+    return this.dataRollback.getMovementRollbackStatus(id, userId);
+  }
+
+  @Post('movements/:id/cancel')
+  cancelMovement(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.dataService.cancelMovement(id, userId);
+  }
+
   @Get('batch-groups/:groupId')
   getBatchGroup(@Param('groupId') groupId: string, @CurrentUser() userId: string) {
     return this.dataService.getBatchGroup(groupId, userId);
+  }
+
+  @Post('batch-groups/:groupId/cancel')
+  cancelBatchGroup(@Param('groupId') groupId: string, @CurrentUser() userId: string) {
+    return this.dataService.cancelBatchGroup(groupId, userId);
   }
 
   @Post('deploy/preflight')

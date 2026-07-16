@@ -180,6 +180,7 @@ model Deployment {
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
   rollbacks    Rollback[]
+  qualityRuns  DeploymentQualityRun[]
 
   @@index([createdBy])
 }
@@ -222,6 +223,13 @@ model DataMovement {
   recordTypeMappings Json?
   status             JobStatus        @default(pending)
   movementType       String           @default("deploy")
+  operation          String           @default("insert")
+  externalIdField    String?
+  idempotent         Boolean          @default(false)
+  rollbackArtifact   Json?
+  rollbackReport     Json?
+  rollbackStatus     String?
+  durableRollback    DataRollbackArtifact?
   batchId            String?
   batch              DataDeployBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   chunkIndex         Int?
@@ -233,6 +241,27 @@ model DataMovement {
   @@index([batchId])
 }
 
+/// Encrypted pre-write rollback snapshot. The unique movement relation makes
+/// the first completed capture immutable across queue retries and API replicas.
+model DataRollbackArtifact {
+  id                String       @id @default(uuid())
+  movementId        String       @unique
+  movement          DataMovement @relation(fields: [movementId], references: [id], onDelete: Cascade)
+  ciphertext        Bytes
+  algorithm         String       @default("aes-256-gcm+gzip")
+  iv                String
+  authTag           String
+  sha256            String
+  compressedBytes   Int
+  uncompressedBytes Int
+  previousCount     Int
+  insertedCount     Int
+  expiresAt         DateTime
+  createdAt         DateTime     @default(now())
+
+  @@index([expiresAt])
+}
+
 model DataDeployBatch {
   id                 String            @id @default(uuid())
   /// Groups multiple per-object batches created from one multi-object deploy request.
@@ -242,7 +271,12 @@ model DataDeployBatch {
   targetOrgId        String
   targetOrg          OrgConnection     @relation("BatchTargetOrg", fields: [targetOrgId], references: [id])
   objectName         String?
+  objectKey          String?
+  dependsOn          String[]          @default([])
   strategy           String            @default("generic")
+  operation          String            @default("insert")
+  externalIdField    String?
+  idempotent         Boolean           @default(false)
   movementType       String            @default("deploy")
   status             JobStatus         @default(queued)
   baseSoql           String?
@@ -253,6 +287,14 @@ model DataDeployBatch {
   totalChunks        Int               @default(1)
   completedChunks    Int               @default(0)
   failedChunks       Int               @default(0)
+  maxParallelChunks  Int               @default(4)
+  quotaRemaining     Int?
+  quotaConfidence    String            @default("unknown")
+  boundaryArtifact   Json?
+  rollbackPolicy     String            @default("none")
+  rollbackArtifact   Json?
+  rollbackReport     Json?
+  rollbackStatus     String?
   error              String?
   createdBy          String            @default("system")
   createdAt          DateTime          @default(now())
@@ -280,6 +322,7 @@ model DataDeployChunk {
   status      JobStatus       @default(queued)
   recordCount Int?
   error       String?
+  errorDetails Json?
   attempts    Int             @default(0)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
@@ -382,6 +425,178 @@ model DeploymentPlan {
   updatedAt      DateTime  @updatedAt
 
   @@index([createdBy])
+}
+
+/// Planning and quality-policy record for the provider-neutral Deployment Workbench.
+/// Execution workers may attach a legacy Deployment later; planning itself has no side effects.
+model DeploymentQualityRun {
+  id                    String                        @id @default(uuid())
+  deploymentId          String?
+  deployment            Deployment?                   @relation(fields: [deploymentId], references: [id], onDelete: SetNull)
+  name                  String?
+  description           String?
+  source                Json
+  targetOrgId           String
+  targetProfile         String
+  strategy              String
+  components            Json
+  manifestXml           String?
+  apiVersion            String?
+  destructiveSelections Json
+  dependencyPolicy      Json
+  chainedData           Json?
+  policySnapshot        Json
+  stagePlan             Json
+  status                String                        @default("planned")
+  currentStage          String?
+  summary               Json?
+  artifacts             Json?
+  validationId          String?
+  executionLease        String?
+  approvedBy            String?
+  approvedAt            DateTime?
+  rejectedBy            String?
+  rejectedAt            DateTime?
+  rejectionReason       String?
+  createdBy             String                        @default("system")
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+  stages                DeploymentQualityStage[]
+  issues                DeploymentQualityIssue[]
+  testResults           DeploymentQualityTestResult[]
+  audits                DeploymentQualityAudit[]
+  approvals             DeploymentQualityApproval[]
+  destructiveReviews   DeploymentDestructiveReview[]
+
+  @@index([createdBy, createdAt])
+  @@index([targetOrgId, status])
+  @@index([deploymentId])
+  @@index([validationId])
+}
+
+/// Immutable, content-addressed Workbench bytes. The database implementation is
+/// the default durable object store; callers only retain this checksum key.
+model DeploymentArtifact {
+  id          String   @id
+  kind        String
+  checksum    String
+  content     Bytes
+  sizeBytes   Int
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  retainUntil DateTime?
+
+  @@index([kind, createdAt])
+  @@index([retainUntil])
+}
+
+/// One actor can contribute at most one approval to a run.
+model DeploymentQualityApproval {
+  id        String               @id @default(uuid())
+  runId     String
+  run       DeploymentQualityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  actorId   String
+  createdAt DateTime             @default(now())
+
+  @@unique([runId, actorId])
+  @@index([runId, createdAt])
+}
+
+/// Explicit, hash-bound destructive decisions are independent from plan approval.
+model DeploymentDestructiveReview {
+  id        String               @id @default(uuid())
+  runId     String
+  run       DeploymentQualityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  actorId   String
+  digest    String
+  approved  Boolean
+  createdAt DateTime             @default(now())
+
+  @@unique([runId, actorId, digest])
+  @@index([runId, digest, approved])
+}
+
+model DeploymentQualityStage {
+  id          String                        @id @default(uuid())
+  runId       String
+  run         DeploymentQualityRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  key         String
+  ordinal     Int
+  required    Boolean                       @default(true)
+  status      String                        @default("pending")
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  durationMs  Int?
+  summary     Json?
+  artifacts   Json?
+  error       String?
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  issues      DeploymentQualityIssue[]
+  testResults DeploymentQualityTestResult[]
+
+  @@unique([runId, key])
+  @@unique([runId, ordinal])
+  @@index([runId, status])
+}
+
+model DeploymentQualityIssue {
+  id          String                  @id @default(uuid())
+  runId       String
+  run         DeploymentQualityRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stageId     String?
+  stage       DeploymentQualityStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  engine      String
+  ruleId      String
+  severity    String
+  message     String
+  component   String?
+  file        String?
+  line        Int?
+  column      Int?
+  fingerprint String?
+  helpUrl     String?
+  metadata    Json?
+  createdAt   DateTime                @default(now())
+
+  @@index([runId, severity])
+  @@index([stageId])
+  @@index([engine, ruleId])
+}
+
+model DeploymentQualityTestResult {
+  id          String                  @id @default(uuid())
+  runId       String
+  run         DeploymentQualityRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stageId     String?
+  stage       DeploymentQualityStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  className   String
+  methodName  String
+  status      String
+  durationMs  Int?
+  message     String?
+  stackTrace  String?
+  diagnostics Json?
+  coverage    Json?
+  createdAt   DateTime                @default(now())
+
+  @@index([runId, status])
+  @@index([stageId])
+  @@index([className])
+}
+
+/// Append-only decisions and policy lifecycle events for a workbench run.
+model DeploymentQualityAudit {
+  id        String               @id @default(uuid())
+  runId     String
+  run       DeploymentQualityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  action    String
+  actorId   String
+  details   Json?
+  createdAt DateTime             @default(now())
+
+  @@index([runId, createdAt])
+  @@index([actorId, createdAt])
 }
 
 model OrgSetupRun {

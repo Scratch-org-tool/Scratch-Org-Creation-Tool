@@ -1,7 +1,7 @@
 'use client';
 
-import { GitMetadataDeployWorkspace } from '@/modules/deployment-center/azure-deploy-workspace';
+import { DeploymentWorkbenchWorkspace } from '@/modules/deployment-workbench/deployment-workbench-workspace';
 
 export default function GitMetadataDeploymentPage() {
-  return <GitMetadataDeployWorkspace />;
+  return <DeploymentWorkbenchWorkspace sourceMode="scm" />;
 }

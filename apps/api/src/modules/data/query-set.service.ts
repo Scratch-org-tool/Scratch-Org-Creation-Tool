@@ -23,7 +23,11 @@ export class QuerySetService {
       id: t.id,
       label: t.label,
       object: t.object,
+      soqlTemplate: t.soqlTemplate,
       requiredVariables: t.requiredVariables ?? [],
+      operation: 'insert' as const,
+      externalIdField: undefined,
+      dependsOn: [],
     }));
   }
 

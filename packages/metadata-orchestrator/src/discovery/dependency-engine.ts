@@ -26,6 +26,7 @@ export class DependencyDiscoveryEngine {
     applyApexReferenceDiscovery(repo, components, options.projectRoot);
 
     const engine = GraphEngine.fromRepository(repo);
+    engine.recordDetectedCycles(engine.findCycles());
     engine.resolveCyclesWithHeuristics();
     engine.markAllReadyWhereIndegreeZero();
     return engine;

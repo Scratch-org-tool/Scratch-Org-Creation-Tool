@@ -13,6 +13,7 @@ import { JobProcessRegistryService } from '../modules/jobs/job-process-registry.
 import { StreamService } from '../modules/stream/stream.service';
 import { BulkThrottleService } from '../modules/data/bulk-throttle.service';
 import { DataDeployOrchestratorService } from '../modules/data/data-deploy-orchestrator.service';
+import { DataRollbackService } from '../modules/data/data-rollback.service';
 
 function resolveOrgTarget(org: { alias: string; username?: string | null }): string {
   return org.username ?? org.alias;
@@ -78,6 +79,7 @@ export class DataDeployWorker {
     private readonly bulkThrottle: BulkThrottleService,
     private readonly dataDeployOrchestrator: DataDeployOrchestratorService,
     private readonly processRegistry: JobProcessRegistryService,
+    private readonly dataRollback: DataRollbackService,
   ) {}
 
   async process(job: Job) {
@@ -93,7 +95,7 @@ export class DataDeployWorker {
       await this.jobsService.addLog(dbJobId, stream, line);
       await this.streamService.publishJobLog(dbJobId, stream, line);
     };
-    return this.dataDeployOrchestrator.planBatch(batchId, log);
+    return this.dataDeployOrchestrator.planBatch(batchId, log, dbJobId);
   }
 
   private async processDeploy(job: Job) {
@@ -108,7 +110,10 @@ export class DataDeployWorker {
       chunkId,
       batchId,
       chunkIndex,
+      operation,
       externalIdField,
+      rollback,
+      rollbackEnabled,
     } = job.data as {
       sourceOrgId: string;
       targetOrgId: string;
@@ -120,7 +125,10 @@ export class DataDeployWorker {
       chunkId?: string;
       batchId?: string;
       chunkIndex?: number;
+      operation?: 'insert' | 'upsert';
       externalIdField?: string;
+      rollback?: { enabled?: boolean; maxBytes?: number };
+      rollbackEnabled?: boolean;
     };
 
     const log = async (stream: 'stdout' | 'stderr', line: string) => {
@@ -137,18 +145,21 @@ export class DataDeployWorker {
       return { cancelled: true, movementId, chunkId };
     }
 
-    await prisma.dataMovement.update({
-      where: { id: movementId },
-      data: { status: 'running' },
-    });
-
     if (chunkId) {
-      await prisma.dataDeployChunk.update({
-        where: { id: chunkId },
+      const claimed = await prisma.dataDeployChunk.updateMany({
+        where: { id: chunkId, status: { in: ['pending', 'queued'] } },
         data: { status: 'running' },
       });
+      if (claimed.count === 0) {
+        await log('stderr', 'Chunk is no longer active; skipping cancelled or duplicate work');
+        return { cancelled: true, movementId, chunkId };
+      }
       await log('stdout', `Processing chunk ${(chunkIndex ?? 0) + 1}${batchId ? ` (batch ${batchId})` : ''}`);
     }
+    await prisma.dataMovement.updateMany({
+      where: { id: movementId, status: { in: ['pending', 'queued', 'planning'] } },
+      data: { status: 'running' },
+    });
 
     const [source, target] = await Promise.all([
       prisma.orgConnection.findUnique({ where: { id: sourceOrgId } }),
@@ -210,8 +221,8 @@ export class DataDeployWorker {
 
       if (recordCount === 0) {
         await log('stderr', 'No records to import — chunk completed with 0 records');
-        await prisma.dataMovement.update({
-          where: { id: movementId },
+        await prisma.dataMovement.updateMany({
+          where: { id: movementId, status: { in: ['pending', 'queued', 'planning', 'running'] } },
           data: { status: 'completed', recordCount: 0 },
         });
         if (chunkId) {
@@ -224,8 +235,26 @@ export class DataDeployWorker {
         throw new Error('Job cancelled by user');
       }
 
-      const importVerb = externalIdField ? `Upserting (by ${externalIdField}) into` : 'Importing into';
+      const writeOperation = operation ?? (externalIdField ? 'upsert' : 'insert');
+      if (writeOperation === 'upsert' && !externalIdField) {
+        throw new Error('Upsert job is missing externalIdField');
+      }
+      const importVerb = writeOperation === 'upsert'
+        ? `Upserting (by ${externalIdField}) into`
+        : 'Inserting into';
       await log('stdout', `${importVerb} ${target.alias} (${targetOrg})...`);
+
+      if (writeOperation === 'upsert' && (rollbackEnabled || rollback?.enabled)) {
+        await log('stdout', 'Capturing encrypted target rollback snapshot...');
+        await this.dataRollback.captureUpsertSnapshot({
+          movementId,
+          targetAlias: targetOrg,
+          objectName,
+          externalIdField: externalIdField!,
+          csvPath,
+          maxBytes: rollback?.maxBytes,
+        });
+      }
 
       const importSlot = await this.bulkThrottle.acquire(targetOrg);
       let importResult;
@@ -238,8 +267,8 @@ export class DataDeployWorker {
             );
           },
         };
-        importResult = externalIdField
-          ? await this.sfCli.upsertBulk(objectName, csvPath, externalIdField, targetOrg, waitMinutes, cliOptions)
+        importResult = writeOperation === 'upsert'
+          ? await this.sfCli.upsertBulk(objectName, csvPath, externalIdField!, targetOrg, waitMinutes, cliOptions)
           : await this.sfCli.importBulk(objectName, csvPath, targetOrg, waitMinutes, cliOptions);
       } finally {
         await importSlot.release();
@@ -271,8 +300,8 @@ export class DataDeployWorker {
 
       await log('stdout', `Successfully deployed ${recordCount} record(s) to ${target.alias}`);
 
-      await prisma.dataMovement.update({
-        where: { id: movementId },
+      await prisma.dataMovement.updateMany({
+        where: { id: movementId, status: { in: ['pending', 'queued', 'planning', 'running'] } },
         data: { status: 'completed', recordCount },
       });
 
@@ -290,7 +319,13 @@ export class DataDeployWorker {
         data: { status: cancelled ? 'cancelled' : 'failed' },
       }).catch(() => undefined);
       if (chunkId && !cancelled) {
-        await this.dataDeployOrchestrator.onChunkFailed(chunkId, message);
+        await this.dataDeployOrchestrator.onChunkFailed(chunkId, message, {
+          phase: 'bulk_write',
+          message,
+          objectName,
+          operation: operation ?? (externalIdField ? 'upsert' : 'insert'),
+          externalIdField,
+        });
       }
       if (chunkId && cancelled) {
         await prisma.dataDeployChunk.updateMany({

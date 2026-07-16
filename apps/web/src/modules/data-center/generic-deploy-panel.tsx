@@ -24,7 +24,20 @@ import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 import { DataDeployBatchProgress } from './data-deploy-batch-progress';
 import { DataPreviewTable } from './data-preview-table';
-import type { Org } from './types';
+import type { OrgToOrgObjectMeta } from './types';
+import {
+  buildGenericDeployPayload,
+  defaultOperationForMeta,
+  externalIdOptions,
+  isCurrentConfigurationRequest,
+  DATA_CENTER_ADD_QUERY_EVENT,
+  preflightKey,
+  type DataPreflightReport,
+  type DataOperation,
+  type ReplicationQuery,
+} from './data-center-contracts';
+import { DataPreflightReportView } from './data-preflight-report';
+import { DataMovementControls } from './data-movement-controls';
 
 interface JobData {
   id: string;
@@ -42,6 +55,11 @@ interface Movement {
   createdAt: string;
   sourceOrg: { alias: string };
   targetOrg: { alias: string };
+  canCancel?: boolean;
+  canRollback?: boolean;
+  batchId?: string | null;
+  rollbackStatus?: string | null;
+  rollbackReport?: unknown;
 }
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
@@ -54,7 +72,16 @@ export function GenericDeployPanel() {
     objectName: 'Account',
     soql: '',
     recordLimit: 200,
+    operation: 'insert' as DataOperation,
+    externalIdField: '',
+    rollbackEnabled: false,
+    maxParallelChunks: 4,
   });
+  const [objectMeta, setObjectMeta] = useState<OrgToOrgObjectMeta | null>(null);
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [preflight, setPreflight] = useState<DataPreflightReport | null>(null);
+  const [preflightConfigKey, setPreflightConfigKey] = useState<string | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const [preview, setPreview] = useState<{
     records: unknown[];
     totalSize: number;
@@ -75,10 +102,32 @@ export function GenericDeployPanel() {
   const [confirmingDeploy, setConfirmingDeploy] = useState(false);
   const logBottomRef = useRef<HTMLDivElement>(null);
   const previewRequestRef = useRef(0);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const movementListRequestRef = useRef(0);
+  const jobPollGenerationRef = useRef(0);
+  const movementPollGenerationRef = useRef(0);
+  const preflightRequestRef = useRef(0);
+  const deployRequestRef = useRef(0);
+
+  const runtimePayload = buildGenericDeployPayload({
+    ...form,
+    dryRun: false,
+  });
+  const runtimeKey = preflightKey(runtimePayload);
+  const runtimeKeyRef = useRef(runtimeKey);
+  const previousRuntimeKeyRef = useRef(runtimeKey);
+  runtimeKeyRef.current = runtimeKey;
+  const hasCurrentPreflight = Boolean(preflight && preflightConfigKey === runtimeKey);
+  const externalIds = externalIdOptions(objectMeta);
 
   const loadMovements = useCallback(() => {
+    const request = ++movementListRequestRef.current;
     api<Movement[]>('/data/movements')
-      .then((list) => setMovements(list.filter((m) => m.movementType === 'deploy')))
+      .then((list) => {
+        if (request === movementListRequestRef.current) {
+          setMovements(list.filter((m) => m.movementType === 'deploy'));
+        }
+      })
       .catch(console.error);
   }, []);
 
@@ -87,41 +136,89 @@ export function GenericDeployPanel() {
   }, [loadMovements]);
 
   useEffect(() => {
+    const addTemplate = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        target: string;
+        query: ReplicationQuery;
+      }>).detail;
+      if (detail?.target !== 'deploy' || !detail.query) return;
+      setForm((current) => ({
+        ...current,
+        objectName: detail.query.object,
+        soql: detail.query.soql,
+        recordLimit: detail.query.limit ?? current.recordLimit,
+        operation: detail.query.operation,
+        externalIdField: detail.query.externalIdField ?? '',
+      }));
+    };
+    window.addEventListener(DATA_CENTER_ADD_QUERY_EVENT, addTemplate);
+    return () => window.removeEventListener(DATA_CENTER_ADD_QUERY_EVENT, addTemplate);
+  }, []);
+
+  useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
   useEffect(() => {
     if (!jobId) return;
-    const poll = setInterval(async () => {
+    const generation = ++jobPollGenerationRef.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
       try {
-        const data = await api<JobData>(`/jobs/${jobId}`);
+        const data = await api<JobData>(`/jobs/${jobId}`, { signal: controller.signal });
+        if (generation !== jobPollGenerationRef.current) return;
         setJob(data);
         if (data.logs?.length) {
           setLogs(data.logs.map((l) => l.line));
         }
         if (TERMINAL_STATUSES.includes(data.status)) {
-          clearInterval(poll);
           loadMovements();
+          return;
         }
       } catch {
         /* ignore */
       }
-    }, 2000);
-    return () => clearInterval(poll);
+      if (generation === jobPollGenerationRef.current) {
+        timer = setTimeout(() => void poll(), 2000);
+      }
+    };
+    void poll();
+    return () => {
+      jobPollGenerationRef.current += 1;
+      controller?.abort();
+      if (timer) clearTimeout(timer);
+    };
   }, [jobId, loadMovements]);
 
   useEffect(() => {
     if (!movementId) return;
-    const poll = setInterval(async () => {
+    const generation = ++movementPollGenerationRef.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
       try {
-        const data = await api<Movement>(`/data/movements/${movementId}`);
+        const data = await api<Movement>(`/data/movements/${movementId}`, {
+          signal: controller.signal,
+        });
+        if (generation !== movementPollGenerationRef.current) return;
         setMovement(data);
-        if (TERMINAL_STATUSES.includes(data.status)) clearInterval(poll);
+        if (TERMINAL_STATUSES.includes(data.status)) return;
       } catch {
         /* ignore */
       }
-    }, 2000);
-    return () => clearInterval(poll);
+      if (generation === movementPollGenerationRef.current) {
+        timer = setTimeout(() => void poll(), 2000);
+      }
+    };
+    void poll();
+    return () => {
+      movementPollGenerationRef.current += 1;
+      controller?.abort();
+      if (timer) clearTimeout(timer);
+    };
   }, [movementId]);
 
   const previewSoql = replaceOrApplyLimit(
@@ -132,6 +229,9 @@ export function GenericDeployPanel() {
   const handlePreview = async () => {
     if (!form.sourceOrgId) return;
     const request = ++previewRequestRef.current;
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
     setPreviewLoading(true);
     setPreviewError(null);
     try {
@@ -142,8 +242,9 @@ export function GenericDeployPanel() {
         previewLimit?: number;
       }>(
         `/data/preview?sourceOrgId=${form.sourceOrgId}&soql=${encodeURIComponent(previewSoql)}&recordLimit=${form.recordLimit}`,
+        { signal: controller.signal },
       );
-      if (previewRequestRef.current === request) setPreview(res);
+      if (previewRequestRef.current === request && !controller.signal.aborted) setPreview(res);
     } catch (err) {
       if (previewRequestRef.current === request) {
         setPreview(null);
@@ -156,12 +257,100 @@ export function GenericDeployPanel() {
 
   useEffect(() => {
     previewRequestRef.current += 1;
+    previewAbortRef.current?.abort();
     setPreview(null);
     setPreviewError(null);
     setPreviewLoading(false);
   }, [form.sourceOrgId, form.objectName, form.soql, form.recordLimit]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setObjectMeta(null);
+    if (!form.sourceOrgId || !form.objectName.trim()) return;
+    const timer = setTimeout(async () => {
+      setMetadataLoading(true);
+      try {
+        const meta = await api<OrgToOrgObjectMeta>(
+          `/data/org-to-org/object-meta?orgId=${encodeURIComponent(form.sourceOrgId)}&objectName=${encodeURIComponent(form.objectName.trim())}`,
+        );
+        if (cancelled) return;
+        setObjectMeta(meta);
+        const defaults = defaultOperationForMeta(meta);
+        setForm((current) => ({
+          ...current,
+          operation: defaults.operation,
+          externalIdField: defaults.externalIdField ?? '',
+          rollbackEnabled: defaults.operation === 'upsert' && current.rollbackEnabled,
+        }));
+      } catch {
+        if (!cancelled) setObjectMeta(null);
+      } finally {
+        if (!cancelled) setMetadataLoading(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [form.sourceOrgId, form.objectName]);
+
+  useEffect(() => {
+    if (previousRuntimeKeyRef.current === runtimeKey) return;
+    previousRuntimeKeyRef.current = runtimeKey;
+    preflightRequestRef.current += 1;
+    setPreflight(null);
+    setPreflightConfigKey(null);
+    setPreflightLoading(false);
+    setConfirmingDeploy(false);
+  }, [runtimeKey]);
+
+  const runPreflight = async (openConfirmation: boolean) => {
+    if (preflightLoading || loading) return;
+    const request = ++preflightRequestRef.current;
+    const requestedKey = runtimeKey;
+    setPreflightLoading(true);
+    setDeployError(null);
+    try {
+      const report = await api<DataPreflightReport>('/data/deploy/preflight', {
+        method: 'POST',
+        body: JSON.stringify({ ...runtimePayload, dryRun: true }),
+      });
+      if (!isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        runtimeKeyRef.current,
+      )) return;
+      setPreflight(report);
+      setPreflightConfigKey(requestedKey);
+      if (openConfirmation && report.ok) setConfirmingDeploy(true);
+      if (openConfirmation && !report.ok) {
+        setDeployError('Preflight failed. Resolve every blocking issue before deployment.');
+      }
+    } catch (err) {
+      if (isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        runtimeKeyRef.current,
+      )) {
+        setPreflight(null);
+        setPreflightConfigKey(null);
+        setDeployError(err instanceof Error ? err.message : 'Preflight failed');
+      }
+    } finally {
+      if (isCurrentConfigurationRequest(
+        request,
+        preflightRequestRef.current,
+        requestedKey,
+        runtimeKeyRef.current,
+      )) setPreflightLoading(false);
+    }
+  };
+
   const handleDeploy = async () => {
+    if (loading) return;
+    const request = ++deployRequestRef.current;
     if (form.sourceOrgId === form.targetOrgId) {
       setDeployError('Source and target org must differ.');
       return;
@@ -174,6 +363,10 @@ export function GenericDeployPanel() {
     setBatchId(null);
     setDeployError(null);
     try {
+      if (!hasCurrentPreflight || !preflight?.ok) {
+        setDeployError('Run a successful preflight for the current configuration before deploying.');
+        return;
+      }
       const res = await api<{
         movementId: string;
         jobId: string;
@@ -182,16 +375,19 @@ export function GenericDeployPanel() {
         totalChunks?: number;
       }>('/data/deploy', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify(runtimePayload),
       });
+      if (request !== deployRequestRef.current) return;
       setJobId(res.jobId);
       setMovementId(res.movementId);
       setBatchId(res.batchId ?? null);
       setJob({ id: res.jobId, status: res.status });
     } catch (err) {
-      setDeployError(err instanceof Error ? err.message : 'Deploy failed');
+      if (request === deployRequestRef.current) {
+        setDeployError(err instanceof Error ? err.message : 'Deploy failed');
+      }
     } finally {
-      setLoading(false);
+      if (request === deployRequestRef.current) setLoading(false);
     }
   };
 
@@ -243,6 +439,71 @@ export function GenericDeployPanel() {
           <div>
             <Label htmlFor="generic-deploy-object">Object</Label>
             <Input id="generic-deploy-object" value={form.objectName} onChange={(e) => setForm({ ...form, objectName: e.target.value })} />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {metadataLoading
+                ? 'Reading object metadata…'
+                : objectMeta
+                  ? `Metadata loaded for ${objectMeta.label}.`
+                  : 'Object metadata is required to discover safe upsert keys.'}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <Label htmlFor="generic-deploy-operation">Write operation</Label>
+              <Select
+                id="generic-deploy-operation"
+                value={form.operation}
+                onChange={(e) => setForm({
+                  ...form,
+                  operation: e.target.value as DataOperation,
+                  externalIdField: e.target.value === 'upsert'
+                    ? form.externalIdField || externalIds[0] || ''
+                    : '',
+                  rollbackEnabled: e.target.value === 'upsert' && form.rollbackEnabled,
+                })}
+              >
+                <option value="insert">Insert (non-idempotent)</option>
+                <option value="upsert" disabled={externalIds.length === 0}>Upsert (safe retry)</option>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="generic-deploy-external-id">External ID</Label>
+              <Select
+                id="generic-deploy-external-id"
+                value={form.externalIdField}
+                disabled={form.operation !== 'upsert'}
+                onChange={(e) => setForm({ ...form, externalIdField: e.target.value })}
+              >
+                <option value="">Select external ID…</option>
+                {externalIds.map((field) => <option key={field} value={field}>{field}</option>)}
+              </Select>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-5">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.rollbackEnabled}
+                disabled={form.operation !== 'upsert'}
+                onChange={(event) => setForm({ ...form, rollbackEnabled: event.target.checked })}
+              />
+              Capture rollback data
+            </label>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="generic-deploy-parallel">Parallel chunks</Label>
+              <Input
+                id="generic-deploy-parallel"
+                type="number"
+                min={1}
+                max={32}
+                className="w-20"
+                value={form.maxParallelChunks}
+                onChange={(event) => setForm({
+                  ...form,
+                  maxParallelChunks: Math.min(32, Math.max(1, Number(event.target.value) || 1)),
+                })}
+              />
+            </div>
           </div>
           <div>
             <Label htmlFor="generic-deploy-record-limit">Maximum records to deploy</Label>
@@ -318,18 +579,37 @@ export function GenericDeployPanel() {
               Preview Data
             </Button>
             <Button
-              onClick={() => setConfirmingDeploy(true)}
-              loading={loading}
+              variant="outline"
+              onClick={() => void runPreflight(false)}
+              loading={preflightLoading}
+              disabled={
+                !form.sourceOrgId
+                || !form.targetOrgId
+                || form.sourceOrgId === form.targetOrgId
+                || (form.operation === 'upsert' && !form.externalIdField)
+              }
+            >
+              Dry-run preflight
+            </Button>
+            <Button
+              onClick={() => void runPreflight(true)}
+              loading={preflightLoading || loading}
               disabled={
                 isRunning
                 || !form.sourceOrgId
                 || !form.targetOrgId
                 || form.sourceOrgId === form.targetOrgId
+                || (form.operation === 'upsert' && !form.externalIdField)
               }
             >
-              Deploy
+              Review &amp; deploy
             </Button>
           </div>
+          {preflight && hasCurrentPreflight && (
+            <div className="mt-4">
+              <DataPreflightReportView report={preflight} />
+            </div>
+          )}
           {preview && (
             <div className="mt-4">
               <DataPreviewTable
@@ -370,30 +650,40 @@ export function GenericDeployPanel() {
               )}
             </div>
           )}
+          <DataMovementControls
+            movement={movement}
+            onUpdated={(next) => setMovement((current) => current ? { ...current, ...next } : current)}
+          />
         </div>
       </div>
 
       <FormSection title="Recent deployments">
         <ListRowGroup emptyMessage="No deployments yet.">
           {movements.map((m) => (
-            <ListRow
-              key={m.id}
-              title={m.objectName ?? 'Data deploy'}
-              subtitle={`${m.sourceOrg.alias} → ${m.targetOrg.alias}`}
-              status={m.status}
-              trailing={
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {m.recordCount ?? '—'} · {new Date(m.createdAt).toLocaleDateString()}
-                </span>
-              }
-            />
+            <div key={m.id} className="border-b border-border/40 p-2 last:border-0">
+              <ListRow
+                title={m.objectName ?? 'Data deploy'}
+                subtitle={`${m.sourceOrg.alias} → ${m.targetOrg.alias}`}
+                status={m.status}
+                trailing={
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {m.recordCount ?? '—'} · {new Date(m.createdAt).toLocaleDateString()}
+                  </span>
+                }
+              />
+              <DataMovementControls
+                movement={m}
+                onUpdated={(next) => setMovements((current) => current.map((item) =>
+                  item.id === next.id ? { ...item, ...next } : item))}
+              />
+            </div>
           ))}
         </ListRowGroup>
       </FormSection>
       <ConfirmDialog
         open={confirmingDeploy}
         title="Deploy data to the target org?"
-        message={`Deploy up to ${form.recordLimit.toLocaleString()} ${form.objectName} records from the selected source org to the selected target org. This can overwrite matching target data.`}
+        message={`${preflight?.operation ?? form.operation} up to ${preflight?.sourceCount?.toLocaleString() ?? form.recordLimit.toLocaleString()} ${form.objectName} records in ${preflight?.estimatedBulkBatches ?? 'an unknown number of'} batch(es). ${preflight?.idempotent ? 'This operation is idempotent.' : 'Insert is non-idempotent and failed chunks cannot be retried safely.'}`}
         confirmLabel="Deploy data"
         loading={loading}
         onConfirm={() => void handleDeploy()}

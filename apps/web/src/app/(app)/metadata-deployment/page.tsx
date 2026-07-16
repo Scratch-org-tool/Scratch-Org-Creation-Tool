@@ -1,7 +1,7 @@
 'use client';
 
-import { MetadataDeploymentWorkspace } from '@/modules/metadata-deployment/metadata-deployment-workspace';
+import { DeploymentWorkbenchWorkspace } from '@/modules/deployment-workbench/deployment-workbench-workspace';
 
 export default function MetadataDeploymentPage() {
-  return <MetadataDeploymentWorkspace />;
+  return <DeploymentWorkbenchWorkspace sourceMode="org_compare" />;
 }

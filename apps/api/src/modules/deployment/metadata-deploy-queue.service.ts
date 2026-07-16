@@ -26,6 +26,7 @@ export interface MetadataDeployEnqueueInput {
   destructiveChangesXml?: string;
   quickDeployValidationId?: string;
   localProjectRoot?: string;
+  sourceArtifactId?: string;
   sourceOrgId?: string;
   sourceOrgAlias?: string;
   deployMode?: 'git' | 'azure' | 'org_to_org' | 'local_workspace';
@@ -35,6 +36,7 @@ export interface MetadataDeployEnqueueInput {
   createdBy?: string;
   chainDataDeploy?: boolean;
   dataDeployConfig?: Array<Record<string, unknown>>;
+  workbenchRunId?: string;
 }
 
 export class MetadataEnqueueError extends Error {
@@ -140,6 +142,7 @@ export class MetadataDeployQueueService {
       destructiveChangesXml: input.destructiveChangesXml,
       quickDeployValidationId: input.quickDeployValidationId,
       localProjectRoot: input.localProjectRoot,
+      sourceArtifactId: input.sourceArtifactId,
       automationRunId: input.automationRunId,
       deploymentId: input.deploymentId,
       assignPermissionSet: input.assignPermissionSet ?? false,
@@ -151,15 +154,22 @@ export class MetadataDeployQueueService {
       intelligentDeployRunId: input.intelligentDeployRunId,
       chainDataDeploy: input.chainDataDeploy,
       dataDeployConfig: input.dataDeployConfig,
+      workbenchRunId: input.workbenchRunId,
     };
 
     const job = await prisma.job.create({
       data: {
         queue: QUEUE_NAMES.METADATA_DEPLOY,
-        type: input.automationRunId ? 'pipeline_metadata_deploy' : 'metadata_deploy',
+        type: input.workbenchRunId
+          ? 'workbench_metadata_deploy'
+          : input.automationRunId
+            ? 'pipeline_metadata_deploy'
+            : 'metadata_deploy',
         parentRunId: input.automationRunId ?? null,
         status: 'pending',
-        currentStep: input.assignPermissionSetOnly
+        currentStep: input.workbenchRunId
+          ? 'Starting Deployment Workbench'
+          : input.assignPermissionSetOnly
           ? 'Assign Permission Set'
           : input.quickDeployValidationId
             ? 'Quick deploy of validated changes'

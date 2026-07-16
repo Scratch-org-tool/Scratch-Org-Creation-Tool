@@ -4,6 +4,7 @@ import {
   escapeSoqlLiteral,
   toSoqlLiteral,
 } from './soql.js';
+import { resolveDataWriteOperation, topologicallySortDataDependencies } from './data-runtime.js';
 
 export const ORG_TO_ORG_KEY_SCAN_MAX = 10_000;
 /** @deprecated Use DATA_RECORD_LIMIT_MAX */
@@ -99,9 +100,14 @@ const orgToOrgDeployBaseSchema = z.object({
   soql: z.string().min(1).optional(),
   selectedRecordIds: z.array(recordIdSchema).optional(),
   displayFields: z.array(z.string()).optional(),
-  strategy: z.enum(['insert', 'upsert']),
-  matchField: z.string().optional(),
+  operation: z.enum(['insert', 'upsert']).optional(),
+  /** @deprecated Use operation. Retained for existing API clients. */
+  strategy: z.enum(['insert', 'upsert']).optional(),
+  matchField: z.string().trim().min(1).optional(),
   recordTypeMappings: z.record(z.string(), z.string()).optional(),
+  dryRun: z.boolean().default(false),
+  unknownQuotaPolicy: z.enum(['block', 'warn']).default('block'),
+  maxParallelChunks: z.number().int().min(1).max(32).optional(),
 });
 
 export const orgToOrgDeploySchema = orgToOrgDeployBaseSchema.superRefine((data, ctx) => {
@@ -121,6 +127,23 @@ export const orgToOrgDeploySchema = orgToOrgDeployBaseSchema.superRefine((data, 
       path: ['selectedRecordIds'],
     });
   }
+  if (data.operation) {
+    try {
+      resolveDataWriteOperation(data.operation, data.matchField);
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error instanceof Error ? error.message : String(error),
+        path: ['matchField'],
+      });
+    }
+  }
+}).transform((data) => {
+  const requested = data.operation ?? data.strategy;
+  const runtime = requested === 'upsert' && !data.matchField
+    ? { operation: 'upsert' as const, externalIdField: undefined, idempotent: false }
+    : resolveDataWriteOperation(requested, data.matchField);
+  return { ...data, ...runtime, strategy: runtime.operation, matchField: runtime.externalIdField };
 });
 
 export type OrgToOrgCompareInput = z.infer<typeof orgToOrgCompareSchema>;
@@ -484,6 +507,7 @@ export interface OrgToOrgFilterRow {
 }
 
 export interface OrgToOrgObjectDeployConfig {
+  id?: string;
   objectName: string;
   recordLimit: number;
   filters: OrgToOrgFilterRow[];
@@ -493,6 +517,8 @@ export interface OrgToOrgObjectDeployConfig {
   matchField?: string;
   queryMode?: 'builder' | 'soql';
   soql?: string;
+  dependsOn?: string[];
+  order?: number;
 }
 
 export interface OrgToOrgFilterPreviewResult {
@@ -511,7 +537,7 @@ export interface OrgToOrgDeployBatchResult {
   deployments: Array<{
     objectName: string;
     movementId: string;
-    jobId: string;
+    jobId?: string;
     status: string;
     batchId?: string;
     totalChunks?: number;
@@ -666,6 +692,7 @@ export const orgToOrgPreviewFilterSchema = z.object({
 });
 
 export const orgToOrgObjectDeployConfigSchema = z.object({
+  id: z.string().min(1).optional(),
   objectName: z.string().min(1),
   recordLimit: z.number().int().min(1).max(ORG_TO_ORG_RECORD_LIMIT_MAX).default(200),
   filters: z.array(orgToOrgFilterRowSchema).default([]),
@@ -675,16 +702,51 @@ export const orgToOrgObjectDeployConfigSchema = z.object({
   matchField: z.string().optional(),
   queryMode: z.enum(['builder', 'soql']).optional(),
   soql: z.string().min(1).optional(),
+  dependsOn: z.array(z.string().min(1)).default([]),
+  order: z.number().int().nonnegative().optional(),
 });
 
 export const orgToOrgDeployBatchSchema = z.object({
   sourceOrgId: z.string().uuid(),
   targetOrgId: z.string().uuid(),
-  strategy: z.enum(['insert', 'upsert']),
+  operation: z.enum(['insert', 'upsert']).optional(),
+  /** @deprecated Use operation. */
+  strategy: z.enum(['insert', 'upsert']).optional(),
   objects: z.array(orgToOrgObjectDeployConfigSchema).min(1),
+  dryRun: z.boolean().default(false),
+  unknownQuotaPolicy: z.enum(['block', 'warn']).default('block'),
+  maxParallelChunks: z.number().int().min(1).max(32).optional(),
 }).refine((data) => data.sourceOrgId !== data.targetOrgId, {
   message: 'Source and target org must differ',
   path: ['targetOrgId'],
+}).superRefine((data, context) => {
+  const operation = data.operation ?? data.strategy;
+  if (!operation) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'operation is required for multi-object deploys',
+      path: ['operation'],
+    });
+  }
+  try {
+    topologicallySortDataDependencies(data.objects.map((object) => ({
+      ...object,
+      id: object.id ?? object.objectName,
+    })));
+  } catch (error) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : String(error),
+      path: ['objects'],
+    });
+  }
+}).transform((data) => {
+  const operation = (data.operation ?? data.strategy)!;
+  const objects = topologicallySortDataDependencies(data.objects.map((object) => ({
+    ...object,
+    id: object.id ?? object.objectName,
+  })));
+  return { ...data, operation, strategy: operation, objects };
 });
 
 export type OrgToOrgPreviewFilterInput = z.infer<typeof orgToOrgPreviewFilterSchema>;

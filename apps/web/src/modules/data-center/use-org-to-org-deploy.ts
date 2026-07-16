@@ -21,6 +21,12 @@ import type {
   OrgToOrgWizardStep,
 } from './types';
 import { DEFAULT_OBJECT_CONFIG } from './types';
+import {
+  dependencyError,
+  moveByIndex,
+  orderDeploymentObjects,
+  preflightKey,
+} from './data-center-contracts';
 
 const DEFAULT_FORM: OrgToOrgFormState = {
   sourceOrgId: '',
@@ -28,10 +34,10 @@ const DEFAULT_FORM: OrgToOrgFormState = {
   strategy: 'upsert',
 };
 
-const TERMINAL_JOB_STATUSES = ['completed', 'failed', 'cancelled'];
+const TERMINAL_JOB_STATUSES = ['completed', 'partial', 'failed', 'cancelled'];
 
 function aggregateJobStatus(statuses: string[]): string {
-  if (statuses.some((s) => s === 'failed')) return 'failed';
+  if (statuses.some((s) => s === 'failed' || s === 'partial')) return 'failed';
   if (statuses.some((s) => s === 'cancelled')) return 'cancelled';
   if (statuses.length > 0 && statuses.every((s) => s === 'completed')) return 'completed';
   if (statuses.some((s) => s === 'running')) return 'running';
@@ -67,6 +73,7 @@ export function useOrgToOrgDeploy() {
   const [form, setForm] = useState<OrgToOrgFormState>(DEFAULT_FORM);
   const [objects, setObjects] = useState<OrgToOrgObjectInfo[]>([]);
   const [checkedObjects, setCheckedObjects] = useState<Set<string>>(new Set());
+  const [objectOrder, setObjectOrder] = useState<string[]>([]);
   const [activeObject, setActiveObject] = useState<string | null>(null);
   const [objectConfigs, setObjectConfigs] = useState<Map<string, OrgToOrgObjectDeployConfig>>(new Map());
   const [objectMetaCache, setObjectMetaCache] = useState<Map<string, OrgToOrgObjectMeta>>(new Map());
@@ -82,11 +89,17 @@ export function useOrgToOrgDeploy() {
   const [deployStatus, setDeployStatus] = useState<string | null>(null);
   const [deployJobError, setDeployJobError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [preflightResult, setPreflightResult] = useState<OrgToOrgDeployBatchResult | null>(null);
+  const [preflightPayloadKey, setPreflightPayloadKey] = useState<string | null>(null);
+  const [confirmingDeploy, setConfirmingDeploy] = useState(false);
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const orgGenerationRef = useRef(0);
   const objectsRequestRef = useRef(0);
   const metaRequestRef = useRef(new Map<string, number>());
   const previewRequestRef = useRef(new Map<string, number>());
+  const jobPollGenerationRef = useRef(0);
+  const preflightRequestRef = useRef(0);
+  const deployRequestRef = useRef(0);
 
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
@@ -94,15 +107,21 @@ export function useOrgToOrgDeploy() {
 
   useEffect(() => {
     if (jobIds.length === 0) return;
-    let cancelled = false;
-    const poll = setInterval(async () => {
+    const generation = ++jobPollGenerationRef.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      controller = new AbortController();
       try {
         const jobs = await Promise.all(
           jobIds.map((id) =>
-            api<{ status: string; error?: string | null; logs?: Array<{ line: string }> }>(`/jobs/${id}`),
+            api<{ status: string; error?: string | null; logs?: Array<{ line: string }> }>(
+              `/jobs/${id}`,
+              { signal: controller?.signal },
+            ),
           ),
         );
-        if (cancelled) return;
+        if (generation !== jobPollGenerationRef.current) return;
         const lines: string[] = [];
         for (const data of jobs) {
           if (data.logs?.length) lines.push(...data.logs.map((l) => l.line));
@@ -111,16 +130,49 @@ export function useOrgToOrgDeploy() {
         setDeployStatus(aggregateJobStatus(jobs.map((j) => j.status)));
         const failed = jobs.find((j) => j.status === 'failed');
         setDeployJobError(failed?.error ?? null);
-        if (jobs.every((j) => TERMINAL_JOB_STATUSES.includes(j.status))) clearInterval(poll);
+        if (jobs.every((j) => TERMINAL_JOB_STATUSES.includes(j.status))) return;
       } catch {
         /* ignore */
       }
-    }, 2000);
+      if (generation === jobPollGenerationRef.current) {
+        timer = setTimeout(() => void poll(), 2000);
+      }
+    };
+    void poll();
     return () => {
-      cancelled = true;
-      clearInterval(poll);
+      jobPollGenerationRef.current += 1;
+      controller?.abort();
+      if (timer) clearTimeout(timer);
     };
   }, [jobIds]);
+
+  useEffect(() => {
+    if (!batchResult?.batchId || wizardStep !== 'deploy') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const group = await api<{
+          batches: Array<{ status: string; error?: string | null }>;
+        }>(`/data/batch-groups/${batchResult.batchId}`);
+        if (cancelled) return;
+        const statuses = group.batches.map((batch) => batch.status);
+        setDeployStatus(aggregateJobStatus(statuses));
+        setDeployJobError(group.batches.find((batch) =>
+          ['partial', 'failed'].includes(batch.status))?.error ?? null);
+        if (!statuses.every((status) => TERMINAL_JOB_STATUSES.includes(status))) {
+          timer = setTimeout(() => void poll(), 2000);
+        }
+      } catch {
+        if (!cancelled) timer = setTimeout(() => void poll(), 4000);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [batchResult?.batchId, wizardStep]);
 
   useEffect(() => {
     const sourceOrgId = searchParams.get('sourceOrgId');
@@ -160,17 +212,29 @@ export function useOrgToOrgDeploy() {
 
   useEffect(() => {
     orgGenerationRef.current += 1;
+    preflightRequestRef.current += 1;
+    deployRequestRef.current += 1;
     objectsRequestRef.current += 1;
     metaRequestRef.current.clear();
     previewRequestRef.current.clear();
     if (previewTimer.current) clearTimeout(previewTimer.current);
     setObjects([]);
     setCheckedObjects(new Set());
+    setObjectOrder([]);
     setActiveObject(null);
     setObjectConfigs(new Map());
     setObjectMetaCache(new Map());
     setSelectedRecordIds(new Map());
     setWizardStep('configure');
+    setPreflightResult(null);
+    setPreflightPayloadKey(null);
+    setConfirmingDeploy(false);
+    setLoadingDeploy(false);
+    setJobIds([]);
+    setBatchResult(null);
+    setDeployStatus(null);
+    setDeployJobError(null);
+    setLogs([]);
     if (orgsReady) void loadObjects();
   }, [form.sourceOrgId, form.targetOrgId, orgsReady, loadObjects]);
 
@@ -301,6 +365,11 @@ export function useOrgToOrgDeploy() {
         if (checked) next.add(apiName);
         else next.delete(apiName);
         return next;
+      });
+      setObjectOrder((previous) => {
+        if (checked && !previous.includes(apiName)) return [...previous, apiName];
+        if (!checked) return previous.filter((name) => name !== apiName);
+        return previous;
       });
       if (!checked) {
         setSelectedRecordIds((prev) => {
@@ -480,9 +549,41 @@ export function useOrgToOrgDeploy() {
   const activeMeta = activeObject ? objectMetaCache.get(activeObject) : undefined;
 
   const checkedObjectList = useMemo(
-    () => objects.filter((o) => checkedObjects.has(o.apiName)),
-    [objects, checkedObjects],
+    () => objectOrder
+      .map((name) => objects.find((object) => object.apiName === name))
+      .filter((object): object is OrgToOrgObjectInfo => Boolean(object)),
+    [objects, objectOrder],
   );
+
+  const moveObject = useCallback((index: number, direction: -1 | 1) => {
+    setObjectOrder((current) => moveByIndex(current, index, direction));
+  }, []);
+
+  const toggleObjectDependency = useCallback((
+    objectName: string,
+    dependencyName: string,
+    enabled: boolean,
+  ) => {
+    setObjectConfigs((current) => {
+      const next = new Map(current);
+      const config = next.get(objectName) ?? DEFAULT_OBJECT_CONFIG(objectName);
+      const dependencies = new Set(config.dependsOn ?? []);
+      if (enabled) dependencies.add(dependencyName);
+      else dependencies.delete(dependencyName);
+      next.set(objectName, { ...config, id: objectName, dependsOn: [...dependencies] });
+      return next;
+    });
+  }, []);
+
+  const selectedDependencyError = useMemo(() => dependencyError(objectOrder.map((objectName, order) => {
+    const config = objectConfigs.get(objectName) ?? DEFAULT_OBJECT_CONFIG(objectName);
+    return {
+      id: objectName,
+      objectName,
+      dependsOn: config.dependsOn ?? [],
+      order,
+    };
+  })), [objectConfigs, objectOrder]);
 
   const totalSelectedCount = useMemo(() => {
     let n = 0;
@@ -490,8 +591,8 @@ export function useOrgToOrgDeploy() {
     return n;
   }, [selectedRecordIds]);
 
-  const canGoNext = checkedObjects.size > 0;
-  const canDeploy = wizardStep === 'preview' && checkedObjects.size > 0;
+  const canGoNext = checkedObjects.size > 0 && !selectedDependencyError;
+  const canDeploy = wizardStep === 'preview' && checkedObjects.size > 0 && !selectedDependencyError;
 
   const goToPreview = useCallback(async () => {
     if (!canGoNext) return;
@@ -503,8 +604,121 @@ export function useOrgToOrgDeploy() {
     }
   }, [canGoNext, checkedObjects, objectConfigs, runPreviewForObject]);
 
+  const buildDeployPayload = useCallback((dryRun: boolean) => {
+    const configured = objectOrder.map((objectName, order) => {
+      const config = objectConfigs.get(objectName) ?? DEFAULT_OBJECT_CONFIG(objectName);
+      const ids = selectedRecordIds.get(objectName);
+      return {
+        ...config,
+        id: objectName,
+        objectName,
+        order,
+        dependsOn: config.dependsOn ?? [],
+        ...(usesCustomSoql(config)
+          ? { soql: config.customSoql!.trim(), queryMode: 'soql' as const }
+          : {}),
+        ...(ids && ids.size > 0 ? { selectedRecordIds: Array.from(ids) } : {}),
+      };
+    });
+    return {
+      sourceOrgId: form.sourceOrgId,
+      targetOrgId: form.targetOrgId,
+      operation: form.strategy,
+      strategy: form.strategy,
+      dryRun,
+      unknownQuotaPolicy: 'block' as const,
+      maxParallelChunks: 4,
+      objects: orderDeploymentObjects(configured).map((config) => ({
+        id: config.id,
+        objectName: config.objectName,
+        recordLimit: config.recordLimit,
+        filters: config.filters,
+        selectedReferenceFields: config.selectedReferenceFields,
+        selectedDeployFields: config.selectedDeployFields,
+        matchField: config.matchField,
+        dependsOn: config.dependsOn,
+        order: config.order,
+        ...(config.queryMode === 'soql' && config.customSoql
+          ? { soql: config.customSoql, queryMode: 'soql' as const }
+          : {}),
+        ...(selectedRecordIds.get(config.objectName)?.size
+          ? { selectedRecordIds: Array.from(selectedRecordIds.get(config.objectName)!) }
+          : {}),
+      })),
+    };
+  }, [form, objectConfigs, objectOrder, selectedRecordIds]);
+
+  const currentPayloadKey = useMemo(
+    () => preflightKey(buildDeployPayload(false)),
+    [buildDeployPayload],
+  );
+
+  useEffect(() => {
+    if (preflightPayloadKey && preflightPayloadKey !== currentPayloadKey) {
+      setPreflightResult(null);
+      setPreflightPayloadKey(null);
+      setConfirmingDeploy(false);
+    }
+  }, [currentPayloadKey, preflightPayloadKey]);
+
+  const prepareDeploy = useCallback(async () => {
+    if (!orgsReady || checkedObjects.size === 0 || selectedDependencyError) return;
+    if (loadingDeploy) return;
+    const request = ++preflightRequestRef.current;
+    const generation = orgGenerationRef.current;
+    setLoadingDeploy(true);
+    setError(null);
+    try {
+      const result = await api<OrgToOrgDeployBatchResult>('/data/org-to-org/deploy-batch', {
+        method: 'POST',
+        body: JSON.stringify(buildDeployPayload(true)),
+      });
+      if (
+        request !== preflightRequestRef.current
+        || generation !== orgGenerationRef.current
+      ) return;
+      setPreflightResult(result);
+      setPreflightPayloadKey(currentPayloadKey);
+      const safe = Boolean(
+        result.dryRun
+        && result.preflight?.every((item) => item.report.ok)
+        && result.quotaSummary?.sufficient,
+      );
+      if (safe) setConfirmingDeploy(true);
+      else setError('Preflight failed. Resolve all object, field, dependency, and quota issues.');
+    } catch (err) {
+      if (request === preflightRequestRef.current && generation === orgGenerationRef.current) {
+        setError(err instanceof Error ? err.message : 'Preflight failed');
+        setPreflightResult(null);
+        setPreflightPayloadKey(null);
+      }
+    } finally {
+      if (request === preflightRequestRef.current && generation === orgGenerationRef.current) {
+        setLoadingDeploy(false);
+      }
+    }
+  }, [
+    buildDeployPayload,
+    checkedObjects.size,
+    currentPayloadKey,
+    orgsReady,
+    loadingDeploy,
+    selectedDependencyError,
+  ]);
+
   const deploy = useCallback(async () => {
     if (!orgsReady || checkedObjects.size === 0) return;
+    if (loadingDeploy) return;
+    const request = ++deployRequestRef.current;
+    const generation = orgGenerationRef.current;
+    const safe = preflightPayloadKey === currentPayloadKey
+      && preflightResult?.preflight?.every((item) => item.report.ok)
+      && preflightResult.quotaSummary?.sufficient;
+    if (!safe) {
+      setError('Run a successful preflight for the current object plan before deploying.');
+      return;
+    }
+    setConfirmingDeploy(false);
     setLoadingDeploy(true);
     setError(null);
     setLogs([]);
@@ -513,40 +727,32 @@ export function useOrgToOrgDeploy() {
     setDeployStatus('queued');
     setDeployJobError(null);
     try {
-      const payload = {
-        sourceOrgId: form.sourceOrgId,
-        targetOrgId: form.targetOrgId,
-        strategy: form.strategy,
-        objects: Array.from(checkedObjects).map((objectName) => {
-          const config = objectConfigs.get(objectName) ?? DEFAULT_OBJECT_CONFIG(objectName);
-          const ids = selectedRecordIds.get(objectName);
-          return {
-            objectName,
-            recordLimit: config.recordLimit,
-            filters: config.filters,
-            selectedReferenceFields: config.selectedReferenceFields,
-            selectedDeployFields: config.selectedDeployFields,
-            matchField: config.matchField,
-            ...(usesCustomSoql(config)
-              ? { soql: config.customSoql!.trim(), queryMode: 'soql' as const }
-              : {}),
-            ...(ids && ids.size > 0 ? { selectedRecordIds: Array.from(ids) } : {}),
-          };
-        }),
-      };
       const result = await api<OrgToOrgDeployBatchResult>('/data/org-to-org/deploy-batch', {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildDeployPayload(false)),
       });
+      if (request !== deployRequestRef.current || generation !== orgGenerationRef.current) return;
       setBatchResult(result);
-      setJobIds(result.deployments.map((d) => d.jobId));
+      setJobIds(result.deployments.map((d) => d.jobId).filter((id): id is string => Boolean(id)));
       setWizardStep('deploy');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Deploy failed');
+      if (request === deployRequestRef.current && generation === orgGenerationRef.current) {
+        setError(err instanceof Error ? err.message : 'Deploy failed');
+      }
     } finally {
-      setLoadingDeploy(false);
+      if (request === deployRequestRef.current && generation === orgGenerationRef.current) {
+        setLoadingDeploy(false);
+      }
     }
-  }, [orgsReady, checkedObjects, form, objectConfigs, selectedRecordIds]);
+  }, [
+    buildDeployPayload,
+    checkedObjects.size,
+    currentPayloadKey,
+    orgsReady,
+    loadingDeploy,
+    preflightPayloadKey,
+    preflightResult,
+  ]);
 
   const scratchWarning =
     sourceOrg?.type === 'scratch' && sourceOrg.expiresAt
@@ -586,11 +792,19 @@ export function useOrgToOrgDeploy() {
     toggleRecord,
     toggleAllRecordsForObject,
     checkedObjectList,
+    objectOrder,
+    moveObject,
+    toggleObjectDependency,
+    dependencyError: selectedDependencyError,
     totalSelectedCount,
     canGoNext,
     canDeploy,
     goToPreview,
     deploy,
+    prepareDeploy,
+    preflightResult,
+    confirmingDeploy,
+    setConfirmingDeploy,
     scratchWarning,
     jobIds,
     batchResult,

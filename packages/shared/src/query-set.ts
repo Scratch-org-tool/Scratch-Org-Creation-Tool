@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX, stripLimitOffset } from './org-to-org-data.js';
 import { assertSoqlIdentifier, escapeSoqlLiteral } from './soql.js';
+import {
+  resolveDataWriteOperation,
+  topologicallySortDataDependencies,
+  type DataWriteOperation,
+} from './data-runtime.js';
 
 export const querySetEntrySchema = z.object({
   id: z.string().min(1),
@@ -9,13 +14,40 @@ export const querySetEntrySchema = z.object({
   soql: z.string().min(1),
   limit: z.number().int().positive().optional(),
   variables: z.record(z.string()).optional(),
+  operation: z.enum(['insert', 'upsert']).optional(),
+  externalIdField: z.string().trim().min(1).optional(),
+  dependsOn: z.array(z.string().min(1)).default([]),
+  order: z.number().int().nonnegative().optional(),
 });
 
-export const querySetSchema = z.object({
+export const querySetBaseSchema = z.object({
   version: z.literal(1).default(1),
   defaultLimit: z.number().int().positive().default(200),
   source: z.enum(['builder', 'upload', 'merged']).default('builder'),
   queries: z.array(querySetEntrySchema).min(1),
+});
+
+export const querySetSchema = querySetBaseSchema.superRefine((querySet, context) => {
+  try {
+    topologicallySortDataDependencies(querySet.queries);
+  } catch (error) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : String(error),
+      path: ['queries'],
+    });
+  }
+  querySet.queries.forEach((query, index) => {
+    try {
+      resolveDataWriteOperation(query.operation, query.externalIdField);
+    } catch (error) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error instanceof Error ? error.message : String(error),
+        path: ['queries', index, 'externalIdField'],
+      });
+    }
+  });
 });
 
 export type QuerySetEntry = z.infer<typeof querySetEntrySchema>;
@@ -112,12 +144,13 @@ export function normalizeQuerySet(
   });
 
   const limit = parsed.defaultLimit;
-  const queries = parsed.queries.map((q) => {
+  const queries = topologicallySortDataDependencies(parsed.queries).map((q) => {
     const perQueryLimit = q.limit ?? limit;
     let soql = stripIdFromSelect(q.soql);
     soql = replaceOrApplyLimit(soql, perQueryLimit);
     const object = q.object || extractObjectFromSoql(soql) || 'Unknown';
-    return { ...q, object, soql, limit: perQueryLimit };
+    const runtime = resolveDataWriteOperation(q.operation, q.externalIdField);
+    return { ...q, ...runtime, object, soql, limit: perQueryLimit };
   });
 
   return { ...parsed, defaultLimit: limit, queries };
@@ -129,6 +162,10 @@ export interface QueryTemplate {
   object: string;
   soqlTemplate: string;
   requiredVariables?: string[];
+  operation?: DataWriteOperation;
+  externalIdField?: string;
+  dependsOn?: string[];
+  order?: number;
 }
 
 export function compileQuerySetFromTemplates(
@@ -160,6 +197,10 @@ export function compileQuerySetFromTemplates(
       soql,
       limit: defaultLimit,
       variables,
+      operation: t.operation,
+      externalIdField: t.externalIdField,
+      dependsOn: t.dependsOn ?? [],
+      order: t.order,
     };
   });
 
