@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
 } from 'react';
@@ -13,7 +14,7 @@ import {
   ChevronRight,
   Eye,
   Filter,
-  Layers,
+  GitCompare,
   ListTree,
   Search,
   Square,
@@ -141,6 +142,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [relatedError, setRelatedError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const didAutoSelectType = useRef(false);
 
   const pageSize = 100;
   const typeSummaries = useMemo(() => compareTypeSummaries(items), [items]);
@@ -172,6 +174,32 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   useEffect(() => {
     setCurrentPage(1);
   }, [filters.metadataType, filters.diffTypes, filters.search, filters.selectedOnly]);
+
+  // A new comparison clears any earlier auto-selection so the system can default
+  // the metadata type again for the fresh source/target pair.
+  useEffect(() => {
+    didAutoSelectType.current = false;
+    setFilters({ metadataType: '', diffTypes: [...DIFF_ORDER], search: '', selectedOnly: false });
+  }, [comparisonId]);
+
+  // Default the metadata type from the system: once the comparison surfaces real
+  // differences, focus the type with the most changes so the user immediately
+  // sees components and their source-vs-target diff instead of a flat list.
+  useEffect(() => {
+    if (didAutoSelectType.current || filters.metadataType) return;
+    const changedTypes = typeSummaries.filter(
+      (type) => type.new + type.changed + type.deleted > 0,
+    );
+    if (!changedTypes.length) return;
+    const best = [...changedTypes].sort((left, right) => {
+      const leftChanges = left.new + left.changed + left.deleted;
+      const rightChanges = right.new + right.changed + right.deleted;
+      return rightChanges - leftChanges || left.metadataType.localeCompare(right.metadataType);
+    })[0];
+    if (!best) return;
+    didAutoSelectType.current = true;
+    setFilters((current) => ({ ...current, metadataType: best.metadataType }));
+  }, [typeSummaries, filters.metadataType]);
 
   const selectedSummary = useMemo(() => {
     const selectedItems = items.filter((item) => selectedKeys.has(buildCompareKey(item.metadataType, item.fullName)));
@@ -217,6 +245,12 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   const clearAllVisible = useCallback(() => {
     onSelectItems(filteredItems, false);
   }, [filteredItems, onSelectItems]);
+
+  const clearAllSelected = useCallback(() => {
+    const selected = items.filter((item) =>
+      selectedKeys.has(buildCompareKey(item.metadataType, item.fullName)));
+    onSelectItems(selected, false);
+  }, [items, onSelectItems, selectedKeys]);
 
   const selectAllInType = useCallback(() => {
     const typeItems = filteredItems.filter((item) => item.metadataType === activeMetadataType);
@@ -264,24 +298,40 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-card/30 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <Layers className="size-4 text-primary" aria-hidden="true" />
-          <div>
-            <p className="text-sm font-medium">Metadata comparison</p>
-            <p className="text-xs text-muted-foreground" aria-live="polite">
-              {comparisonSummary
-                ? `${comparisonSummary.total} components inspected · ${comparisonSummary.new} new · ${comparisonSummary.changed} changed · ${comparisonSummary.deleted} deleted`
-                : running
-                  ? 'Discovering metadata types and components from both orgs…'
-                  : 'Metadata is loaded automatically from the selected source and target orgs.'}
-            </p>
+      <div className="rounded-xl border border-border/60 bg-card/30 p-3 sm:p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <GitCompare className="size-4 text-primary" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                <span className="truncate">{sourceLabel}</span>
+                <span className="text-muted-foreground" aria-hidden="true">&rarr;</span>
+                <span className="truncate">{targetLabel}</span>
+              </p>
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                {comparisonSummary
+                  ? `${comparisonSummary.total} components inspected${running ? ' · still loading…' : ''}`
+                  : running
+                    ? 'Discovering metadata types and components from both orgs…'
+                    : 'Metadata is loaded automatically from the selected source and target orgs.'}
+              </p>
+            </div>
           </div>
+          {anySelected && (
+            <Button size="sm" variant="outline" onClick={clearAllSelected}>
+              Clear {selectedKeys.size} selected
+            </Button>
+          )}
         </div>
-        {anySelected && (
-          <Button size="sm" variant="outline" onClick={clearAllVisible}>
-            Clear {selectedKeys.size} selected
-          </Button>
+        {comparisonSummary && (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <StatChip label="Components" value={comparisonSummary.total} tone="neutral" />
+            <StatChip label="New" value={comparisonSummary.new} tone="new" />
+            <StatChip label="Changed" value={comparisonSummary.changed} tone="changed" />
+            <StatChip label="Deleted" value={comparisonSummary.deleted} tone="deleted" />
+            <StatChip label="Not inspected" value={comparisonSummary.unknown} tone="unknown" />
+            <StatChip label="Selected" value={selectedSummary.total} tone="selected" />
+          </div>
         )}
       </div>
 
@@ -363,8 +413,14 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
                 summaries={typeSummaries}
                 active={activeMetadataType}
                 filters={filters}
-                onSelect={(metadataType) => setFilters((current) => ({ ...current, metadataType }))}
-                onShowAll={() => setFilters((current) => ({ ...current, metadataType: '' }))}
+                onSelect={(metadataType) => {
+                  didAutoSelectType.current = true;
+                  setFilters((current) => ({ ...current, metadataType }));
+                }}
+                onShowAll={() => {
+                  didAutoSelectType.current = true;
+                  setFilters((current) => ({ ...current, metadataType: '' }));
+                }}
               />
             </div>
           </aside>
@@ -626,6 +682,29 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
           }}
         />
       )}
+    </div>
+  );
+}
+
+function StatChip({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'neutral' | 'selected' | CompareDiffType;
+}) {
+  const toneClass =
+    tone === 'selected'
+      ? 'border-primary/30 bg-primary/10 text-primary'
+      : tone === 'neutral'
+        ? 'border-border/60 bg-muted/20 text-foreground'
+        : DIFF_CONFIG[tone].color;
+  return (
+    <div className={cn('rounded-lg border px-3 py-2', toneClass)}>
+      <p className="text-lg font-semibold leading-none tabular-nums">{value.toLocaleString()}</p>
+      <p className="mt-1 text-[11px] font-medium opacity-80">{label}</p>
     </div>
   );
 }
