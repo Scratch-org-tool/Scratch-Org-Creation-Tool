@@ -8,11 +8,14 @@ import { DataModule } from './modules/data/data.module';
 import { MetadataModule } from './modules/metadata/metadata.module';
 import { DeploymentModule } from './modules/deployment/deployment.module';
 import { PlansModule } from './modules/plans/plans.module';
+import { DriftModule } from './modules/drift/drift.module';
+import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { OrgSetupModule } from './modules/org-setup/org-setup.module';
 import { ProvisioningModule } from './modules/provisioning/provisioning.module';
 import { CopilotModule } from './modules/copilot/copilot.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { DefectsModule } from './modules/defects/defects.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { QueueModule } from './modules/queue/queue.module';
 import { StreamModule } from './modules/stream/stream.module';
 import { OrchestratorModule } from './modules/orchestrator/orchestrator.module';
@@ -39,6 +42,7 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     QueueModule,
     WorkersModule,
     StreamModule,
+    NotificationsModule,
     OrchestratorModule,
     OrgsModule,
     JobsModule,
@@ -46,7 +50,9 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     DataModule,
     DeploymentModule,
     PlansModule,
+    DriftModule,
     MetadataModule,
+    SchedulerModule,
     OrgSetupModule,
     ProvisioningModule,
     CopilotModule,

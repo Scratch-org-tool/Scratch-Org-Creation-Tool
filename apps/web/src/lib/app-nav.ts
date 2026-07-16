@@ -1,8 +1,10 @@
 import {
   Activity,
+  Bell,
   Bug,
   Cloud,
   FileStack,
+  GitCompare,
   LayoutDashboard,
   Rocket,
   Shield,
@@ -76,15 +78,25 @@ export const APP_NAV: NavItem[] = [
     children: DEPLOYMENT_CHILDREN,
     activePrefixes: DEPLOYMENT_ACTIVE_PREFIXES,
   },
+  { href: '/drift', label: 'Drift Monitoring', icon: GitCompare, module: 'deployment' },
   { href: '/monitoring', label: 'Monitoring', icon: Activity, module: 'monitoring' },
   { href: '/defects-command-centre', label: 'Developer Board', icon: Bug, module: 'defects' },
 ];
 
-export const ADMIN_NAV_ITEM = {
-  href: '/admin/users',
-  label: 'User Access',
-  icon: Shield,
-} as const;
+export interface AdminNavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+}
+
+/** Admin-only entries rendered beneath the main nav for administrators. */
+export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
+  { href: '/admin/users', label: 'User Access', icon: Shield },
+  { href: '/admin/notifications', label: 'Notifications', icon: Bell },
+];
+
+/** @deprecated Prefer {@link ADMIN_NAV_ITEMS}. Kept for existing imports. */
+export const ADMIN_NAV_ITEM = ADMIN_NAV_ITEMS[0]!;
 
 export function isNavItemActive(pathname: string, item: NavItem): boolean {
   if (pathname.startsWith(item.href)) return true;

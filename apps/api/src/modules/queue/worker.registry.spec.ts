@@ -38,6 +38,9 @@ function createRegistry() {
   const jobsService = {
     updateStatus: vi.fn().mockResolvedValue({}),
   };
+  const notificationsService = {
+    notify: vi.fn().mockResolvedValue(null),
+  };
   const pipelineOrchestrator = {
     handleJobSucceeded: vi.fn().mockResolvedValue(undefined),
     handleJobFailed: vi.fn().mockResolvedValue(undefined),
@@ -48,6 +51,7 @@ function createRegistry() {
     queueService as never,
     streamService as never,
     jobsService as never,
+    notificationsService as never,
     pipelineOrchestrator as never,
     worker as never,
     worker as never,
@@ -63,6 +67,7 @@ function createRegistry() {
   return {
     processor: processors.get('org-setup')!,
     jobsService,
+    notificationsService,
     pipelineOrchestrator,
     streamService,
     worker,

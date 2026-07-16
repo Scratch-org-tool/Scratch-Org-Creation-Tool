@@ -1,4 +1,4 @@
-import { Boxes, Database, Layers, Rocket, Users, Wrench } from 'lucide-react';
+import { Boxes, CalendarClock, Database, Layers, Rocket, Users, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { AppModule } from '@/lib/auth-utils';
 
@@ -69,6 +69,15 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
         iconBg: 'bg-violet-500/10 text-violet-400',
         modules: ['deployment'],
         activePrefixes: ['/metadata-deployment'],
+      },
+      {
+        label: 'Deployment Automations',
+        description: 'Schedule saved deployment plans to run automatically and track run history.',
+        href: '/deployment-center/automations',
+        icon: CalendarClock,
+        iconBg: 'bg-pink-500/10 text-pink-400',
+        modules: ['deployment'],
+        activePrefixes: ['/deployment-center/automations'],
       },
       {
         label: 'Jenkins',

@@ -37,6 +37,7 @@ describe('deployment sidebar navigation', () => {
     expect(childHrefs).toContain('/deployment-workbench');
     expect(childHrefs).toContain('/deployment-center/git');
     expect(childHrefs).toContain('/metadata-deployment');
+    expect(childHrefs).toContain('/deployment-center/automations');
     expect(childHrefs).toContain('/deployment-center/jenkins');
     expect(childHrefs).toContain('/data-center?tab=cona');
     expect(childHrefs).toContain('/data-center?tab=org-to-org');
@@ -55,6 +56,7 @@ describe('deployment sidebar navigation', () => {
       '/deployment-center',
       '/deployment-workbench',
       '/deployment-center/git',
+      '/deployment-center/automations',
       '/deployment-center/jenkins',
       '/metadata-deployment',
       '/data-center',

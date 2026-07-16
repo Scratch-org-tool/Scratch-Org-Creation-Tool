@@ -13,9 +13,14 @@ import { AccountPartnerImportWorker } from '../../workers/account-partner-import
 import { AiAnalysisWorker } from '../../workers/ai-analysis.worker';
 import { StreamService } from '../stream/stream.service';
 import { JobsService } from '../jobs/jobs.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PipelineOrchestratorService } from '../orchestrator/pipeline-orchestrator.service';
 import { JobCancelledError } from '../environment/scratch-org-job.service';
-import type { PipelineStepId } from '@sfcc/shared';
+import {
+  notificationLevelForStatus,
+  queueToNotificationCategory,
+  type PipelineStepId,
+} from '@sfcc/shared';
 import { PipelineStepError } from '../../workers/metadata-deploy.worker';
 import { resolvePipelineSuccessAction } from '../orchestrator/pipeline-dispatch.util';
 
@@ -25,6 +30,7 @@ export class WorkerRegistry implements OnModuleInit {
     private readonly queueService: QueueService,
     private readonly streamService: StreamService,
     private readonly jobsService: JobsService,
+    private readonly notificationsService: NotificationsService,
     private readonly pipelineOrchestrator: PipelineOrchestratorService,
     private readonly scratchOrgWorker: ScratchOrgWorker,
     private readonly metadataDeployWorker: MetadataDeployWorker,
@@ -120,6 +126,82 @@ export class WorkerRegistry implements OnModuleInit {
     }).catch(() => undefined);
   }
 
+  private humanizeJobType(type: string, alias?: string | null): string {
+    const cleaned = type
+      .replace(/^pipeline_/, '')
+      .replace(/^org_to_org_/, '')
+      .replace(/_/g, ' ')
+      .trim();
+    const label = cleaned
+      ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
+      : 'Job';
+    return alias ? `${label} (${alias})` : label;
+  }
+
+  /**
+   * Emit an in-app notification to a finished job's owner. Delivery is gated by
+   * the admin controls inside NotificationsService, so this is a no-op unless an
+   * administrator has enabled notifications for the relevant category.
+   *
+   * Noise policy: successes only notify for standalone jobs (no parent run) so
+   * multi-step pipelines don't emit one alert per child; failures always notify
+   * because they always warrant attention.
+   */
+  private async notifyJobTerminal(
+    dbJobId: string,
+    status: 'completed' | 'partial' | 'failed',
+    error?: string,
+  ): Promise<void> {
+    try {
+      const job = await prisma.job.findUnique({
+        where: { id: dbJobId },
+        select: {
+          queue: true,
+          type: true,
+          alias: true,
+          parentRunId: true,
+          createdBy: true,
+          parentRun: { select: { createdBy: true } },
+        },
+      });
+      if (!job) return;
+      if (status !== 'failed' && job.parentRunId) return;
+
+      const owner =
+        job.createdBy && job.createdBy !== 'system'
+          ? job.createdBy
+          : job.parentRun?.createdBy;
+      if (!owner || owner === 'system') return;
+
+      const label = this.humanizeJobType(job.type, job.alias);
+      const title =
+        status === 'failed'
+          ? `${label} failed`
+          : status === 'partial'
+            ? `${label} finished with warnings`
+            : `${label} completed`;
+      const body =
+        status === 'failed' && error
+          ? error.length > 240
+            ? `${error.slice(0, 237)}...`
+            : error
+          : undefined;
+
+      await this.notificationsService.notify({
+        userId: owner,
+        category: queueToNotificationCategory(job.queue),
+        level: notificationLevelForStatus(status),
+        title,
+        body,
+        jobId: dbJobId,
+        link: '/monitoring',
+        metadata: { jobId: dbJobId, status, queue: job.queue, type: job.type },
+      });
+    } catch {
+      // Best-effort only — a notification failure must never break the queue.
+    }
+  }
+
   onModuleInit() {
     const wrap = (
       handler: (job: Parameters<Parameters<typeof this.queueService.registerWorker>[1]>[0]) => Promise<unknown>,
@@ -191,6 +273,7 @@ export class WorkerRegistry implements OnModuleInit {
             if (current?.status !== terminalStatus) {
               await this.jobsService.updateStatus(dbJobId, terminalStatus);
               await this.streamService.publish('job_status', { jobId: dbJobId, status: terminalStatus });
+              void this.notifyJobTerminal(dbJobId, terminalStatus);
             }
           }
 
@@ -265,6 +348,7 @@ export class WorkerRegistry implements OnModuleInit {
             }
             await this.jobsService.updateStatus(dbJobId, 'failed', message);
             await this.streamService.publish('job_status', { jobId: dbJobId, status: 'failed', error: message });
+            void this.notifyJobTerminal(dbJobId, 'failed', message);
 
             const runId = data.automationRunId ?? current?.parentRunId ?? undefined;
             if (runId && options?.failedStep) {
