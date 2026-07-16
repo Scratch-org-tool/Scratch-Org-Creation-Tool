@@ -409,22 +409,95 @@ model DeploymentAudit {
 /// Saved, reusable deployment definition — the seam for future automation
 /// (scheduled promotions, webhooks, approval gates).
 model DeploymentPlan {
-  id             String    @id @default(uuid())
-  name           String
-  description    String?
-  sourceOrgId    String?
-  targetOrgId    String?
-  planType       String    @default("combined")
-  metadataConfig Json?
-  dataConfig     Json?
-  enabled        Boolean   @default(true)
-  lastRunAt      DateTime?
-  lastRunStatus  String?
-  createdBy      String    @default("system")
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                 String              @id @default(uuid())
+  name               String
+  description        String?
+  sourceOrgId        String?
+  targetOrgId        String?
+  planType           String              @default("combined")
+  metadataConfig     Json?
+  dataConfig         Json?
+  enabled            Boolean             @default(true)
+  /// Structured automation schedule (see @sfcc/shared DeploymentSchedule). Null = manual only.
+  schedule           Json?
+  scheduleEnabled    Boolean             @default(false)
+  /// Next time the scheduler should fire this plan; claimed atomically per tick.
+  nextRunAt          DateTime?
+  lastScheduledRunAt DateTime?
+  lastRunAt          DateTime?
+  lastRunStatus      String?
+  createdBy          String              @default("system")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  runs               DeploymentPlanRun[]
 
   @@index([createdBy])
+  @@index([scheduleEnabled, nextRunAt])
+}
+
+/// One execution of a saved plan — manual or scheduled — for run history.
+model DeploymentPlanRun {
+  id              String         @id @default(uuid())
+  planId          String
+  plan            DeploymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  trigger         String         @default("manual")
+  status          String         @default("started")
+  planType        String?
+  jobId           String?
+  automationRunId String?
+  error           String?
+  createdBy       String         @default("system")
+  startedAt       DateTime       @default(now())
+  finishedAt      DateTime?
+
+  @@index([planId, startedAt])
+}
+
+/// A recurring source-vs-target org comparison that records drift snapshots
+/// and (optionally) alerts the owner when new differences appear.
+model DriftMonitor {
+  id              String          @id @default(uuid())
+  name            String
+  description     String?
+  sourceOrgId     String
+  targetOrgId     String
+  metadataTypes   String[]        @default([])
+  schedule        Json?
+  scheduleEnabled Boolean         @default(false)
+  enabled         Boolean         @default(true)
+  notifyOnDrift   Boolean         @default(true)
+  nextRunAt       DateTime?
+  lastCheckedAt   DateTime?
+  lastStatus      String?
+  lastDriftCount  Int?
+  createdBy       String          @default("system")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  snapshots       DriftSnapshot[]
+
+  @@index([createdBy])
+  @@index([scheduleEnabled, nextRunAt])
+}
+
+/// A single drift check result. Only differing components are stored in `items`.
+model DriftSnapshot {
+  id               String       @id @default(uuid())
+  monitorId        String
+  monitor          DriftMonitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  status           String       @default("clean")
+  trigger          String       @default("schedule")
+  totalDifferences Int          @default(0)
+  added            Int          @default(0)
+  changed          Int          @default(0)
+  removed          Int          @default(0)
+  byType           Json?
+  items            Json?
+  newlyDrifted     Json?
+  error            String?
+  createdBy        String       @default("system")
+  createdAt        DateTime     @default(now())
+
+  @@index([monitorId, createdAt])
 }
 
 /// Planning and quality-policy record for the provider-neutral Deployment Workbench.
@@ -646,6 +719,38 @@ model AppUser {
 
   @@index([email])
   @@index([status])
+}
+
+/// Per-user notification inbox entry. Rows are only created when an
+/// administrator has enabled notifications and the relevant category is on.
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  category  String    @default("system")
+  level     String    @default("info")
+  title     String
+  body       String?
+  link      String?
+  jobId     String?
+  metadata  Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+/// Global, admin-owned notification controls. A single "global" row decides
+/// whether notifications are sent at all, which channels deliver, and which
+/// categories are active. Absent row => notifications are off.
+model NotificationSetting {
+  id         String   @id @default("global")
+  enabled    Boolean  @default(false)
+  channels   Json     @default("{\"inApp\":true,\"email\":false}")
+  categories Json     @default("{\"deployment\":true,\"data\":true,\"environment\":true,\"provisioning\":true,\"system\":true}")
+  updatedBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 /// Security audit trail. Metadata must never contain credentials, bearer

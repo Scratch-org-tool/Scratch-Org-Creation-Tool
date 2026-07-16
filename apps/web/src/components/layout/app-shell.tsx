@@ -13,6 +13,7 @@ import { SidebarProvider, useSidebar } from '@/components/ui/sidebar';
 import { openCopilot } from '@/store';
 import { useAuth } from '@/contexts/auth-context';
 import { canAccessModule } from '@/lib/auth-utils';
+import { NotificationBellIcon, NotificationsProvider } from '@/modules/notifications';
 
 const CopilotPanel = dynamic(
   () => import('@/modules/ai-copilot/copilot-panel').then((m) => m.CopilotPanel),
@@ -35,17 +36,20 @@ function MobileHeader() {
 
   return (
     <header className="md:hidden sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-white/8 bg-[#0a0a0a] px-3 py-2.5 shrink-0">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={toggleSidebar}
-        className="size-9 text-white/80 hover:bg-white/10 hover:text-white"
-        aria-label="Open menu"
-      >
-        <Menu className="size-5" />
-      </Button>
-      <SidebarBrandCompact />
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={toggleSidebar}
+          className="size-9 text-white/80 hover:bg-white/10 hover:text-white"
+          aria-label="Open menu"
+        >
+          <Menu className="size-5" />
+        </Button>
+        <SidebarBrandCompact />
+      </div>
+      <NotificationBellIcon />
     </header>
   );
 }
@@ -73,6 +77,7 @@ function AppShellContent({ children }: { children: React.ReactNode }) {
   };
 
   return (
+    <NotificationsProvider>
     <div className="flex h-svh w-full overflow-hidden bg-background">
       <AppSidebar onSignOut={handleSignOut} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -102,6 +107,7 @@ function AppShellContent({ children }: { children: React.ReactNode }) {
       <SidebarWidthSync />
       {canUseCopilot && <CopilotPanel />}
     </div>
+    </NotificationsProvider>
   );
 }
 
