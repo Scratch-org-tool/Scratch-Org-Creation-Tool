@@ -6,6 +6,7 @@ import { prisma } from '@sfcc/db';
 import {
   buildComparisonItems,
   buildPackageXml,
+  CURATED_COMPARE_TYPES,
   metadataCompareAnalyzeSchema,
   metadataCompareStartSchema,
   summarizeComparisonItems,
@@ -73,49 +74,63 @@ export class MetadataCompareService {
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
 
-    const existing = await prisma.metadataComparison.findFirst({
-      where: {
-        sourceOrgId: input.sourceOrgId,
-        targetOrgId: input.targetOrgId,
-        createdBy: userId,
-        status: 'running',
-        createdAt: { gte: new Date(Date.now() - RUNNING_COMPARISON_REUSE_MS) },
-      },
-      orderBy: { createdAt: 'desc' },
+    const requestedTypes = input.types?.length
+      ? [...new Set(input.types.map((type) => type.trim()).filter(Boolean))].sort()
+      : undefined;
+    const comparisonLockKey = [
+      'metadata-comparison',
+      userId,
+      input.sourceOrgId,
+      input.targetOrgId,
+    ].join(':');
+    const claimed = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        comparisonLockKey,
+      );
+      const existing = await tx.metadataComparison.findFirst({
+        where: {
+          sourceOrgId: input.sourceOrgId,
+          targetOrgId: input.targetOrgId,
+          createdBy: userId,
+          status: 'running',
+          createdAt: { gte: new Date(Date.now() - RUNNING_COMPARISON_REUSE_MS) },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (existing) return { session: existing, reused: true as const };
+      const session = await tx.metadataComparison.create({
+        data: {
+          sourceOrgId: input.sourceOrgId,
+          targetOrgId: input.targetOrgId,
+          status: 'running',
+          createdBy: userId,
+          summary: {
+            total: 0,
+            new: 0,
+            changed: 0,
+            deleted: 0,
+            same: 0,
+            unknown: 0,
+            byType: {},
+            progress: {
+              phase: requestedTypes ? 'listing_components' : 'discovering_types',
+              completedTypes: 0,
+              totalTypes: requestedTypes?.length ?? 0,
+            },
+          },
+        },
+      });
+      return { session, reused: false as const };
     });
-    if (existing) {
+    if (claimed.reused) {
       return {
-        comparisonId: existing.id,
+        comparisonId: claimed.session.id,
         status: 'running' as const,
         reused: true,
       };
     }
-
-    const requestedTypes = input.types?.length
-      ? [...new Set(input.types.map((type) => type.trim()).filter(Boolean))].sort()
-      : undefined;
-    const session = await prisma.metadataComparison.create({
-      data: {
-        sourceOrgId: input.sourceOrgId,
-        targetOrgId: input.targetOrgId,
-        status: 'running',
-        createdBy: userId,
-        summary: {
-          total: 0,
-          new: 0,
-          changed: 0,
-          deleted: 0,
-          same: 0,
-          unknown: 0,
-          byType: {},
-          progress: {
-            phase: requestedTypes ? 'listing_components' : 'discovering_types',
-            completedTypes: 0,
-            totalTypes: requestedTypes?.length ?? 0,
-          },
-        },
-      },
-    });
+    const session = claimed.session;
 
     void this.runComparison(
       session.id,

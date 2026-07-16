@@ -68,6 +68,7 @@ export interface CompareFilters {
   metadataType: string;
   diffTypes: CompareDiffType[];
   search: string;
+  selectedOnly: boolean;
 }
 
 export interface CompareRelatedChildren {

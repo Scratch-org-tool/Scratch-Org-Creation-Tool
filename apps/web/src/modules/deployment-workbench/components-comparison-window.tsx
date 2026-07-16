@@ -133,6 +133,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
     metadataType: '',
     diffTypes: [...DIFF_ORDER],
     search: '',
+    selectedOnly: false,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
@@ -145,12 +146,17 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   const typeSummaries = useMemo(() => compareTypeSummaries(items), [items]);
 
   const filteredItems = useMemo(
-    () => filterCompareItems(items, {
-      metadataType: filters.metadataType,
-      diffTypes: filters.diffTypes,
-      search: filters.search,
-    }),
-    [items, filters],
+    () => {
+      const matching = filterCompareItems(items, {
+        metadataType: filters.metadataType,
+        diffTypes: filters.diffTypes,
+        search: filters.search,
+      });
+      return filters.selectedOnly
+        ? matching.filter((item) => selectedKeys.has(buildCompareKey(item.metadataType, item.fullName)))
+        : matching;
+    },
+    [items, filters, selectedKeys],
   );
 
   const totalPages = useMemo(
@@ -165,7 +171,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filters.metadataType, filters.diffTypes, filters.search]);
+  }, [filters.metadataType, filters.diffTypes, filters.search, filters.selectedOnly]);
 
   const selectedSummary = useMemo(() => {
     const selectedItems = items.filter((item) => selectedKeys.has(buildCompareKey(item.metadataType, item.fullName)));
@@ -223,7 +229,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
   }, [activeMetadataType, filteredItems, onSelectItems]);
 
   const clearFilters = useCallback(() => {
-    setFilters({ metadataType: '', diffTypes: [...DIFF_ORDER], search: '' });
+    setFilters({ metadataType: '', diffTypes: [...DIFF_ORDER], search: '', selectedOnly: false });
   }, []);
 
   const loadRelatedChildren = useCallback(async (objectName: string) => {
@@ -397,6 +403,24 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
                       onClick={() => toggleDiffType(diffType)}
                     />
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => setFilters((current) => ({
+                      ...current,
+                      selectedOnly: !current.selectedOnly,
+                    }))}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors',
+                      filters.selectedOnly
+                        ? 'border border-primary/40 bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:bg-muted/40',
+                    )}
+                    aria-pressed={filters.selectedOnly}
+                  >
+                    <CheckSquare className="size-3.5" aria-hidden="true" />
+                    Selected
+                    <span className="text-muted-foreground">{selectedKeys.size}</span>
+                  </button>
                 </div>
               </div>
 
