@@ -131,10 +131,10 @@ export function NotificationSettingsWorkspace() {
           <GlassCard
             className={cn(
               'border-2 transition-colors',
-              enabled ? 'border-emerald-500/30' : 'border-amber-500/25',
+              enabled ? 'border-emerald-500/30' : 'border-amber-500/40',
             )}
           >
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-start gap-3">
                 <span
                   className={cn(
@@ -153,14 +153,29 @@ export function NotificationSettingsWorkspace() {
                     and sends nothing — no in-app alerts, no email — regardless of the settings
                     below.
                   </p>
+                  {!enabled && (
+                    <p className="mt-2 text-xs font-medium text-amber-300">
+                      Turn this on, choose channels and categories below, then click “Save changes”.
+                    </p>
+                  )}
                 </div>
               </div>
-              <Switch
-                checked={enabled}
-                onChange={setEnabled}
-                aria-label="Enable notifications"
-                className="mt-1"
-              />
+              <div className="flex shrink-0 items-center gap-3 sm:pt-0.5">
+                <span
+                  className={cn(
+                    'text-xs font-semibold uppercase tracking-wide',
+                    enabled ? 'text-emerald-400' : 'text-amber-300',
+                  )}
+                >
+                  {enabled ? 'On' : 'Off'}
+                </span>
+                <Switch
+                  size="lg"
+                  checked={enabled}
+                  onChange={setEnabled}
+                  aria-label={enabled ? 'Turn notifications off' : 'Turn notifications on'}
+                />
+              </div>
             </div>
           </GlassCard>
 
@@ -168,7 +183,12 @@ export function NotificationSettingsWorkspace() {
             title="Delivery channels"
             description="Where enabled notifications are delivered. The in-app inbox is always available."
           >
-            <div className={cn('space-y-2', !enabled && 'pointer-events-none opacity-60')}>
+            {!enabled && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                Turn on notifications above to change delivery channels.
+              </p>
+            )}
+            <div className={cn('space-y-2', !enabled && 'pointer-events-none')}>
               {NOTIFICATION_CHANNELS.map((channel) => (
                 <ToggleRow
                   key={channel}
@@ -188,7 +208,12 @@ export function NotificationSettingsWorkspace() {
             title="Activity categories"
             description="Choose exactly which kinds of activity generate notifications."
           >
-            <div className={cn('space-y-2', !enabled && 'pointer-events-none opacity-60')}>
+            {!enabled && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                Turn on notifications above to choose which activity sends alerts.
+              </p>
+            )}
+            <div className={cn('space-y-2', !enabled && 'pointer-events-none')}>
               {NOTIFICATION_CATEGORIES.map((category) => (
                 <ToggleRow
                   key={category}
