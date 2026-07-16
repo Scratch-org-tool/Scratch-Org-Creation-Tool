@@ -2,12 +2,16 @@
 
 import { useMemo, useState, type KeyboardEvent } from 'react';
 import {
+  ArrowLeftRight,
   Boxes,
   CheckCircle2,
+  Cloud,
+  GitCompare,
   Lock,
   Play,
   RotateCcw,
   ShieldCheck,
+  Target,
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -167,19 +171,40 @@ function PlanView({ w }: { w: DeploymentWorkbenchState }) {
         {w.step === 4 && <ReviewStep w={w} />}
         {w.step === 5 && <ExecuteStep w={w} />}
       </main>
-      {w.step < 5 && <WizardFooter w={w} />}
+      {w.step < 5 && !(w.step === 0 && w.form.sourceMode === 'org_compare') && (
+        <WizardFooter w={w} />
+      )}
     </div>
   );
 }
 
 function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
-  const sourceReady = w.form.sourceMode === 'scm'
-    ? Boolean(w.scmSource)
-    : Boolean(w.form.sourceOrgId && w.form.targetOrgId && w.form.sourceOrgId !== w.form.targetOrgId);
+  const orgCompare = w.form.sourceMode === 'org_compare';
+  const sameOrg = Boolean(
+    orgCompare && w.form.sourceOrgId && w.form.sourceOrgId === w.form.targetOrgId,
+  );
+  const sourceReady = orgCompare
+    ? Boolean(w.form.sourceOrgId && w.form.targetOrgId && w.form.sourceOrgId !== w.form.targetOrgId)
+    : Boolean(w.scmSource && w.form.targetOrgId);
+
+  const startCompare = () => {
+    w.setStep(1);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('#workbench-main')?.focus());
+  };
+
+  const swapOrgs = () => {
+    const nextSource = w.form.targetOrgId;
+    const nextTarget = w.form.sourceOrgId;
+    w.selectSource(nextSource);
+    w.selectTarget(nextTarget);
+  };
+
   return (
     <GlassCard
-      title="Source and target"
-      description="Choose an org comparison or a connected source-control manifest."
+      title={orgCompare ? 'Compare orgs' : 'Source and target'}
+      description={orgCompare
+        ? 'Pick the org you are deploying from and the org you are deploying to, then run a full metadata comparison.'
+        : 'Choose a connected source-control manifest and the org to deploy to.'}
     >
       <fieldset className="space-y-5">
         <legend className="sr-only">Deployment source type</legend>
@@ -202,32 +227,48 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
           />
         </div>
 
-        {w.form.sourceMode === 'org_compare' ? (
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Source org" htmlFor="workbench-source-org">
-              <Select
-                id="workbench-source-org"
-                value={w.form.sourceOrgId}
-                onChange={(event) => w.selectSource(event.target.value)}
+        {orgCompare ? (
+          <div className="grid items-stretch gap-3 md:grid-cols-[1fr_auto_1fr]">
+            <OrgSelectCard
+              tone="source"
+              label="Source org"
+              hint="Deploy from"
+              icon={<Cloud className="size-4" />}
+              selectId="workbench-source-org"
+              value={w.form.sourceOrgId}
+              org={w.orgs.find((org) => org.id === w.form.sourceOrgId)}
+              orgs={w.orgs}
+              disabledId={w.form.targetOrgId}
+              placeholder="Select source org…"
+              onChange={(value) => w.selectSource(value)}
+            />
+            <div className="flex items-center justify-center md:pt-9">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="rounded-full"
+                onClick={swapOrgs}
+                disabled={!w.form.sourceOrgId && !w.form.targetOrgId}
+                aria-label="Swap source and target orgs"
+                title="Swap source and target"
               >
-                <option value="">Select source org…</option>
-                {w.orgs.map((org) => (
-                  <option key={org.id} value={org.id} disabled={org.id === w.form.targetOrgId}>
-                    {org.alias}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Target org" htmlFor="workbench-target-org">
-              <Select id="workbench-target-org" value={w.form.targetOrgId} onChange={(event) => w.selectTarget(event.target.value)}>
-                <option value="">Select target org…</option>
-                {w.orgs.map((org) => (
-                  <option key={org.id} value={org.id} disabled={org.id === w.form.sourceOrgId}>
-                    {org.alias}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+                <ArrowLeftRight className="size-4" />
+              </Button>
+            </div>
+            <OrgSelectCard
+              tone="target"
+              label="Target org"
+              hint="Deploy to"
+              icon={<Target className="size-4" />}
+              selectId="workbench-target-org"
+              value={w.form.targetOrgId}
+              org={w.orgs.find((org) => org.id === w.form.targetOrgId)}
+              orgs={w.orgs}
+              disabledId={w.form.sourceOrgId}
+              placeholder="Select target org…"
+              onChange={(value) => w.selectTarget(value)}
+            />
           </div>
         ) : (
           <>
@@ -239,6 +280,12 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
               </Select>
             </Field>
           </>
+        )}
+
+        {sameOrg && (
+          <InlineAlert variant="warning">
+            Source and target must be different orgs to compare metadata.
+          </InlineAlert>
         )}
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -276,13 +323,99 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
         </div>
 
         {w.form.targetProfile === 'production' && <ProductionLock />}
-        {!sourceReady && (
-          <p className="text-sm text-muted-foreground">
-            Complete the source and target fields to continue.
-          </p>
+
+        {orgCompare && (
+          <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <GitCompare className="size-4 shrink-0 text-primary" aria-hidden="true" />
+              {sourceReady
+                ? 'Ready. Choose "Compare orgs" to load every metadata difference between the two orgs.'
+                : 'Select a source and target org to enable the comparison.'}
+            </p>
+            <Button type="button" onClick={startCompare} disabled={!sourceReady}>
+              <GitCompare className="mr-2 size-4" /> Compare orgs
+            </Button>
+          </div>
         )}
       </fieldset>
     </GlassCard>
+  );
+}
+
+function OrgSelectCard({
+  tone,
+  label,
+  hint,
+  icon,
+  selectId,
+  value,
+  org,
+  orgs,
+  disabledId,
+  placeholder,
+  onChange,
+}: {
+  tone: 'source' | 'target';
+  label: string;
+  hint: string;
+  icon: React.ReactNode;
+  selectId: string;
+  value: string;
+  org?: { id: string; alias: string; type?: string; username?: string | null };
+  orgs: Array<{ id: string; alias: string; type?: string }>;
+  disabledId: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  const selected = Boolean(value);
+  return (
+    <div
+      className={cn(
+        'flex flex-col rounded-xl border p-4 transition-colors',
+        selected
+          ? tone === 'source'
+            ? 'border-sky-500/40 bg-sky-500/5'
+            : 'border-emerald-500/40 bg-emerald-500/5'
+          : 'border-border/60 bg-card/40',
+      )}
+    >
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={cn(
+              'flex size-9 items-center justify-center rounded-lg',
+              tone === 'source' ? 'bg-sky-500/15 text-sky-300' : 'bg-emerald-500/15 text-emerald-300',
+            )}
+          >
+            {icon}
+          </span>
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{hint}</p>
+            <p className="truncate text-sm font-semibold">{org?.alias ?? label}</p>
+          </div>
+        </div>
+        {selected && <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-400" />}
+      </div>
+      <Select
+        id={selectId}
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{placeholder}</option>
+        {orgs.map((option) => (
+          <option key={option.id} value={option.id} disabled={option.id === disabledId}>
+            {option.alias}
+          </option>
+        ))}
+      </Select>
+      {org?.type && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="rounded-full border border-border/60 px-2 py-0.5 capitalize">{org.type}</span>
+          {org.username && <span className="truncate">{org.username}</span>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -343,8 +476,8 @@ function ComponentsStep({ w }: { w: DeploymentWorkbenchState }) {
 
   return (
     <GlassCard
-      title="Component comparison"
-      description="Select metadata components by type and state. Expand an object to include related child components."
+      title="Compare & select components"
+      description="Pick a metadata type to load its components from both orgs, review the source-vs-target diff, then select what to deploy."
     >
       <ComponentsComparisonWindow
         comparisonId={w.form.comparisonId}
