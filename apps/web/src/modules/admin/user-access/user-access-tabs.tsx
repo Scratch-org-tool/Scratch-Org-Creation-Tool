@@ -36,12 +36,3 @@ export function UserAccessTabs({ active, onChange }: UserAccessTabsProps) {
     </div>
   );
 }
-
-export function UserAccessComingSoon({ label }: { label: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-border/60 bg-card/30 py-16 text-center">
-      <p className="text-lg font-medium">{label}</p>
-      <p className="text-sm text-muted-foreground mt-2">Coming soon</p>
-    </div>
-  );
-}

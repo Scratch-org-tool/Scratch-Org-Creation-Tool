@@ -3,6 +3,7 @@ export * from './schemas/index.js';
 export * from './queues/index.js';
 export * from './constants.js';
 export * from './auth.js';
+export * from './user-access-admin.js';
 export * from './sanitize.js';
 export * from './soql.js';
 export * from './query-set.js';

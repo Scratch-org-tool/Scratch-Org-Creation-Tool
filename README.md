@@ -318,13 +318,18 @@ Admins can grant additional modules per user: Deployment, Org Setup, Provisionin
 
 ### User Access (`/admin/users`)
 
-Admin workspace with:
+Admin workspace with four tabs:
 
-- Stat cards (total, active, admins, inactive users)
-- Searchable user table with derived role labels (Super Admin, Integration, Developer, Viewer)
-- **Manage** drawer for role, module grants, and active/inactive status
-- `GET /auth/users/overview` for stats + enriched user list
-- `PATCH /auth/users/:id/access` for `{ role?, grantedModules?, status? }`
+- **Users** — stat cards (total, active, admins, inactive, new-this-week), search + role/status filters, CSV export (with spreadsheet formula-injection hardening), and a **Manage** drawer for role, module grants, and active/inactive status.
+- **Roles** — read-only overview of the derived role model (Super Admin, Integration, Developer, Viewer) with live per-role counts.
+- **Permissions** — a module × role matrix showing what each role can access (admins always get every module).
+- **Activity Logs** — a paginated, security-relevant audit feed (access changes, session revocations, password activity).
+
+APIs:
+
+- `GET /auth/users/overview` — stats + enriched user list (single AppUser query).
+- `PATCH /auth/users/:id/access` — `{ role?, grantedModules?, status? }`. Admins **cannot** change their own access here, and the **last active admin** is protected from demotion/deactivation. Every change (and denial) is written to the audit trail with the acting admin and a PII-free diff.
+- `GET /auth/audit-events?limit&offset` — admin-only, paginated audit feed. `ipHash`/`userAgentHash` are never returned.
 
 Users appear after they log in at least once (row created in `AppUser`).
 
@@ -340,19 +345,19 @@ The app uses a **compact flat sidebar**, **gradient page headers** (`DeploymentP
 |------|-------|
 | **Dashboard** | Premium overview — KPI cards, platform health, quick actions |
 | **Environment** | **Integrations hub** — Connected orgs, Salesforce, Azure DevOps, scratch orgs (tabbed workspace) |
-| **Deployment** | Hub page with CI/CD, Data Operations, and Org & Users cards |
+| **Deployment** | Expands into a submenu of every deployment tool (CI/CD, Data Operations, Org & Users) and opens the Deployment Center hub |
 | **Monitoring** | Job stats and recent jobs table (select a row for status details) |
 | **User Access** | Admin only |
 
-### Deployment Center hub
+### Deployment Center hub & sidebar submenu
 
-`/deployment-center` groups tools by permission:
+Selecting **Deployment** in the sidebar expands a submenu of every deployment tool, and the same links power the `/deployment-center` hub page. Both read from a single source of truth (`apps/web/src/lib/deployment-links.ts`) and are grouped/gated by permission:
 
-- **CI/CD** — Azure DevOps Deployment Center, Jenkins (coming soon)
-- **Data Operations** — unified tabbed workspace at `/data-center` (CONA seed, deploy, replication, templates)
-- **Org & Users** — unified tabbed workspace at `/org-setup` (baseline setup, load config, CONA users, CSV users)
+- **CI/CD deployment** (`deployment`) — Deployment Workbench, Git Metadata Deploy, Org-to-Org Metadata, Jenkins (coming soon)
+- **Data operations** (`data`) — Data Operations, Org-to-Org Data Deploy, Custom Settings Load
+- **Org & users** (`org-setup` / `provisioning`) — Org & Users
 
-Legacy routes redirect to tabbed workspaces (e.g. `/user-provisioning` → `/org-setup?tab=users-cona`).
+Deployment Workbench is reached from this submenu/hub — it is **not** a separate top-level sidebar item (no duplicates). Legacy routes redirect to tabbed workspaces (e.g. `/user-provisioning` → `/org-setup?tab=users-cona`).
 
 ### Studio UI kit
 

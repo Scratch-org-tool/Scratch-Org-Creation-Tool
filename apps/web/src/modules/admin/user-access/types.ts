@@ -1,8 +1,12 @@
 import type { AppModule } from '@sfcc/shared';
 
+export type { AuthAuditEventView, AuthAuditEventsPage } from '@sfcc/shared';
+
 export type UserAccessTab = 'users' | 'roles' | 'permissions' | 'activity';
 
 export type UserStatusFilter = 'all' | 'active' | 'inactive';
+
+export type UserRoleFilter = 'all' | 'Super Admin' | 'Integration' | 'Developer' | 'Viewer';
 
 export interface UserAccessStats {
   total: number;
@@ -10,6 +14,7 @@ export interface UserAccessStats {
   inactive: number;
   admins: number;
   pendingInvites: number;
+  newThisWeek: number;
   totalTrendPct: number | null;
 }
 

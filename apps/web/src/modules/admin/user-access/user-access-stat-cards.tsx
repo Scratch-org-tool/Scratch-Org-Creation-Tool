@@ -41,11 +41,11 @@ export function UserAccessStatCards({ stats }: UserAccessStatCardsProps) {
         trend={`${adminPct}% of total users`}
       />
       <StatCard
-        label="Pending Invites"
-        value={stats?.pendingInvites ?? 0}
+        label="New This Week"
+        value={stats?.newThisWeek ?? 0}
         icon={UserPlus}
         iconClass="text-amber-400"
-        trend="Invites coming soon"
+        trend="Joined in the last 7 days"
       />
       <StatCard
         label="Inactive Users"

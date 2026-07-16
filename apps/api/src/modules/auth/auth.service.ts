@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -15,6 +16,8 @@ import {
   updateFirebaseAuthPassword,
 } from '@sfcc/firebase';
 import {
+  AUTH_ACCESS_LAST_ADMIN,
+  AUTH_ACCESS_SELF_FORBIDDEN,
   AUTH_ACCOUNT_ACTION_FAILED,
   AUTH_GENERIC_INVALID,
   AUTH_LOGIN_FAILED,
@@ -25,6 +28,7 @@ import {
   AUTH_SIGNUP_FAILED,
   AUTH_EMAIL_EXISTS,
   AUTH_UNAVAILABLE,
+  AUTH_USER_NOT_FOUND,
   type ForgotPasswordInput,
   type LoginInput,
   type MeResponse,
@@ -40,13 +44,15 @@ import {
   type UserRole,
 } from '@sfcc/shared';
 import {
+  countActiveAdminUsers,
+  getAppUser,
   getAppUserByFirebaseUid,
-  getUserAccessStats,
   listAppUsers,
   touchLastActive,
   updateAppUser,
   upsertAppUser,
 } from './app-user.service';
+import { computeUserAccessStats } from './user-access-stats.util';
 import { FirebaseIdentityError, FirebaseIdentityService } from './firebase-identity.service';
 import { AuthSecurityService } from './auth-security.service';
 import {
@@ -541,28 +547,87 @@ export class AuthService {
 
   async getUsersOverview(requesterFirebaseUid: string) {
     await this.assertAdmin(requesterFirebaseUid);
-    const [stats, users] = await Promise.all([
-      getUserAccessStats(true),
-      listAppUsers(true),
-    ]);
+    // Single query — stats are derived from the same list the table renders.
+    const users = await listAppUsers(true);
     return {
-      stats,
+      stats: computeUserAccessStats(users),
       users: users.map((u) => this.toAccessRow(u)),
     };
+  }
+
+  async listAuditEvents(
+    requesterFirebaseUid: string,
+    options: { limit: number; offset: number },
+  ) {
+    await this.assertAdmin(requesterFirebaseUid);
+    return this.authAudit.listEvents(options);
   }
 
   async updateUserAccess(
     requesterFirebaseUid: string,
     targetUserId: string,
     body: { grantedModules?: AppModule[]; role?: UserRole; status?: UserAccessStatus },
+    context: AuthAuditContext,
   ) {
-    await this.assertAdmin(requesterFirebaseUid);
+    const requester = await this.assertAdmin(requesterFirebaseUid);
+
+    const target = await getAppUser(targetUserId);
+    if (!target) {
+      throw new NotFoundException(AUTH_USER_NOT_FOUND);
+    }
+
+    // Admins cannot change their own role/status/modules from this console.
+    // This prevents accidental self-lockout and privilege self-management;
+    // self-service goes through the account settings flow instead.
+    if (target.id === requester.id) {
+      await this.recordAuditBestEffort(
+        requester.id,
+        AUTH_AUDIT_EVENTS.USER_ACCESS_UPDATE_DENIED,
+        context,
+        { reason: 'self', targetId: target.id },
+      );
+      throw new ForbiddenException(AUTH_ACCESS_SELF_FORBIDDEN);
+    }
+
+    // Last-admin protection: never demote or deactivate the final active admin.
+    const removesAdminPrivilege =
+      target.role === 'admin' &&
+      target.status !== 'inactive' &&
+      ((body.role != null && body.role !== 'admin') || body.status === 'inactive');
+    if (removesAdminPrivilege && (await countActiveAdminUsers()) <= 1) {
+      await this.recordAuditBestEffort(
+        requester.id,
+        AUTH_AUDIT_EVENTS.USER_ACCESS_UPDATE_DENIED,
+        context,
+        { reason: 'last_admin', targetId: target.id },
+      );
+      throw new ForbiddenException(AUTH_ACCESS_LAST_ADMIN);
+    }
+
+    let updated;
     try {
-      const updated = await updateAppUser(targetUserId, body);
-      return this.toAccessRow(updated);
+      updated = await updateAppUser(targetUserId, body);
     } catch {
       throw new BadRequestException(AUTH_GENERIC_INVALID);
     }
+
+    await this.recordAuditBestEffort(
+      target.id,
+      AUTH_AUDIT_EVENTS.USER_ACCESS_UPDATED,
+      context,
+      {
+        actorId: requester.id,
+        roleChanged: body.role != null && body.role !== target.role,
+        statusChanged:
+          body.status != null && body.status !== (target.status ?? 'active'),
+        modulesChanged: body.grantedModules != null,
+        nextRole: updated.role,
+        nextStatus: updated.status ?? 'active',
+        moduleCount: updated.grantedModules.length,
+      },
+    );
+
+    return this.toAccessRow(updated);
   }
 
   private async assertAdmin(firebaseUid: string) {
@@ -570,6 +635,7 @@ export class AuthService {
     if (!profile || profile.role !== 'admin') {
       throw new ForbiddenException(AUTH_GENERIC_INVALID);
     }
+    return profile;
   }
 
   private async assertActiveAccount(

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
+import type { AuditMetadataValue, AuthAuditEventsPage } from '@sfcc/shared';
 import { AuthSecurityService } from './auth-security.service';
 
 export const AUTH_AUDIT_EVENTS = {
@@ -9,6 +10,8 @@ export const AUTH_AUDIT_EVENTS = {
   PASSWORD_CHANGE_SUCCESS: 'password_change_success',
   SESSIONS_REVOKED: 'sessions_revoked',
   PASSWORD_RESET_REQUESTED: 'password_reset_requested',
+  USER_ACCESS_UPDATED: 'user_access_updated',
+  USER_ACCESS_UPDATE_DENIED: 'user_access_update_denied',
 } as const;
 
 export interface AuthAuditContext {
@@ -47,6 +50,49 @@ export class AuthAuditService {
       // rolled back. Emit only a fixed event label, never request contents.
       this.logger.error(`auth_audit_write_failed event=${eventType}`);
     }
+  }
+
+  /**
+   * Paginated, newest-first audit feed for the admin Activity Logs view.
+   * Deliberately excludes `ipHash` / `userAgentHash` so those never leave the
+   * server, even to administrators.
+   */
+  async listEvents({
+    limit,
+    offset,
+  }: {
+    limit: number;
+    offset: number;
+  }): Promise<AuthAuditEventsPage> {
+    const [rows, total] = await Promise.all([
+      prisma.authAuditEvent.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        select: {
+          id: true,
+          userId: true,
+          eventType: true,
+          metadata: true,
+          createdAt: true,
+        },
+      }),
+      prisma.authAuditEvent.count(),
+    ]);
+
+    return {
+      events: rows.map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        eventType: row.eventType,
+        metadata:
+          (row.metadata as Record<string, AuditMetadataValue> | null) ?? null,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      total,
+      limit,
+      offset,
+    };
   }
 
   private safeMetadata(

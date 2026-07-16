@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -25,6 +26,8 @@ import {
   parseSignupInput,
   parseUpdateMeInput,
   claimAdminSchema,
+  clampAuditLimit,
+  clampAuditOffset,
   updateUserAccessSchema,
 } from '@sfcc/shared';
 
@@ -181,6 +184,20 @@ export class AuthController {
     return this.authService.getUsersOverview(req.user.uid);
   }
 
+  @Get('audit-events')
+  @UseGuards(AuthGuard)
+  listAuditEvents(
+    @Req() req: AuthenticatedRequest,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    if (!req.user) throw new UnauthorizedException();
+    return this.authService.listAuditEvents(req.user.uid, {
+      limit: clampAuditLimit(limit),
+      offset: clampAuditOffset(offset),
+    });
+  }
+
   @Post('claim-admin')
   @UseGuards(AuthGuard)
   claimAdmin(
@@ -213,7 +230,12 @@ export class AuthController {
     if (!parsed.success) {
       throw new BadRequestException(AUTH_GENERIC_INVALID);
     }
-    return this.authService.updateUserAccess(req.user.uid, id, parsed.data);
+    return this.authService.updateUserAccess(
+      req.user.uid,
+      id,
+      parsed.data,
+      this.getAuditContext(req),
+    );
   }
 
   private getAuditContext(req: AuthenticatedRequest) {
