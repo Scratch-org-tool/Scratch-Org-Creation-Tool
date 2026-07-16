@@ -318,13 +318,18 @@ Admins can grant additional modules per user: Deployment, Org Setup, Provisionin
 
 ### User Access (`/admin/users`)
 
-Admin workspace with:
+Admin workspace with four tabs:
 
-- Stat cards (total, active, admins, inactive users)
-- Searchable user table with derived role labels (Super Admin, Integration, Developer, Viewer)
-- **Manage** drawer for role, module grants, and active/inactive status
-- `GET /auth/users/overview` for stats + enriched user list
-- `PATCH /auth/users/:id/access` for `{ role?, grantedModules?, status? }`
+- **Users** — stat cards (total, active, admins, inactive, new-this-week), search + role/status filters, CSV export (with spreadsheet formula-injection hardening), and a **Manage** drawer for role, module grants, and active/inactive status.
+- **Roles** — read-only overview of the derived role model (Super Admin, Integration, Developer, Viewer) with live per-role counts.
+- **Permissions** — a module × role matrix showing what each role can access (admins always get every module).
+- **Activity Logs** — a paginated, security-relevant audit feed (access changes, session revocations, password activity).
+
+APIs:
+
+- `GET /auth/users/overview` — stats + enriched user list (single AppUser query).
+- `PATCH /auth/users/:id/access` — `{ role?, grantedModules?, status? }`. Admins **cannot** change their own access here, and the **last active admin** is protected from demotion/deactivation. Every change (and denial) is written to the audit trail with the acting admin and a PII-free diff.
+- `GET /auth/audit-events?limit&offset` — admin-only, paginated audit feed. `ipHash`/`userAgentHash` are never returned.
 
 Users appear after they log in at least once (row created in `AppUser`).
 
