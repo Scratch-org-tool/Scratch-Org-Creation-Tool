@@ -15,9 +15,11 @@ import type {
   UserAccessOverview,
   UserAccessRow,
   UserAccessTab,
+  UserRoleFilter,
   UserStatusFilter,
 } from './types';
 import { applyAccessDraft, reconcileAccessRow } from './optimistic-user-access';
+import { usersToCsv } from './user-access-csv';
 
 export function useUserAccessWorkspace() {
   const { profile, refreshProfile } = useAuth();
@@ -31,6 +33,7 @@ export function useUserAccessWorkspace() {
   const [tab, setTab] = useState<UserAccessTab>('users');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<UserStatusFilter>('all');
+  const [roleFilter, setRoleFilter] = useState<UserRoleFilter>('all');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [manageUser, setManageUser] = useState<UserAccessRow | null>(null);
@@ -81,13 +84,14 @@ export function useUserAccessWorkspace() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, pageSize]);
+  }, [search, statusFilter, roleFilter, pageSize]);
 
   const filteredUsers = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (overview?.users ?? []).filter((u) => {
       if (statusFilter === 'active' && u.status !== 'active') return false;
       if (statusFilter === 'inactive' && u.status !== 'inactive') return false;
+      if (roleFilter !== 'all' && u.displayRole !== roleFilter) return false;
       if (!q) return true;
       return (
         u.displayName.toLowerCase().includes(q) ||
@@ -95,13 +99,27 @@ export function useUserAccessWorkspace() {
         u.displayRole.toLowerCase().includes(q)
       );
     });
-  }, [overview?.users, search, statusFilter]);
+  }, [overview?.users, search, statusFilter, roleFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
   const paginatedUsers = useMemo(() => {
     const start = (page - 1) * pageSize;
     return filteredUsers.slice(start, start + pageSize);
   }, [filteredUsers, page, pageSize]);
+
+  const exportCsv = useCallback(() => {
+    if (typeof document === 'undefined' || filteredUsers.length === 0) return;
+    const csv = usersToCsv(filteredUsers);
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `user-access-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [filteredUsers]);
 
   const openManage = (user: UserAccessRow) => {
     setManageUser(user);
@@ -205,6 +223,9 @@ export function useUserAccessWorkspace() {
     setSearch,
     statusFilter,
     setStatusFilter,
+    roleFilter,
+    setRoleFilter,
+    exportCsv,
     page,
     setPage,
     pageSize,

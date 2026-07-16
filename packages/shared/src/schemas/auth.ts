@@ -21,6 +21,11 @@ export const AUTH_RATE_LIMITED_CODE = 'AUTH_RATE_LIMITED';
 export const AUTH_PASSWORD_CHANGED =
   'Password changed. Sign in again on all devices.';
 export const AUTH_SESSIONS_REVOKED = 'Signed out from all devices.';
+export const AUTH_ACCESS_SELF_FORBIDDEN =
+  'You cannot change your own access here. Ask another administrator to make this change.';
+export const AUTH_ACCESS_LAST_ADMIN =
+  'At least one active administrator must remain. Assign another admin before changing this one.';
+export const AUTH_USER_NOT_FOUND = 'User not found.';
 
 const emailSchema = z
   .string()
@@ -140,19 +145,9 @@ export const claimAdminSchema = z.object({
 export const updateUserAccessSchema = z.object({
   role: z.enum(['admin', 'user']).optional(),
   status: z.enum(['active', 'inactive']).optional(),
-  grantedModules: z
-    .array(z.enum([
-      'dashboard',
-      'environment',
-      'data',
-      'deployment',
-      'org-setup',
-      'provisioning',
-      'monitoring',
-      'copilot',
-    ]))
-    .max(20)
-    .optional(),
+  // Use the canonical module list so every grantable module (incl. `defects`)
+  // stays in sync with APP_MODULES instead of a drifting hand-written subset.
+  grantedModules: z.array(appModuleSchema).max(20).optional(),
 });
 
 export type UpdateUserAccessInput = z.infer<typeof updateUserAccessSchema>;

@@ -117,29 +117,9 @@ export async function updateAppUser(
   return toProfile(user);
 }
 
-export async function getUserAccessStats(_dptOnly = true) {
-  const users = await prisma.appUser.findMany();
-
-  const total = users.length;
-  const active = users.filter((u) => u.status !== 'inactive').length;
-  const inactive = users.filter((u) => u.status === 'inactive').length;
-  const admins = users.filter((u) => u.role === 'admin').length;
-
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const thisWeek = users.filter((u) => u.createdAt >= weekAgo).length;
-  const prevWeek = users.filter(
-    (u) => u.createdAt >= twoWeeksAgo && u.createdAt < weekAgo,
-  ).length;
-  const totalTrendPct =
-    prevWeek > 0 ? Math.round(((thisWeek - prevWeek) / prevWeek) * 100) : null;
-
-  return {
-    total,
-    active,
-    inactive,
-    admins,
-    pendingInvites: 0,
-    totalTrendPct,
-  };
+/** Efficient count of active administrators, for last-admin protection. */
+export async function countActiveAdminUsers(): Promise<number> {
+  return prisma.appUser.count({
+    where: { role: 'admin', status: { not: 'inactive' } },
+  });
 }
