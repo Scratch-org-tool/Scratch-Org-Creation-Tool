@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyProductionLocks,
+  buildCompareKey,
+  compareTypeSummaries,
   componentCount,
   createInitialForm,
+  filterCompareItems,
   groupQualityResults,
   invalidateSourceState,
   layoutDependencyGraph,
@@ -12,6 +15,7 @@ import {
   runCanResume,
   serverRunActions,
   selectionsFromCompareItems,
+  splitCompareKey,
   stageRisk,
   validateWorkbenchForm,
 } from './workbench-utils';
@@ -215,5 +219,43 @@ describe('deployment workbench utilities', () => {
     expect(layout.edges).toHaveLength(1);
     expect(layout.edges[0]?.explanation).toBe('A references B');
     expect(layout.truncated).toBe(true);
+  });
+
+  it('summarizes comparison items by metadata type with per-state counts', () => {
+    const items = [
+      { metadataType: 'ApexClass', fullName: 'A', diffType: 'new' as const },
+      { metadataType: 'ApexClass', fullName: 'B', diffType: 'changed' as const },
+      { metadataType: 'ApexClass', fullName: 'C', diffType: 'same' as const },
+      { metadataType: 'CustomObject', fullName: 'Obj__c', diffType: 'new' as const },
+      { metadataType: 'CustomObject', fullName: 'Old__c', diffType: 'deleted' as const },
+      { metadataType: 'CustomField', fullName: 'Obj__c.Field__c', diffType: 'changed' as const },
+      { metadataType: 'CustomField', fullName: 'Obj__c.Other__c', diffType: 'unknown' as const },
+    ];
+    const summaries = compareTypeSummaries(items);
+    expect(summaries).toHaveLength(3);
+    const apex = summaries.find((summary) => summary.metadataType === 'ApexClass')!;
+    expect(apex).toMatchObject({ total: 3, new: 1, changed: 1, same: 1, deleted: 0, unknown: 0 });
+    const customObject = summaries.find((summary) => summary.metadataType === 'CustomObject')!;
+    expect(customObject).toMatchObject({ total: 2, new: 1, deleted: 1 });
+    expect(summaries[0].metadataType).toBe('ApexClass');
+  });
+
+  it('filters comparison items by type, state, and search', () => {
+    const items = [
+      { metadataType: 'ApexClass', fullName: 'AccountController', diffType: 'new' as const },
+      { metadataType: 'ApexClass', fullName: 'ContactController', diffType: 'changed' as const },
+      { metadataType: 'CustomObject', fullName: 'Account', diffType: 'changed' as const },
+      { metadataType: 'ApexClass', fullName: 'OldJob', diffType: 'deleted' as const },
+    ];
+    expect(filterCompareItems(items, { metadataType: 'ApexClass' })).toHaveLength(3);
+    expect(filterCompareItems(items, { diffTypes: ['new', 'deleted'] })).toHaveLength(2);
+    expect(filterCompareItems(items, { search: 'controller' })).toHaveLength(2);
+    expect(filterCompareItems(items, { metadataType: 'ApexClass', diffTypes: ['changed'], search: 'contact' })).toHaveLength(1);
+  });
+
+  it('builds and splits stable compare keys', () => {
+    expect(buildCompareKey('ApexClass', 'MyClass')).toBe('ApexClass::MyClass');
+    expect(splitCompareKey('ApexClass::MyClass')).toEqual({ metadataType: 'ApexClass', fullName: 'MyClass' });
+    expect(splitCompareKey('invalid')).toEqual({ metadataType: 'invalid', fullName: 'invalid' });
   });
 });

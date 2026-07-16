@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Lock,
   Play,
-  RefreshCw,
   RotateCcw,
   ShieldCheck,
   XCircle,
@@ -26,7 +25,8 @@ import { GitMetadataSourceFields } from '@/modules/source-control/git-metadata-s
 import { cn } from '@/utils/cn';
 import type { DeploymentWorkbenchState } from './use-deployment-workbench';
 import { useDeploymentWorkbench } from './use-deployment-workbench';
-import type { CompareItem, DependencyGraph, WorkbenchStage } from './types';
+import { ComponentsComparisonWindow } from './components-comparison-window';
+import type { DependencyGraph, WorkbenchStage } from './types';
 import {
   componentCount,
   groupQualityResults,
@@ -38,14 +38,6 @@ import {
   supportsOptionalDependencies,
   WORKBENCH_STEPS,
 } from './workbench-utils';
-
-const DIFF_STYLES: Record<CompareItem['diffType'], string> = {
-  new: 'text-emerald-300 bg-emerald-500/10',
-  changed: 'text-amber-300 bg-amber-500/10',
-  deleted: 'text-red-300 bg-red-500/10',
-  same: 'text-muted-foreground bg-muted/30',
-  unknown: 'text-muted-foreground bg-muted/30',
-};
 
 export function DeploymentWorkbenchWorkspace({
   sourceMode,
@@ -346,96 +338,28 @@ function ComponentsStep({ w }: { w: DeploymentWorkbenchState }) {
     );
   }
 
-  const grouped = ['changed', 'new', 'deleted'] as const;
   return (
     <GlassCard
       title="Component comparison"
-      description="Select changed and new metadata to deploy. Deleted metadata is isolated for destructive review."
-      headerAction={(
-        <Button onClick={() => void w.startComparison()} loading={w.comparing} disabled={!w.form.sourceOrgId || !w.form.targetOrgId}>
-          <RefreshCw className="mr-2 size-4" />
-          {w.form.comparisonId ? 'Compare again' : 'Run comparison'}
-        </Button>
-      )}
+      description="Select metadata components by type and state. Expand an object to include related child components."
     >
-      <div aria-live="polite" className="mb-4 text-sm text-muted-foreground">
-        Comparison status: <StatusBadge status={w.comparisonStatus} />
-        {w.comparisonSummary && ` · ${w.comparisonSummary.total} components inspected`}
-      </div>
-      {w.comparisonStatus === 'running' && (
-        <InlineAlert variant="info" className="mb-4">
-          The comparison is running in the background. Results update automatically.
-        </InlineAlert>
-      )}
-      {grouped.map((diffType) => {
-        const items = w.compareItems.filter((item) => item.diffType === diffType);
-        if (!items.length) return null;
-        return (
-          <section key={diffType} className="mb-5" aria-labelledby={`components-${diffType}`}>
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h3 id={`components-${diffType}`} className="text-sm font-semibold capitalize">
-                {diffType === 'deleted' ? 'Destructive changes' : `${diffType} components`} ({items.length})
-              </h3>
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => w.selectDiffType(diffType, true)}>Select all</Button>
-                <Button size="sm" variant="ghost" onClick={() => w.selectDiffType(diffType, false)}>Clear</Button>
-              </div>
-            </div>
-            {diffType === 'deleted' && (
-              <InlineAlert variant="warning" className="mb-2">
-                Selected deletions are sent as a separate destructive manifest.
-              </InlineAlert>
-            )}
-            <div className="max-h-72 overflow-auto rounded-lg border border-border/60">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-card">
-                  <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
-                    <th className="w-12 p-2"><span className="sr-only">Select</span></th>
-                    <th className="p-2">Component</th>
-                    <th className="p-2">Type</th>
-                    <th className="p-2">Difference</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item) => {
-                    const key = `${item.metadataType}::${item.fullName}`;
-                    return (
-                      <tr key={key} className="border-b border-border/40 last:border-0">
-                        <td className="p-2">
-                          <input
-                            type="checkbox"
-                            checked={w.selectedKeys.has(key)}
-                            onChange={() => w.toggleCompareItem(item)}
-                            aria-label={`Select ${item.metadataType} ${item.fullName}`}
-                          />
-                        </td>
-                        <td className="p-2 font-medium">{item.fullName}</td>
-                        <td className="p-2 text-muted-foreground">{item.metadataType}</td>
-                        <td className="p-2">
-                          <span className={cn('rounded-full px-2 py-0.5 text-xs capitalize', DIFF_STYLES[item.diffType])}>
-                            {item.diffType}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        );
-      })}
-      {componentCount(w.form.destructiveSelections) > 0 && (
-        !w.capabilities?.supports.destructiveChanges
-      ) && (
+      <ComponentsComparisonWindow
+        comparisonId={w.form.comparisonId}
+        comparisonStatus={w.comparisonStatus}
+        comparisonSummary={w.comparisonSummary}
+        items={w.compareItems}
+        selectedKeys={w.selectedKeys}
+        comparing={w.comparing}
+        sourceOrgId={w.form.sourceOrgId}
+        targetOrgId={w.form.targetOrgId}
+        onStartComparison={w.startComparison}
+        onToggleItem={w.toggleCompareItem}
+        onSelectItems={w.selectCompareItems}
+      />
+      {componentCount(w.form.destructiveSelections) > 0 && !w.capabilities?.supports.destructiveChanges && (
         <InlineAlert variant="error" title="Destructive plan blocked">
           The server must advertise destructive changes.
         </InlineAlert>
-      )}
-      {!w.compareItems.length && w.comparisonStatus !== 'running' && (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          Run the background comparison to resolve changed, new, and deleted metadata.
-        </div>
       )}
     </GlassCard>
   );
