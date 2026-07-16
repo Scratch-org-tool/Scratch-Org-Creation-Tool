@@ -12,7 +12,7 @@ import {
 } from 'react';
 import { api, getStreamUrl } from '@/services/api';
 import { useAuth } from '@/contexts/auth-context';
-import type { NotificationListResponse, NotificationRecord } from '@sfcc/shared';
+import { toAppUserId, type NotificationListResponse, type NotificationRecord } from '@sfcc/shared';
 import { NotificationsSheet } from './notifications-sheet';
 
 interface NotificationsContextValue {
@@ -28,7 +28,7 @@ const NotificationsContext = createContext<NotificationsContextValue | null>(nul
 const PAGE_SIZE = 30;
 const MAX_ITEMS = 200;
 
-type IncomingPayload = Partial<NotificationRecord> & { id?: string };
+type IncomingPayload = Partial<NotificationRecord> & { id?: string; userId?: string };
 
 function toRecord(payload: IncomingPayload): NotificationRecord | null {
   if (!payload.id || typeof payload.title !== 'string' || !payload.createdAt) return null;
@@ -150,6 +150,10 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let connectedOnce = false;
 
+    // Admins receive every user's events on the shared stream, so only accept
+    // notification events addressed to the current user for the live inbox.
+    const selfId = toAppUserId(user.uid);
+
     void refresh();
 
     const clearTimer = () => {
@@ -190,6 +194,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
               payload?: IncomingPayload;
             };
             if (data.type !== 'notification' || !data.payload) return;
+            if (data.payload.userId && data.payload.userId !== selfId) return;
             const record = toRecord(data.payload);
             if (record) pushIncoming(record);
           } catch {
