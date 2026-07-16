@@ -4,12 +4,14 @@ import type {
   DeploymentWorkbenchCapabilities,
   DeploymentWorkbenchInput,
   MetadataSelection,
+  StaticAnalysisEngineInfo,
   WorkbenchStrategy,
 } from '@sfcc/shared';
 
 export type SourceMode = 'org_compare' | 'scm';
 export type WorkbenchCapabilities = Omit<DeploymentWorkbenchCapabilities, 'supports'> & {
   staticAnalysisAvailability?: Record<string, boolean>;
+  staticAnalysisEngineInfo?: StaticAnalysisEngineInfo[];
   supports: DeploymentWorkbenchCapabilities['supports'] & {
     destructiveOnly?: boolean;
     destructiveAcknowledgement?: boolean;
@@ -128,7 +130,14 @@ export interface WorkbenchPreview {
     sourceIdentityHash?: string;
     targetHash?: string;
   };
-  destructiveReview?: DestructiveReview;
+  destructiveReview?: {
+    requiresReview: boolean;
+    componentCount: number;
+    apiVersion: string;
+    manifestXml: string;
+    digest: string;
+    warning?: string;
+  } | null;
   dependencies?: {
     nodes: DependencyGraph['nodes'];
     edges: DependencyGraph['edges'];
