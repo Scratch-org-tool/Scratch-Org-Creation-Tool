@@ -25,7 +25,7 @@ import { useNavigation } from '@/contexts/navigation-context';
 import { useAuth } from '@/contexts/auth-context';
 import { canAccessModule } from '@/lib/auth-utils';
 import {
-  ADMIN_NAV_ITEM,
+  ADMIN_NAV_ITEMS,
   APP_NAV,
   avatarColor,
   canAccessNavItem,
@@ -35,6 +35,7 @@ import {
 } from '@/lib/app-nav';
 import { cn } from '@/utils/cn';
 import { openCopilot } from '@/store';
+import { NotificationBell } from '@/modules/notifications';
 import { navigateFromSidebar } from './sidebar-navigation';
 
 export const SIDEBAR_EXPANDED_PX = 260;
@@ -313,21 +314,25 @@ function SidebarPanel({
               ))
             )}
 
-            {profile?.role === 'admin' && (
-              <NavButton
-                label={ADMIN_NAV_ITEM.label}
-                icon={ADMIN_NAV_ITEM.icon}
-                active={pathname.startsWith('/admin')}
-                collapsed={!expanded}
-                onClick={() => navigate(ADMIN_NAV_ITEM.href)}
-              />
-            )}
+            {profile?.role === 'admin' &&
+              ADMIN_NAV_ITEMS.map((item) => (
+                <NavButton
+                  key={item.href}
+                  label={item.label}
+                  icon={item.icon}
+                  active={pathname === item.href || pathname.startsWith(`${item.href}/`)}
+                  collapsed={!expanded}
+                  onClick={() => navigate(item.href)}
+                />
+              ))}
           </div>
         </div>
 
         {/* Footer */}
         <div className="shrink-0 border-t border-white/8 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
           <div className="flex flex-col gap-0.5">
+            <NotificationBell collapsed={!expanded} />
+
             <NavButton
               label="AI Copilot"
               icon={Bot}
