@@ -3,17 +3,23 @@ import {
   Bug,
   Cloud,
   FileStack,
-  Layers,
   LayoutDashboard,
   Rocket,
   Shield,
 } from 'lucide-react';
 import { canAccessModule, type AppModule } from '@/lib/auth-utils';
+import { DEPLOYMENT_LINKS } from '@/lib/deployment-links';
 import type { LucideIcon } from 'lucide-react';
 
 export interface NavChild {
   href: string;
   label: string;
+  /** Visible when the user can access ANY of these modules (omit = always). */
+  modules?: AppModule[];
+  /** Rendered non-interactive with a lock (e.g. "coming soon"). */
+  locked?: boolean;
+  /** Extra path prefixes that mark this child active. */
+  activePrefixes?: string[];
 }
 
 export interface NavItem {
@@ -25,6 +31,24 @@ export interface NavItem {
   activePrefixes?: string[];
   accessibleModules?: AppModule[];
 }
+
+/** Deployment submenu + active prefixes, derived from the shared link source. */
+const DEPLOYMENT_CHILDREN: NavChild[] = DEPLOYMENT_LINKS.map((link) => ({
+  href: link.href,
+  label: link.label,
+  modules: link.modules,
+  locked: link.locked,
+  activePrefixes: link.activePrefixes,
+}));
+
+const DEPLOYMENT_ACTIVE_PREFIXES = Array.from(
+  new Set([
+    '/deployment-center',
+    ...DEPLOYMENT_LINKS.flatMap(
+      (link) => link.activePrefixes ?? [link.href.split('?')[0]!],
+    ),
+  ]),
+);
 
 /** Flat top-level nav — hubs + breadcrumbs handle drill-down. */
 export const APP_NAV: NavItem[] = [
@@ -49,20 +73,8 @@ export const APP_NAV: NavItem[] = [
     icon: Rocket,
     module: 'deployment',
     accessibleModules: ['deployment', 'data', 'org-setup', 'provisioning'],
-    activePrefixes: [
-      '/deployment-center',
-      '/data-center',
-      '/org-setup',
-      '/user-provisioning',
-      '/custom-settings-load',
-    ],
-  },
-  {
-    href: '/deployment-workbench',
-    label: 'Deployment Workbench',
-    icon: Layers,
-    module: 'deployment',
-    activePrefixes: ['/metadata-deployment'],
+    children: DEPLOYMENT_CHILDREN,
+    activePrefixes: DEPLOYMENT_ACTIVE_PREFIXES,
   },
   { href: '/monitoring', label: 'Monitoring', icon: Activity, module: 'monitoring' },
   { href: '/defects-command-centre', label: 'Developer Board', icon: Bug, module: 'defects' },
@@ -87,6 +99,40 @@ export function canAccessNavItem(
 ): boolean {
   const modules = item.accessibleModules ?? [item.module];
   return modules.some((m) => canAccessModule(profile, m));
+}
+
+export function canAccessNavChild(
+  profile: Parameters<typeof canAccessModule>[0],
+  child: NavChild,
+): boolean {
+  if (!child.modules || child.modules.length === 0) return true;
+  return child.modules.some((m) => canAccessModule(profile, m));
+}
+
+/**
+ * Child links may carry query strings (e.g. `/data-center?tab=cona`). Match on
+ * the path (plus any `activePrefixes`) and, when present, the query params too,
+ * so sibling tabs of the same base route highlight independently.
+ */
+export function isNavChildActive(
+  pathname: string,
+  search: string,
+  child: NavChild,
+): boolean {
+  const [base, query] = child.href.split('?');
+  const prefixes = [base!, ...(child.activePrefixes ?? [])];
+  const pathMatches = prefixes.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+  if (!pathMatches) return false;
+  if (!query) return true;
+
+  const expected = new URLSearchParams(query);
+  const current = new URLSearchParams(search);
+  for (const [key, value] of expected) {
+    if (current.get(key) !== value) return false;
+  }
+  return true;
 }
 
 export function userInitials(name: string): string {

@@ -345,19 +345,19 @@ The app uses a **compact flat sidebar**, **gradient page headers** (`DeploymentP
 |------|-------|
 | **Dashboard** | Premium overview — KPI cards, platform health, quick actions |
 | **Environment** | **Integrations hub** — Connected orgs, Salesforce, Azure DevOps, scratch orgs (tabbed workspace) |
-| **Deployment** | Hub page with CI/CD, Data Operations, and Org & Users cards |
+| **Deployment** | Expands into a submenu of every deployment tool (CI/CD, Data Operations, Org & Users) and opens the Deployment Center hub |
 | **Monitoring** | Job stats and recent jobs table (select a row for status details) |
 | **User Access** | Admin only |
 
-### Deployment Center hub
+### Deployment Center hub & sidebar submenu
 
-`/deployment-center` groups tools by permission:
+Selecting **Deployment** in the sidebar expands a submenu of every deployment tool, and the same links power the `/deployment-center` hub page. Both read from a single source of truth (`apps/web/src/lib/deployment-links.ts`) and are grouped/gated by permission:
 
-- **CI/CD** — Azure DevOps Deployment Center, Jenkins (coming soon)
-- **Data Operations** — unified tabbed workspace at `/data-center` (CONA seed, deploy, replication, templates)
-- **Org & Users** — unified tabbed workspace at `/org-setup` (baseline setup, load config, CONA users, CSV users)
+- **CI/CD deployment** (`deployment`) — Deployment Workbench, Git Metadata Deploy, Org-to-Org Metadata, Jenkins (coming soon)
+- **Data operations** (`data`) — Data Operations, Org-to-Org Data Deploy, Custom Settings Load
+- **Org & users** (`org-setup` / `provisioning`) — Org & Users
 
-Legacy routes redirect to tabbed workspaces (e.g. `/user-provisioning` → `/org-setup?tab=users-cona`).
+Deployment Workbench is reached from this submenu/hub — it is **not** a separate top-level sidebar item (no duplicates). Legacy routes redirect to tabbed workspaces (e.g. `/user-provisioning` → `/org-setup?tab=users-cona`).
 
 ### Studio UI kit
 
