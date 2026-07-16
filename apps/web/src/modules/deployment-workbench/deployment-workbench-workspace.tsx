@@ -30,6 +30,7 @@ import { cn } from '@/utils/cn';
 import type { DeploymentWorkbenchState } from './use-deployment-workbench';
 import { useDeploymentWorkbench } from './use-deployment-workbench';
 import { ComponentsComparisonWindow } from './components-comparison-window';
+import { MetadataTypePicker } from './metadata-type-picker';
 import type { DependencyGraph, WorkbenchStage } from './types';
 import {
   componentCount,
@@ -183,9 +184,14 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
   const sameOrg = Boolean(
     orgCompare && w.form.sourceOrgId && w.form.sourceOrgId === w.form.targetOrgId,
   );
+  const bothOrgsSelected = Boolean(
+    w.form.sourceOrgId && w.form.targetOrgId && w.form.sourceOrgId !== w.form.targetOrgId,
+  );
+  const typesSelected = w.compareTypes.length > 0;
   const sourceReady = orgCompare
-    ? Boolean(w.form.sourceOrgId && w.form.targetOrgId && w.form.sourceOrgId !== w.form.targetOrgId)
+    ? bothOrgsSelected
     : Boolean(w.scmSource && w.form.targetOrgId);
+  const canCompare = sourceReady && (!orgCompare || typesSelected);
 
   const startCompare = () => {
     w.setStep(1);
@@ -288,6 +294,21 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
           </InlineAlert>
         )}
 
+        {orgCompare && (
+          <MetadataTypePicker
+            available={w.availableTypes}
+            selected={w.compareTypes}
+            common={w.commonCompareTypes}
+            loading={w.availableTypesLoading}
+            error={w.availableTypesError}
+            disabled={!bothOrgsSelected}
+            onToggle={w.toggleCompareType}
+            onSelectCommon={w.selectCommonCompareTypes}
+            onSelectAll={w.selectAllCompareTypes}
+            onClear={w.clearCompareTypes}
+          />
+        )}
+
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Environment profile" htmlFor="workbench-environment">
             <Select
@@ -328,11 +349,13 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
           <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/10 p-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <GitCompare className="size-4 shrink-0 text-primary" aria-hidden="true" />
-              {sourceReady
-                ? 'Ready. Choose "Compare orgs" to load every metadata difference between the two orgs.'
-                : 'Select a source and target org to enable the comparison.'}
+              {!bothOrgsSelected
+                ? 'Select a source and target org to enable the comparison.'
+                : !typesSelected
+                  ? 'Select at least one metadata type above to compare.'
+                  : `Ready. "Compare orgs" loads differences for ${w.compareTypes.length} metadata type${w.compareTypes.length === 1 ? '' : 's'}.`}
             </p>
-            <Button type="button" onClick={startCompare} disabled={!sourceReady}>
+            <Button type="button" onClick={startCompare} disabled={!canCompare}>
               <GitCompare className="mr-2 size-4" /> Compare orgs
             </Button>
           </div>

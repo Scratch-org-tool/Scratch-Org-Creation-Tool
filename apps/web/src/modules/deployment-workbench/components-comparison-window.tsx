@@ -312,8 +312,8 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
                 {comparisonSummary
                   ? `${comparisonSummary.total} components inspected${running ? ' · still loading…' : ''}`
                   : running
-                    ? 'Discovering metadata types and components from both orgs…'
-                    : 'Metadata is loaded automatically from the selected source and target orgs.'}
+                    ? 'Comparing the selected metadata types across both orgs…'
+                    : 'Only the metadata types you selected on the Source step are compared.'}
               </p>
             </div>
           </div>
@@ -339,9 +339,9 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
         <InlineAlert variant="info">
           {comparisonSummary?.progress?.phase === 'resolving_xml'
             ? `Inspecting source and target XML (${comparisonSummary.progress.resolvedItems ?? 0} of ${comparisonSummary.progress.totalItems ?? 0}). Results update automatically.`
-            : comparisonSummary?.progress?.totalTypes
-              ? `Loading metadata types (${comparisonSummary.progress.completedTypes} of ${comparisonSummary.progress.totalTypes}). Results appear as each type completes.`
-              : 'Discovering all supported metadata types. Results appear automatically.'}
+              : comparisonSummary?.progress?.totalTypes
+                ? `Comparing metadata types (${comparisonSummary.progress.completedTypes} of ${comparisonSummary.progress.totalTypes}). Results appear as each type completes.`
+                : 'Comparing the selected metadata types. Results appear automatically.'}
         </InlineAlert>
       )}
 
@@ -382,7 +382,7 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
           <ListTree className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true" />
           <p className="text-sm font-medium">No metadata components found</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Return to Source and confirm that both connected orgs are available.
+            Return to Source to adjust the selected metadata types, and confirm both orgs are available.
           </p>
         </div>
       )}

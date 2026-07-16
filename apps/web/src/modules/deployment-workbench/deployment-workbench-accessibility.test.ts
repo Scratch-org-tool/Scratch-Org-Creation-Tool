@@ -54,4 +54,14 @@ describe('deployment workbench component semantics', () => {
     expect(source).toContain("['passed', 'failed', 'cancelled', 'rejected'].includes(w.status.status)");
     expect(source).toContain('<ComponentsStep w={w} />');
   });
+
+  it('lets the user choose which metadata types are compared', () => {
+    // The comparison is scoped to the user's selection instead of every type.
+    expect(hookSource).toContain('types: compareTypes');
+    expect(hookSource).toContain('if (!compareTypes.length) return;');
+    expect(hookSource).toContain('/types?pageSize=2000');
+    // A required type selection gates the comparison in the UI.
+    expect(source).toContain('<MetadataTypePicker');
+    expect(source).toContain('disabled={!canCompare}');
+  });
 });
