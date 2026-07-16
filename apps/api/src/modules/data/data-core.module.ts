@@ -12,9 +12,10 @@ import { QuerySectionRuntimeService } from './query-section-runtime.service';
 import { DataRollbackService } from './data-rollback.service';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
 import { JobsModule } from '../jobs/jobs.module';
+import { StreamModule } from '../stream/stream.module';
 
 @Module({
-  imports: [forwardRef(() => OrchestratorModule), JobsModule],
+  imports: [forwardRef(() => OrchestratorModule), JobsModule, StreamModule],
   providers: [
     RecordTypeMapperService,
     QuerySetService,
