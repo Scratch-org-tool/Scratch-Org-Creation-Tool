@@ -648,6 +648,38 @@ model AppUser {
   @@index([status])
 }
 
+/// Per-user notification inbox entry. Rows are only created when an
+/// administrator has enabled notifications and the relevant category is on.
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  category  String    @default("system")
+  level     String    @default("info")
+  title     String
+  body       String?
+  link      String?
+  jobId     String?
+  metadata  Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+/// Global, admin-owned notification controls. A single "global" row decides
+/// whether notifications are sent at all, which channels deliver, and which
+/// categories are active. Absent row => notifications are off.
+model NotificationSetting {
+  id         String   @id @default("global")
+  enabled    Boolean  @default(false)
+  channels   Json     @default("{\"inApp\":true,\"email\":false}")
+  categories Json     @default("{\"deployment\":true,\"data\":true,\"environment\":true,\"provisioning\":true,\"system\":true}")
+  updatedBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
 /// Security audit trail. Metadata must never contain credentials, bearer
 /// tokens, passwords, raw IP addresses, or raw user-agent values.
 model AuthAuditEvent {
