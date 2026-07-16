@@ -9,5 +9,6 @@ import { DataModule } from '../data/data.module';
   imports: [DeploymentModule, MetadataModule, DataModule],
   controllers: [PlansController],
   providers: [PlansService],
+  exports: [PlansService],
 })
 export class PlansModule {}
