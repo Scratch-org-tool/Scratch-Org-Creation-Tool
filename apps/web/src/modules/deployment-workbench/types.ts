@@ -39,6 +39,30 @@ export interface CompareSummary {
   deleted: number;
   same: number;
   unknown: number;
+  typeErrors?: Array<{ metadataType: string; org: 'source' | 'target'; error: string }>;
+}
+
+export type CompareDiffType = CompareItem['diffType'];
+
+export interface CompareTypeSummary {
+  metadataType: string;
+  total: number;
+  new: number;
+  changed: number;
+  deleted: number;
+  same: number;
+  unknown: number;
+}
+
+export interface CompareFilters {
+  metadataType: string;
+  diffTypes: CompareDiffType[];
+  search: string;
+}
+
+export interface CompareRelatedChildren {
+  objectName: string;
+  childTypes: Array<{ type: string; count: number }>;
 }
 
 export interface WorkbenchForm {

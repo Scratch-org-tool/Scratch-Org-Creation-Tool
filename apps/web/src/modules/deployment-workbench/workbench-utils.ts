@@ -6,6 +6,7 @@ import type {
 } from '@sfcc/shared';
 import type {
   CompareItem,
+  CompareTypeSummary,
   DependencyGraph,
   WorkbenchCapabilities,
   WorkbenchForm,
@@ -149,6 +150,50 @@ export function selectionsFromCompareItems(
 
 export function componentCount(selections: MetadataSelection[]): number {
   return selections.reduce((total, selection) => total + selection.members.length, 0);
+}
+
+export function compareTypeSummaries(items: CompareItem[]): CompareTypeSummary[] {
+  const grouped = new Map<string, CompareTypeSummary>();
+  for (const item of items) {
+    const existing = grouped.get(item.metadataType) ?? {
+      metadataType: item.metadataType,
+      total: 0,
+      new: 0,
+      changed: 0,
+      deleted: 0,
+      same: 0,
+      unknown: 0,
+    };
+    existing.total += 1;
+    existing[item.diffType] += 1;
+    grouped.set(item.metadataType, existing);
+  }
+  return [...grouped.values()].sort((left, right) => left.metadataType.localeCompare(right.metadataType));
+}
+
+export function filterCompareItems(
+  items: CompareItem[],
+  filters: { metadataType?: string; diffTypes?: CompareItem['diffType'][]; search?: string },
+): CompareItem[] {
+  const query = filters.search?.trim().toLowerCase();
+  return items.filter((item) => {
+    if (filters.metadataType && item.metadataType !== filters.metadataType) return false;
+    if (filters.diffTypes?.length && !filters.diffTypes.includes(item.diffType)) return false;
+    if (query && !item.fullName.toLowerCase().includes(query)) return false;
+    return true;
+  });
+}
+
+export function buildCompareKey(metadataType: string, fullName: string): string {
+  return `${metadataType}::${fullName}`;
+}
+
+export function splitCompareKey(key: string): { metadataType: string; fullName: string } {
+  const separator = key.indexOf('::');
+  if (separator <= 0 || separator === key.length - 2) {
+    return { metadataType: key, fullName: key };
+  }
+  return { metadataType: key.slice(0, separator), fullName: key.slice(separator + 2) };
 }
 
 export function validateWorkbenchForm(

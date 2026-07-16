@@ -361,6 +361,18 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     });
   }, [compareItems]);
 
+  const selectCompareItems = useCallback((items: CompareItem[], selected: boolean) => {
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      for (const item of items) {
+        const key = `${item.metadataType}::${item.fullName}`;
+        if (selected) next.add(key);
+        else next.delete(key);
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     const selected = compareItems.filter((item) =>
       selectedKeys.has(`${item.metadataType}::${item.fullName}`));
@@ -763,6 +775,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     refreshComparison,
     toggleCompareItem,
     selectDiffType,
+    selectCompareItems,
     preview,
     previewing,
     previewPlan,
