@@ -84,7 +84,7 @@ export class MetadataCompareService {
       input.targetOrgId,
     ].join(':');
     const claimed = await prisma.$transaction(async (tx) => {
-      await tx.$queryRawUnsafe(
+      await tx.$executeRawUnsafe(
         'SELECT pg_advisory_xact_lock(hashtext($1))',
         comparisonLockKey,
       );

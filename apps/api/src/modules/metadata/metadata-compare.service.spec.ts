@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
     update: vi.fn(),
   },
   $queryRawUnsafe: vi.fn(),
+  $executeRawUnsafe: vi.fn(),
   $transaction: vi.fn(),
 }));
 
@@ -40,6 +41,7 @@ describe('MetadataCompareService automatic catalog comparison', () => {
     db.metadataComparison.create.mockResolvedValue({ id: 'comparison-1' });
     db.metadataComparison.update.mockResolvedValue({});
     db.$queryRawUnsafe.mockResolvedValue([]);
+    db.$executeRawUnsafe.mockResolvedValue(0);
     db.$transaction.mockImplementation((callback: (tx: typeof db) => unknown) => callback(db));
     service = new MetadataCompareService({
       listTypesRaw,
