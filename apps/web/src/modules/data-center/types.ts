@@ -1,4 +1,4 @@
-export type DataCenterTab = 'cona' | 'deploy' | 'replication' | 'templates' | 'org-to-org';
+export type DataCenterTab = 'cona' | 'deploy' | 'replication' | 'templates';
 
 export interface Org {
   id: string;
@@ -83,6 +83,8 @@ export interface OrgToOrgObjectDeployConfig {
   matchCount?: number;
   previewRecords?: unknown[];
   displayFields?: string[];
+  /** SOQL used by the latest preview — reused for target comparison. */
+  previewSoql?: string;
   dependsOn?: string[];
   order?: number;
 }
@@ -117,6 +119,15 @@ export interface OrgToOrgCompareResult {
   matchField: string;
   truncated?: boolean;
   warning?: string;
+}
+
+/** Per-object result of the source-vs-target comparison shown on the review step. */
+export interface OrgToOrgObjectCompareState {
+  summary?: OrgToOrgCompareSummary;
+  matchField?: string;
+  truncated?: boolean;
+  warning?: string;
+  error?: string;
 }
 
 export interface OrgToOrgDeployBatchResult {

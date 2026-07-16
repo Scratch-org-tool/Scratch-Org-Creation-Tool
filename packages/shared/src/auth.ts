@@ -131,6 +131,7 @@ export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
   '/environment-center': 'environment',
   '/scratch-templates': 'environment',
   '/data-center': 'data',
+  '/data-deploy': 'data',
   '/custom-settings-load': 'data',
   '/deployment-center': 'deployment',
   '/metadata-deployment': 'deployment',
