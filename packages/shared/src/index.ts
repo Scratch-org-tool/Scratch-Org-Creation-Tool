@@ -13,6 +13,7 @@ export * from './azure-utils.js';
 export * from './azure-work-items.js';
 export * from './org-to-org-data.js';
 export * from './org-to-org-metadata.js';
+export * from './notifications.js';
 export * from './data-deploy-chunks.js';
 export * from './data-runtime.js';
 export * from './deployment-plan.js';

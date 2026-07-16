@@ -115,7 +115,8 @@ export interface StreamEvent {
     | 'auth_status'
     | 'copilot_chunk'
     | 'deployment_stage'
-    | 'deployment_result';
+    | 'deployment_result'
+    | 'notification';
   payload: Record<string, unknown>;
   timestamp: string;
   /** Owning app-user id — SSE events are only delivered to their owner (admins see all). */
