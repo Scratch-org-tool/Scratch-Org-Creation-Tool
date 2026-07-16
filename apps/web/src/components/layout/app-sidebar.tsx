@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, type ReactNode } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Bot, Lock, LogOut, PanelLeft } from 'lucide-react';
 import { AppLogo } from '@/components/ui/app-logo';
@@ -28,7 +28,9 @@ import {
   ADMIN_NAV_ITEM,
   APP_NAV,
   avatarColor,
+  canAccessNavChild,
   canAccessNavItem,
+  isNavChildActive,
   isNavItemActive,
   userInitials,
   type NavItem,
@@ -174,18 +176,24 @@ function NavButton({
 
 function NavEntry({
   item,
+  profile,
   allowed,
   active,
   collapsed,
   onNavigate,
 }: {
   item: NavItem;
+  profile: Parameters<typeof canAccessNavChild>[0];
   allowed: boolean;
   active: boolean;
   collapsed: boolean;
   onNavigate: (href: string) => void;
 }) {
   const pathname = usePathname();
+  const search = useSearchParams().toString();
+  const visibleChildren = item.children?.filter((child) =>
+    canAccessNavChild(profile, child),
+  );
 
   return (
     <div className="flex flex-col gap-0.5">
@@ -198,21 +206,34 @@ function NavEntry({
         collapsed={collapsed}
         onClick={() => allowed && onNavigate(item.href)}
       />
-      {item.children && active && !collapsed && (
+      {visibleChildren && visibleChildren.length > 0 && active && !collapsed && (
         <motion.div
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: 'auto' }}
           exit={{ opacity: 0, height: 0 }}
           className="ml-3 flex flex-col gap-0.5 border-l border-white/10 pl-3 overflow-hidden"
         >
-          {item.children.map((child) => {
-            const childActive =
-              pathname === child.href || pathname.startsWith(`${child.href}/`);
+          {visibleChildren.map((child) => {
+            if (child.locked) {
+              return (
+                <div
+                  key={child.href}
+                  aria-disabled="true"
+                  title="Coming soon"
+                  className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-white/35 cursor-not-allowed"
+                >
+                  <span className="truncate">{child.label}</span>
+                  <Lock className="size-3 shrink-0 opacity-60" />
+                </div>
+              );
+            }
+            const childActive = isNavChildActive(pathname, search, child);
             return (
               <button
                 key={child.href}
                 type="button"
                 onClick={() => onNavigate(child.href)}
+                aria-current={childActive ? 'page' : undefined}
                 className={cn(
                   'rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-white/10',
                   childActive ? 'text-white font-medium' : 'text-white/55',
@@ -305,6 +326,7 @@ function SidebarPanel({
                 <NavEntry
                   key={item.href}
                   item={item}
+                  profile={profile}
                   allowed={canAccessNavItem(profile, item)}
                   active={isNavItemActive(pathname, item)}
                   collapsed={!expanded}
