@@ -19,6 +19,7 @@ import { useGitMetadataSource } from '@/modules/source-control/use-git-metadata-
 import { api, getStreamUrl } from '@/services/api';
 import type {
   CompareItem,
+  CompareItemDiff,
   CompareSummary,
   DestructiveReview,
   DeploymentHistoryFilters,
@@ -59,6 +60,7 @@ interface TestClassResponse {
 }
 
 const DEFAULT_MANIFEST = 'manifest/package.xml';
+const WORKBENCH_COMPARISON_DRAFT_KEY = 'deployment-workbench:comparison';
 const DEFAULT_HISTORY_FILTERS: DeploymentHistoryFilters = {
   page: 1,
   pageSize: 20,
@@ -70,6 +72,32 @@ const DEFAULT_HISTORY_FILTERS: DeploymentHistoryFilters = {
   dateTo: '',
   owner: '',
 };
+
+interface WorkbenchComparisonDraft {
+  sourceOrgId: string;
+  targetOrgId: string;
+  comparisonId: string;
+  selectedKeys: string[];
+}
+
+function readComparisonDraft(): WorkbenchComparisonDraft | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(WORKBENCH_COMPARISON_DRAFT_KEY) ?? 'null') as
+      | WorkbenchComparisonDraft
+      | null;
+    if (
+      !parsed
+      || typeof parsed.sourceOrgId !== 'string'
+      || typeof parsed.targetOrgId !== 'string'
+      || typeof parsed.comparisonId !== 'string'
+      || !Array.isArray(parsed.selectedKeys)
+    ) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 function historyUrl(filters: DeploymentHistoryFilters): string {
   const query = new URLSearchParams({
@@ -102,6 +130,10 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const [compareItems, setCompareItems] = useState<CompareItem[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [comparing, setComparing] = useState(false);
+  const [selectedCompareItem, setSelectedCompareItem] = useState<CompareItem | null>(null);
+  const [compareItemDiff, setCompareItemDiff] = useState<CompareItemDiff | null>(null);
+  const [compareItemDiffLoading, setCompareItemDiffLoading] = useState(false);
+  const [compareItemDiffError, setCompareItemDiffError] = useState<string | null>(null);
   const [preview, setPreview] = useState<WorkbenchPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [destructiveReview, setDestructiveReview] = useState<DestructiveReview | null>(null);
@@ -129,6 +161,10 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const [historyLoading, setHistoryLoading] = useState(false);
   const compareRequest = useRef(0);
   const comparisonAbort = useRef<AbortController | null>(null);
+  const comparisonAttemptKey = useRef<string | null>(null);
+  const comparisonDraftRestored = useRef(false);
+  const diffRequest = useRef(0);
+  const diffAbort = useRef<AbortController | null>(null);
   const previewRequest = useRef(0);
   const previewAbort = useRef<AbortController | null>(null);
   const runRequest = useRef(0);
@@ -139,6 +175,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
 
   useEffect(() => () => {
     comparisonAbort.current?.abort();
+    diffAbort.current?.abort();
     previewAbort.current?.abort();
     runAbort.current?.abort();
     historyAbort.current?.abort();
@@ -157,11 +194,21 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
   const clearComparison = useCallback(() => {
     compareRequest.current += 1;
     comparisonAbort.current?.abort();
+    diffRequest.current += 1;
+    diffAbort.current?.abort();
+    comparisonAttemptKey.current = null;
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem(WORKBENCH_COMPARISON_DRAFT_KEY);
+    }
     setComparisonStatus('idle');
     setComparisonSummary(null);
     setCompareItems([]);
     setSelectedKeys(new Set());
     setComparing(false);
+    setSelectedCompareItem(null);
+    setCompareItemDiff(null);
+    setCompareItemDiffLoading(false);
+    setCompareItemDiffError(null);
   }, []);
 
   const loadRun = useCallback(async (id: string) => {
@@ -278,7 +325,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     const controller = new AbortController();
     comparisonAbort.current = controller;
     const response = await api<ComparisonResponse>(
-      `/metadata/compare/${id}?page=1&pageSize=5000`,
+      `/metadata/compare/${id}?page=1&pageSize=100000`,
       { signal: controller.signal },
     );
     if (request !== compareRequest.current || controller.signal.aborted) return response;
@@ -287,6 +334,54 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     setCompareItems(response.items);
     return response;
   }, []);
+
+  useEffect(() => {
+    if (loading || comparisonDraftRestored.current) return;
+    comparisonDraftRestored.current = true;
+    const draft = readComparisonDraft();
+    if (!draft) return;
+    if (
+      (form.sourceOrgId && form.sourceOrgId !== draft.sourceOrgId)
+      || (form.targetOrgId && form.targetOrgId !== draft.targetOrgId)
+    ) return;
+    comparisonAttemptKey.current = `${draft.sourceOrgId}:${draft.targetOrgId}`;
+    setForm((current) => ({
+      ...current,
+      sourceMode: 'org_compare',
+      sourceOrgId: draft.sourceOrgId,
+      targetOrgId: draft.targetOrgId,
+      comparisonId: draft.comparisonId,
+    }));
+    setSelectedKeys(new Set(draft.selectedKeys));
+    setComparisonStatus('running');
+    void refreshComparison(draft.comparisonId).catch((cause) => {
+      setComparisonStatus('failed');
+      setError(cause instanceof Error ? cause.message : 'Could not restore metadata comparison.');
+    });
+  }, [form.sourceOrgId, form.targetOrgId, loading, refreshComparison]);
+
+  useEffect(() => {
+    if (
+      form.sourceMode !== 'org_compare'
+      || !form.sourceOrgId
+      || !form.targetOrgId
+      || !form.comparisonId
+      || typeof window === 'undefined'
+    ) return;
+    const draft: WorkbenchComparisonDraft = {
+      sourceOrgId: form.sourceOrgId,
+      targetOrgId: form.targetOrgId,
+      comparisonId: form.comparisonId,
+      selectedKeys: [...selectedKeys],
+    };
+    sessionStorage.setItem(WORKBENCH_COMPARISON_DRAFT_KEY, JSON.stringify(draft));
+  }, [
+    form.comparisonId,
+    form.sourceMode,
+    form.sourceOrgId,
+    form.targetOrgId,
+    selectedKeys,
+  ]);
 
   useEffect(() => {
     if (!form.comparisonId || comparisonStatus !== 'running') return;
@@ -305,14 +400,19 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
 
   const startComparison = useCallback(async () => {
     if (!form.sourceOrgId || !form.targetOrgId || form.sourceOrgId === form.targetOrgId) return;
+    comparisonAttemptKey.current = `${form.sourceOrgId}:${form.targetOrgId}`;
     const request = ++compareRequest.current;
     comparisonAbort.current?.abort();
     const controller = new AbortController();
     comparisonAbort.current = controller;
     setComparing(true);
+    setComparisonStatus('running');
     setError(null);
     setCompareItems([]);
     setSelectedKeys(new Set());
+    setSelectedCompareItem(null);
+    setCompareItemDiff(null);
+    setCompareItemDiffError(null);
     try {
       const response = await api<{ comparisonId: string; status: string }>('/metadata/compare/start', {
         method: 'POST',
@@ -332,12 +432,49 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       }
     } catch (cause) {
       if (request === compareRequest.current && !controller.signal.aborted) {
+        setComparisonStatus('failed');
         setError(cause instanceof Error ? cause.message : 'Could not compare orgs.');
       }
     } finally {
       if (request === compareRequest.current) setComparing(false);
     }
   }, [form.sourceOrgId, form.targetOrgId, refreshComparison]);
+
+  useEffect(() => {
+    if (
+      step !== 1
+      || form.sourceMode !== 'org_compare'
+      || !form.sourceOrgId
+      || !form.targetOrgId
+      || form.sourceOrgId === form.targetOrgId
+      || form.comparisonId
+      || comparisonStatus !== 'idle'
+      || comparing
+    ) return;
+    const key = `${form.sourceOrgId}:${form.targetOrgId}`;
+    if (comparisonAttemptKey.current === key) return;
+    comparisonAttemptKey.current = key;
+    void startComparison();
+  }, [
+    comparing,
+    comparisonStatus,
+    form.comparisonId,
+    form.sourceMode,
+    form.sourceOrgId,
+    form.targetOrgId,
+    startComparison,
+    step,
+  ]);
+
+  const retryComparison = useCallback(() => {
+    comparisonAttemptKey.current = null;
+    setError(null);
+    setForm((current) => ({ ...current, comparisonId: undefined }));
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem(WORKBENCH_COMPARISON_DRAFT_KEY);
+    }
+    void startComparison();
+  }, [startComparison]);
 
   const toggleCompareItem = useCallback((item: CompareItem) => {
     const key = `${item.metadataType}::${item.fullName}`;
@@ -372,6 +509,51 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       return next;
     });
   }, []);
+
+  const loadCompareItemDiff = useCallback(async (item: CompareItem) => {
+    if (!form.comparisonId) return null;
+    const request = ++diffRequest.current;
+    diffAbort.current?.abort();
+    const controller = new AbortController();
+    diffAbort.current = controller;
+    setSelectedCompareItem(item);
+    setCompareItemDiff(null);
+    setCompareItemDiffError(null);
+    setCompareItemDiffLoading(true);
+    try {
+      const query = new URLSearchParams({
+        type: item.metadataType,
+        name: item.fullName,
+      });
+      const response = await api<CompareItemDiff>(
+        `/metadata/compare/${form.comparisonId}/diff?${query.toString()}`,
+        { signal: controller.signal },
+      );
+      if (request !== diffRequest.current || controller.signal.aborted) return null;
+      const resolvedDiffType = item.diffType === 'new' || item.diffType === 'deleted'
+        ? item.diffType
+        : response.contentDiffers
+          ? 'changed'
+          : 'same';
+      const resolvedItem = { ...item, diffType: resolvedDiffType } as CompareItem;
+      setCompareItemDiff(response);
+      setSelectedCompareItem(resolvedItem);
+      if (resolvedDiffType !== item.diffType) {
+        setCompareItems((current) => current.map((candidate) =>
+          candidate.metadataType === item.metadataType && candidate.fullName === item.fullName
+            ? resolvedItem
+            : candidate));
+      }
+      return response;
+    } catch (cause) {
+      if (request === diffRequest.current && !controller.signal.aborted) {
+        setCompareItemDiffError(cause instanceof Error ? cause.message : 'Could not load metadata XML.');
+      }
+      return null;
+    } finally {
+      if (request === diffRequest.current) setCompareItemDiffLoading(false);
+    }
+  }, [form.comparisonId]);
 
   useEffect(() => {
     const selected = compareItems.filter((item) =>
@@ -772,10 +954,16 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     selectedKeys,
     comparing,
     startComparison,
+    retryComparison,
     refreshComparison,
     toggleCompareItem,
     selectDiffType,
     selectCompareItems,
+    selectedCompareItem,
+    compareItemDiff,
+    compareItemDiffLoading,
+    compareItemDiffError,
+    loadCompareItemDiff,
     preview,
     previewing,
     previewPlan,

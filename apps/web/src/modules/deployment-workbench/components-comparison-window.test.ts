@@ -23,6 +23,8 @@ describe('components comparison window', () => {
     expect(source).toContain('type="checkbox"');
     expect(source).toContain('Previous');
     expect(source).toContain('Next');
+    expect(source).toContain('No difference');
+    expect(source).toContain('Not inspected');
   });
 
   it('provides a related components panel with add-to-selection actions', () => {
@@ -35,5 +37,13 @@ describe('components comparison window', () => {
   it('uses stable compare keys for selection identity', () => {
     expect(source).toContain('buildCompareKey(');
     expect(source).toContain('onSelectItems(');
+  });
+
+  it('loads comparison data automatically and opens XML from component names', () => {
+    expect(source).not.toContain('Compare again');
+    expect(source).not.toContain('Run comparison');
+    expect(source).toContain('Retry metadata loading');
+    expect(source).toContain('<MetadataXmlDiffViewer');
+    expect(source).toContain('onClick={onOpen}');
   });
 });

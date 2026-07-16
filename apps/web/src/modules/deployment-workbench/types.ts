@@ -30,6 +30,8 @@ export interface CompareItem {
   fullName: string;
   metadataType: string;
   diffType: 'new' | 'changed' | 'deleted' | 'same' | 'unknown';
+  lastModifiedDate?: string;
+  lastModifiedBy?: string;
 }
 
 export interface CompareSummary {
@@ -40,6 +42,14 @@ export interface CompareSummary {
   same: number;
   unknown: number;
   typeErrors?: Array<{ metadataType: string; org: 'source' | 'target'; error: string }>;
+  progress?: {
+    phase: 'discovering_types' | 'listing_components' | 'resolving_xml' | 'completed';
+    completedTypes: number;
+    totalTypes: number;
+    resolvedItems?: number;
+    totalItems?: number;
+    failedItems?: number;
+  };
 }
 
 export type CompareDiffType = CompareItem['diffType'];
@@ -63,6 +73,17 @@ export interface CompareFilters {
 export interface CompareRelatedChildren {
   objectName: string;
   childTypes: Array<{ type: string; count: number }>;
+}
+
+export interface CompareItemDiff {
+  sourceXml: string;
+  targetXml: string;
+  diffLines: Array<{ value: string; added?: boolean; removed?: boolean }>;
+  contentDiffers: boolean;
+  cached?: boolean;
+  loadStatus?: 'ok' | 'partial' | 'failed';
+  retrieveWarnings?: { source?: string; target?: string };
+  truncated?: boolean;
 }
 
 export interface WorkbenchForm {
