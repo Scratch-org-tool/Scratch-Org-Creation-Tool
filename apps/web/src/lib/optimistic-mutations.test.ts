@@ -223,6 +223,7 @@ describe('admin user-access optimistic mutation', () => {
       inactive: 0,
       admins: 0,
       pendingInvites: 0,
+      newThisWeek: 0,
       totalTrendPct: null,
     },
   };

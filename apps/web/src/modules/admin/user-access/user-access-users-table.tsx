@@ -1,12 +1,12 @@
 'use client';
 
-import { MoreHorizontal, Search, Settings } from 'lucide-react';
+import { Download, Search, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input, Select } from '@/components/ui/input';
 import { GlassCard } from '@/components/studio';
 import { relativeTime } from '@/lib/ui-utils';
 import { cn } from '@/utils/cn';
-import type { UserAccessRow, UserStatusFilter } from './types';
+import type { UserAccessRow, UserRoleFilter, UserStatusFilter } from './types';
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
@@ -41,13 +41,15 @@ interface UserAccessUsersTableProps {
   onSearchChange: (v: string) => void;
   statusFilter: UserStatusFilter;
   onStatusFilterChange: (v: UserStatusFilter) => void;
+  roleFilter: UserRoleFilter;
+  onRoleFilterChange: (v: UserRoleFilter) => void;
+  onExport: () => void;
   page: number;
   pageSize: number;
   totalPages: number;
   onPageChange: (p: number) => void;
   onPageSizeChange: (n: number) => void;
   onManage: (user: UserAccessRow) => void;
-  currentUserId?: string;
   savingId?: string | null;
 }
 
@@ -58,13 +60,15 @@ export function UserAccessUsersTable({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
+  roleFilter,
+  onRoleFilterChange,
+  onExport,
   page,
   pageSize,
   totalPages,
   onPageChange,
   onPageSizeChange,
   onManage,
-  currentUserId,
   savingId,
 }: UserAccessUsersTableProps) {
   const start = allCount === 0 ? 0 : (page - 1) * pageSize + 1;
@@ -83,11 +87,21 @@ export function UserAccessUsersTable({
               className="pl-9 h-9"
             />
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="h-9 text-xs" type="button" disabled>
-              Filters
-            </Button>
+          <div className="flex flex-wrap gap-2">
             <Select
+              aria-label="Filter by role"
+              value={roleFilter}
+              onChange={(e) => onRoleFilterChange(e.target.value as UserRoleFilter)}
+              className="h-9 text-xs w-[140px]"
+            >
+              <option value="all">All Roles</option>
+              <option value="Super Admin">Super Admin</option>
+              <option value="Integration">Integration</option>
+              <option value="Developer">Developer</option>
+              <option value="Viewer">Viewer</option>
+            </Select>
+            <Select
+              aria-label="Filter by status"
               value={statusFilter}
               onChange={(e) => onStatusFilterChange(e.target.value as UserStatusFilter)}
               className="h-9 text-xs w-[120px]"
@@ -96,6 +110,17 @@ export function UserAccessUsersTable({
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
             </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 text-xs"
+              type="button"
+              onClick={onExport}
+              disabled={allCount === 0}
+            >
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              Export
+            </Button>
           </div>
         </div>
       </div>
@@ -190,11 +215,6 @@ export function UserAccessUsersTable({
                       <Settings className="w-3.5 h-3.5 mr-1" />
                       Manage
                     </Button>
-                    {user.id !== currentUserId && (
-                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0" type="button" disabled>
-                        <MoreHorizontal className="w-4 h-4" />
-                      </Button>
-                    )}
                   </div>
                 </td>
               </tr>

@@ -4,11 +4,14 @@ import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ConfirmBanner, InlineAlert, PageHeader } from '@/components/studio';
-import { UserAccessComingSoon, UserAccessTabs } from './user-access-tabs';
+import { UserAccessTabs } from './user-access-tabs';
 import { UserAccessManageDrawer } from './user-access-manage-drawer';
 import { UserAccessQuickCards } from './user-access-quick-cards';
 import { UserAccessStatCards } from './user-access-stat-cards';
 import { UserAccessUsersTable } from './user-access-users-table';
+import { UserAccessActivityLog } from './user-access-activity-log';
+import { UserAccessRoles } from './user-access-roles';
+import { UserAccessPermissions } from './user-access-permissions';
 import { useUserAccessWorkspace } from './use-user-access-workspace';
 
 export function UserAccessWorkspace() {
@@ -25,6 +28,9 @@ export function UserAccessWorkspace() {
     setSearch,
     statusFilter,
     setStatusFilter,
+    roleFilter,
+    setRoleFilter,
+    exportCsv,
     page,
     setPage,
     pageSize,
@@ -117,22 +123,24 @@ export function UserAccessWorkspace() {
           onSearchChange={setSearch}
           statusFilter={statusFilter}
           onStatusFilterChange={setStatusFilter}
+          roleFilter={roleFilter}
+          onRoleFilterChange={setRoleFilter}
+          onExport={exportCsv}
           page={page}
           pageSize={pageSize}
           totalPages={totalPages}
           onPageChange={setPage}
           onPageSizeChange={setPageSize}
           onManage={openManage}
-          currentUserId={profile.id}
           savingId={saving ? manageUser?.id : null}
         />
       )}
 
-      {tab === 'roles' && <UserAccessComingSoon label="Roles" />}
-      {tab === 'permissions' && <UserAccessComingSoon label="Permissions" />}
-      {tab === 'activity' && <UserAccessComingSoon label="Activity Logs" />}
+      {tab === 'roles' && <UserAccessRoles users={overview?.users ?? []} />}
+      {tab === 'permissions' && <UserAccessPermissions />}
+      {tab === 'activity' && <UserAccessActivityLog users={overview?.users ?? []} />}
 
-      <UserAccessQuickCards />
+      {tab === 'users' && <UserAccessQuickCards onNavigate={setTab} />}
 
       <UserAccessManageDrawer
         user={manageUser}
