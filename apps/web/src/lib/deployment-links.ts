@@ -1,4 +1,14 @@
-import { Boxes, CalendarClock, Database, Layers, Rocket, Users, Wrench } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  Boxes,
+  CalendarClock,
+  Database,
+  GitBranch,
+  Layers,
+  Settings2,
+  Users,
+  Wrench,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { AppModule } from '@/lib/auth-utils';
 
@@ -25,11 +35,11 @@ export interface DeploymentLink {
 export interface DeploymentSection {
   id: string;
   title: string;
+  /** Compact heading used to group links in the sidebar submenu. */
+  shortTitle: string;
   description: string;
   /** Section is visible when the user can access ANY of these modules. */
   modules: AppModule[];
-  /** Rendered first, full-width, on the hub page. */
-  primary?: boolean;
   columns: 1 | 2 | 3;
   links: DeploymentLink[];
 }
@@ -38,9 +48,9 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
   {
     id: 'cicd',
     title: 'CI/CD deployment',
+    shortTitle: 'CI/CD',
     description: 'Deploy Salesforce metadata from pipeline sources',
     modules: ['deployment'],
-    primary: true,
     columns: 3,
     links: [
       {
@@ -56,7 +66,7 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
         label: 'Git Metadata Deploy',
         description: 'Deploy metadata from Azure DevOps, GitHub, or Bitbucket with live execution logs.',
         href: '/deployment-center/git',
-        icon: Rocket,
+        icon: GitBranch,
         iconBg: 'bg-blue-500/10 text-blue-400',
         modules: ['deployment'],
         activePrefixes: ['/deployment-center/git', '/deployment-center/azure', '/deployment-center/releases'],
@@ -95,25 +105,26 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
   {
     id: 'data',
     title: 'Data operations',
+    shortTitle: 'Data',
     description: 'Move, replicate, and template data across orgs',
     modules: ['data'],
-    columns: 1,
+    columns: 3,
     links: [
       {
-        label: 'Data Operations',
-        description: 'CONA seed, generic deploy, replication, and query templates.',
-        href: '/data-center?tab=cona',
-        icon: Database,
-        iconBg: 'bg-green-500/10 text-green-400',
+        label: 'Org-to-Org Data Deploy',
+        description: 'Pick objects, preview and compare records against the target, then insert or upsert.',
+        href: '/data-deploy',
+        icon: ArrowLeftRight,
+        iconBg: 'bg-indigo-500/10 text-indigo-400',
         modules: ['data'],
-        activePrefixes: ['/data-center'],
+        activePrefixes: ['/data-deploy'],
       },
       {
-        label: 'Org-to-Org Data Deploy',
-        description: 'Compare source vs target records and deploy with insert or upsert.',
-        href: '/data-center?tab=org-to-org',
+        label: 'Data Operations',
+        description: 'CONA seed, generic SOQL deploy, replication, and query templates.',
+        href: '/data-center',
         icon: Database,
-        iconBg: 'bg-indigo-500/10 text-indigo-400',
+        iconBg: 'bg-green-500/10 text-green-400',
         modules: ['data'],
         activePrefixes: ['/data-center'],
       },
@@ -121,7 +132,7 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
         label: 'Custom Settings Load',
         description: 'SFDMU export from a source org to a target org (bundled or custom JSON).',
         href: '/custom-settings-load',
-        icon: Database,
+        icon: Settings2,
         iconBg: 'bg-teal-500/10 text-teal-400',
         modules: ['data'],
         activePrefixes: ['/custom-settings-load'],
@@ -131,9 +142,10 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
   {
     id: 'org',
     title: 'Org & users',
+    shortTitle: 'Org & users',
     description: 'Configure orgs and provision users at scale',
     modules: ['org-setup', 'provisioning'],
-    columns: 1,
+    columns: 3,
     links: [
       {
         label: 'Org & Users',

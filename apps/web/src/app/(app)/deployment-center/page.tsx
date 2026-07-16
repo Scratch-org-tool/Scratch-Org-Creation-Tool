@@ -34,9 +34,6 @@ export default function DeploymentCenterPage() {
     [profile],
   );
 
-  const primarySections = visibleSections.filter((section) => section.primary);
-  const secondarySections = visibleSections.filter((section) => !section.primary);
-
   return (
     <div className="p-4 md:p-6 space-y-5">
       <DeploymentPageHeader
@@ -46,7 +43,7 @@ export default function DeploymentCenterPage() {
         accentClass="to-violet-500/10"
       />
 
-      {primarySections.map((section) => (
+      {visibleSections.map((section) => (
         <DeploymentHubSection
           key={section.id}
           title={section.title}
@@ -55,26 +52,6 @@ export default function DeploymentCenterPage() {
           columns={section.columns}
         />
       ))}
-
-      {secondarySections.length > 0 && (
-        <div
-          className={
-            secondarySections.length > 1
-              ? 'grid grid-cols-1 lg:grid-cols-2 gap-5 items-start'
-              : undefined
-          }
-        >
-          {secondarySections.map((section) => (
-            <DeploymentHubSection
-              key={section.id}
-              title={section.title}
-              description={section.description}
-              actions={section.links.map(toHubAction)}
-              columns={section.columns}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
