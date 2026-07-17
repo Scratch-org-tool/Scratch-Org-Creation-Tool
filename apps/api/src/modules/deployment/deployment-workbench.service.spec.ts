@@ -625,6 +625,9 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       },
     }, 'user-1');
 
+    if (!('dependencies' in preview)) {
+      throw new Error('expected a full preview with dependency resolution');
+    }
     expect(preview.readOnly).toBe(true);
     expect(preview.dependencies.resolvedSelections).toEqual([
       { metadataType: 'ApexClass', members: ['Selected'] },
@@ -721,6 +724,9 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
       },
     }, 'user-1');
 
+    if (!('destructiveReview' in preview)) {
+      throw new Error('expected a full preview with a destructive review');
+    }
     expect(preview.destructiveReview).toEqual(expect.objectContaining({
       requiresReview: true,
       componentCount: 1,

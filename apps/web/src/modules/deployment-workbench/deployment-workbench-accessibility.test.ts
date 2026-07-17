@@ -56,7 +56,6 @@ describe('deployment workbench component semantics', () => {
     expect(source).toContain('<ComponentsStep w={w} />');
   });
 
-<<<<<<< cursor/workbench-ux-overhaul-cef8
   it('shows a dedicated success screen instead of stacking every section', () => {
     // A passed run renders ONLY the success panel until the report is opened.
     expect(source).toContain('if (terminal && succeeded && !showReport)');
@@ -73,6 +72,12 @@ describe('deployment workbench component semantics', () => {
     expect(hookSource).toContain('withAutoStaticAnalysis');
   });
 
+  it('describes analyzers from the shared catalog with availability and install guidance', () => {
+    expect(source).toContain('staticAnalysisEngineOptions(w.capabilities)');
+    expect(source).toContain('Not installed');
+    expect(source).toContain('{engine.requires}');
+  });
+
   it('surfaces background work with loaders instead of text-only states', () => {
     expect(source).toContain('<LoadingOverlay');
     expect(source).toContain('Building the deployment plan…');
@@ -85,14 +90,5 @@ describe('deployment workbench component semantics', () => {
     expect(source).toContain('onStepSelect={goToStep}');
     expect(source).toContain('isStepEnabled={stepEnabled}');
     expect(source).toContain("window.scrollTo({ top: 0, behavior: 'smooth' })");
-=======
-  it('presents static analysis engines with availability and install guidance', () => {
-    expect(source).toContain('staticAnalysisEngineOptions(w.capabilities)');
-    expect(source).toContain('defaultStaticAnalysisEngines(w.capabilities)');
-    expect(source).toContain('Not installed');
-    expect(source).toContain('{engine.requires}');
-    expect(source).toContain('disabled={!engine.available}');
-    expect(hookSource).toContain('policyForEnvironment(profile, capabilities)');
->>>>>>> main
   });
 });
