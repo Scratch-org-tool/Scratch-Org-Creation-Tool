@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 
 import type { CopilotAction } from '@sfcc/shared';
 
@@ -80,18 +79,3 @@ export const useCopilotStore = create<CopilotState>((set) => ({
       streamStartedAt: undefined,
     }),
 }));
-
-interface AppState {
-  persona: 'developer' | 'release_manager' | 'qa' | 'admin';
-  setPersona: (p: AppState['persona']) => void;
-}
-
-export const useAppStore = create<AppState>()(
-  persist(
-    (set) => ({
-      persona: 'developer',
-      setPersona: (persona) => set({ persona }),
-    }),
-    { name: 'sfcc-app-store' },
-  ),
-);

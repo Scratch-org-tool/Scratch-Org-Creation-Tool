@@ -117,7 +117,7 @@ export class CopilotService {
     return {
       ...(clientContext ?? {}),
       grantedModules: serverModules.length > 0 ? serverModules : clientModules,
-      persona: userProfile?.role ?? clientContext?.persona ?? 'user',
+      role: userProfile?.role ?? clientContext?.role ?? 'user',
       displayName: userProfile?.displayName ?? clientContext?.displayName,
     };
   }

@@ -1,8 +1,7 @@
-import { JOB_STATUS, ORG_TYPES, PERSONAS, DEPLOYMENT_STRATEGIES } from '../constants.js';
+import { JOB_STATUS, ORG_TYPES, DEPLOYMENT_STRATEGIES } from '../constants.js';
 
 export type JobStatus = (typeof JOB_STATUS)[keyof typeof JOB_STATUS];
 export type OrgType = (typeof ORG_TYPES)[keyof typeof ORG_TYPES];
-export type Persona = (typeof PERSONAS)[keyof typeof PERSONAS];
 export type DeploymentStrategy = (typeof DEPLOYMENT_STRATEGIES)[keyof typeof DEPLOYMENT_STRATEGIES];
 
 export interface OrgConnection {
@@ -22,7 +21,6 @@ export interface OrgConnection {
 export interface AutomationRun {
   id: string;
   intent: string;
-  persona: Persona;
   status: JobStatus;
   createdBy: string;
   jobs: Job[];

@@ -32,13 +32,6 @@ enum JobStatus {
   cancelled
 }
 
-enum Persona {
-  developer
-  release_manager
-  qa
-  admin
-}
-
 enum DeploymentStrategy {
   azure
   jenkins
@@ -81,7 +74,6 @@ model OrgConnection {
 model AutomationRun {
   id                    String         @id @default(uuid())
   intent                String
-  persona               Persona        @default(developer)
   status                JobStatus      @default(pending)
   createdBy             String         @default("system")
   config                Json?

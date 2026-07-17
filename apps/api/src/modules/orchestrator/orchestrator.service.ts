@@ -12,9 +12,9 @@ export class OrchestratorService {
     private readonly jobsService: JobsService,
   ) {}
 
-  async createAutomationRun(intent: string, persona: string, config?: Record<string, unknown>) {
+  async createAutomationRun(intent: string, config?: Record<string, unknown>) {
     return prisma.automationRun.create({
-      data: { intent, persona: persona as 'developer', config: (config ?? {}) as Prisma.InputJsonValue, status: 'pending' },
+      data: { intent, config: (config ?? {}) as Prisma.InputJsonValue, status: 'pending' },
     });
   }
 

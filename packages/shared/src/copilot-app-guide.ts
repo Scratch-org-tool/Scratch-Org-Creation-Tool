@@ -9,7 +9,7 @@ export interface CopilotClientContext {
   connectedOrgs: Array<{ alias: string; orgId: string; type?: string }>;
   activeTab?: string;
   recentJobId?: string;
-  persona: 'admin' | 'user';
+  role: 'admin' | 'user';
 }
 
 export interface AppGuideRoute {
