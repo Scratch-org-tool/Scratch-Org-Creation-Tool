@@ -1,24 +1,31 @@
 'use client';
 
 import { useMemo, useState, type KeyboardEvent } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
+  ArrowLeft,
   ArrowLeftRight,
+  ArrowRight,
   Boxes,
   CheckCircle2,
+  ClipboardList,
   Cloud,
   Database,
   FileText,
   FlaskConical,
+  GitBranch,
   GitCompare,
   History,
   Lock,
+  Network,
   Play,
   Plus,
+  Rocket,
   RotateCcw,
   ScanSearch,
   ShieldCheck,
-  Target,
   XCircle,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
@@ -32,13 +39,22 @@ import {
   LoadingOverlay,
   PageSkeleton,
   StatusBadge,
-  WizardSteps,
 } from '@/components/studio';
 import { GitMetadataSourceFields } from '@/modules/source-control/git-metadata-source-fields';
+import { DeploymentRiskPanel } from '@/modules/metadata-deployment/deployment-risk-panel';
 import { cn } from '@/utils/cn';
 import type { DeploymentWorkbenchState } from './use-deployment-workbench';
 import { useDeploymentWorkbench } from './use-deployment-workbench';
 import { ComponentsComparisonWindow } from './components-comparison-window';
+import {
+  ChooserDivider,
+  ChooserHero,
+  ChooserOptionRow,
+  ChooserPanel,
+  FlowCard,
+  WorkbenchStepper,
+  type WorkbenchStepDefinition,
+} from './workbench-chooser';
 import type { DependencyGraph, WorkbenchStage } from './types';
 import {
   componentCount,
@@ -54,44 +70,150 @@ import {
   WORKBENCH_STEPS,
 } from './workbench-utils';
 
+const STEP_DEFINITIONS: WorkbenchStepDefinition[] = [
+  { label: WORKBENCH_STEPS[0], icon: ArrowLeftRight },
+  { label: WORKBENCH_STEPS[1], icon: GitCompare },
+  { label: WORKBENCH_STEPS[2], icon: Network },
+  { label: WORKBENCH_STEPS[3], icon: ShieldCheck },
+  { label: WORKBENCH_STEPS[4], icon: ClipboardList },
+  { label: WORKBENCH_STEPS[5], icon: Rocket },
+];
+
+type WorkbenchFlow = 'landing' | 'metadata' | 'data';
+
 export function DeploymentWorkbenchWorkspace({
   sourceMode,
 }: {
   sourceMode?: 'org_compare' | 'scm';
 } = {}) {
   const w = useDeploymentWorkbench(sourceMode);
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState<'plan' | 'history'>('plan');
+
+  // The flow lives in the URL so deep links, refresh, and back/forward work.
+  // Run and source deep links (history, other pages) land straight in the
+  // metadata flow instead of the chooser.
+  const flowParam = searchParams.get('flow');
+  const hasDeepLink = Boolean(
+    searchParams.get('runId')
+    ?? searchParams.get('run')
+    ?? searchParams.get('sourceOrgId')
+    ?? searchParams.get('targetOrgId')
+    ?? searchParams.get('sourceType')
+    ?? searchParams.get('source'),
+  );
+  const flow: WorkbenchFlow = flowParam === 'data'
+    ? 'data'
+    : flowParam === 'metadata' || sourceMode || hasDeepLink
+      ? 'metadata'
+      : 'landing';
+
+  const openFlow = (next: Exclude<WorkbenchFlow, 'landing'>) => {
+    router.push(`/deployment-workbench?flow=${next}`);
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
+  const backToChooser = () => {
+    router.push('/deployment-workbench');
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
 
   if (w.loading) {
     return <div className="p-4 md:p-6"><PageSkeleton variant="studio-2row" /></div>;
   }
 
+  if (flow === 'landing') {
+    return (
+      <div className="p-4 md:p-6 space-y-6">
+        <DeploymentPageHeader
+          title="Deployment Workbench"
+          subtitle="One governed pipeline for everything you move between Salesforce environments"
+          icon={Boxes}
+          accentClass="to-cyan-500/10"
+        />
+        <ChooserHero
+          icon={ArrowLeftRight}
+          title="What do you want to deploy?"
+          subtitle="Choose a deployment type. Both flows share the same source-to-target experience: compare, review, and deploy with confidence."
+        />
+        <div className="mx-auto grid w-full max-w-4xl gap-5 md:grid-cols-2">
+          <FlowCard
+            tone="source"
+            icon={Boxes}
+            title="Metadata Deployment"
+            description="Compare metadata between orgs or a repository branch, then deploy through quality gates."
+            features={[
+              'Full org-to-org comparison with XML diffs',
+              'Dependency resolution and intelligent batches',
+              'Automatic static analysis, validation, and approvals',
+              'Rollback-ready snapshots and a complete audit trail',
+            ]}
+            cta="Open metadata deployment"
+            onOpen={() => openFlow('metadata')}
+          />
+          <FlowCard
+            tone="target"
+            icon={Database}
+            title="Data Deployment"
+            description="Move object records between orgs with previews, target comparison, and rollback."
+            features={[
+              'Pick objects and records with live source previews',
+              'Compare against the target before writing anything',
+              'Insert or upsert with chunked, throttled bulk jobs',
+              'Durable rollback snapshots for every movement',
+            ]}
+            cta="Open data deployment"
+            onOpen={() => openFlow('data')}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (flow === 'data') {
+    return (
+      <div className="p-4 md:p-6 space-y-5">
+        <DeploymentPageHeader
+          title="Data Deployment"
+          subtitle="Move object records between connected Salesforce environments"
+          icon={Database}
+          accentClass="to-emerald-500/10"
+        />
+        <BackToChooserLink onClick={backToChooser} />
+        <DataFlowChooser orgs={w.orgs} />
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 md:p-6 space-y-5">
       <DeploymentPageHeader
-        title="Deployment Workbench"
+        title="Metadata Deployment"
         subtitle="Plan, govern, execute, and audit Salesforce metadata deployments"
         icon={Boxes}
         accentClass="to-cyan-500/10"
       />
 
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Deployment workbench views">
-        <TabButton
-          id="workbench-tab-plan"
-          controls="workbench-panel-plan"
-          active={tab === 'plan'}
-          onClick={() => setTab('plan')}
-        >
-          Plan &amp; execute
-        </TabButton>
-        <TabButton
-          id="workbench-tab-history"
-          controls="workbench-panel-history"
-          active={tab === 'history'}
-          onClick={() => setTab('history')}
-        >
-          Audit & history
-        </TabButton>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Deployment workbench views">
+          <TabButton
+            id="workbench-tab-plan"
+            controls="workbench-panel-plan"
+            active={tab === 'plan'}
+            onClick={() => setTab('plan')}
+          >
+            Plan &amp; execute
+          </TabButton>
+          <TabButton
+            id="workbench-tab-history"
+            controls="workbench-panel-history"
+            active={tab === 'history'}
+            onClick={() => setTab('history')}
+          >
+            Audit & history
+          </TabButton>
+        </div>
+        <BackToChooserLink onClick={backToChooser} />
       </div>
 
       {w.error && (
@@ -115,6 +237,181 @@ export function DeploymentWorkbenchWorkspace({
           ? <HistoryView w={w} />
           : <PlanView w={w} onOpenHistory={() => setTab('history')} />}
       </section>
+    </div>
+  );
+}
+
+function BackToChooserLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <ArrowLeft className="size-3.5" aria-hidden="true" />
+      Change deployment type
+    </button>
+  );
+}
+
+/**
+ * Data deployment location chooser — the premium source→target screen. On
+ * start it hands the chosen orgs to the org-to-org data deploy flow.
+ */
+function DataFlowChooser({
+  orgs,
+}: {
+  orgs: Array<{ id: string; alias: string; type?: string; username?: string | null }>;
+}) {
+  const router = useRouter();
+  const [sourceKind, setSourceKind] = useState<'org' | 'scratch'>('org');
+  const [targetKind, setTargetKind] = useState<'org' | 'scratch'>('org');
+  const [sourceOrgId, setSourceOrgId] = useState('');
+  const [targetOrgId, setTargetOrgId] = useState('');
+  const [starting, setStarting] = useState(false);
+
+  const standardOrgs = orgs.filter((org) => org.type !== 'scratch');
+  const scratchOrgs = orgs.filter((org) => org.type === 'scratch');
+  const sameOrg = Boolean(sourceOrgId && sourceOrgId === targetOrgId);
+  const ready = Boolean(sourceOrgId && targetOrgId && !sameOrg);
+
+  const swap = () => {
+    setSourceOrgId(targetOrgId);
+    setTargetOrgId(sourceOrgId);
+    const nextSourceKind = targetKind;
+    setTargetKind(sourceKind);
+    setSourceKind(nextSourceKind);
+  };
+
+  const start = () => {
+    setStarting(true);
+    router.push(
+      `/data-deploy?sourceOrgId=${encodeURIComponent(sourceOrgId)}&targetOrgId=${encodeURIComponent(targetOrgId)}`,
+    );
+  };
+
+  const orgSelect = (
+    id: string,
+    value: string,
+    list: typeof orgs,
+    disabledId: string,
+    placeholder: string,
+    onChange: (next: string) => void,
+  ) => (
+    <Select id={id} aria-label={placeholder} value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">{placeholder}</option>
+      {list.map((org) => (
+        <option key={org.id} value={org.id} disabled={org.id === disabledId}>
+          {org.alias}{org.username ? ` — ${org.username}` : ''}
+        </option>
+      ))}
+    </Select>
+  );
+
+  return (
+    <div className="relative space-y-6">
+      {starting && <LoadingOverlay label="Opening the data deployment…" />}
+      <ChooserHero
+        icon={ArrowLeftRight}
+        title="Select Data Source & Deployment Target"
+        subtitle="Pick where the records come from and where they go. You will preview, compare against the target, and confirm before anything is written."
+      />
+      <div className="grid items-stretch gap-4 lg:grid-cols-[1fr_auto_1fr]">
+        <ChooserPanel
+          tone="source"
+          icon={Cloud}
+          title="Data Source"
+          question="Where would you like to copy records from?"
+        >
+          <ChooserOptionRow
+            tone="source"
+            icon={<Cloud className="size-4 text-sky-300" aria-hidden="true" />}
+            title="Salesforce Organization"
+            description="Copy from a connected production, sandbox, or Dev Hub org"
+            name="data-source-kind"
+            value="org"
+            checked={sourceKind === 'org'}
+            onSelect={() => {
+              setSourceKind('org');
+              if (sourceOrgId && scratchOrgs.some((org) => org.id === sourceOrgId)) setSourceOrgId('');
+            }}
+          >
+            {orgSelect('data-source-org', sourceOrgId, standardOrgs, targetOrgId, 'Select source org…', setSourceOrgId)}
+          </ChooserOptionRow>
+          <ChooserOptionRow
+            tone="source"
+            icon={<Zap className="size-4 text-sky-300" aria-hidden="true" />}
+            title="SFDX Scratch Org"
+            description="Copy from a connected scratch org"
+            name="data-source-kind"
+            value="scratch"
+            checked={sourceKind === 'scratch'}
+            onSelect={() => {
+              setSourceKind('scratch');
+              if (sourceOrgId && standardOrgs.some((org) => org.id === sourceOrgId)) setSourceOrgId('');
+            }}
+          >
+            {scratchOrgs.length === 0
+              ? <p className="text-xs text-muted-foreground">No scratch orgs connected yet.</p>
+              : orgSelect('data-source-scratch', sourceOrgId, scratchOrgs, targetOrgId, 'Select scratch org…', setSourceOrgId)}
+          </ChooserOptionRow>
+        </ChooserPanel>
+
+        <ChooserDivider onClick={swap} />
+
+        <ChooserPanel
+          tone="target"
+          icon={Rocket}
+          title="Deployment Target"
+          question="Where would you like to deploy records to?"
+        >
+          <ChooserOptionRow
+            tone="target"
+            icon={<Cloud className="size-4 text-emerald-300" aria-hidden="true" />}
+            title="Salesforce Organization"
+            description="Deploy to a connected production, sandbox, or Dev Hub org"
+            name="data-target-kind"
+            value="org"
+            checked={targetKind === 'org'}
+            onSelect={() => {
+              setTargetKind('org');
+              if (targetOrgId && scratchOrgs.some((org) => org.id === targetOrgId)) setTargetOrgId('');
+            }}
+          >
+            {orgSelect('data-target-org', targetOrgId, standardOrgs, sourceOrgId, 'Select target org…', setTargetOrgId)}
+          </ChooserOptionRow>
+          <ChooserOptionRow
+            tone="target"
+            icon={<Zap className="size-4 text-emerald-300" aria-hidden="true" />}
+            title="SFDX Scratch Org"
+            description="Deploy to a connected scratch org"
+            name="data-target-kind"
+            value="scratch"
+            checked={targetKind === 'scratch'}
+            onSelect={() => {
+              setTargetKind('scratch');
+              if (targetOrgId && standardOrgs.some((org) => org.id === targetOrgId)) setTargetOrgId('');
+            }}
+          >
+            {scratchOrgs.length === 0
+              ? <p className="text-xs text-muted-foreground">No scratch orgs connected yet.</p>
+              : orgSelect('data-target-scratch', targetOrgId, scratchOrgs, sourceOrgId, 'Select scratch org…', setTargetOrgId)}
+          </ChooserOptionRow>
+        </ChooserPanel>
+      </div>
+
+      {sameOrg && (
+        <div className="mx-auto max-w-xl">
+          <InlineAlert variant="warning">Source and target must be different orgs.</InlineAlert>
+        </div>
+      )}
+
+      <div className="flex justify-center pb-2">
+        <Button size="lg" className="px-8" disabled={!ready} loading={starting} onClick={start}>
+          Start Data Deployment
+          <ArrowRight className="ml-2 size-4" aria-hidden="true" />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -205,15 +502,12 @@ function PlanView({
 
   return (
     <div className="relative space-y-4">
-      <div className="overflow-x-auto rounded-xl border border-border/60 bg-card/30 p-3">
-        <WizardSteps
-          steps={[...WORKBENCH_STEPS]}
-          current={w.step}
-          className="min-w-[760px]"
-          onStepSelect={goToStep}
-          isStepEnabled={stepEnabled}
-        />
-      </div>
+      <WorkbenchStepper
+        steps={STEP_DEFINITIONS}
+        current={w.step}
+        onStepSelect={goToStep}
+        isStepEnabled={stepEnabled}
+      />
       <main id="workbench-main" tabIndex={-1} className="relative focus:outline-none">
         {w.step === 0 && <SourceStep w={w} />}
         {w.step === 1 && <ComponentsStep w={w} />}
@@ -234,13 +528,15 @@ function PlanView({
           />
         )}
       </main>
-      {w.step < 5 && !(w.step === 0 && w.form.sourceMode === 'org_compare') && (
-        <WizardFooter w={w} />
-      )}
+      {w.step > 0 && w.step < 5 && <WizardFooter w={w} />}
     </div>
   );
 }
 
+/**
+ * Metadata deployment location chooser — the premium source→target screen
+ * (hero, side-by-side panels, arrow divider, single call to action).
+ */
 function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
   const orgCompare = w.form.sourceMode === 'org_compare';
   const sameOrg = Boolean(
@@ -249,6 +545,7 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
   const sourceReady = orgCompare
     ? Boolean(w.form.sourceOrgId && w.form.targetOrgId && w.form.sourceOrgId !== w.form.targetOrgId)
     : Boolean(w.scmSource && w.form.targetOrgId);
+  const targetOrg = w.orgs.find((org) => org.id === w.form.targetOrgId);
 
   const startCompare = () => {
     w.setStep(1);
@@ -266,225 +563,164 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
   };
 
   return (
-    <GlassCard
-      title={orgCompare ? 'Compare orgs' : 'Source and target'}
-      description={orgCompare
-        ? 'Pick the org you are deploying from and the org you are deploying to, then run a full metadata comparison.'
-        : 'Choose a connected source-control manifest and the org to deploy to.'}
-    >
-      <fieldset className="space-y-5">
-        <legend className="sr-only">Deployment source type</legend>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <SourceChoice
+    <div className="space-y-6">
+      <ChooserHero
+        icon={ArrowLeftRight}
+        title="Select Comparison & Deployment Locations"
+        subtitle="Compare Salesforce metadata from an org or a repository branch, then deploy with confidence through quality gates, approvals, and rollback."
+      />
+
+      <div className="grid items-stretch gap-4 lg:grid-cols-[1fr_auto_1fr]">
+        <ChooserPanel
+          tone="source"
+          icon={GitCompare}
+          title="Comparison Source"
+          question="Where would you like to compare from?"
+        >
+          <ChooserOptionRow
+            tone="source"
+            icon={<Cloud className="size-4 text-sky-300" aria-hidden="true" />}
+            title="Salesforce Organization"
+            description="Compare from a connected Salesforce org"
             name="workbench-source-mode"
             value="org_compare"
-            checked={w.form.sourceMode === 'org_compare'}
-            title="Org to org"
-            description="Compare connected orgs in the background."
-            onChange={() => w.selectSourceMode('org_compare')}
-          />
-          <SourceChoice
+            checked={orgCompare}
+            onSelect={() => w.selectSourceMode('org_compare')}
+          >
+            <Select
+              id="workbench-source-org"
+              aria-label="Source org"
+              value={w.form.sourceOrgId}
+              onChange={(event) => w.selectSource(event.target.value)}
+            >
+              <option value="">Select source org…</option>
+              {w.orgs.map((org) => (
+                <option key={org.id} value={org.id} disabled={org.id === w.form.targetOrgId}>
+                  {org.alias}{org.username ? ` — ${org.username}` : ''}
+                </option>
+              ))}
+            </Select>
+          </ChooserOptionRow>
+          <ChooserOptionRow
+            tone="source"
+            icon={<GitBranch className="size-4 text-sky-300" aria-hidden="true" />}
+            title="Source Control"
+            description="Compare from a Git repository branch manifest"
             name="workbench-source-mode"
             value="scm"
-            checked={w.form.sourceMode === 'scm'}
-            title="Source control"
-            description="Azure DevOps, GitHub, or Bitbucket repository manifest."
-            onChange={() => w.selectSourceMode('scm')}
-          />
-        </div>
-
-        {orgCompare ? (
-          <div className="grid items-stretch gap-3 md:grid-cols-[1fr_auto_1fr]">
-            <OrgSelectCard
-              tone="source"
-              label="Source org"
-              hint="Deploy from"
-              icon={<Cloud className="size-4" />}
-              selectId="workbench-source-org"
-              value={w.form.sourceOrgId}
-              org={w.orgs.find((org) => org.id === w.form.sourceOrgId)}
-              orgs={w.orgs}
-              disabledId={w.form.targetOrgId}
-              placeholder="Select source org…"
-              onChange={(value) => w.selectSource(value)}
-            />
-            <div className="flex items-center justify-center md:pt-9">
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="rounded-full"
-                onClick={swapOrgs}
-                disabled={!w.form.sourceOrgId && !w.form.targetOrgId}
-                aria-label="Swap source and target orgs"
-                title="Swap source and target"
-              >
-                <ArrowLeftRight className="size-4" />
-              </Button>
-            </div>
-            <OrgSelectCard
-              tone="target"
-              label="Target org"
-              hint="Deploy to"
-              icon={<Target className="size-4" />}
-              selectId="workbench-target-org"
-              value={w.form.targetOrgId}
-              org={w.orgs.find((org) => org.id === w.form.targetOrgId)}
-              orgs={w.orgs}
-              disabledId={w.form.sourceOrgId}
-              placeholder="Select target org…"
-              onChange={(value) => w.selectTarget(value)}
-            />
-          </div>
-        ) : (
-          <>
+            checked={!orgCompare}
+            onSelect={() => w.selectSourceMode('scm')}
+          >
             <GitMetadataSourceFields source={w.scm} />
-            <Field label="Target org" htmlFor="workbench-target-org" className="max-w-md">
-              <Select id="workbench-target-org" value={w.form.targetOrgId} onChange={(event) => w.selectTarget(event.target.value)}>
-                <option value="">Select target org…</option>
-                {w.orgs.map((org) => <option key={org.id} value={org.id}>{org.alias}</option>)}
-              </Select>
-            </Field>
-          </>
-        )}
+          </ChooserOptionRow>
+        </ChooserPanel>
 
-        {sameOrg && (
+        <ChooserDivider onClick={orgCompare ? swapOrgs : undefined} />
+
+        <ChooserPanel
+          tone="target"
+          icon={Rocket}
+          title="Deployment Target"
+          question="Where would you like to deploy to?"
+        >
+          <ChooserOptionRow
+            tone="target"
+            icon={<Cloud className="size-4 text-emerald-300" aria-hidden="true" />}
+            title="Salesforce Organization"
+            description={targetOrg
+              ? `${targetOrg.alias}${targetOrg.type ? ` · ${targetOrg.type}` : ''}`
+              : 'Deploy to a connected Salesforce org'}
+            name="workbench-target-mode"
+            value="org"
+            checked
+            onSelect={() => undefined}
+          >
+            <div className="space-y-3">
+              <Select
+                id="workbench-target-org"
+                aria-label="Target org"
+                value={w.form.targetOrgId}
+                onChange={(event) => w.selectTarget(event.target.value)}
+              >
+                <option value="">Select target org…</option>
+                {w.orgs.map((org) => (
+                  <option
+                    key={org.id}
+                    value={org.id}
+                    disabled={orgCompare && org.id === w.form.sourceOrgId}
+                  >
+                    {org.alias}{org.username ? ` — ${org.username}` : ''}
+                  </option>
+                ))}
+              </Select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Environment profile" htmlFor="workbench-environment">
+                  <Select
+                    id="workbench-environment"
+                    value={w.form.targetProfile}
+                    onChange={(event) => w.selectProfile(event.target.value as typeof w.form.targetProfile)}
+                  >
+                    {(w.capabilities?.environments ?? ['scratch', 'sandbox', 'production']).map((environment) => (
+                      <option key={environment} value={environment}>{environment}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Deployment strategy" htmlFor="workbench-strategy">
+                  <Select
+                    id="workbench-strategy"
+                    value={w.form.strategy}
+                    onChange={(event) => w.setForm((current) => ({
+                      ...current,
+                      strategy: event.target.value as typeof current.strategy,
+                      policy: event.target.value === 'validate_then_quick'
+                        ? { ...current.policy, validation: { required: true } }
+                        : current.policy,
+                    }))}
+                  >
+                    <option value="direct">Direct</option>
+                    <option value="intelligent">Intelligent batches</option>
+                    <option value="validate_then_quick">Validate, then quick deploy</option>
+                  </Select>
+                </Field>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The environment profile must match the connected target org; the server verifies it.
+              </p>
+            </div>
+          </ChooserOptionRow>
+        </ChooserPanel>
+      </div>
+
+      {sameOrg && (
+        <div className="mx-auto max-w-xl">
           <InlineAlert variant="warning">
             Source and target must be different orgs to compare metadata.
           </InlineAlert>
-        )}
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Environment profile" htmlFor="workbench-environment">
-            <Select
-              id="workbench-environment"
-              value={w.form.targetProfile}
-              onChange={(event) => w.selectProfile(event.target.value as typeof w.form.targetProfile)}
-            >
-              {(w.capabilities?.environments ?? ['scratch', 'sandbox', 'production']).map((environment) => (
-                <option key={environment} value={environment}>{environment}</option>
-              ))}
-            </Select>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Must match the connected target org; the server verifies this value.
-            </p>
-          </Field>
-          <Field label="Deployment strategy" htmlFor="workbench-strategy">
-            <Select
-              id="workbench-strategy"
-              value={w.form.strategy}
-              onChange={(event) => w.setForm((current) => ({
-                ...current,
-                strategy: event.target.value as typeof current.strategy,
-                policy: event.target.value === 'validate_then_quick'
-                  ? { ...current.policy, validation: { required: true } }
-                  : current.policy,
-              }))}
-            >
-              <option value="direct">Direct</option>
-              <option value="intelligent">Intelligent batches</option>
-              <option value="validate_then_quick">Validate, then quick deploy</option>
-            </Select>
-          </Field>
         </div>
-
-        {w.form.targetProfile === 'production' && <ProductionLock />}
-
-        {orgCompare && (
-          <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/10 p-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <GitCompare className="size-4 shrink-0 text-primary" aria-hidden="true" />
-              {sourceReady
-                ? 'Ready. Choose "Compare orgs" to load every metadata difference between the two orgs.'
-                : 'Select a source and target org to enable the comparison.'}
-            </p>
-            <Button type="button" onClick={startCompare} disabled={!sourceReady}>
-              <GitCompare className="mr-2 size-4" /> Compare orgs
-            </Button>
-          </div>
-        )}
-      </fieldset>
-    </GlassCard>
-  );
-}
-
-function OrgSelectCard({
-  tone,
-  label,
-  hint,
-  icon,
-  selectId,
-  value,
-  org,
-  orgs,
-  disabledId,
-  placeholder,
-  onChange,
-}: {
-  tone: 'source' | 'target';
-  label: string;
-  hint: string;
-  icon: React.ReactNode;
-  selectId: string;
-  value: string;
-  org?: { id: string; alias: string; type?: string; username?: string | null };
-  orgs: Array<{ id: string; alias: string; type?: string }>;
-  disabledId: string;
-  placeholder: string;
-  onChange: (value: string) => void;
-}) {
-  const selected = Boolean(value);
-  return (
-    <div
-      className={cn(
-        'flex flex-col rounded-xl border p-4 transition-colors',
-        selected
-          ? tone === 'source'
-            ? 'border-sky-500/40 bg-sky-500/5'
-            : 'border-emerald-500/40 bg-emerald-500/5'
-          : 'border-border/60 bg-card/40',
       )}
-    >
-      <div className="mb-3 flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2.5">
-          <span
-            className={cn(
-              'flex size-9 items-center justify-center rounded-lg',
-              tone === 'source' ? 'bg-sky-500/15 text-sky-300' : 'bg-emerald-500/15 text-emerald-300',
-            )}
-          >
-            {icon}
-          </span>
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{hint}</p>
-            <p className="truncate text-sm font-semibold">{org?.alias ?? label}</p>
-          </div>
-        </div>
-        {selected && <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-400" />}
+
+      {w.form.targetProfile === 'production' && (
+        <div className="mx-auto max-w-2xl"><ProductionLock /></div>
+      )}
+
+      <div className="flex flex-col items-center gap-2 pb-2">
+        <Button size="lg" className="px-8" onClick={startCompare} disabled={!sourceReady}>
+          {orgCompare ? 'Start Comparison' : 'Continue to Components'}
+          <ArrowRight className="ml-2 size-4" aria-hidden="true" />
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          {sourceReady
+            ? orgCompare
+              ? 'The full metadata comparison starts automatically in the background.'
+              : 'The branch manifest is resolved on the next step.'
+            : 'Select a source and a target to continue.'}
+        </p>
       </div>
-      <Select
-        id={selectId}
-        aria-label={label}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        <option value="">{placeholder}</option>
-        {orgs.map((option) => (
-          <option key={option.id} value={option.id} disabled={option.id === disabledId}>
-            {option.alias}
-          </option>
-        ))}
-      </Select>
-      {org?.type && (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="rounded-full border border-border/60 px-2 py-0.5 capitalize">{org.type}</span>
-          {org.username && <span className="truncate">{org.username}</span>}
-        </div>
-      )}
     </div>
   );
 }
 
+/** Radio option card used by the dependency-mode picker. */
 function SourceChoice({
   checked,
   title,
@@ -1206,6 +1442,20 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
               The server did not return a manifest and hash for this exact plan.
             </InlineAlert>
           )}
+        </GlassCard>
+      )}
+      {w.form.sourceMode === 'org_compare' && w.form.targetOrgId && (
+        <GlassCard
+          title="Deployment risk"
+          description="Deterministic risk factors for this exact selection, with an optional AI explanation."
+        >
+          <DeploymentRiskPanel
+            targetOrgId={w.form.targetOrgId}
+            sourceOrgId={w.form.sourceOrgId || undefined}
+            selections={w.form.components}
+            destructiveSelections={w.form.destructiveSelections.length ? w.form.destructiveSelections : undefined}
+            testLevel={w.form.policy.tests.level}
+          />
         </GlassCard>
       )}
       <GlassCard title="Plan identity">

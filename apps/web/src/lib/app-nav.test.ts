@@ -36,7 +36,6 @@ describe('deployment sidebar navigation', () => {
     const childHrefs = deployment!.children!.map((child) => child.href);
     expect(childHrefs).toContain('/deployment-workbench');
     expect(childHrefs).toContain('/deployment-center/git');
-    expect(childHrefs).toContain('/metadata-deployment');
     expect(childHrefs).toContain('/deployment-center/automations');
     expect(childHrefs).toContain('/deployment-center/jenkins');
     expect(childHrefs).toContain('/data-center');
@@ -44,6 +43,14 @@ describe('deployment sidebar navigation', () => {
     expect(childHrefs).toContain('/custom-settings-load');
     expect(childHrefs).toContain('/org-setup');
     expect(APP_NAV.some((item) => item.href === '/deployment-workbench')).toBe(false);
+  });
+
+  it('has no duplicate Org-to-Org Metadata entry — the workbench owns that flow', () => {
+    const childHrefs = deployment!.children!.map((child) => child.href);
+    expect(childHrefs).not.toContain('/metadata-deployment');
+    // The redirected legacy route still highlights the workbench link.
+    const workbench = deployment!.children!.find((child) => child.href === '/deployment-workbench')!;
+    expect(workbench.activePrefixes).toContain('/metadata-deployment');
   });
 
   it('has no duplicate child links', () => {
@@ -132,7 +139,7 @@ describe('isNavChildActive', () => {
     const workbench: NavChild = { href: '/deployment-workbench', label: 'Deployment Workbench' };
     expect(isNavChildActive('/deployment-workbench', '', workbench)).toBe(true);
     expect(isNavChildActive('/deployment-workbench/anything', '', workbench)).toBe(true);
-    expect(isNavChildActive('/metadata-deployment', '', workbench)).toBe(false);
+    expect(isNavChildActive('/data-deploy', '', workbench)).toBe(false);
   });
 
   it('matches via activePrefixes', () => {

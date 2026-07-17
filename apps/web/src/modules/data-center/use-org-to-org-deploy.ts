@@ -182,7 +182,14 @@ export function useOrgToOrgDeploy() {
 
   useEffect(() => {
     const sourceOrgId = searchParams.get('sourceOrgId');
-    if (sourceOrgId) setForm((f) => ({ ...f, sourceOrgId }));
+    const targetOrgId = searchParams.get('targetOrgId');
+    if (sourceOrgId || targetOrgId) {
+      setForm((f) => ({
+        ...f,
+        ...(sourceOrgId ? { sourceOrgId } : {}),
+        ...(targetOrgId ? { targetOrgId } : {}),
+      }));
+    }
   }, [searchParams]);
 
   const orgsReady =

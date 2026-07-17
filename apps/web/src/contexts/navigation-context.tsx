@@ -22,7 +22,7 @@ const PREFETCH_ROUTES = [
   '/deployment-workbench',
   '/deployment-center/git',
   '/deployment-center/jenkins',
-  '/metadata-deployment',
+  '/data-deploy',
   '/data-center',
   '/org-setup',
   '/custom-settings-load',
