@@ -19,6 +19,8 @@ export interface DataDeployBatchChunk {
   errorDetails?: Record<string, unknown> | null;
   jobId: string | null;
   attempts?: number;
+  processedRecords?: number | null;
+  failedRecords?: number | null;
 }
 
 export interface DataDeployBatch {
@@ -27,6 +29,7 @@ export interface DataDeployBatch {
   totalChunks: number;
   completedChunks: number;
   failedChunks: number;
+  requestedRecords?: number;
   totalRecords: number;
   chunkSize: number;
   objectName: string | null;
@@ -45,17 +48,23 @@ export interface DataDeployBatch {
   canCancel?: boolean;
   canRollback?: boolean;
   error?: string | null;
+  plannerJobId?: string | null;
   chunks: DataDeployBatchChunk[];
 }
 
 interface DataDeployBatchProgressProps {
   batchId: string;
   onTerminal?: (batch: DataDeployBatch) => void;
+  onJobIdsChange?: (jobIds: string[]) => void;
 }
 
 const TERMINAL = ['completed', 'partial', 'failed', 'cancelled'];
 
-export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatchProgressProps) {
+export function DataDeployBatchProgress({
+  batchId,
+  onTerminal,
+  onJobIdsChange,
+}: DataDeployBatchProgressProps) {
   const [batch, setBatch] = useState<DataDeployBatch | null>(null);
   const [pollRevision, setPollRevision] = useState(0);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -77,6 +86,10 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
       });
       if (request !== loadRequest.current || controller.signal.aborted) return false;
       setBatch(data);
+      onJobIdsChange?.([
+        data.plannerJobId,
+        ...data.chunks.map((chunk) => chunk.jobId),
+      ].filter((id): id is string => Boolean(id)));
       if (TERMINAL.includes(data.status)) {
         onTerminal?.(data);
         return true;
@@ -85,7 +98,7 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
       if (!controller.signal.aborted && request === loadRequest.current) console.error(err);
     }
     return false;
-  }, [batchId, onTerminal]);
+  }, [batchId, onJobIdsChange, onTerminal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,6 +122,18 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
   const retrySafe = isRetrySafe(batch);
   const failedChunks = batch.chunks.filter((chunk) => chunk.status === 'failed');
   const activeChunks = batch.chunks.filter((chunk) => ['queued', 'running'].includes(chunk.status)).length;
+  const waitingChunks = batch.chunks.filter((chunk) => ['pending', 'planning'].includes(chunk.status)).length;
+  const requestedRecords = batch.requestedRecords && batch.requestedRecords > 0
+    ? batch.requestedRecords
+    : batch.totalRecords;
+  const isTerminal = TERMINAL.includes(batch.status);
+  const hasPlanningShortfall =
+    !['pending', 'planning', 'queued'].includes(batch.status)
+    && batch.totalRecords < requestedRecords;
+  const visibleChunks = batch.chunks.filter((chunk) =>
+    !(chunk.status === 'cancelled'
+      && chunk.chunkIndex >= batch.totalChunks
+      && chunk.error?.startsWith('Chunk not needed')));
   const rollbackAvailable = batch.canRollback ?? (
     retrySafe
     && batch.rollbackPolicy === 'capture'
@@ -141,30 +166,53 @@ export function DataDeployBatchProgress({ batchId, onTerminal }: DataDeployBatch
         <div>
           <p className="text-sm font-medium">Load-balanced deploy</p>
           <p className="text-xs text-muted-foreground">
-            {progressLabel} · {batch.totalRecords.toLocaleString()} records · chunks of{' '}
+            {progressLabel} ·{' '}
+            {hasPlanningShortfall
+              ? `${batch.totalRecords.toLocaleString()} matched of ${requestedRecords.toLocaleString()} requested`
+              : `${batch.totalRecords.toLocaleString()} records`}{' '}
+            · chunks of{' '}
             {batch.chunkSize.toLocaleString()}
           </p>
           <p className="text-xs text-muted-foreground">
-            Scheduler: {activeChunks}/{batch.maxParallelChunks ?? '—'} active
+            {isTerminal
+              ? 'Scheduler finished'
+              : `Scheduler: ${activeChunks} active · ${waitingChunks} waiting · capacity ${
+                  batch.maxParallelChunks ?? '—'
+                }`}
             {' · '}
             {batch.operation ?? batch.strategy}
             {batch.externalIdField ? ` by ${batch.externalIdField}` : ''}
-            {batch.dependsOn?.length ? ` · waits for ${batch.dependsOn.join(', ')}` : ' · ready'}
+            {!isTerminal && (batch.dependsOn?.length
+              ? ` · waits for ${batch.dependsOn.join(', ')}`
+              : ' · dependencies clear')}
           </p>
         </div>
         <StatusBadge status={batch.status} />
       </div>
+      {hasPlanningShortfall && (
+        <InlineAlert variant="warning">
+          The source query matched {batch.totalRecords.toLocaleString()} of the requested maximum{' '}
+          {requestedRecords.toLocaleString()}. Only matching records were scheduled. Review the
+          filter or custom SOQL if this was unexpected.
+        </InlineAlert>
+      )}
       {batch.error && <InlineAlert variant="error">{batch.error}</InlineAlert>}
       {actionError && (
         <InlineAlert variant="error" onDismiss={() => setActionError(null)}>{actionError}</InlineAlert>
       )}
       <ListRowGroup>
-        {batch.chunks.map((chunk) => (
+        {visibleChunks.map((chunk) => (
           <div key={chunk.id} className="border-b border-border/40 last:border-b-0">
             <ListRow
               title={`Chunk ${chunk.chunkIndex + 1}`}
               subtitle={[
                 chunk.recordCount != null ? `${chunk.recordCount.toLocaleString()} records` : null,
+                chunk.processedRecords != null
+                  ? `${chunk.processedRecords.toLocaleString()} processed`
+                  : null,
+                chunk.failedRecords
+                  ? `${chunk.failedRecords.toLocaleString()} row failures`
+                  : null,
                 chunk.attempts ? `${chunk.attempts} retry attempt(s)` : null,
               ].filter(Boolean).join(' · ') || undefined}
               trailing={(

@@ -149,6 +149,33 @@ export function isBatchCancellable(status: string): boolean {
   return ['pending', 'queued', 'planning', 'running', 'paused'].includes(status);
 }
 
+export const DATA_DEPLOY_TERMINAL_STATUSES = ['completed', 'partial', 'failed', 'cancelled'] as const;
+
+export function isTerminalDeployStatus(status: string): boolean {
+  return DATA_DEPLOY_TERMINAL_STATUSES.includes(
+    status as (typeof DATA_DEPLOY_TERMINAL_STATUSES)[number],
+  );
+}
+
+/** Aggregate object-batch state without allowing a planner job to report success early. */
+export function aggregateDeployStatus(statuses: string[]): string {
+  if (statuses.length === 0) return 'queued';
+  const allTerminal = statuses.every(isTerminalDeployStatus);
+  if (!allTerminal) {
+    return statuses.some((status) =>
+      ['planning', 'running', 'completed', 'partial', 'failed'].includes(status))
+      ? 'running'
+      : 'queued';
+  }
+  if (statuses.every((status) => status === 'completed')) return 'completed';
+  if (statuses.every((status) => status === 'cancelled')) return 'cancelled';
+  if (statuses.some((status) => status === 'partial')) return 'partial';
+  if (statuses.some((status) => status === 'failed')) {
+    return statuses.some((status) => status === 'completed') ? 'partial' : 'failed';
+  }
+  return 'partial';
+}
+
 export function rollbackInsertedCount(value: unknown): number {
   if (!value || typeof value !== 'object') return 0;
   if (Array.isArray(value)) {

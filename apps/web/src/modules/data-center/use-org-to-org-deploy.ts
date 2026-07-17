@@ -24,7 +24,9 @@ import type {
 } from './types';
 import { DEFAULT_OBJECT_CONFIG } from './types';
 import {
+  aggregateDeployStatus,
   dependencyError,
+  isTerminalDeployStatus,
   moveByIndex,
   orderDeploymentObjects,
   preflightKey,
@@ -35,16 +37,6 @@ const DEFAULT_FORM: OrgToOrgFormState = {
   targetOrgId: '',
   strategy: 'upsert',
 };
-
-const TERMINAL_JOB_STATUSES = ['completed', 'partial', 'failed', 'cancelled'];
-
-function aggregateJobStatus(statuses: string[]): string {
-  if (statuses.some((s) => s === 'failed' || s === 'partial')) return 'failed';
-  if (statuses.some((s) => s === 'cancelled')) return 'cancelled';
-  if (statuses.length > 0 && statuses.every((s) => s === 'completed')) return 'completed';
-  if (statuses.some((s) => s === 'running')) return 'running';
-  return 'queued';
-}
 
 function usesCustomSoql(config: OrgToOrgObjectDeployConfig): boolean {
   return config.queryMode === 'soql' && Boolean(config.customSoql?.trim());
@@ -107,6 +99,15 @@ export function useOrgToOrgDeploy() {
   const deployRequestRef = useRef(0);
   const compareRequestRef = useRef(0);
 
+  const trackJobIds = useCallback((ids: string[]) => {
+    const valid = ids.filter(Boolean);
+    if (valid.length === 0) return;
+    setJobIds((current) => {
+      const next = [...new Set([...current, ...valid])];
+      return next.length === current.length ? current : next;
+    });
+  }, []);
+
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
   }, []);
@@ -133,10 +134,9 @@ export function useOrgToOrgDeploy() {
           if (data.logs?.length) lines.push(...data.logs.map((l) => l.line));
         }
         if (lines.length) setLogs(lines);
-        setDeployStatus(aggregateJobStatus(jobs.map((j) => j.status)));
         const failed = jobs.find((j) => j.status === 'failed');
-        setDeployJobError(failed?.error ?? null);
-        if (jobs.every((j) => TERMINAL_JOB_STATUSES.includes(j.status))) return;
+        if (failed?.error) setDeployJobError(failed.error);
+        if (jobs.every((j) => isTerminalDeployStatus(j.status))) return;
       } catch {
         /* ignore */
       }
@@ -163,10 +163,10 @@ export function useOrgToOrgDeploy() {
         }>(`/data/batch-groups/${batchResult.batchId}`);
         if (cancelled) return;
         const statuses = group.batches.map((batch) => batch.status);
-        setDeployStatus(aggregateJobStatus(statuses));
+        setDeployStatus(aggregateDeployStatus(statuses));
         setDeployJobError(group.batches.find((batch) =>
           ['partial', 'failed'].includes(batch.status))?.error ?? null);
-        if (!statuses.every((status) => TERMINAL_JOB_STATUSES.includes(status))) {
+        if (!statuses.every(isTerminalDeployStatus)) {
           timer = setTimeout(() => void poll(), 2000);
         }
       } catch {
@@ -820,7 +820,7 @@ export function useOrgToOrgDeploy() {
       });
       if (request !== deployRequestRef.current || generation !== orgGenerationRef.current) return;
       setBatchResult(result);
-      setJobIds(result.deployments.map((d) => d.jobId).filter((id): id is string => Boolean(id)));
+      trackJobIds(result.deployments.map((d) => d.jobId).filter((id): id is string => Boolean(id)));
       setWizardStep('deploy');
     } catch (err) {
       if (request === deployRequestRef.current && generation === orgGenerationRef.current) {
@@ -839,6 +839,7 @@ export function useOrgToOrgDeploy() {
     loadingDeploy,
     preflightPayloadKey,
     preflightResult,
+    trackJobIds,
   ]);
 
   const scratchWarning =
@@ -912,5 +913,6 @@ export function useOrgToOrgDeploy() {
     deployJobError,
     logs,
     setLogs,
+    trackJobIds,
   };
 }
