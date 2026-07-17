@@ -863,6 +863,58 @@ export class SfCliClient extends EventEmitter {
     return this.run(['data', 'query', '--query', flattenSoqlArg(soql), '--target-org', alias], { json: true });
   }
 
+  /** REST SOQL with automatic pagination — supports compound and relationship fields Bulk Query rejects. */
+  async queryAll(
+    alias: string,
+    soql: string,
+  ): Promise<SfCommandResult<{ records: Array<Record<string, unknown>> }>> {
+    const first = await this.query(alias, soql);
+    if (!first.success) {
+      return {
+        success: false,
+        error: first.error,
+        stdout: first.stdout,
+        stderr: first.stderr,
+        exitCode: first.exitCode,
+      };
+    }
+
+    const records: Array<Record<string, unknown>> = [];
+    let page = extractSoqlQueryPage(first.data);
+    records.push(...(page?.records ?? []));
+    let done = page?.done ?? true;
+    let nextUrl = page?.nextRecordsUrl;
+
+    while (!done && nextUrl) {
+      const restPath = nextUrl.startsWith('/') ? nextUrl.slice(1) : nextUrl;
+      const next = await this.run<unknown>(
+        ['api', 'request', 'rest', restPath, '--target-org', alias, '--method', 'GET'],
+        { json: true },
+      );
+      if (!next.success) {
+        return {
+          success: false,
+          error: next.error ?? 'SOQL pagination failed',
+          stdout: next.stdout,
+          stderr: next.stderr,
+          exitCode: next.exitCode,
+        };
+      }
+      page = extractSoqlQueryPage(next.data);
+      records.push(...(page?.records ?? []));
+      done = page?.done ?? true;
+      nextUrl = page?.nextRecordsUrl;
+    }
+
+    return {
+      success: true,
+      data: { records },
+      stdout: first.stdout,
+      stderr: first.stderr,
+      exitCode: 0,
+    };
+  }
+
   /**
    * Kick off a sandbox refresh from its production org (requires prod auth).
    * Runs async — Salesforce completes the refresh in the background; poll the
@@ -1581,6 +1633,27 @@ export function isSfdmuPluginMissingError(text: string): boolean {
     || lower.includes('sfdmu run is not')
     || lower.includes('command sfdmu')
     || lower.includes('plugin is unavailable');
+}
+
+export function isBulkCompoundQueryError(error?: string): boolean {
+  if (!error) return false;
+  return /selecting compound data not supported in bulk query/i.test(error);
+}
+
+type SoqlQueryPage = {
+  records?: Array<Record<string, unknown>>;
+  done?: boolean;
+  nextRecordsUrl?: string;
+};
+
+function extractSoqlQueryPage(data: unknown): SoqlQueryPage | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const record = data as Record<string, unknown>;
+  const nested = record.result;
+  if (nested && typeof nested === 'object') {
+    return nested as SoqlQueryPage;
+  }
+  return record as SoqlQueryPage;
 }
 
 export function createSfCliClient(options?: SfCliOptions): SfCliClient {

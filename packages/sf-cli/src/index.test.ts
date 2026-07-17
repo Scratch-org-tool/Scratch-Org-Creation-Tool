@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   formatRecordValues,
+  isBulkCompoundQueryError,
   parseSfPluginVersion,
   requiredSfPlugins,
   SfCliClient,
@@ -76,6 +77,14 @@ describe('SfCliClient streaming', () => {
       'Error (1): Selecting compound data not supported in Bulk Query',
     );
     assert.match(result.stderr, /update available/);
+  });
+
+  it('detects Bulk Query compound-field failures', () => {
+    assert.equal(
+      isBulkCompoundQueryError('Error (1): Selecting compound data not supported in Bulk Query'),
+      true,
+    );
+    assert.equal(isBulkCompoundQueryError('Invalid field Foo__c'), false);
   });
 });
 

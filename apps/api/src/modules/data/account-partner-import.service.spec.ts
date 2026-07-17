@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   sfCli: {
     describeSObject: vi.fn(),
     exportBulk: vi.fn(),
+    queryAll: vi.fn(),
     upsertBulk: vi.fn(),
   },
   orgConnection: {
@@ -17,9 +18,13 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@sfcc/sf-cli', () => ({
-  createSfCliClient: () => mocks.sfCli,
-}));
+vi.mock('@sfcc/sf-cli', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@sfcc/sf-cli')>();
+  return {
+    ...actual,
+    createSfCliClient: () => mocks.sfCli,
+  };
+});
 
 vi.mock('@sfcc/db', () => ({
   prisma: {
@@ -180,5 +185,93 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       expect.any(Object),
     );
     expect(logs.at(-1)).toBe('Account Partner migration completed');
+  });
+
+  it('falls back to REST query when Bulk Query rejects compound fields', async () => {
+    const service = new AccountPartnerImportService();
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      soql: string,
+      alias: string,
+      file: string,
+    ) => {
+      if (alias === 'source') {
+        return {
+          success: false,
+          error: 'Error (1): Selecting compound data not supported in Bulk Query',
+          stdout: '',
+          stderr: '',
+          exitCode: 1,
+        };
+      }
+      if (soql.includes('FROM Account ')) {
+        await writeFile(
+          file,
+          'Id,cfs_ob__u_CustomerNumber__c\n001ACCOUNT00000001,000123\n',
+          'utf8',
+        );
+      } else {
+        await writeFile(
+          file,
+          'Id,cfs_ob__EmployeeNo__c\n001EMPLOYEE0000001,E-1\n',
+          'utf8',
+        );
+      }
+      return { success: true };
+    });
+    mocks.sfCli.queryAll.mockResolvedValue({
+      success: true,
+      data: {
+        records: [{
+          cfs_ob__AccountPartnerExternalId__c: 'AP-1',
+          cfs_ob__PartnerRole__c: 'ZR',
+          cfs_ob__Bottler__c: '5000',
+          cfs_ob__Sales_Office__c: 'S003',
+          cfs_ob__Account__r: { cfs_ob__u_CustomerNumber__c: '000123' },
+          cfs_ob__EmployeeMaster__r: { cfs_ob__EmployeeNo__c: 'E-1' },
+        }],
+      },
+    });
+
+    const preview = await service.previewSoqlMapping(input);
+
+    expect(preview.ok).toBe(true);
+    expect(mocks.sfCli.queryAll).toHaveBeenCalledTimes(1);
+    expect(preview.sample[0]).toEqual(expect.objectContaining({
+      externalId: 'AP-1',
+      accountKey: '123',
+      employeeKey: 'E-1',
+    }));
+  });
+
+  it('allows create-only lookup fields that Salesforce marks as not updateable', async () => {
+    const service = new AccountPartnerImportService();
+    mocks.sfCli.describeSObject.mockImplementation(async (
+      _alias: string,
+      objectName: string,
+    ) => {
+      const writable = (name: string, externalId = false, updateable = true) => ({
+        name,
+        externalId,
+        createable: true,
+        updateable,
+        length: externalId ? 255 : undefined,
+      });
+      const fields = objectName === 'cfs_ob__AccountPartner__c'
+        ? [
+            writable('cfs_ob__AccountPartnerExternalId__c', true),
+            writable('cfs_ob__PartnerRole__c'),
+            writable('cfs_ob__Bottler__c'),
+            writable('cfs_ob__Account__c', false, false),
+            writable('cfs_ob__EmployeeMaster__c', false, false),
+          ]
+        : objectName === 'Account'
+          ? [writable('cfs_ob__u_CustomerNumber__c', true)]
+          : [writable('cfs_ob__EmployeeNo__c', true)];
+      return { success: true, data: { result: { fields } } };
+    });
+
+    const preview = await service.previewSoqlMapping(input);
+
+    expect(preview.ok).toBe(true);
   });
 });
