@@ -1122,7 +1122,7 @@ model WorkItemChangeNotification {
   lastEmailAt       DateTime?
   updatedAt         DateTime  @updatedAt
 
-  @@unique([provider, externalProjectId, externalItemId])
+  @@unique([provider, externalProjectId, externalItemId], map: "WorkItemChangeNotification_item_key")
   @@index([lastNotifiedAt])
 }
 

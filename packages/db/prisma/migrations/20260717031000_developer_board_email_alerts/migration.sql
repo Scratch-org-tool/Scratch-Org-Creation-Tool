@@ -18,7 +18,7 @@ CREATE TABLE "WorkItemChangeNotification" (
     CONSTRAINT "WorkItemChangeNotification_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "WorkItemChangeNotification_provider_externalProjectId_externalItemId_key"
+CREATE UNIQUE INDEX "WorkItemChangeNotification_item_key"
     ON "WorkItemChangeNotification"("provider", "externalProjectId", "externalItemId");
 
 CREATE INDEX "WorkItemChangeNotification_lastNotifiedAt_idx"
