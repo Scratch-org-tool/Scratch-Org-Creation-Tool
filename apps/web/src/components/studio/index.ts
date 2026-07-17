@@ -9,6 +9,7 @@ export { DeploymentHubSection } from './deployment-hub-section';
 export { DeploymentPageHeader } from './deployment-page-header';
 export { StatusBadge } from './status-badge';
 export { InlineAlert } from './inline-alert';
+export { LoadingOverlay, BusyRow } from './loading-overlay';
 export { ListRow, ListRowGroup, ListRowStatusIcon, relativeTime } from './list-row';
 export { FormSection } from './form-section';
 export { OptionTile } from './option-tile';

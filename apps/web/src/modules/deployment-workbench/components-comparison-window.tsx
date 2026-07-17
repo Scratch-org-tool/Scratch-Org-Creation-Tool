@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 import { InlineAlert } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import { api } from '@/services/api';
@@ -336,13 +337,25 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
       </div>
 
       {running && (
-        <InlineAlert variant="info">
-          {comparisonSummary?.progress?.phase === 'resolving_xml'
-            ? `Inspecting source and target XML (${comparisonSummary.progress.resolvedItems ?? 0} of ${comparisonSummary.progress.totalItems ?? 0}). Results update automatically.`
-            : comparisonSummary?.progress?.totalTypes
-              ? `Loading metadata types (${comparisonSummary.progress.completedTypes} of ${comparisonSummary.progress.totalTypes}). Results appear as each type completes.`
-              : 'Discovering all supported metadata types. Results appear automatically.'}
-        </InlineAlert>
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3"
+        >
+          <Spinner size="md" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium">
+              {comparisonSummary?.progress?.phase === 'resolving_xml'
+                ? `Inspecting source and target XML (${comparisonSummary.progress.resolvedItems ?? 0} of ${comparisonSummary.progress.totalItems ?? 0})…`
+                : comparisonSummary?.progress?.totalTypes
+                  ? `Loading metadata types (${comparisonSummary.progress.completedTypes} of ${comparisonSummary.progress.totalTypes})…`
+                  : 'Comparing the two orgs in the background…'}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Results appear automatically as each metadata type completes — no refresh needed.
+            </p>
+          </div>
+        </div>
       )}
 
       {comparisonStatus === 'failed' && (
@@ -905,7 +918,12 @@ function RelatedPanel({
           <X className="size-4" />
         </Button>
       </div>
-      {loading && <p className="text-sm text-muted-foreground">Loading related components…</p>}
+      {loading && (
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner size="sm" />
+          Loading related components…
+        </p>
+      )}
       {error && <InlineAlert variant="error">{error}</InlineAlert>}
       {!loading && !error && children?.childTypes.length === 0 && (
         <p className="text-sm text-muted-foreground">No related child components found in this comparison.</p>

@@ -44,6 +44,7 @@ import {
   serverRunActions,
   TERMINAL_RUN_STATUSES,
   validateWorkbenchForm,
+  withAutoStaticAnalysis,
 } from './workbench-utils';
 
 interface ComparisonResponse {
@@ -269,7 +270,12 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
         sourceOrgId: sourceOrgId || current.sourceOrgId,
         targetOrgId: targetOrgId || current.targetOrgId,
         targetProfile: targetOrgId ? profile : current.targetProfile,
-        policy: targetOrgId ? policyForEnvironment(profile, nextCapabilities) : current.policy,
+        // Static analysis is always automatic — request every engine the
+        // server knows about; unavailable analyzers are skipped server-side.
+        policy: withAutoStaticAnalysis(
+          targetOrgId ? policyForEnvironment(profile) : current.policy,
+          nextCapabilities,
+        ),
       }));
       const requestedRun = params.get('runId') ?? params.get('run');
       if (requestedRun) {
@@ -588,7 +594,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       ...invalidateSourceState(current, { targetOrgId }),
       targetOrgId,
       targetProfile: profile,
-      policy: policyForEnvironment(profile, capabilities),
+      policy: withAutoStaticAnalysis(policyForEnvironment(profile), capabilities),
     }));
   }, [capabilities, clearComparison, clearPlanResolution, orgs]);
 
@@ -596,7 +602,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     setForm((current) => ({
       ...current,
       targetProfile,
-      policy: policyForEnvironment(targetProfile, capabilities),
+      policy: withAutoStaticAnalysis(policyForEnvironment(targetProfile), capabilities),
     }));
   }, [capabilities]);
 
@@ -910,6 +916,38 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     }
   }, [loadDestructiveReview, loadRun]);
 
+  /**
+   * Start a fresh deployment: clears the finished run, comparison, and plan
+   * while keeping the chosen orgs so the next deployment starts instantly.
+   */
+  const resetPlan = useCallback(() => {
+    runRequest.current += 1;
+    runAbort.current?.abort();
+    activeRunId.current = null;
+    setRunId(null);
+    setStatus(null);
+    setStages([]);
+    setResults(null);
+    setProgress(null);
+    setSseConnected(false);
+    setActionPending(null);
+    clearComparison();
+    clearPlanResolution();
+    setError(null);
+    setNotice(null);
+    setForm((current) => ({
+      ...createInitialForm(current.sourceMode),
+      sourceOrgId: current.sourceOrgId,
+      targetOrgId: current.targetOrgId,
+      targetProfile: current.targetProfile,
+      policy: withAutoStaticAnalysis(
+        policyForEnvironment(current.targetProfile),
+        capabilities,
+      ),
+    }));
+    setStep(0);
+  }, [capabilities, clearComparison, clearPlanResolution]);
+
   return {
     step,
     setStep,
@@ -973,6 +1011,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     historyLoading,
     loadHistory,
     openHistoryRun,
+    resetPlan,
     validation,
   };
 }

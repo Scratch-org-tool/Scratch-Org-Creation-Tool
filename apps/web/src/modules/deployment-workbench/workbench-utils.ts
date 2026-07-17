@@ -28,6 +28,45 @@ export const WORKBENCH_STEPS = [
 
 export const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'cancelled', 'rejected'] as const;
 
+/**
+ * Every analyzer the platform knows about. Static analysis is fully automatic:
+ * all engines are requested on every deployment and the server silently skips
+ * any analyzer that is not installed on the host.
+ */
+export const AUTO_STATIC_ANALYSIS_ENGINES = ['code-analyzer', 'pmd', 'eslint'] as const;
+
+/** Engines to request, preferring what the server reports as installed. */
+export function autoStaticAnalysisEngines(capabilities: WorkbenchCapabilities | null): string[] {
+  const known = capabilities?.staticAnalysisEngines?.length
+    ? capabilities.staticAnalysisEngines
+    : [...AUTO_STATIC_ANALYSIS_ENGINES];
+  const availability = capabilities?.staticAnalysisAvailability;
+  if (availability) {
+    const available = known.filter((engine) => availability[engine] !== false);
+    if (available.length > 0) return available;
+  }
+  return [...known];
+}
+
+/**
+ * Static analysis is never user-configured: it is always enabled with every
+ * engine, and only production keeps a blocking threshold (error/critical = 0).
+ * Everywhere else it runs in the background and reports findings.
+ */
+export function withAutoStaticAnalysis(
+  policy: DeploymentPolicy,
+  capabilities: WorkbenchCapabilities | null,
+): DeploymentPolicy {
+  return {
+    ...policy,
+    staticAnalysis: {
+      ...policy.staticAnalysis,
+      enabled: true,
+      engines: autoStaticAnalysisEngines(capabilities),
+    },
+  };
+}
+
 export function profileForOrgType(type?: string): DeploymentEnvironment {
   if (type === 'prod' || type === 'production') return 'production';
   if (type === 'sandbox') return 'sandbox';
@@ -83,7 +122,11 @@ export function policyForEnvironment(
       tests: { level: 'RunLocalTests', tests: [], minimumCoverage: 75 },
       staticAnalysis: {
         enabled: true,
+<<<<<<< cursor/workbench-ux-overhaul-cef8
+        engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
+=======
         engines: defaultStaticAnalysisEngines(capabilities),
+>>>>>>> main
         severityThreshold: 'error',
         maxCounts: { info: null, warning: null, error: 0, critical: 0 },
         blockMode: 'threshold',
@@ -97,11 +140,13 @@ export function policyForEnvironment(
     return {
       tests: { level: 'RunLocalTests', tests: [], minimumCoverage: 75 },
       staticAnalysis: {
-        enabled: false,
-        engines: [],
+        enabled: true,
+        engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
         severityThreshold: 'error',
         maxCounts: { info: null, warning: null, error: 0, critical: 0 },
-        blockMode: 'threshold',
+        // Analysis always runs in the background; outside production it
+        // reports findings without blocking the deployment.
+        blockMode: 'never',
       },
       validation: { required: true },
       snapshot: { required: true, rollbackRequired: true },
@@ -111,11 +156,11 @@ export function policyForEnvironment(
   return {
     tests: { level: 'NoTestRun', tests: [], minimumCoverage: 0 },
     staticAnalysis: {
-      enabled: false,
-      engines: [],
+      enabled: true,
+      engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
       severityThreshold: 'error',
       maxCounts: { info: null, warning: null, error: 0, critical: 0 },
-      blockMode: 'threshold',
+      blockMode: 'never',
     },
     validation: { required: false },
     snapshot: { required: false, rollbackRequired: false },

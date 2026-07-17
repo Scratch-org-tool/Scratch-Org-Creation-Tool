@@ -6,11 +6,17 @@ import {
   Boxes,
   CheckCircle2,
   Cloud,
+<<<<<<< cursor/workbench-ux-overhaul-cef8
+  FileText,
+=======
   Database,
   FlaskConical,
+>>>>>>> main
   GitCompare,
+  History,
   Lock,
   Play,
+  Plus,
   RotateCcw,
   ScanSearch,
   ShieldCheck,
@@ -19,11 +25,14 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import {
+  BusyRow,
   DeploymentPageHeader,
   GlassCard,
   InlineAlert,
+  LoadingOverlay,
   PageSkeleton,
   StatusBadge,
   WizardSteps,
@@ -45,6 +54,7 @@ import {
   staticAnalysisEngineOptions,
   supportsDestructiveAcknowledgement,
   supportsOptionalDependencies,
+  TERMINAL_RUN_STATUSES,
   WORKBENCH_STEPS,
 } from './workbench-utils';
 
@@ -105,7 +115,9 @@ export function DeploymentWorkbenchWorkspace({
         aria-labelledby={`workbench-tab-${tab}`}
         tabIndex={0}
       >
-        {tab === 'history' ? <HistoryView w={w} /> : <PlanView w={w} />}
+        {tab === 'history'
+          ? <HistoryView w={w} />
+          : <PlanView w={w} onOpenHistory={() => setTab('history')} />}
       </section>
     </div>
   );
@@ -162,19 +174,69 @@ function TabButton({
   );
 }
 
-function PlanView({ w }: { w: DeploymentWorkbenchState }) {
+function PlanView({
+  w,
+  onOpenHistory,
+}: {
+  w: DeploymentWorkbenchState;
+  onOpenHistory: () => void;
+}) {
+  const sourceReady = Boolean(w.form.targetOrgId) && (
+    w.form.sourceMode === 'org_compare'
+      ? Boolean(w.form.sourceOrgId) && w.form.sourceOrgId !== w.form.targetOrgId
+      : Boolean(w.scmSource)
+  );
+  const componentsReady = w.form.sourceMode === 'scm'
+    || componentCount(w.form.components) + componentCount(w.form.destructiveSelections) > 0;
+
+  // Each wizard step is its own page; a step is only reachable once the
+  // steps before it are satisfied (Plan Review needs a preview, Execute a run).
+  const stepEnabled = (index: number): boolean => {
+    if (index <= 0) return true;
+    if (index <= 3) return sourceReady && (index === 1 || componentsReady);
+    if (index === 4) return Boolean(w.preview);
+    return Boolean(w.runId);
+  };
+
+  const goToStep = (index: number) => {
+    if (!stepEnabled(index)) return;
+    w.setStep(index);
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      document.querySelector<HTMLElement>('#workbench-main')?.focus();
+    });
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
       <div className="overflow-x-auto rounded-xl border border-border/60 bg-card/30 p-3">
-        <WizardSteps steps={[...WORKBENCH_STEPS]} current={w.step} className="min-w-[760px]" />
+        <WizardSteps
+          steps={[...WORKBENCH_STEPS]}
+          current={w.step}
+          className="min-w-[760px]"
+          onStepSelect={goToStep}
+          isStepEnabled={stepEnabled}
+        />
       </div>
-      <main id="workbench-main" tabIndex={-1} className="focus:outline-none">
+      <main id="workbench-main" tabIndex={-1} className="relative focus:outline-none">
         {w.step === 0 && <SourceStep w={w} />}
         {w.step === 1 && <ComponentsStep w={w} />}
         {w.step === 2 && <DependenciesStep w={w} />}
         {w.step === 3 && <QualityStep w={w} />}
         {w.step === 4 && <ReviewStep w={w} />}
-        {w.step === 5 && <ExecuteStep w={w} />}
+        {w.step === 5 && <ExecuteStep w={w} onOpenHistory={onOpenHistory} />}
+        {w.previewing && (
+          <LoadingOverlay
+            label="Building the deployment plan…"
+            sublabel="Resolving the manifest, dependencies, and quality gates on the server. This can take a moment for large selections."
+          />
+        )}
+        {w.creating && (
+          <LoadingOverlay
+            label="Creating the deployment run…"
+            sublabel="Persisting the immutable plan and starting execution."
+          />
+        )}
       </main>
       {w.step < 5 && !(w.step === 0 && w.form.sourceMode === 'org_compare') && (
         <WizardFooter w={w} />
@@ -194,7 +256,10 @@ function SourceStep({ w }: { w: DeploymentWorkbenchState }) {
 
   const startCompare = () => {
     w.setStep(1);
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('#workbench-main')?.focus());
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      document.querySelector<HTMLElement>('#workbench-main')?.focus();
+    });
   };
 
   const swapOrgs = () => {
@@ -718,9 +783,12 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
   const [testSearch, setTestSearch] = useState('');
   const filteredTests = w.testClasses.filter((item) =>
     item.name.toLowerCase().includes(testSearch.toLowerCase()));
+<<<<<<< cursor/workbench-ux-overhaul-cef8
+=======
   const staticPolicy = w.form.policy.staticAnalysis;
   const engineOptions = staticAnalysisEngineOptions(w.capabilities);
   const selectedTestCount = w.form.policy.tests.tests.length;
+>>>>>>> main
 
   return (
     <div className="space-y-4">
@@ -815,6 +883,9 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
         </div>
       </GlassCard>
 
+<<<<<<< cursor/workbench-ux-overhaul-cef8
+      <AutomaticStaticAnalysisCard w={w} />
+=======
       <GlassCard
         title={<SectionTitle icon={ScanSearch}>Static code analysis</SectionTitle>}
         description="Scan the resolved deployment source for quality and security findings before it reaches the target."
@@ -981,6 +1052,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
           </div>
         )}
       </GlassCard>
+>>>>>>> main
 
       <GlassCard
         title={<SectionTitle icon={FlaskConical}>Apex tests and coverage</SectionTitle>}
@@ -1048,6 +1120,9 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
             />
             <div className="max-h-60 overflow-auto rounded-lg border border-border/60 p-2">
               {w.testClassesLoading ? (
+<<<<<<< cursor/workbench-ux-overhaul-cef8
+                <BusyRow label="Loading Apex classes from the target org…" />
+=======
                 <p className="p-3 text-sm text-muted-foreground">Loading classes from target org…</p>
               ) : !filteredTests.length ? (
                 <p className="p-3 text-sm text-muted-foreground">
@@ -1055,6 +1130,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
                     ? 'No Apex classes match the filter.'
                     : 'No Apex classes were found in the target org.'}
                 </p>
+>>>>>>> main
               ) : filteredTests.map((testClass) => (
                 <label key={testClass.name} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/30">
                   <input
@@ -1119,6 +1195,58 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
   );
 }
 
+<<<<<<< cursor/workbench-ux-overhaul-cef8
+function AutomaticStaticAnalysisCard({ w }: { w: DeploymentWorkbenchState }) {
+  const engines = w.form.policy.staticAnalysis.engines;
+  const availability = w.capabilities?.staticAnalysisAvailability;
+  const production = w.form.targetProfile === 'production';
+  return (
+    <GlassCard
+      title={(
+        <div className="flex items-center gap-2">
+          <ScanSearch className="size-4 text-primary" aria-hidden="true" />
+          <span>Static code analysis</span>
+          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+            Automatic
+          </span>
+        </div>
+      )}
+      description="Nothing to configure — a complete static code analysis runs in the background on every deployment."
+    >
+      <div className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Every available analyzer is executed against the exact resolved source while the
+          deployment runs; analyzers that are not installed on the server are skipped
+          automatically. Findings appear in the results and in the audit trail.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {engines.map((engine) => {
+            const unavailable = availability?.[engine] === false;
+            return (
+              <span
+                key={engine}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs',
+                  unavailable
+                    ? 'border-border/60 text-muted-foreground line-through'
+                    : 'border-primary/40 bg-primary/10 text-primary',
+                )}
+                title={unavailable ? 'Not installed on the server — skipped automatically' : 'Runs automatically'}
+              >
+                <ScanSearch className="size-3" aria-hidden="true" />
+                {engine}
+              </span>
+            );
+          })}
+        </div>
+        <InlineAlert variant={production ? 'warning' : 'info'}>
+          {production
+            ? 'Production target: any error or critical finding blocks the deployment before the org is touched.'
+            : 'Findings are reported without blocking this environment. Production targets block on error and critical findings.'}
+        </InlineAlert>
+      </div>
+    </GlassCard>
+=======
 function SectionTitle({
   icon: Icon,
   children,
@@ -1133,6 +1261,7 @@ function SectionTitle({
       </span>
       <span className="text-base font-semibold leading-none tracking-tight">{children}</span>
     </div>
+>>>>>>> main
   );
 }
 
@@ -1215,7 +1344,7 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
               This backend does not advertise hash-bound destructive acknowledgement support.
             </InlineAlert>
           ) : w.destructiveReviewLoading ? (
-            <p className="text-sm text-muted-foreground">Loading the server-generated destructive manifest…</p>
+            <BusyRow label="Loading the server-generated destructive manifest…" />
           ) : w.destructiveReview ? (
             <div className="space-y-3">
               {!w.runId && (
@@ -1289,9 +1418,16 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
   );
 }
 
-function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
+function ExecuteStep({
+  w,
+  onOpenHistory,
+}: {
+  w: DeploymentWorkbenchState;
+  onOpenHistory: () => void;
+}) {
   const [rejectReason, setRejectReason] = useState('');
   const [rollbackReason, setRollbackReason] = useState('');
+  const [showReport, setShowReport] = useState(false);
   if (!w.runId || !w.status) {
     return (
       <GlassCard title="Execute deployment">
@@ -1300,106 +1436,46 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
     );
   }
   const actions = serverRunActions(w.status);
-  const sourceIdentity = w.results?.artifacts?.source as Record<string, unknown> | undefined;
-  const pinnedCommit = typeof sourceIdentity?.commitSha === 'string'
-    ? sourceIdentity.commitSha
-    : w.status.commitSha;
-  const sourceDigest = typeof sourceIdentity?.digest === 'string'
-    ? sourceIdentity.digest
-    : w.status.sourceDigest;
+  const terminal = TERMINAL_RUN_STATUSES.includes(w.status.status as never);
+  const succeeded = w.status.status === 'passed';
+
+  // Success shows ONLY the success screen; the full report is opt-in so the
+  // page never stacks every planning section under the result again.
+  if (terminal && succeeded && !showReport) {
+    return (
+      <div className="space-y-4">
+        <SuccessPanel w={w} onOpenHistory={onOpenHistory} onShowReport={() => setShowReport(true)} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      <GlassCard
-        title={(
-          <div className="flex flex-wrap items-center gap-2">
-            <span>Run {w.runId.slice(0, 8)}</span>
-            <StatusBadge status={w.status.status} />
-          </div>
-        )}
-        description="Stage updates use the live event stream with authenticated polling fallback."
-        headerAction={(
-          <span className={cn('flex items-center gap-1 text-xs', w.sseConnected ? 'text-emerald-300' : 'text-amber-300')}>
-            <span className={cn('size-2 rounded-full', w.sseConnected ? 'bg-emerald-400' : 'bg-amber-400')} />
-            {w.sseConnected ? 'Live' : 'Polling'}
-          </span>
-        )}
-      >
-        <div aria-live="polite" aria-atomic="true" className="sr-only">
-          Deployment status {w.status.status}. Current stage {w.status.currentStage ?? 'none'}.
-        </div>
-        {(pinnedCommit || sourceDigest) && (
-          <dl className="mb-4 grid gap-3 rounded-lg border border-border/60 p-3 text-sm sm:grid-cols-2">
-            <SummaryTerm label="Pinned commit SHA" value={pinnedCommit ?? '—'} />
-            <SummaryTerm label="Source digest" value={sourceDigest ?? '—'} />
-          </dl>
-        )}
-        <div className="space-y-2">
-          {w.stages.map((stage) => <StageRow key={stage.key} stage={stage} />)}
-        </div>
-        <div className="mt-5 flex flex-wrap gap-2">
-          {actions.canCancel && (
-            <Button
-              variant="outline"
-              loading={w.actionPending === 'cancel'}
-              onClick={() => void w.runAction('cancel')}
-            >
-              <XCircle className="mr-2 size-4" /> Cancel
-            </Button>
-          )}
-          {actions.canApprove && (
-            <Button
-              loading={w.actionPending === 'approve'}
-              onClick={() => void w.runAction('approve')}
-            >
-              <ShieldCheck className="mr-2 size-4" /> Approve
-            </Button>
-          )}
-          {actions.canResume && (
-            <Button loading={w.actionPending === 'resume'} onClick={() => void w.runAction('resume')}>
-              <Play className="mr-2 size-4" /> Resume intelligent batches
-            </Button>
-          )}
-          {actions.canQuickDeploy && (
-            <Button
-              variant="outline"
-              loading={w.actionPending === 'quick-deploy'}
-              onClick={() => void w.runAction('quick-deploy')}
-            >
-              Quick deploy validated package
-            </Button>
-          )}
-        </div>
-        {actions.canReject && (
-          <div className="mt-4 flex flex-col gap-2 rounded-lg border border-border/60 p-3 sm:flex-row sm:items-end">
-            <Field label="Rejection reason" htmlFor="reject-reason" className="flex-1">
-              <Input id="reject-reason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} />
-            </Field>
-            <Button
-              variant="destructive"
-              disabled={!rejectReason.trim()}
-              loading={w.actionPending === 'reject'}
-              onClick={() => void w.runAction('reject', { reason: rejectReason })}
-            >
-              Reject plan
-            </Button>
-          </div>
-        )}
-      </GlassCard>
-
-      {w.form.sourceMode === 'org_compare'
-        && w.form.comparisonId
-        && ['passed', 'failed', 'cancelled', 'rejected'].includes(w.status.status) && (
-        <div className="space-y-3">
-          <InlineAlert
-            variant={w.status.status === 'passed' ? 'success' : 'warning'}
-            title={w.status.status === 'passed' ? 'Deployment successful' : 'Deployment finished'}
-          >
-            The comparison remains available below so you can inspect the deployed selection and
-            source-versus-target XML without starting another comparison.
-          </InlineAlert>
-          <ComponentsStep w={w} />
-        </div>
+      {terminal && succeeded && (
+        <SuccessPanel
+          w={w}
+          compact
+          onOpenHistory={onOpenHistory}
+          onShowReport={() => setShowReport(false)}
+          reportOpen
+        />
       )}
+      {terminal && !succeeded && (
+        <InlineAlert
+          variant={w.status.status === 'failed' ? 'error' : 'warning'}
+          title={w.status.status === 'failed' ? 'Deployment failed' : `Deployment ${w.status.status}`}
+        >
+          Review the stage outcomes and quality results below
+          {actions.canRollback ? ', or roll the target back to its captured snapshot' : ''}.
+        </InlineAlert>
+      )}
+
+      <RunProgressCard
+        w={w}
+        actions={actions}
+        rejectReason={rejectReason}
+        onRejectReasonChange={setRejectReason}
+      />
 
       {w.progress?.totalBatches ? (
         <GlassCard title="Intelligent batches">
@@ -1417,13 +1493,13 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
         </GlassCard>
       ) : null}
 
-      {(w.destructiveReview || w.destructiveReviewLoading) && (
+      {(w.destructiveReview || w.destructiveReviewLoading) && !terminal && (
         <GlassCard
           title="Destructive manifest review"
           description="Target mutation is blocked until this persisted plan digest is explicitly approved."
         >
           {w.destructiveReviewLoading || !w.destructiveReview ? (
-            <p className="text-sm text-muted-foreground">Loading destructive manifest…</p>
+            <BusyRow label="Loading the server-generated destructive manifest…" />
           ) : (
             <div className="space-y-3">
               <dl>
@@ -1467,8 +1543,36 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
         </GlassCard>
       )}
 
-      <ResultDetails w={w} />
-      <DependenciesStep w={w} />
+      {(terminal || w.status.status === 'awaiting_approval') && <ResultDetails w={w} />}
+
+      {terminal
+        && w.form.sourceMode === 'org_compare'
+        && w.form.comparisonId
+        && (showReport || !succeeded) && (
+        <GlassCard
+          title="Deployed selection & source-versus-target XML"
+          description="The comparison from this run stays available for inspection without starting a new one."
+        >
+          <ComponentsComparisonWindow
+            comparisonId={w.form.comparisonId}
+            comparisonStatus={w.comparisonStatus}
+            comparisonSummary={w.comparisonSummary}
+            items={w.compareItems}
+            selectedKeys={w.selectedKeys}
+            comparing={w.comparing}
+            selectedItem={w.selectedCompareItem}
+            itemDiff={w.compareItemDiff}
+            itemDiffLoading={w.compareItemDiffLoading}
+            itemDiffError={w.compareItemDiffError}
+            sourceLabel={w.orgs.find((org) => org.id === w.form.sourceOrgId)?.alias ?? 'Source org'}
+            targetLabel={w.orgs.find((org) => org.id === w.form.targetOrgId)?.alias ?? 'Target org'}
+            onRetryComparison={w.retryComparison}
+            onToggleItem={w.toggleCompareItem}
+            onSelectItems={w.selectCompareItems}
+            onSelectItem={(item) => void w.loadCompareItemDiff(item)}
+          />
+        </GlassCard>
+      )}
 
       {actions.canRollback && (
         <GlassCard title="Rollback" description="Restores captured existing metadata. Net-new metadata is not deleted automatically.">
@@ -1494,14 +1598,227 @@ function ExecuteStep({ w }: { w: DeploymentWorkbenchState }) {
   );
 }
 
+/** Clean, single-purpose success screen shown when a run passes. */
+function SuccessPanel({
+  w,
+  onOpenHistory,
+  onShowReport,
+  compact,
+  reportOpen,
+}: {
+  w: DeploymentWorkbenchState;
+  onOpenHistory: () => void;
+  onShowReport: () => void;
+  compact?: boolean;
+  reportOpen?: boolean;
+}) {
+  const grouped = groupQualityResults(w.results, w.status);
+  const targetAlias = w.orgs.find((org) => org.id === w.form.targetOrgId)?.alias
+    ?? w.status?.results?.validation?.summary?.targetAlias
+    ?? 'target org';
+  const deployed = componentCount(w.form.components);
+  const destructive = componentCount(w.form.destructiveSelections);
+  const durationMs = w.status
+    ? Math.max(0, new Date(w.status.updatedAt).getTime() - new Date(w.status.createdAt).getTime())
+    : 0;
+
+  if (compact) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3">
+        <p className="flex items-center gap-2 text-sm font-medium text-emerald-300">
+          <CheckCircle2 className="size-4" aria-hidden="true" />
+          Deployment successful — full report below
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={onShowReport}>
+            {reportOpen ? 'Hide full report' : 'View full report'}
+          </Button>
+          <Button size="sm" onClick={() => w.resetPlan()}>
+            <Plus className="mr-1.5 size-4" /> New deployment
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <GlassCard className="border-emerald-500/40">
+      <div className="flex flex-col items-center gap-4 py-8 text-center">
+        <span className="flex size-16 items-center justify-center rounded-full bg-emerald-500/15">
+          <CheckCircle2 className="size-9 text-emerald-400" aria-hidden="true" />
+        </span>
+        <div>
+          <h2 className="text-xl font-semibold text-foreground">Deployment successful</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {deployed > 0 ? `${deployed} component${deployed === 1 ? '' : 's'} deployed` : 'Deployment completed'}
+            {destructive > 0 ? ` · ${destructive} deleted` : ''} to <strong>{String(targetAlias)}</strong>
+            {durationMs > 0 ? ` in ${formatDuration(durationMs)}` : ''}.
+          </p>
+        </div>
+        <dl className="grid w-full max-w-xl grid-cols-2 gap-3 sm:grid-cols-4">
+          <Metric label="Components" value={deployed || '—'} />
+          <Metric
+            label="Apex coverage"
+            value={grouped.coverage === null ? '—' : `${grouped.coverage}%`}
+          />
+          <Metric
+            label="Static findings"
+            value={grouped.staticIssues.length}
+            danger={grouped.staticIssues.length > 0}
+          />
+          <Metric label="Run" value={w.runId ? w.runId.slice(0, 8) : '—'} />
+        </dl>
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+          <Button onClick={() => w.resetPlan()}>
+            <Plus className="mr-2 size-4" /> Start new deployment
+          </Button>
+          <Button variant="outline" onClick={onShowReport}>
+            <FileText className="mr-2 size-4" /> View full report
+          </Button>
+          <Button variant="ghost" onClick={onOpenHistory}>
+            <History className="mr-2 size-4" /> Audit &amp; history
+          </Button>
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+/** Live run card: stage loader banner + stage list + server-authorized actions. */
+function RunProgressCard({
+  w,
+  actions,
+  rejectReason,
+  onRejectReasonChange,
+}: {
+  w: DeploymentWorkbenchState;
+  actions: ReturnType<typeof serverRunActions>;
+  rejectReason: string;
+  onRejectReasonChange: (value: string) => void;
+}) {
+  if (!w.runId || !w.status) return null;
+  const terminal = TERMINAL_RUN_STATUSES.includes(w.status.status as never);
+  const runningStage = w.stages.find((stage) => stage.status === 'running');
+  const sourceIdentity = w.results?.artifacts?.source as Record<string, unknown> | undefined;
+  const pinnedCommit = typeof sourceIdentity?.commitSha === 'string'
+    ? sourceIdentity.commitSha
+    : w.status.commitSha;
+  const sourceDigest = typeof sourceIdentity?.digest === 'string'
+    ? sourceIdentity.digest
+    : w.status.sourceDigest;
+  return (
+    <GlassCard
+      title={(
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Run {w.runId.slice(0, 8)}</span>
+          <StatusBadge status={w.status.status} />
+        </div>
+      )}
+      description="Stage updates use the live event stream with authenticated polling fallback."
+      headerAction={(
+        <span className={cn('flex items-center gap-1 text-xs', w.sseConnected ? 'text-emerald-300' : 'text-amber-300')}>
+          <span className={cn('size-2 rounded-full', w.sseConnected ? 'bg-emerald-400' : 'bg-amber-400')} />
+          {w.sseConnected ? 'Live' : 'Polling'}
+        </span>
+      )}
+    >
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        Deployment status {w.status.status}. Current stage {w.status.currentStage ?? 'none'}.
+      </div>
+      {!terminal && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3">
+          <Spinner size="md" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium">
+              {runningStage
+                ? `${readableStage(runningStage.key)} is running in the background…`
+                : w.status.status === 'awaiting_approval'
+                  ? 'Waiting for approval — nothing runs until the plan is approved.'
+                  : 'Working… the next stage starts automatically.'}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              You can keep this page open; every stage updates live.
+            </p>
+          </div>
+        </div>
+      )}
+      {(pinnedCommit || sourceDigest) && (
+        <dl className="mb-4 grid gap-3 rounded-lg border border-border/60 p-3 text-sm sm:grid-cols-2">
+          <SummaryTerm label="Pinned commit SHA" value={pinnedCommit ?? '—'} />
+          <SummaryTerm label="Source digest" value={sourceDigest ?? '—'} />
+        </dl>
+      )}
+      <div className="space-y-2">
+        {w.stages.map((stage) => <StageRow key={stage.key} stage={stage} />)}
+      </div>
+      <div className="mt-5 flex flex-wrap gap-2">
+        {actions.canCancel && (
+          <Button
+            variant="outline"
+            loading={w.actionPending === 'cancel'}
+            onClick={() => void w.runAction('cancel')}
+          >
+            <XCircle className="mr-2 size-4" /> Cancel
+          </Button>
+        )}
+        {actions.canApprove && (
+          <Button
+            loading={w.actionPending === 'approve'}
+            onClick={() => void w.runAction('approve')}
+          >
+            <ShieldCheck className="mr-2 size-4" /> Approve
+          </Button>
+        )}
+        {actions.canResume && (
+          <Button loading={w.actionPending === 'resume'} onClick={() => void w.runAction('resume')}>
+            <Play className="mr-2 size-4" /> Resume intelligent batches
+          </Button>
+        )}
+        {actions.canQuickDeploy && (
+          <Button
+            variant="outline"
+            loading={w.actionPending === 'quick-deploy'}
+            onClick={() => void w.runAction('quick-deploy')}
+          >
+            Quick deploy validated package
+          </Button>
+        )}
+      </div>
+      {actions.canReject && (
+        <div className="mt-4 flex flex-col gap-2 rounded-lg border border-border/60 p-3 sm:flex-row sm:items-end">
+          <Field label="Rejection reason" htmlFor="reject-reason" className="flex-1">
+            <Input id="reject-reason" value={rejectReason} onChange={(event) => onRejectReasonChange(event.target.value)} />
+          </Field>
+          <Button
+            variant="destructive"
+            disabled={!rejectReason.trim()}
+            loading={w.actionPending === 'reject'}
+            onClick={() => void w.runAction('reject', { reason: rejectReason })}
+          >
+            Reject plan
+          </Button>
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
 function StageRow({ stage }: { stage: WorkbenchStage }) {
   const icon = stage.status === 'passed'
     ? <CheckCircle2 className="size-4 text-emerald-400" />
     : stage.status === 'failed'
       ? <XCircle className="size-4 text-red-400" />
-      : <span className={cn('size-2 rounded-full', stage.status === 'running' ? 'animate-pulse bg-primary' : 'bg-muted-foreground')} />;
+      : stage.status === 'running'
+        ? <Spinner size="sm" label={`${readableStage(stage.key)} running`} />
+        : <span className="size-2 rounded-full bg-muted-foreground" />;
   return (
-    <details className="rounded-lg border border-border/60 px-3 py-2" open={stage.status === 'failed'}>
+    <details
+      className={cn(
+        'rounded-lg border px-3 py-2',
+        stage.status === 'running' ? 'border-primary/40 bg-primary/5' : 'border-border/60',
+      )}
+      open={stage.status === 'failed'}
+    >
       <summary className="flex cursor-pointer list-none items-center gap-3">
         {icon}
         <span className="flex-1 text-sm font-medium">{readableStage(stage.key)}</span>
@@ -1607,7 +1924,10 @@ function HistoryView({ w }: { w: DeploymentWorkbenchState }) {
   ) => w.setHistoryFilters((current) => ({ ...current, [key]: value }));
 
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
+      {w.historyLoading && (
+        <LoadingOverlay label="Loading deployment history…" />
+      )}
       <GlassCard title="Deployment history" description="Authoritative quality runs, gates, validation, and stage outcomes.">
         <div className="mb-4 grid gap-3 md:grid-cols-3 lg:grid-cols-4">
           <Field label="Source" htmlFor="history-source">
@@ -1818,17 +2138,26 @@ function WizardFooter({ w }: { w: DeploymentWorkbenchState }) {
     || (w.step === 1 && componentBlocked)
     || (w.step === 3 && (w.validation.blockers.length > 0 || !destructivePreviewSupported));
 
+  const focusStepTop = () => requestAnimationFrame(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    document.querySelector<HTMLElement>('#workbench-main')?.focus();
+  });
   const next = async () => {
     if (w.step === 3) {
-      await w.previewPlan();
+      const previewed = await w.previewPlan();
+      if (previewed) focusStepTop();
       return;
     }
     w.setStep(Math.min(4, w.step + 1));
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('#workbench-main')?.focus());
+    focusStepTop();
+  };
+  const back = () => {
+    w.setStep(Math.max(0, w.step - 1));
+    focusStepTop();
   };
   return (
     <div className="sticky bottom-0 z-20 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur">
-      <Button variant="outline" disabled={w.step === 0} onClick={() => w.setStep(Math.max(0, w.step - 1))}>
+      <Button variant="outline" disabled={w.step === 0 || w.previewing || w.creating} onClick={back}>
         Back
       </Button>
       <div className="flex items-center gap-2">
