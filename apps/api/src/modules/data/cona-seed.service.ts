@@ -13,6 +13,7 @@ import {
   ONBOARDING_OBJECT,
   type BottlerSalesOfficeConfig,
   type ConaManualAccountQuery,
+  type ConaManualSeedQuery,
   type DataSeedQuerySet,
 } from '@sfcc/shared';
 import type { AccountSeedRow, ResolvedManualAccountQuery } from './account-seed-query.builder';
@@ -21,6 +22,8 @@ import {
   buildAccountSeedSoql,
   resolveManualAccountSeedQuery,
 } from './account-seed-query.builder';
+import type { ResolvedManualOnboardingQuery } from './onboarding-seed-query.builder';
+import { resolveManualOnboardingSeedQuery } from './onboarding-seed-query.builder';
 import { RecordTypeMapperService } from './record-type-mapper.service';
 
 type SeedDataset = 'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts';
@@ -55,6 +58,10 @@ export class ConaSeedService {
     return queries.map(resolveManualAccountSeedQuery);
   }
 
+  validateManualOnboardingQueries(queries: ConaManualSeedQuery[]) {
+    return queries.map(resolveManualOnboardingSeedQuery);
+  }
+
   async previewAccountSeed(sourceOrgId: string, rows: AccountSeedRow[]) {
     const org = await this.resolveOrg(sourceOrgId);
     const results = [];
@@ -73,6 +80,8 @@ export class ConaSeedService {
     accountSeedRows?: AccountSeedRow[],
     accountQueryMode: 'guided' | 'manual' = 'guided',
     manualAccountQueries?: ConaManualAccountQuery[],
+    onboardingQueryMode: 'automatic' | 'manual' = 'automatic',
+    manualOnboardingQueries?: ConaManualSeedQuery[],
   ) {
     const org = await this.resolveOrg(sourceOrgId);
     const bottlers = [...new Set((accountSeedRows ?? []).map((r) => r.bottler))];
@@ -85,16 +94,50 @@ export class ConaSeedService {
     ) {
       throw new Error('Add at least one manual Account query');
     }
+    if (
+      datasets.includes('OnboardingConfig')
+      && onboardingQueryMode === 'manual'
+      && !manualOnboardingQueries?.length
+    ) {
+      throw new Error('Add at least one manual OnboardingConfig query');
+    }
 
     const safeBottler = escapeSoqlValue(defaultBottler);
     const manualQueryPreviews: Array<ResolvedManualAccountQuery & {
       availableCount: number;
       selectedCount: number;
     }> = [];
-    if (datasets.includes('OnboardingConfig')) {
+    const manualOnboardingPreviews: Array<ResolvedManualOnboardingQuery & {
+      availableCount: number;
+      selectedCount: number;
+    }> = [];
+    if (datasets.includes('OnboardingConfig') && onboardingQueryMode === 'automatic') {
       const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM ${ONBOARDING_OBJECT} WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
       const count = (r.data?.result as { totalSize?: number })?.totalSize ?? 0;
       checks.push({ dataset: 'OnboardingConfig', count, ok: count > 0 });
+    }
+    if (
+      datasets.includes('OnboardingConfig')
+      && onboardingQueryMode === 'manual'
+      && manualOnboardingQueries?.length
+    ) {
+      for (const query of manualOnboardingQueries) {
+        const resolved = resolveManualOnboardingSeedQuery(query);
+        const result = await this.sfCli.query(org.alias, buildCountSoql(resolved.soql));
+        if (!result.success) {
+          throw new Error(
+            `Manual query "${resolved.label}" preview failed: ${result.error ?? 'unknown Salesforce query error'}`,
+          );
+        }
+        const availableCount = (result.data?.result as { totalSize?: number })?.totalSize ?? 0;
+        const selectedCount = Math.min(availableCount, resolved.limit);
+        checks.push({
+          dataset: `OnboardingConfig:${resolved.label}`,
+          count: selectedCount,
+          ok: selectedCount > 0,
+        });
+        manualOnboardingPreviews.push({ ...resolved, availableCount, selectedCount });
+      }
     }
     if (datasets.includes('Products')) {
       const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM cfs_ob__u_Product__c WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
@@ -147,7 +190,12 @@ export class ConaSeedService {
     }
 
     const ok = checks.every((c) => c.ok);
-    return { ok, checks, manualQueries: manualQueryPreviews };
+    return {
+      ok,
+      checks,
+      manualQueries: manualQueryPreviews,
+      manualOnboardingQueries: manualOnboardingPreviews,
+    };
   }
 
   async runSeed(options: {
@@ -157,6 +205,8 @@ export class ConaSeedService {
     accountSeedRows?: AccountSeedRow[];
     accountQueryMode?: 'guided' | 'manual';
     manualAccountQueries?: ConaManualAccountQuery[];
+    onboardingQueryMode?: 'automatic' | 'manual';
+    manualOnboardingQueries?: ConaManualSeedQuery[];
     dataSeedMode?: DataSeedMode;
     querySet?: DataSeedQuerySet;
     salesOfficeConfig?: BottlerSalesOfficeConfig;
@@ -171,6 +221,7 @@ export class ConaSeedService {
     const mode = options.dataSeedMode ?? 'hybrid';
     const datasets = options.datasets ?? ['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'];
     const accountQueryMode = options.accountQueryMode ?? 'guided';
+    const onboardingQueryMode = options.onboardingQueryMode ?? 'automatic';
     const bottler = options.accountSeedRows?.[0]?.bottler ?? options.salesOfficeConfig?.bottler ?? '5000';
 
     try {
@@ -181,13 +232,15 @@ export class ConaSeedService {
       options.accountSeedRows,
       accountQueryMode,
       options.manualAccountQueries,
+      onboardingQueryMode,
+      options.manualOnboardingQueries,
     );
     if (!validation.ok) {
       throw new Error(`Validation failed: ${JSON.stringify(validation.checks.filter((c) => !c.ok))}`);
     }
     await log('Validation passed');
 
-    if (datasets.includes('OnboardingConfig')) {
+    if (datasets.includes('OnboardingConfig') && onboardingQueryMode === 'automatic') {
       const csv = join(workDir, 'onboarding-config.csv');
       await log('Exporting OnboardingConfig...');
       const exp = await this.sfCli.exportBulk(ONBOARDING_SOQL(bottler), source.alias, csv, 10, { cwd: workDir });
@@ -202,6 +255,47 @@ export class ConaSeedService {
       await log('Importing OnboardingConfig...');
       const imp = await this.sfCli.importBulk(ONBOARDING_OBJECT, csv, target.alias, 10, { cwd: workDir });
       if (!imp.success) throw new Error(imp.error ?? 'Onboarding import failed');
+    }
+    if (
+      datasets.includes('OnboardingConfig')
+      && onboardingQueryMode === 'manual'
+      && options.manualOnboardingQueries?.length
+    ) {
+      const mappings = await this.recordTypeMapper.buildMappings(
+        options.sourceOrgId,
+        options.targetOrgId,
+        ONBOARDING_OBJECT,
+      );
+      for (const [i, query] of options.manualOnboardingQueries.entries()) {
+        const resolved = resolveManualOnboardingSeedQuery(query);
+        const csv = join(workDir, `manual-onboarding-${i}.csv`);
+        await log(
+          `Exporting manual OnboardingConfig query "${resolved.label}" `
+          + `(up to ${resolved.limit.toLocaleString()} records)...`,
+        );
+        const exp = await this.sfCli.exportBulk(
+          resolved.soql,
+          source.alias,
+          csv,
+          10,
+          { cwd: workDir },
+        );
+        if (!exp.success) {
+          throw new Error(exp.error ?? `OnboardingConfig export failed for "${resolved.label}"`);
+        }
+        await this.applyRecordTypeMappings(csv, mappings);
+        await log(`Importing manual OnboardingConfig query "${resolved.label}"...`);
+        const imp = await this.sfCli.importBulk(
+          resolved.objectName,
+          csv,
+          target.alias,
+          10,
+          { cwd: workDir },
+        );
+        if (!imp.success) {
+          throw new Error(imp.error ?? `OnboardingConfig import failed for "${resolved.label}"`);
+        }
+      }
     }
 
     if (datasets.includes('Products')) {

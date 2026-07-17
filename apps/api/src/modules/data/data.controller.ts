@@ -388,6 +388,8 @@ export class DataController {
         input.accountSeedRows,
         input.accountQueryMode,
         input.manualAccountQueries,
+        input.onboardingQueryMode,
+        input.manualOnboardingQueries,
       );
     } catch (error) {
       throw new BadRequestException(
@@ -407,6 +409,15 @@ export class DataController {
       } catch (error) {
         throw new BadRequestException(
           error instanceof Error ? error.message : 'Manual Account query is invalid',
+        );
+      }
+    }
+    if (input.onboardingQueryMode === 'manual' && input.manualOnboardingQueries) {
+      try {
+        this.conaSeedService.validateManualOnboardingQueries(input.manualOnboardingQueries);
+      } catch (error) {
+        throw new BadRequestException(
+          error instanceof Error ? error.message : 'Manual OnboardingConfig query is invalid',
         );
       }
     }

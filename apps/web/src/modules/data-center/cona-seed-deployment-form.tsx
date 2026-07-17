@@ -18,6 +18,7 @@ type Bottler = '5000' | '4900' | '4600';
 type DistributionChannel = 'Z1' | 'Z3';
 type Dataset = 'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts';
 type AccountQueryMode = 'guided' | 'manual';
+type OnboardingQueryMode = 'automatic' | 'manual';
 
 interface AccountSeedRow {
   accountGroup: AccountGroup;
@@ -32,6 +33,8 @@ interface ManualAccountQuery {
   soql: string;
   limit: number;
 }
+
+type ManualOnboardingQuery = ManualAccountQuery;
 
 interface JobData {
   id: string;
@@ -56,6 +59,13 @@ const DEFAULT_MANUAL_QUERY: ManualAccountQuery = {
   limit: 500,
 };
 
+const DEFAULT_ONBOARDING_QUERY: ManualOnboardingQuery = {
+  id: 'manual-onboarding-1',
+  label: 'Manual OnboardingConfig query 1',
+  soql: '',
+  limit: 500,
+};
+
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
 
 function isZfsv5000Blocked(row: AccountSeedRow) {
@@ -72,11 +82,20 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
   const [manualQueries, setManualQueries] = useState<ManualAccountQuery[]>([
     { ...DEFAULT_MANUAL_QUERY },
   ]);
+  const [onboardingQueryMode, setOnboardingQueryMode] =
+    useState<OnboardingQueryMode>('automatic');
+  const [manualOnboardingQueries, setManualOnboardingQueries] =
+    useState<ManualOnboardingQuery[]>([{ ...DEFAULT_ONBOARDING_QUERY }]);
   const [preview, setPreview] = useState<{
     ok?: boolean;
     checks?: Array<{ dataset: string; count: number; ok: boolean }>;
     rows?: Array<AccountSeedRow & { availableCount: number; soql: string }>;
     manualQueries?: Array<ManualAccountQuery & {
+      availableCount: number;
+      selectedCount: number;
+      soql: string;
+    }>;
+    manualOnboardingQueries?: Array<ManualOnboardingQuery & {
       availableCount: number;
       selectedCount: number;
       soql: string;
@@ -89,6 +108,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
   const [error, setError] = useState<string | null>(null);
   const logBottomRef = useRef<HTMLDivElement>(null);
   const manualQuerySequence = useRef(2);
+  const manualOnboardingSequence = useRef(2);
 
   useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -115,9 +135,26 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     datasets.includes('Accounts') && accountQueryMode === 'manual'
       ? manualQueries
       : undefined;
+  const manualOnboardingQueryPayload =
+    datasets.includes('OnboardingConfig') && onboardingQueryMode === 'manual'
+      ? manualOnboardingQueries
+      : undefined;
 
   const validateSelection = useCallback(() => {
     if (datasets.length === 0) throw new Error('Select at least one dataset');
+    if (datasets.includes('OnboardingConfig') && onboardingQueryMode === 'manual') {
+      if (manualOnboardingQueries.length === 0) {
+        throw new Error('Add at least one manual OnboardingConfig query');
+      }
+      for (const [index, query] of manualOnboardingQueries.entries()) {
+        if (!query.label.trim()) {
+          throw new Error(`Manual OnboardingConfig query ${index + 1} needs a label`);
+        }
+        if (!query.soql.trim()) {
+          throw new Error(`Manual query "${query.label}" needs SOQL`);
+        }
+      }
+    }
     if (!datasets.includes('Accounts')) return;
     if (accountQueryMode === 'guided') {
       const blocked = accountRows.find(isZfsv5000Blocked);
@@ -129,7 +166,14 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
       if (!query.label.trim()) throw new Error(`Manual query ${index + 1} needs a label`);
       if (!query.soql.trim()) throw new Error(`Manual query "${query.label}" needs SOQL`);
     }
-  }, [accountQueryMode, accountRows, datasets, manualQueries]);
+  }, [
+    accountQueryMode,
+    accountRows,
+    datasets,
+    manualOnboardingQueries,
+    manualQueries,
+    onboardingQueryMode,
+  ]);
 
   const seedPayload = {
     sourceOrgId,
@@ -138,6 +182,8 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     accountQueryMode,
     accountSeedRows: accountSeedPayload,
     manualAccountQueries: manualAccountQueryPayload,
+    onboardingQueryMode,
+    manualOnboardingQueries: manualOnboardingQueryPayload,
   };
 
   const handlePreview = async () => {
@@ -155,6 +201,11 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
           ok: boolean;
           checks: Array<{ dataset: string; count: number; ok: boolean }>;
           manualQueries?: Array<ManualAccountQuery & {
+            availableCount: number;
+            selectedCount: number;
+            soql: string;
+          }>;
+          manualOnboardingQueries?: Array<ManualOnboardingQuery & {
             availableCount: number;
             selectedCount: number;
             soql: string;
@@ -181,6 +232,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
         checks: validation.checks,
         rows: accountPreview?.rows,
         manualQueries: validation.manualQueries,
+        manualOnboardingQueries: validation.manualOnboardingQueries,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preview failed');
@@ -242,6 +294,30 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     setPreview(null);
   };
 
+  const updateManualOnboardingQuery = (
+    index: number,
+    patch: Partial<ManualOnboardingQuery>,
+  ) => {
+    setManualOnboardingQueries((queries) =>
+      queries.map((query, queryIndex) =>
+        queryIndex === index ? { ...query, ...patch } : query));
+    setPreview(null);
+  };
+
+  const addManualOnboardingQuery = () => {
+    const sequence = manualOnboardingSequence.current++;
+    setManualOnboardingQueries((queries) => [
+      ...queries,
+      {
+        id: `manual-onboarding-${sequence}`,
+        label: `Manual OnboardingConfig query ${sequence}`,
+        soql: '',
+        limit: 500,
+      },
+    ]);
+    setPreview(null);
+  };
+
   const isRunning =
     job?.status === 'running'
     || job?.status === 'queued'
@@ -291,6 +367,120 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
             ))}
           </div>
         </FormSection>
+
+        {datasets.includes('OnboardingConfig') && (
+          <FormSection title="OnboardingConfig query" className="mt-6">
+            <div className="max-w-sm mb-4">
+              <Label htmlFor="cona-onboarding-query-mode">Selection mode</Label>
+              <Select
+                id="cona-onboarding-query-mode"
+                value={onboardingQueryMode}
+                onChange={(event) => {
+                  setOnboardingQueryMode(event.target.value as OnboardingQueryMode);
+                  setPreview(null);
+                  setError(null);
+                }}
+              >
+                <option value="automatic">Built-in query</option>
+                <option value="manual">Manual SOQL</option>
+              </Select>
+            </div>
+
+            {onboardingQueryMode === 'automatic' ? (
+              <p className="text-xs text-muted-foreground">
+                Uses the built-in primary-group onboarding query.
+              </p>
+            ) : (
+              <>
+                <InlineAlert variant="info" title="Manual OnboardingConfig SOQL">
+                  Queries must target <code>cfs_ob__Onboarding_Config__c</code> and select{' '}
+                  <code>RecordTypeId</code> plus at least one field to seed. Source record IDs are
+                  removed and RecordType IDs are mapped to the target org. The maximum records
+                  value replaces any LIMIT in the query.
+                </InlineAlert>
+                <div className="space-y-3 mt-3">
+                  {manualOnboardingQueries.map((query, index) => (
+                    <div key={query.id} className="rounded-lg border border-border p-3 space-y-3">
+                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem_auto] items-end">
+                        <div>
+                          <Label htmlFor={`cona-onboarding-${query.id}-label`}>Query label</Label>
+                          <Input
+                            id={`cona-onboarding-${query.id}-label`}
+                            value={query.label}
+                            maxLength={120}
+                            onChange={(event) =>
+                              updateManualOnboardingQuery(index, { label: event.target.value })
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor={`cona-onboarding-${query.id}-limit`}>
+                            Maximum records
+                          </Label>
+                          <Input
+                            id={`cona-onboarding-${query.id}-limit`}
+                            type="number"
+                            min={1}
+                            max={100_000}
+                            value={query.limit}
+                            onChange={(event) =>
+                              updateManualOnboardingQuery(index, {
+                                limit: Math.min(
+                                  100_000,
+                                  Math.max(1, Number(event.target.value) || 1),
+                                ),
+                              })
+                            }
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={manualOnboardingQueries.length === 1}
+                          onClick={() => {
+                            setManualOnboardingQueries((queries) =>
+                              queries.filter((_, queryIndex) => queryIndex !== index));
+                            setPreview(null);
+                          }}
+                          aria-label={`Remove manual OnboardingConfig query ${index + 1}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <div>
+                        <Label htmlFor={`cona-onboarding-${query.id}-soql`}>SOQL query</Label>
+                        <Textarea
+                          id={`cona-onboarding-${query.id}-soql`}
+                          value={query.soql}
+                          className="min-h-36 font-mono text-xs"
+                          placeholder={
+                            'SELECT RecordTypeId, cfs_ob__Bottler__c, '
+                            + 'cfs_ob__Business_Unit__c FROM '
+                            + 'cfs_ob__Onboarding_Config__c WHERE ...'
+                          }
+                          onChange={(event) =>
+                            updateManualOnboardingQuery(index, { soql: event.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 gap-1"
+                  onClick={addManualOnboardingQuery}
+                >
+                  <Code2 className="w-4 h-4" />
+                  Add OnboardingConfig query
+                </Button>
+              </>
+            )}
+          </FormSection>
+        )}
 
         {datasets.includes('Accounts') && (
           <FormSection title="Account queries" className="mt-6">
@@ -550,6 +740,17 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                   Row {i + 1}: {row.accountGroup}/{row.bottler}/{row.distributionChannel} — {row.availableCount} available
                 </summary>
                 <pre className="studio-console p-2 mt-1 rounded overflow-x-auto">{row.soql}</pre>
+              </details>
+            ))}
+            {preview.manualOnboardingQueries?.map((query) => (
+              <details key={query.id} className="text-xs" open>
+                <summary className="cursor-pointer text-muted-foreground">
+                  {query.label}: {query.selectedCount.toLocaleString()} selected from{' '}
+                  {query.availableCount.toLocaleString()} matching OnboardingConfig records
+                </summary>
+                <pre className="studio-console p-2 mt-1 rounded overflow-x-auto whitespace-pre-wrap">
+                  {query.soql}
+                </pre>
               </details>
             ))}
             {preview.manualQueries?.map((query) => (

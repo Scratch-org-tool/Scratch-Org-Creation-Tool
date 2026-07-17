@@ -8,6 +8,7 @@ import type { AccountSeedRow } from '../modules/data/account-seed-query.builder'
 import type {
   BottlerSalesOfficeConfig,
   ConaManualAccountQuery,
+  ConaManualSeedQuery,
   DataSeedQuerySet,
 } from '@sfcc/shared';
 
@@ -28,6 +29,8 @@ export class ConaSeedWorker {
       accountSeedRows,
       accountQueryMode,
       manualAccountQueries,
+      onboardingQueryMode,
+      manualOnboardingQueries,
       dataSeedMode,
       querySet,
       querySection,
@@ -41,6 +44,8 @@ export class ConaSeedWorker {
       accountSeedRows?: AccountSeedRow[];
       accountQueryMode?: 'guided' | 'manual';
       manualAccountQueries?: ConaManualAccountQuery[];
+      onboardingQueryMode?: 'automatic' | 'manual';
+      manualOnboardingQueries?: ConaManualSeedQuery[];
       dataSeedMode?: 'automatic' | 'query_json' | 'hybrid' | 'query_section';
       querySet?: DataSeedQuerySet;
       querySection?: unknown;
@@ -78,6 +83,8 @@ export class ConaSeedWorker {
       accountSeedRows,
       accountQueryMode,
       manualAccountQueries,
+      onboardingQueryMode,
+      manualOnboardingQueries,
       dataSeedMode,
       querySet,
       salesOfficeConfig,
