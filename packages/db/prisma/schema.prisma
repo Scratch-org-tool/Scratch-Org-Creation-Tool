@@ -990,6 +990,26 @@ model ReleaseApproval {
   @@unique([releaseId, actorId])
 }
 
+/// User-defined SOQL query template for data seeding/replication — the
+/// generic, DB-backed alternative to the built-in CONA templates. Templates
+/// may declare {{variable}} placeholders that are filled at compile time.
+model DataQueryTemplate {
+  id           String   @id @default(uuid())
+  name         String
+  description  String?
+  objectName   String
+  soqlTemplate String
+  variables    String[] @default([])
+  /// Shared templates are visible to every user (read-only for non-owners).
+  shared       Boolean  @default(false)
+  createdBy    String   @default("system")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([createdBy, name])
+  @@index([shared])
+}
+
 /// A deployment freeze window. While active (enabled + now within range) all
 /// non-validation metadata deployments to the covered orgs are blocked. An
 /// empty orgConnectionIds list freezes every org.
