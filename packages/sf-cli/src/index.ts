@@ -1,4 +1,9 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { type ChildProcess } from 'child_process';
+// cross-spawn resolves `sf.cmd` on Windows and escapes every argument for
+// cmd.exe. Plain child_process.spawn with `shell: true` concatenates args
+// unescaped, so any SOQL (spaces, parentheses, newlines) breaks the command
+// with errors like "FROM was unexpected at this time.".
+import spawn from 'cross-spawn';
 import { EventEmitter } from 'events';
 import * as path from 'node:path';
 
@@ -165,6 +170,11 @@ function killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+/** SOQL is whitespace-insensitive; multi-line queries confuse arg parsing and logs. */
+function flattenSoqlArg(soql: string): string {
+  return soql.replace(/\s+/g, ' ').trim();
+}
+
 function configuredStreamTimeout(timeoutMs?: number): number {
   if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
     return timeoutMs;
@@ -219,7 +229,6 @@ export class SfCliClient extends EventEmitter {
       proc = spawn(this.cliPath, cmdArgs, {
         cwd: options?.cwd ?? this.cwd,
         env: this.env,
-        shell: process.platform === 'win32',
         detached: process.platform !== 'win32',
       });
 
@@ -328,7 +337,6 @@ export class SfCliClient extends EventEmitter {
       const proc = spawn(this.cliPath, args, {
         cwd: cwd ?? this.cwd,
         env: this.env,
-        shell: process.platform === 'win32',
         detached: process.platform !== 'win32',
       });
 
@@ -350,11 +358,11 @@ export class SfCliClient extends EventEmitter {
         : undefined;
       timer?.unref();
 
-      proc.stdout.on('data', (chunk: Buffer) => {
+      proc.stdout?.on('data', (chunk: Buffer) => {
         stdout += chunk.toString();
       });
 
-      proc.stderr.on('data', (chunk: Buffer) => {
+      proc.stderr?.on('data', (chunk: Buffer) => {
         stderr += chunk.toString();
       });
 
@@ -590,7 +598,7 @@ export class SfCliClient extends EventEmitter {
 
   // Data query
   async query(alias: string, soql: string): Promise<SfCommandResult<{ result: { records: unknown[]; totalSize: number } }>> {
-    return this.run(['data', 'query', '--query', soql, '--target-org', alias], { json: true });
+    return this.run(['data', 'query', '--query', flattenSoqlArg(soql), '--target-org', alias], { json: true });
   }
 
   /**
@@ -620,7 +628,7 @@ export class SfCliClient extends EventEmitter {
     soql: string,
   ): Promise<SfCommandResult<{ result: { records: unknown[]; totalSize: number } }>> {
     return this.run(
-      ['data', 'query', '--query', soql, '--target-org', alias, '--use-tooling-api'],
+      ['data', 'query', '--query', flattenSoqlArg(soql), '--target-org', alias, '--use-tooling-api'],
       { json: true },
     );
   }
@@ -664,7 +672,7 @@ export class SfCliClient extends EventEmitter {
   ): Promise<SfCommandResult> {
     return this.runStreaming([
       'data', 'export', 'bulk',
-      '--query', query,
+      '--query', flattenSoqlArg(query),
       '--target-org', targetOrg,
       '--output-file', outputFile,
       '--result-format', 'csv',
