@@ -6,6 +6,7 @@ import {
   Cloud,
   FileStack,
   GitCompare,
+  GraduationCap,
   LayoutDashboard,
   Rocket,
   ScrollText,
@@ -90,6 +91,7 @@ export const APP_NAV: NavItem[] = [
   { href: '/calendar', label: 'Calendar', icon: CalendarDays, module: 'dashboard' },
   { href: '/monitoring', label: 'Monitoring', icon: Activity, module: 'monitoring' },
   { href: '/defects-command-centre', label: 'Developer Board', icon: Bug, module: 'defects' },
+  { href: '/learning', label: 'Salesforce Academy', icon: GraduationCap, module: 'learning' },
 ];
 
 export interface AdminNavItem {
@@ -103,6 +105,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { href: '/admin/users', label: 'User Access', icon: Shield },
   { href: '/admin/notifications', label: 'Notifications', icon: Bell },
   { href: '/admin/audit', label: 'Audit Report', icon: ScrollText },
+  { href: '/learning/team', label: 'Academy Progress', icon: GraduationCap },
 ];
 
 /** @deprecated Prefer {@link ADMIN_NAV_ITEMS}. Kept for existing imports. */
