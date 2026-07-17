@@ -2,6 +2,8 @@ import { z } from 'zod';
 import {
   assertSoqlIdentifier,
   escapeSoqlLiteral,
+  findTopLevelKeyword,
+  splitTopLevelFields,
   toSoqlLiteral,
 } from './soql.js';
 import { resolveDataWriteOperation, topologicallySortDataDependencies } from './data-runtime.js';
@@ -237,7 +239,9 @@ export function defaultDeployFieldSelection(
 }
 
 export function fieldsForPreviewQuery(fieldNames: string[]): string[] {
-  const fields = uniqueFields(fieldNames);
+  // Relationship subqueries return nested arrays, not scalar columns — they
+  // cannot be rendered as preview table columns.
+  const fields = uniqueFields(fieldNames.filter((field) => !field.startsWith('(')));
   if (!fields.includes('Id')) return ['Id', ...fields];
   return fields;
 }
@@ -361,7 +365,9 @@ function normalizeSelectField(field: string): string {
 }
 
 function splitSelectFields(selectClause: string): string[] {
-  return selectClause.split(',').map(normalizeSelectField).filter(Boolean);
+  // Top-level split keeps relationship subqueries `(SELECT … FROM …)` intact
+  // instead of shattering them on their inner commas.
+  return splitTopLevelFields(selectClause).map(normalizeSelectField).filter(Boolean);
 }
 
 function parseSimpleWhereFilters(whereClause: string): OrgToOrgFilterRow[] {
@@ -382,23 +388,32 @@ export function parseOrgToOrgSoql(soql: string): ParsedOrgToOrgSoql {
   const trimmed = soql.trim().replace(/;+\s*$/, '');
   if (!trimmed) throw new OrgToOrgSoqlParseError('SOQL query is empty');
   if (/;/.test(trimmed)) throw new OrgToOrgSoqlParseError('Multiple SOQL statements are not supported');
-  if (!/^\s*SELECT\b/i.test(trimmed)) {
+  const selectMatch = trimmed.match(/^\s*SELECT\s+/i);
+  if (!selectMatch) {
     throw new OrgToOrgSoqlParseError('Only SELECT queries are supported');
   }
 
-  const fromMatch = trimmed.match(/\bFROM\s+([A-Za-z_][\w]*)\b/i);
-  if (!fromMatch) throw new OrgToOrgSoqlParseError('Could not find FROM clause in query');
+  // Resolve clauses at the top level only — a related-object subquery like
+  // `(SELECT Id FROM Contacts WHERE …)` has its own FROM/WHERE that must not
+  // be mistaken for the driving object's clauses.
+  const fromIndex = findTopLevelKeyword(trimmed, 'FROM', selectMatch[0].length);
+  if (fromIndex === -1) throw new OrgToOrgSoqlParseError('Could not find FROM clause in query');
 
-  const objectName = fromMatch[1]!;
-  const selectMatch = trimmed.match(/^\s*SELECT\s+([\s\S]+?)\s+FROM\b/i);
-  if (!selectMatch) throw new OrgToOrgSoqlParseError('Could not parse SELECT fields');
+  const objectMatch = trimmed.slice(fromIndex).match(/^FROM\s+([A-Za-z_][\w]*)\b/i);
+  if (!objectMatch) throw new OrgToOrgSoqlParseError('Could not find FROM clause in query');
+  const objectName = objectMatch[1]!;
 
-  const fields = splitSelectFields(selectMatch[1]!);
+  const fields = splitSelectFields(trimmed.slice(selectMatch[0].length, fromIndex));
   if (fields.length === 0) throw new OrgToOrgSoqlParseError('SELECT field list is empty');
 
   const baseWithoutLimit = stripLimitOffset(trimmed);
-  const whereMatch = baseWithoutLimit.match(/\bWHERE\s+([\s\S]+?)(?:\s+ORDER\s+BY\b|$)/i);
-  const whereClause = whereMatch?.[1]?.trim();
+  const whereIndex = findTopLevelKeyword(baseWithoutLimit, 'WHERE', fromIndex);
+  let whereClause: string | undefined;
+  if (whereIndex !== -1) {
+    const orderByIndex = findTopLevelKeyword(baseWithoutLimit, 'ORDER BY', whereIndex);
+    const whereEnd = orderByIndex === -1 ? baseWithoutLimit.length : orderByIndex;
+    whereClause = baseWithoutLimit.slice(whereIndex + 'WHERE'.length, whereEnd).trim() || undefined;
+  }
   const filters = whereClause ? parseSimpleWhereFilters(whereClause) : [];
 
   return { fields, objectName, whereClause, filters };
@@ -414,7 +429,9 @@ export function validateSoqlForObject(soql: string, expectedObjectName: string):
 }
 
 export function deployFieldsFromSoqlSelect(fields: string[]): string[] {
-  return fields.filter((f) => f.toLowerCase() !== 'id');
+  // Relationship subqueries return nested child records, not writable columns
+  // on the driving object, so they never become deploy fields.
+  return fields.filter((f) => f.toLowerCase() !== 'id' && !f.startsWith('('));
 }
 
 export function resolveOrgToOrgPreviewSoql(input: {
@@ -436,11 +453,17 @@ export function resolveOrgToOrgDeploySoql(input: {
   return `${base} LIMIT ${limit}`;
 }
 
-/** Build lightweight key-only SOQL using WHERE from user query */
+/** Build lightweight key-only SOQL using the top-level WHERE from the user query */
 export function buildKeySoql(soql: string, objectName: string, matchField: string, maxKeys: number): string {
   const base = stripLimitOffset(soql);
-  const whereMatch = base.match(/\bWHERE\b([\s\S]+?)(?:\bORDER\s+BY\b|$)/i);
-  const whereClause = whereMatch ? ` WHERE ${whereMatch[1].trim()}` : '';
+  const whereIndex = findTopLevelKeyword(base, 'WHERE');
+  let whereClause = '';
+  if (whereIndex !== -1) {
+    const orderByIndex = findTopLevelKeyword(base, 'ORDER BY', whereIndex);
+    const whereEnd = orderByIndex === -1 ? base.length : orderByIndex;
+    const clause = base.slice(whereIndex + 'WHERE'.length, whereEnd).trim();
+    if (clause) whereClause = ` WHERE ${clause}`;
+  }
   return `SELECT ${assertSoqlIdentifier(matchField, 'match field')} FROM ${assertSoqlIdentifier(objectName, 'object name')}${whereClause} LIMIT ${maxKeys}`;
 }
 

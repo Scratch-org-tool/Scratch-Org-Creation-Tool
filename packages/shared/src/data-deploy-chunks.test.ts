@@ -114,3 +114,48 @@ test('stripOrderByLimitOffset removes trailing clauses', () => {
     'SELECT Id FROM Account',
   );
 });
+
+test('buildCountSoql uses the top-level FROM when a relationship subquery is selected', () => {
+  const q = buildCountSoql(
+    "SELECT Id, Name, (SELECT Id FROM Contacts) FROM Account WHERE Industry = 'Tech' LIMIT 200",
+  );
+  assert.equal(q, "SELECT COUNT() FROM Account WHERE Industry = 'Tech'");
+});
+
+test('buildCountSoql keeps semi-join subqueries in the WHERE clause', () => {
+  const q = buildCountSoql(
+    "SELECT Id FROM Contact WHERE AccountId IN (SELECT Id FROM Account WHERE Industry = 'Tech') LIMIT 50",
+  );
+  assert.equal(
+    q,
+    "SELECT COUNT() FROM Contact WHERE AccountId IN (SELECT Id FROM Account WHERE Industry = 'Tech')",
+  );
+});
+
+test('buildIdOnlySoql resolves the top-level FROM with a subquery in the SELECT list', () => {
+  const q = buildIdOnlySoql(
+    'SELECT Id, (SELECT Id FROM Contacts ORDER BY LastName) FROM Account',
+    1_000,
+  );
+  assert.equal(q, 'SELECT Id FROM Account ORDER BY Id LIMIT 1000');
+});
+
+test('injectWhereCondition ignores WHERE inside subqueries when none exists at top level', () => {
+  const q = injectWhereCondition(
+    "SELECT Id, (SELECT Id FROM Contacts WHERE LastName != null) FROM Account",
+    "Id > '001'",
+  );
+  assert.equal(
+    q,
+    "SELECT Id, (SELECT Id FROM Contacts WHERE LastName != null) FROM Account WHERE Id > '001'",
+  );
+});
+
+test('stripOrderByLimitOffset keeps ORDER BY inside subqueries', () => {
+  assert.equal(
+    stripOrderByLimitOffset(
+      'SELECT Id, (SELECT Id FROM Contacts ORDER BY LastName) FROM Account ORDER BY Name LIMIT 10',
+    ),
+    'SELECT Id, (SELECT Id FROM Contacts ORDER BY LastName) FROM Account',
+  );
+});

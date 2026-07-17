@@ -468,9 +468,66 @@ describe('parseOrgToOrgSoql', () => {
     );
   });
 
+  it('parses a related-object subquery without mistaking it for the driving object', () => {
+    const parsed = parseOrgToOrgSoql(
+      "SELECT Id, Name, (SELECT Id, LastName FROM Contacts WHERE LastName != null) FROM Account WHERE Industry = 'Tech'",
+    );
+    assert.equal(parsed.objectName, 'Account');
+    assert.deepEqual(parsed.fields, [
+      'Id',
+      'Name',
+      '(SELECT Id, LastName FROM Contacts WHERE LastName != null)',
+    ]);
+    assert.equal(parsed.whereClause, "Industry = 'Tech'");
+    // Must not throw "Query targets Contacts but selected object is Account".
+    validateSoqlForObject(
+      'SELECT Id, (SELECT Id FROM Contacts) FROM Account',
+      'Account',
+    );
+  });
+
+  it('parses a semi-join WHERE subquery against the outer object', () => {
+    const parsed = parseOrgToOrgSoql(
+      "SELECT Id, LastName FROM Contact WHERE AccountId IN (SELECT Id FROM Account WHERE Industry = 'Tech') ORDER BY LastName LIMIT 10",
+    );
+    assert.equal(parsed.objectName, 'Contact');
+    assert.deepEqual(parsed.fields, ['Id', 'LastName']);
+    assert.equal(
+      parsed.whereClause,
+      "AccountId IN (SELECT Id FROM Account WHERE Industry = 'Tech')",
+    );
+  });
+
+  it('parses multi-line SOQL from the custom editor', () => {
+    const parsed = parseOrgToOrgSoql(
+      'SELECT\n  Id,\n  Name\nFROM Account\nWHERE Name != null',
+    );
+    assert.equal(parsed.objectName, 'Account');
+    assert.deepEqual(parsed.fields, ['Id', 'Name']);
+  });
+
   it('deployFieldsFromSoqlSelect excludes Id', () => {
     const deployFields = deployFieldsFromSoqlSelect(['Id', 'Name', 'Industry']);
     assert.deepEqual(deployFields, ['Name', 'Industry']);
+  });
+
+  it('deployFieldsFromSoqlSelect excludes relationship subqueries', () => {
+    const deployFields = deployFieldsFromSoqlSelect([
+      'Id',
+      'Name',
+      '(SELECT Id FROM Contacts)',
+    ]);
+    assert.deepEqual(deployFields, ['Name']);
+  });
+
+  it('buildKeySoql uses the top-level WHERE even when subqueries contain WHERE', () => {
+    const q = buildKeySoql(
+      "SELECT Id, (SELECT Id FROM Contacts WHERE LastName != null) FROM Account WHERE Industry = 'Tech' ORDER BY Name LIMIT 5",
+      'Account',
+      'Name',
+      1000,
+    );
+    assert.equal(q, "SELECT Name FROM Account WHERE Industry = 'Tech' LIMIT 1000");
   });
 
   it('resolveOrgToOrgDeploySoql strips embedded LIMIT and applies cap', () => {

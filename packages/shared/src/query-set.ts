@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX, stripLimitOffset } from './org-to-org-data.js';
-import { assertSoqlIdentifier, escapeSoqlLiteral } from './soql.js';
+import {
+  assertSoqlIdentifier,
+  escapeSoqlLiteral,
+  findTopLevelKeyword,
+  flattenSoql,
+  splitTopLevelFields,
+} from './soql.js';
 import {
   resolveDataWriteOperation,
   topologicallySortDataDependencies,
@@ -83,10 +89,15 @@ export function buildGenericDeployQuery(input: {
   objectName: string;
   recordLimit?: number;
 }): string {
-  let query = input.soql?.trim();
-  if (!query || !/\bFROM\b/i.test(query)) {
+  // Multi-line SOQL from the custom editor must be collapsed to one line so
+  // downstream CLI invocations and clause rewrites behave predictably.
+  let query = input.soql ? flattenSoql(input.soql) : '';
+  if (!query || findTopLevelKeyword(query, 'FROM') === -1) {
     query = `SELECT Name FROM ${assertSoqlIdentifier(input.objectName, 'object name')}`;
   }
+  // Relationship subqueries cannot be exported to flat CSV (Bulk API rejects
+  // them) — related objects deploy as their own step in dependency order.
+  query = stripSelectSubqueries(query);
   query = stripIdFromSelect(query);
   if (input.recordLimit != null) {
     return replaceOrApplyLimit(query, input.recordLimit);
@@ -97,11 +108,35 @@ export function buildGenericDeployQuery(input: {
   return `${query.trim().replace(/;+\s*$/, '')} LIMIT 200`;
 }
 
+/**
+ * Remove relationship subqueries `(SELECT … FROM …)` from the top-level
+ * SELECT list. Falls back to `Id` when the list would otherwise be empty.
+ */
+export function stripSelectSubqueries(soql: string): string {
+  const query = soql.trim();
+  const selectMatch = query.match(/^\s*SELECT\s+/i);
+  if (!selectMatch) return query;
+  const fieldsStart = selectMatch[0].length;
+  const fromIndex = findTopLevelKeyword(query, 'FROM', fieldsStart);
+  if (fromIndex === -1) return query;
+  const fields = splitTopLevelFields(query.slice(fieldsStart, fromIndex));
+  const scalarFields = fields.filter((field) => !field.startsWith('('));
+  if (scalarFields.length === fields.length) return query;
+  const kept = scalarFields.length > 0 ? scalarFields : ['Id'];
+  return `${query.slice(0, fieldsStart)}${kept.join(', ')} ${query.slice(fromIndex)}`;
+}
+
 export function stripIdFromSelect(soql: string): string {
-  let query = soql.trim();
-  query = query.replace(/\bSELECT\s+Id\s*,\s*/i, 'SELECT ');
-  query = query.replace(/,\s*Id\b(?=\s*,|\s+FROM)/gi, '');
-  return query;
+  const query = soql.trim();
+  const selectMatch = query.match(/^\s*SELECT\s+/i);
+  if (!selectMatch) return query;
+  const fieldsStart = selectMatch[0].length;
+  const fromIndex = findTopLevelKeyword(query, 'FROM', fieldsStart);
+  if (fromIndex === -1) return query;
+  const fields = splitTopLevelFields(query.slice(fieldsStart, fromIndex))
+    .filter((field) => field.toLowerCase() !== 'id');
+  if (fields.length === 0) return query;
+  return `${query.slice(0, fieldsStart)}${fields.join(', ')} ${query.slice(fromIndex)}`;
 }
 
 export function substituteVariables(
@@ -120,17 +155,21 @@ export function substituteVariables(
 }
 
 export function extractObjectFromSoql(soql: string): string | null {
-  const match = soql.match(/\bFROM\s+([a-zA-Z0-9_]+)/i);
+  // The first FROM inside a relationship subquery must not win — resolve the
+  // driving object from the top-level FROM clause only.
+  const fromIndex = findTopLevelKeyword(soql, 'FROM');
+  if (fromIndex === -1) return null;
+  const match = soql.slice(fromIndex).match(/^FROM\s+([a-zA-Z0-9_]+)/i);
   return match?.[1] ?? null;
 }
 
 export function extractFieldsFromSoql(soql: string): string[] {
-  const selectMatch = soql.match(/\bSELECT\s+(.+?)\s+FROM\b/is);
+  const selectMatch = soql.match(/^\s*SELECT\s+/i);
   if (!selectMatch) return [];
-  return selectMatch[1]
-    .split(',')
-    .map((f) => f.trim())
-    .filter(Boolean);
+  const fieldsStart = selectMatch[0].length;
+  const fromIndex = findTopLevelKeyword(soql, 'FROM', fieldsStart);
+  if (fromIndex === -1) return [];
+  return splitTopLevelFields(soql.slice(fieldsStart, fromIndex));
 }
 
 export function normalizeQuerySet(
