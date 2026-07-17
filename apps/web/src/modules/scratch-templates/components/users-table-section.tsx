@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '@/services/api';
 import type { UserProvisionSlot, UserProvisionTemplate } from '@sfcc/shared';
@@ -120,7 +121,8 @@ export function UsersTableSection({
       </div>
 
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          {sourceOrgId && loading && <Spinner size="sm" className="w-3.5 h-3.5" />}
           {sourceOrgId
             ? loading
               ? 'Loading picklists…'
