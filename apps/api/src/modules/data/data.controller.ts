@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { DataService } from './data.service';
 import { QuerySetService } from './query-set.service';
+import { CustomTemplateService } from './custom-template.service';
 import { RecordTypeMapperService } from './record-type-mapper.service';
 import { ConaSeedService } from './cona-seed.service';
 import { AccountPartnerImportService } from './account-partner-import.service';
@@ -39,6 +40,7 @@ export class DataController {
     private readonly dataPreflightService: DataPreflightService,
     private readonly querySectionRuntime: QuerySectionRuntimeService,
     private readonly dataRollback: DataRollbackService,
+    private readonly customTemplates: CustomTemplateService,
   ) {}
 
   @Get('custom-settings/template')
@@ -75,13 +77,57 @@ export class DataController {
   }
 
   @Get('templates')
-  getQueryTemplates() {
-    return this.querySetService.getTemplates();
+  async getQueryTemplates(@CurrentUser() userId: string) {
+    const [builtin, custom] = await Promise.all([
+      Promise.resolve(this.querySetService.getTemplates()),
+      this.customTemplates.list(userId),
+    ]);
+    return [
+      ...builtin.map((template) => ({ ...template, source: 'builtin' as const })),
+      ...custom.map((template) => ({
+        id: template.id,
+        label: template.name,
+        object: template.objectName,
+        soqlTemplate: template.soqlTemplate,
+        requiredVariables: template.variables,
+        operation: 'insert' as const,
+        externalIdField: undefined,
+        dependsOn: [],
+        source: 'custom' as const,
+        description: template.description,
+        shared: template.shared,
+        createdBy: template.createdBy,
+      })),
+    ];
   }
 
   @Get('query-templates')
-  getQueryTemplatesAlias() {
-    return this.querySetService.getTemplates();
+  getQueryTemplatesAlias(@CurrentUser() userId: string) {
+    return this.getQueryTemplates(userId);
+  }
+
+  @Get('custom-templates')
+  listCustomTemplates(@CurrentUser() userId: string) {
+    return this.customTemplates.list(userId);
+  }
+
+  @Post('custom-templates')
+  createCustomTemplate(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.customTemplates.create(body, userId);
+  }
+
+  @Patch('custom-templates/:id')
+  updateCustomTemplate(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    return this.customTemplates.update(id, body, userId);
+  }
+
+  @Delete('custom-templates/:id')
+  deleteCustomTemplate(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.customTemplates.remove(id, userId);
   }
 
   @Get('bottlers')

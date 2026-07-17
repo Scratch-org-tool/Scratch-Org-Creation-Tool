@@ -4,15 +4,19 @@ import {
   DEFAULT_NOTIFICATION_SETTINGS,
   applyNotificationSettingsUpdate,
   isCategoryEnabled,
+  isChannelEnabled,
   normalizeNotificationSettings,
   type NotificationInput,
   type NotificationListQuery,
   type NotificationListResponse,
+  type NotificationPreferences,
   type NotificationRecord,
   type NotificationSettings,
   type NotificationSettingsUpdateInput,
 } from '@sfcc/shared';
 import { StreamService } from '../stream/stream.service';
+import { MailService } from './mail.service';
+import { ChannelWebhookService } from './channel-webhook.service';
 
 const GLOBAL_SETTINGS_ID = 'global';
 
@@ -33,7 +37,11 @@ interface NotificationRow {
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
-  constructor(private readonly stream: StreamService) {}
+  constructor(
+    private readonly stream: StreamService,
+    private readonly mail: MailService,
+    private readonly channelWebhooks: ChannelWebhookService,
+  ) {}
 
   /** Current global settings, falling back to the (disabled) defaults. */
   async getSettings(): Promise<NotificationSettings> {
@@ -88,7 +96,10 @@ export class NotificationsService {
    * created record, or null when the admin controls suppress it. This method
    * never throws — a delivery failure must not break the originating job.
    */
-  async notify(input: NotificationInput): Promise<NotificationRecord | null> {
+  async notify(
+    input: NotificationInput,
+    options?: { email?: boolean },
+  ): Promise<NotificationRecord | null> {
     try {
       if (!input.userId || input.userId === 'system') return null;
       const settings = await this.getSettings();
@@ -112,6 +123,12 @@ export class NotificationsService {
       await this.stream
         .publish('notification', { ...record, userId: input.userId }, input.userId)
         .catch(() => undefined);
+      // Outbound email and chat webhooks are fire-and-forget: they must never
+      // delay or fail the originating job.
+      if (options?.email !== false) {
+        void this.deliverEmail(settings, input);
+      }
+      void this.channelWebhooks.dispatch(input);
       return record;
     } catch (error) {
       this.logger.warn(
@@ -119,6 +136,86 @@ export class NotificationsService {
       );
       return null;
     }
+  }
+
+  /**
+   * Send the email copy of a notification when every gate is open: admin
+   * master switch + email channel, SMTP configured, and the recipient has
+   * personally opted in.
+   */
+  private async deliverEmail(
+    settings: NotificationSettings,
+    input: NotificationInput,
+  ): Promise<void> {
+    try {
+      if (!isChannelEnabled(settings, 'email')) return;
+      if (!this.mail.isConfigured()) return;
+      const user = await prisma.appUser.findUnique({
+        where: { id: input.userId },
+        select: { email: true, emailNotifications: true, status: true },
+      });
+      if (!user?.email || !user.emailNotifications || user.status === 'inactive') return;
+
+      const appUrl = (process.env.PUBLIC_APP_URL ?? process.env.WEB_ORIGIN ?? '').replace(/\/$/, '');
+      const link = input.link ? `${appUrl}${input.link}` : null;
+      const lines = [input.body ?? '', link ? `\nOpen: ${link}` : ''].filter(Boolean);
+      await this.mail.send({
+        to: user.email,
+        subject: `[SF DevOps] ${input.title}`,
+        text: lines.join('\n') || input.title,
+        html: this.renderEmailHtml(input.title, input.body ?? null, link),
+      });
+    } catch (error) {
+      this.logger.warn(
+        `email delivery failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private renderEmailHtml(title: string, body: string | null, link: string | null): string {
+    const escape = (value: string) =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    return [
+      '<div style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#0f172a">',
+      `<h2 style="margin:0 0 12px;font-size:18px">${escape(title)}</h2>`,
+      body ? `<p style="margin:0 0 16px;font-size:14px;line-height:1.6">${escape(body)}</p>` : '',
+      link
+        ? `<p style="margin:0 0 16px"><a href="${escape(link)}" style="display:inline-block;background:#0891b2;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px">Open in Command Center</a></p>`
+        : '',
+      '<p style="margin:16px 0 0;font-size:12px;color:#64748b">You are receiving this because email alerts are enabled on your account. You can turn them off under Account &gt; Email alerts.</p>',
+      '</div>',
+    ].join('');
+  }
+
+  /** Per-user delivery preferences shown on the Account page. */
+  async getPreferences(userId: string): Promise<NotificationPreferences> {
+    const [user, settings] = await Promise.all([
+      prisma.appUser.findUnique({
+        where: { id: userId },
+        select: { emailNotifications: true },
+      }),
+      this.getSettings(),
+    ]);
+    return {
+      emailNotifications: user?.emailNotifications ?? false,
+      emailConfigured: this.mail.isConfigured(),
+      globalEmailEnabled: isChannelEnabled(settings, 'email'),
+    };
+  }
+
+  async updatePreferences(
+    userId: string,
+    emailNotifications: boolean,
+  ): Promise<NotificationPreferences> {
+    await prisma.appUser.update({
+      where: { id: userId },
+      data: { emailNotifications },
+    });
+    return this.getPreferences(userId);
   }
 
   async list(userId: string, query: NotificationListQuery): Promise<NotificationListResponse> {

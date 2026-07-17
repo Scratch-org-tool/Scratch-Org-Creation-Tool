@@ -30,3 +30,7 @@ export * from './data-seed-query-set.js';
 export * from './user-provision-template.js';
 export * from './template-config-migration.js';
 export * from './integrations.js';
+export * from './jenkins.js';
+export * from './releases.js';
+export * from './calendar.js';
+export * from './deployment-risk.js';

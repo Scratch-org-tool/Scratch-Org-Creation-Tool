@@ -67,4 +67,18 @@ export class DriftController {
   ) {
     return this.driftService.getSnapshot(id, snapshotId, userId);
   }
+
+  @Get(':id/remediate/preview')
+  remediationPreview(
+    @Param('id') id: string,
+    @CurrentUser() userId: string,
+    @Query('snapshotId') snapshotId?: string,
+  ) {
+    return this.driftService.remediationPreview(id, userId, snapshotId);
+  }
+
+  @Post(':id/remediate')
+  remediate(@Param('id') id: string, @Body() body: unknown, @CurrentUser() userId: string) {
+    return this.driftService.remediate(id, body, userId);
+  }
 }

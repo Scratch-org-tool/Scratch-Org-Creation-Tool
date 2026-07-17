@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { DeploymentService } from './deployment.service';
-import { AuthGuard } from '../../common/auth.guard';
+import { DeploymentRiskService } from './deployment-risk.service';
+import { AuthGuard, type AuthenticatedRequest } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import type { ScmProvider } from '@sfcc/shared';
@@ -9,11 +10,23 @@ import type { ScmProvider } from '@sfcc/shared';
 @UseGuards(AuthGuard, ModuleGuard)
 @RequireModule('deployment')
 export class DeploymentController {
-  constructor(private readonly deploymentService: DeploymentService) {}
+  constructor(
+    private readonly deploymentService: DeploymentService,
+    private readonly riskService: DeploymentRiskService,
+  ) {}
 
   @Get()
   list(@CurrentUser() userId: string) {
     return this.deploymentService.listDeployments(userId);
+  }
+
+  @Post('risk-score')
+  riskScore(
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.riskService.score(body, userId, req.userProfile?.role === 'admin');
   }
 
   @Post('org-to-org-metadata/deploy')

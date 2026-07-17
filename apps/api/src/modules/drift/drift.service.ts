@@ -1,21 +1,25 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { prisma, Prisma, type DriftMonitor } from '@sfcc/db';
 import {
   buildDriftItems,
+  buildDriftRemediationPlan,
   computeNextRun,
   DEFAULT_DRIFT_TYPES,
   diffDriftSnapshots,
   driftMonitorCreateSchema,
   driftMonitorUpdateSchema,
+  driftRemediateSchema,
   driftStatusFromSummary,
   parseSchedule,
   summarizeDrift,
   type DriftItem,
   type DriftMonitorRecord,
+  type DriftRemediationPlan,
   type DriftSnapshotRecord,
   type DriftStatus,
 } from '@sfcc/shared';
 import { MetadataBrowseService } from '../metadata/metadata-browse.service';
+import { DeploymentService } from '../deployment/deployment.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
 
@@ -31,6 +35,7 @@ export class DriftService {
   constructor(
     private readonly browseService: MetadataBrowseService,
     private readonly notifications: NotificationsService,
+    private readonly deploymentService: DeploymentService,
   ) {}
 
   async list(userId: string): Promise<DriftMonitorRecord[]> {
@@ -282,6 +287,83 @@ export class DriftService {
         .catch(() => undefined);
       return null;
     }
+  }
+
+  /**
+   * Preview what a remediation deploy would contain, based on the latest
+   * drifted snapshot (or a specific one).
+   */
+  async remediationPreview(
+    id: string,
+    userId: string,
+    snapshotId?: string,
+  ): Promise<DriftRemediationPlan & { snapshotId: string; snapshotCreatedAt: string }> {
+    await this.getOwned(id, userId);
+    const snapshot = await this.resolveRemediationSnapshot(id, snapshotId);
+    const items = ((snapshot.items as DriftItem[] | null) ?? []) as DriftItem[];
+    const plan = buildDriftRemediationPlan(items);
+    return {
+      ...plan,
+      snapshotId: snapshot.id,
+      snapshotCreatedAt: snapshot.createdAt.toISOString(),
+    };
+  }
+
+  /**
+   * One-click fix: create an org-to-org metadata deployment (source -> target)
+   * covering the drifted components. Deletions of target-only components are
+   * opt-in and shipped as destructive changes.
+   */
+  async remediate(id: string, body: unknown, userId: string) {
+    const input = driftRemediateSchema.parse(body ?? {});
+    const monitor = await this.getOwned(id, userId);
+    const snapshot = await this.resolveRemediationSnapshot(id, input.snapshotId);
+    const items = ((snapshot.items as DriftItem[] | null) ?? []) as DriftItem[];
+    const plan = buildDriftRemediationPlan(items);
+
+    if (plan.deployCount === 0 && (!input.includeDeletions || plan.deleteCount === 0)) {
+      throw new BadRequestException('This snapshot has nothing to remediate');
+    }
+    if (plan.deployCount === 0 && input.includeDeletions) {
+      throw new BadRequestException(
+        'Destructive-only remediation is not supported — the deploy needs at least one component',
+      );
+    }
+
+    const result = await this.deploymentService.deployOrgToOrgMetadata(
+      {
+        sourceOrgId: monitor.sourceOrgId,
+        targetOrgId: monitor.targetOrgId,
+        selections: plan.deploySelections,
+        ...(input.includeDeletions && plan.deleteCount > 0
+          ? { destructiveSelections: plan.deleteSelections }
+          : {}),
+        ...(input.testLevel ? { testLevel: input.testLevel } : {}),
+        validateOnly: input.validateOnly,
+        deploymentName: `Drift remediation — ${monitor.name}`,
+        deploymentNotes: `Auto-generated from drift snapshot ${snapshot.id} (${plan.deployCount} deploy, ${input.includeDeletions ? plan.deleteCount : 0} delete).`,
+      },
+      userId,
+    );
+    return {
+      ...result,
+      snapshotId: snapshot.id,
+      deployCount: plan.deployCount,
+      deleteCount: input.includeDeletions ? plan.deleteCount : 0,
+    };
+  }
+
+  private async resolveRemediationSnapshot(monitorId: string, snapshotId?: string) {
+    const snapshot = snapshotId
+      ? await prisma.driftSnapshot.findFirst({ where: { id: snapshotId, monitorId } })
+      : await prisma.driftSnapshot.findFirst({
+          where: { monitorId, status: 'drifted' },
+          orderBy: { createdAt: 'desc' },
+        });
+    if (!snapshot) {
+      throw new NotFoundException('No drifted snapshot available to remediate from');
+    }
+    return snapshot;
   }
 
   private async getOwned(id: string, userId: string): Promise<DriftMonitor> {

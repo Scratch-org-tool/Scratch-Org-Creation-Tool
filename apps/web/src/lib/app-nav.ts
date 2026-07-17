@@ -2,11 +2,13 @@ import {
   Activity,
   Bell,
   Bug,
+  CalendarDays,
   Cloud,
   FileStack,
   GitCompare,
   LayoutDashboard,
   Rocket,
+  ScrollText,
   Shield,
 } from 'lucide-react';
 import { canAccessModule, type AppModule } from '@/lib/auth-utils';
@@ -70,8 +72,9 @@ export const APP_NAV: NavItem[] = [
       { href: '/environment-center?tab=source-control', label: 'Source Control' },
       { href: '/environment-center?tab=work-management', label: 'Work Management' },
       { href: '/environment-center/create-scratch-org', label: 'Create Scratch Org' },
+      { href: '/sandbox-refresh', label: 'Sandbox Refresh' },
     ],
-    activePrefixes: ['/scratch-templates'],
+    activePrefixes: ['/scratch-templates', '/sandbox-refresh'],
   },
   { href: '/scratch-templates', label: 'Templates', icon: FileStack, module: 'environment' },
   {
@@ -84,6 +87,7 @@ export const APP_NAV: NavItem[] = [
     activePrefixes: DEPLOYMENT_ACTIVE_PREFIXES,
   },
   { href: '/drift', label: 'Drift Monitoring', icon: GitCompare, module: 'deployment' },
+  { href: '/calendar', label: 'Calendar', icon: CalendarDays, module: 'dashboard' },
   { href: '/monitoring', label: 'Monitoring', icon: Activity, module: 'monitoring' },
   { href: '/defects-command-centre', label: 'Developer Board', icon: Bug, module: 'defects' },
 ];
@@ -98,6 +102,7 @@ export interface AdminNavItem {
 export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { href: '/admin/users', label: 'User Access', icon: Shield },
   { href: '/admin/notifications', label: 'Notifications', icon: Bell },
+  { href: '/admin/audit', label: 'Audit Report', icon: ScrollText },
 ];
 
 /** @deprecated Prefer {@link ADMIN_NAV_ITEMS}. Kept for existing imports. */

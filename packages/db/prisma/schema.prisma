@@ -32,13 +32,6 @@ enum JobStatus {
   cancelled
 }
 
-enum Persona {
-  developer
-  release_manager
-  qa
-  admin
-}
-
 enum DeploymentStrategy {
   azure
   jenkins
@@ -74,6 +67,7 @@ model OrgConnection {
   dataDeployBatchesSource DataDeployBatch[]   @relation("BatchSourceOrg")
   dataDeployBatchesTarget DataDeployBatch[]   @relation("BatchTargetOrg")
   automationRunsTarget     AutomationRun[]    @relation("AutomationRunTarget")
+  releases                Release[]           @relation("ReleaseTargetOrg")
 
   @@index([createdBy])
 }
@@ -81,7 +75,6 @@ model OrgConnection {
 model AutomationRun {
   id                    String         @id @default(uuid())
   intent                String
-  persona               Persona        @default(developer)
   status                JobStatus      @default(pending)
   createdBy             String         @default("system")
   config                Json?
@@ -714,6 +707,10 @@ model AppUser {
   grantedModules String[]    @default([])
   status         String      @default("active")
   lastActiveAt   DateTime?
+  /// Personal opt-in for outbound email alerts (work-item updates, job
+  /// notifications). Off by default — the user must explicitly enable it and
+  /// the admin email channel must also be on before anything is sent.
+  emailNotifications Boolean @default(false)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -931,6 +928,202 @@ model WorkItemSnapshot {
   @@unique([workItemConnectionId, externalProjectId, externalItemId])
   @@index([state])
   @@index([providerUpdatedAt])
+}
+
+/// A release groups deployments and work items into one versioned unit that
+/// moves through draft -> in_review -> approved -> released with an approval
+/// trail and (optionally AI-generated) release notes.
+model Release {
+  id               String            @id @default(uuid())
+  name             String
+  version          String
+  description      String?
+  status           String            @default("draft")
+  targetOrgId      String?
+  targetOrg        OrgConnection?    @relation("ReleaseTargetOrg", fields: [targetOrgId], references: [id], onDelete: SetNull)
+  releaseNotes     String?
+  notesGeneratedAt DateTime?
+  scheduledAt      DateTime?
+  releasedAt       DateTime?
+  createdBy        String            @default("system")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  items            ReleaseItem[]
+  approvals        ReleaseApproval[]
+
+  @@unique([name, version])
+  @@index([status])
+  @@index([createdBy])
+}
+
+/// One linked artifact inside a release: an internal deployment or an
+/// external work item reference (provider + project + item id).
+model ReleaseItem {
+  id                 String   @id @default(uuid())
+  releaseId          String
+  release            Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  kind               String
+  deploymentId       String?
+  workItemProvider   String?
+  workItemProjectId  String?
+  workItemExternalId String?
+  title              String?
+  metadata           Json?
+  addedBy            String   @default("system")
+  createdAt          DateTime @default(now())
+
+  @@index([releaseId])
+  @@index([deploymentId])
+}
+
+/// Approval decisions are append-once per actor (change of mind requires a
+/// new review round after the release returns to draft).
+model ReleaseApproval {
+  id        String   @id @default(uuid())
+  releaseId String
+  release   Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  actorId   String
+  decision  String
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@unique([releaseId, actorId])
+}
+
+/// User-defined SOQL query template for data seeding/replication — the
+/// generic, DB-backed alternative to the built-in CONA templates. Templates
+/// may declare {{variable}} placeholders that are filled at compile time.
+model DataQueryTemplate {
+  id           String   @id @default(uuid())
+  name         String
+  description  String?
+  objectName   String
+  soqlTemplate String
+  variables    String[] @default([])
+  /// Shared templates are visible to every user (read-only for non-owners).
+  shared       Boolean  @default(false)
+  createdBy    String   @default("system")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([createdBy, name])
+  @@index([shared])
+}
+
+/// A deployment freeze window. While active (enabled + now within range) all
+/// non-validation metadata deployments to the covered orgs are blocked. An
+/// empty orgConnectionIds list freezes every org.
+model FreezeWindow {
+  id               String   @id @default(uuid())
+  name             String
+  reason           String?
+  orgConnectionIds String[] @default([])
+  startAt          DateTime
+  endAt            DateTime
+  enabled          Boolean  @default(true)
+  createdBy        String   @default("system")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([enabled, startAt, endAt])
+}
+
+/// Tracks sandbox refresh lifecycle per org connection: manual/requested
+/// refreshes, cadence reminders, and the post-refresh automation to re-run.
+model SandboxRefresh {
+  id               String    @id @default(uuid())
+  orgConnectionId  String
+  sandboxName      String
+  status           String    @default("requested")
+  notes            String?
+  /// Reminder cadence in days (e.g. 30); drives nextRefreshDueAt.
+  cadenceDays      Int?
+  nextRefreshDueAt DateTime?
+  /// Post-refresh automation switches (org setup / data seed jobs to enqueue).
+  postRefreshConfig Json?
+  automationRunId  String?
+  requestedBy      String    @default("system")
+  requestedAt      DateTime  @default(now())
+  completedAt      DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  @@index([orgConnectionId, requestedAt])
+  @@index([status])
+}
+
+/// One Apex test execution against an org, with the parsed summary and
+/// per-test results. Runs are fired from the Quality dashboard.
+model ApexTestRun {
+  id              String    @id @default(uuid())
+  orgConnectionId String
+  alias           String
+  testLevel       String    @default("RunLocalTests")
+  status          JobStatus @default(running)
+  outcome         String?
+  testsRan        Int?
+  passing         Int?
+  failing         Int?
+  skipped         Int?
+  testRunCoverage Float?
+  orgWideCoverage Float?
+  summary         Json?
+  tests           Json?
+  error           String?
+  requestedBy     String    @default("system")
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+
+  @@index([orgConnectionId, startedAt])
+  @@index([requestedBy])
+}
+
+/// Point-in-time org-wide Apex coverage, captured on demand and after each
+/// test run so the Quality dashboard can chart the trend.
+model OrgCoverageSnapshot {
+  id              String   @id @default(uuid())
+  orgConnectionId String
+  percentCovered  Float
+  source          String   @default("manual")
+  capturedAt      DateTime @default(now())
+
+  @@index([orgConnectionId, capturedAt])
+}
+
+/// Outbound chat webhook (Slack or Microsoft Teams). The webhook URL is
+/// encrypted at rest; an empty categories list means "all categories".
+model NotificationChannelWebhook {
+  id            String    @id @default(uuid())
+  type          String
+  name          String
+  encryptedUrl  String
+  enabled       Boolean   @default(true)
+  categories    String[]  @default([])
+  createdBy     String    @default("system")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastSuccessAt DateTime?
+  lastErrorAt   DateTime?
+  lastError     String?
+
+  @@index([enabled])
+}
+
+/// Tracks the last notified change per external work item so webhook-driven
+/// Developer Board alerts never notify the same revision twice and email
+/// bursts are rate limited per item.
+model WorkItemChangeNotification {
+  id                String    @id @default(uuid())
+  provider          String    @default("azure_boards")
+  externalProjectId String
+  externalItemId    String
+  lastRevision      Int?
+  lastChangedDate   DateTime?
+  lastNotifiedAt    DateTime  @default(now())
+  lastEmailAt       DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([provider, externalProjectId, externalItemId], map: "WorkItemChangeNotification_item_key")
+  @@index([lastNotifiedAt])
 }
 
 /// The unique idempotencyKey makes webhook receipt safe to retry.

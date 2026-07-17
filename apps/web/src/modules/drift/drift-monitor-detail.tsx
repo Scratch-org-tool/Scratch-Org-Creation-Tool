@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, RefreshCw, Wand2 } from 'lucide-react';
 import {
   describeSchedule,
   driftItemKey,
   type DriftItem,
+  type DriftRemediationPlan,
   type DriftSnapshotRecord,
 } from '@sfcc/shared';
 import {
@@ -23,8 +24,14 @@ import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/utils/cn';
 import { useOrgs } from '@/hooks/use-orgs';
+import { api } from '@/services/api';
 import { DEFAULT_SCHEDULE, ScheduleFields } from '@/components/schedule-fields';
 import { useDriftMonitor } from './use-drift';
+
+type RemediationPreview = DriftRemediationPlan & {
+  snapshotId: string;
+  snapshotCreatedAt: string;
+};
 
 const DIFF_BADGE_STYLES: Record<DriftItem['diffType'], string> = {
   new: 'bg-emerald-500/15 text-emerald-400',
@@ -64,6 +71,63 @@ export function DriftMonitorDetail({ monitorId }: { monitorId: string }) {
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [notifyOnDrift, setNotifyOnDrift] = useState(true);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+
+  const [remediation, setRemediation] = useState<RemediationPreview | null>(null);
+  const [remediationOpen, setRemediationOpen] = useState(false);
+  const [remediationLoading, setRemediationLoading] = useState(false);
+  const [remediationBusy, setRemediationBusy] = useState(false);
+  const [includeDeletions, setIncludeDeletions] = useState(false);
+  const [validateOnly, setValidateOnly] = useState(false);
+  const [remediationNotice, setRemediationNotice] = useState<string | null>(null);
+  const [remediationError, setRemediationError] = useState<string | null>(null);
+
+  const openRemediation = async () => {
+    setRemediationOpen(true);
+    setRemediationLoading(true);
+    setRemediationError(null);
+    setRemediationNotice(null);
+    try {
+      const preview = await api<RemediationPreview>(
+        `/drift/monitors/${encodeURIComponent(monitorId)}/remediate/preview${
+          selectedId ? `?snapshotId=${encodeURIComponent(selectedId)}` : ''
+        }`,
+      );
+      setRemediation(preview);
+    } catch (err) {
+      setRemediation(null);
+      setRemediationError(err instanceof Error ? err.message : 'Failed to build remediation preview');
+    } finally {
+      setRemediationLoading(false);
+    }
+  };
+
+  const runRemediation = async () => {
+    if (!remediation) return;
+    setRemediationBusy(true);
+    setRemediationError(null);
+    try {
+      const result = await api<{ deploymentId?: string; jobId?: string }>(
+        `/drift/monitors/${encodeURIComponent(monitorId)}/remediate`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            snapshotId: remediation.snapshotId,
+            includeDeletions,
+            validateOnly,
+          }),
+        },
+      );
+      setRemediationNotice(
+        validateOnly
+          ? 'Validation deploy started — check Monitoring for the result, then run a real remediation.'
+          : `Remediation deployment started${result.deploymentId ? ` (${result.deploymentId.slice(0, 8)}…)` : ''}. Run a drift check after it completes to confirm the orgs are back in sync.`,
+      );
+    } catch (err) {
+      setRemediationError(err instanceof Error ? err.message : 'Failed to start remediation');
+    } finally {
+      setRemediationBusy(false);
+    }
+  };
 
   const orgAlias = useMemo(() => {
     const map = new Map<string, string>();
@@ -175,10 +239,22 @@ export function DriftMonitorDetail({ monitorId }: { monitorId: string }) {
           subtitle={monitor.description ?? undefined}
           showBreadcrumbs={false}
           actions={
-            <Button size="sm" onClick={() => void runNow()} loading={checking} disabled={checking}>
-              <RefreshCw className="mr-1.5 size-4" />
-              Check now
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void openRemediation()}
+                disabled={checking || (monitor.lastStatus !== 'drifted' && !remediationOpen)}
+                title={monitor.lastStatus !== 'drifted' ? 'Available when drift is detected' : undefined}
+              >
+                <Wand2 className="mr-1.5 size-4" />
+                Remediate
+              </Button>
+              <Button size="sm" onClick={() => void runNow()} loading={checking} disabled={checking}>
+                <RefreshCw className="mr-1.5 size-4" />
+                Check now
+              </Button>
+            </>
           }
         />
         <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -203,6 +279,131 @@ export function DriftMonitorDetail({ monitorId }: { monitorId: string }) {
           value={`${latest?.added ?? 0} / ${latest?.removed ?? 0}`}
         />
       </StatCardGrid>
+
+      {remediationOpen && (
+        <GlassCard
+          title="Drift remediation"
+          description="Deploys the drifted components from the source org onto the target so they match again."
+          headerAction={(
+            <Button size="sm" variant="ghost" onClick={() => setRemediationOpen(false)}>
+              Close
+            </Button>
+          )}
+        >
+          {remediationError && (
+            <div className="mb-3">
+              <InlineAlert variant="error" onDismiss={() => setRemediationError(null)}>
+                {remediationError}
+              </InlineAlert>
+            </div>
+          )}
+          {remediationNotice && (
+            <div className="mb-3">
+              <InlineAlert variant="success" onDismiss={() => setRemediationNotice(null)}>
+                {remediationNotice}
+              </InlineAlert>
+            </div>
+          )}
+          {remediationLoading ? (
+            <Skeleton className="h-32 rounded-lg" />
+          ) : !remediation ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              No drifted snapshot available to remediate from.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Based on the check from {relativeTime(remediation.snapshotCreatedAt)}:{' '}
+                <span className="text-foreground">{remediation.deployCount}</span> component
+                {remediation.deployCount === 1 ? '' : 's'} will be deployed
+                {remediation.deleteCount > 0 && (
+                  <>
+                    {' '}and <span className="text-foreground">{remediation.deleteCount}</span>{' '}
+                    target-only component{remediation.deleteCount === 1 ? '' : 's'} can optionally be deleted
+                  </>
+                )}
+                .
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-border/60 p-3">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-400">
+                    Deploy to target ({remediation.deployCount})
+                  </p>
+                  <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
+                    {remediation.deploySelections.map((selection) => (
+                      <li key={selection.metadataType}>
+                        <span className="text-muted-foreground">{selection.metadataType}:</span>{' '}
+                        {selection.members.slice(0, 8).join(', ')}
+                        {selection.members.length > 8 ? ` +${selection.members.length - 8} more` : ''}
+                      </li>
+                    ))}
+                    {remediation.deploySelections.length === 0 && (
+                      <li className="text-muted-foreground">Nothing to deploy.</li>
+                    )}
+                  </ul>
+                </div>
+                <div className="rounded-lg border border-border/60 p-3">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-red-400">
+                    Delete from target ({remediation.deleteCount})
+                  </p>
+                  <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
+                    {remediation.deleteSelections.map((selection) => (
+                      <li key={selection.metadataType}>
+                        <span className="text-muted-foreground">{selection.metadataType}:</span>{' '}
+                        {selection.members.slice(0, 8).join(', ')}
+                        {selection.members.length > 8 ? ` +${selection.members.length - 8} more` : ''}
+                      </li>
+                    ))}
+                    {remediation.deleteSelections.length === 0 && (
+                      <li className="text-muted-foreground">Nothing extra on the target.</li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <Switch
+                    checked={validateOnly}
+                    onChange={setValidateOnly}
+                    size="sm"
+                    aria-label="Validate only"
+                  />
+                  Validate only (no changes saved)
+                </label>
+                {remediation.deleteCount > 0 && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <Switch
+                      checked={includeDeletions}
+                      onChange={setIncludeDeletions}
+                      size="sm"
+                      aria-label="Also delete target-only components"
+                    />
+                    Also delete the {remediation.deleteCount} target-only component
+                    {remediation.deleteCount === 1 ? '' : 's'}
+                  </label>
+                )}
+                <div className="ml-auto">
+                  <Button
+                    size="sm"
+                    onClick={() => void runRemediation()}
+                    loading={remediationBusy}
+                    disabled={remediation.deployCount === 0}
+                  >
+                    <Wand2 className="mr-1.5 size-4" />
+                    {validateOnly ? 'Validate remediation' : 'Deploy remediation'}
+                  </Button>
+                </div>
+              </div>
+              {includeDeletions && (
+                <InlineAlert variant="warning">
+                  Destructive changes permanently delete components from the target org. Consider a
+                  validate-only run first.
+                </InlineAlert>
+              )}
+            </div>
+          )}
+        </GlassCard>
+      )}
 
       <GlassCard title="Automation & alerts">
         <div className="space-y-4">

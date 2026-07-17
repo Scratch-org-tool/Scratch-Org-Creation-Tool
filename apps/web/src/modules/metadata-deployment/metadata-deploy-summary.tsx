@@ -3,7 +3,8 @@
 import { Button } from '@/components/ui/button';
 import { Label, Select } from '@/components/ui/input';
 import { FormSection, InlineAlert } from '@/components/studio';
-import { DIFF_TYPE_LABELS, itemKey, TEST_LEVEL_OPTIONS } from './types';
+import { DIFF_TYPE_LABELS, itemKey, selectionsFromItems, TEST_LEVEL_OPTIONS } from './types';
+import { DeploymentRiskPanel } from './deployment-risk-panel';
 import type { MetadataCompareHook } from './use-metadata-compare';
 
 export function MetadataDeploySummary({ w }: { w: MetadataCompareHook }) {
@@ -69,6 +70,13 @@ export function MetadataDeploySummary({ w }: { w: MetadataCompareHook }) {
           Profile metadata selected — deploy may take significant time.
         </InlineAlert>
       )}
+
+      <DeploymentRiskPanel
+        targetOrgId={w.form.targetOrgId}
+        sourceOrgId={w.form.sourceOrgId || undefined}
+        selections={selectionsFromItems(deployableItems)}
+        testLevel={w.form.testLevel}
+      />
 
       <div className="border border-border/60 rounded-md max-h-40 overflow-auto mb-4">
         <table className="w-full text-[10px]">

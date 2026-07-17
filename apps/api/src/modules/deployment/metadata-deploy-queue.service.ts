@@ -11,6 +11,7 @@ import {
 import { QueueService } from '../queue/queue.service';
 import { isIntelligentDeployEnabled } from '../intelligent-deploy/intelligent-orchestrator.service';
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
+import { FreezeWindowService } from '../calendar/freeze-window.service';
 
 export interface MetadataDeployEnqueueInput {
   orgAlias: string;
@@ -87,9 +88,16 @@ export class MetadataDeployQueueService {
   constructor(
     private readonly queueService: QueueService,
     private readonly scmSources: ScmSourceService,
+    private readonly freezeWindows: FreezeWindowService,
   ) {}
 
   async enqueue(input: MetadataDeployEnqueueInput) {
+    // Freeze gate: every metadata deploy funnels through here (classic,
+    // org-to-org, workbench, pipelines). Validation-only runs are allowed.
+    await this.freezeWindows.assertDeployAllowed({
+      orgAlias: input.orgAlias,
+      validateOnly: input.validateOnly ?? false,
+    });
     const dispatch = { started: false };
     try {
       return await this.enqueueInternal(input, dispatch);

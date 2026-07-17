@@ -56,7 +56,7 @@ export function useCopilotContext(): CopilotClientContext {
       connectedOrgs,
       activeTab: resolveActiveTab(pathname, searchParams),
       recentJobId: jobId,
-      persona: profile?.role === 'admin' ? 'admin' : 'user',
+      role: profile?.role === 'admin' ? 'admin' : 'user',
     };
   }, [pathname, searchParams, profile, orgs]);
 }

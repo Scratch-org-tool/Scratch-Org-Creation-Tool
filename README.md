@@ -85,7 +85,7 @@ npm run docker:up
 
 This starts:
 
-- **PostgreSQL** (pgvector) on port `5432` — user `sfcc`, password `sfcc_dev_password`, database `sfcc`
+- **PostgreSQL** (pgvector) on host port `55432` (container `5432`) — user `sfcc`, password `sfcc_dev_password`, database `sfcc`
 - **Redis** on port `6379`
 
 > **Using local Postgres instead of Docker?**  
@@ -409,14 +409,23 @@ If you open the web app directly on port **3000** from another device, set `NEXT
 | Dashboard | `/dashboard` | Premium KPI cards, platform health, recent deployments, quick actions |
 | Integrations | `/environment-center` | Tabbed hub: Salesforce orgs, Azure DevOps, scratch org pipeline |
 | Deployment Center | `/deployment-center` | Hub for CI/CD, Data Operations, and Org & Users |
-| Data Operations | `/data-center` | Tabbed: CONA seed, org-to-org deploy, replication, custom settings, query templates |
-| Metadata Deployment | `/metadata-deployment` | Org-to-org metadata compare, diff, and deploy |
+| Data Operations | `/data-center` | Tabbed: CONA seed, org-to-org deploy, replication, custom settings, query templates (built-in + custom shared templates) |
+| Metadata Deployment | `/metadata-deployment` | Org-to-org metadata compare, diff, deploy, and pre-deploy AI risk scoring |
 | Azure DevOps | `/deployment-center/azure` | Metadata deploy from Azure repos with live console |
-| Jenkins | `/deployment-center/jenkins` | Jenkins-triggered deployments |
+| Jenkins | `/deployment-center/jenkins` | Jenkins job browser, parameterized triggers, live console logs, stop build |
+| Releases | `/releases` | Versioned releases grouping deployments + work items with approvals and AI release notes |
+| Apex Quality | `/quality` | Run Apex tests, inspect failures, track org-wide coverage trends |
+| Drift Monitoring | `/drift` | Scheduled org drift checks with one-click remediation deploys |
+| Calendar | `/calendar` | Scheduled deploys, drift checks, releases, sandbox refreshes, and freeze windows |
+| Sandbox Refresh | `/sandbox-refresh` | Track/trigger sandbox refreshes with cadence reminders and post-refresh seed automation |
 | Org & Users | `/org-setup` | Tabbed: baseline setup, load org config, CONA users, CSV provisioning |
 | Monitoring | `/monitoring` | Job stats, filterable jobs table, status detail on row select |
 | AI Copilot | Sidebar button | Streaming NVIDIA-powered assistant (see [AI Copilot](#ai-copilot)) |
 | User Access | `/admin/users` | Admin user and permission management |
+| Notifications | `/admin/notifications` | Master switch, categories, email channel, Slack/Teams webhooks |
+| Audit Report | `/admin/audit` | Unified auth + deployment + workbench audit feed with CSV export |
+
+Operational endpoints: Prometheus metrics at `GET /api/metrics` (`METRICS_TOKEN` bearer auth in production) and work-item webhooks at `POST /api/defects/webhooks/work-item-updated` (see `docs/developer-board-email-alerts.md`). Production container deployment is documented in `docs/production-deployment.md`.
 
 ### Legacy route redirects
 

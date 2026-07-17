@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { GlassCard, InlineAlert, PageHeader } from '@/components/studio';
 import { cn } from '@/utils/cn';
+import { ChatWebhooksCard } from './chat-webhooks-card';
 import { useNotificationSettings } from './use-notification-settings';
 
 interface ToggleRowProps {
@@ -227,6 +228,8 @@ export function NotificationSettingsWorkspace() {
               ))}
             </div>
           </GlassCard>
+
+          <ChatWebhooksCard />
 
           <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border/60 bg-background/80 py-3 backdrop-blur">
             <Button variant="ghost" size="sm" onClick={reset} disabled={!dirty || saving}>

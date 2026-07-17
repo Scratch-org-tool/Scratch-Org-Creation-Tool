@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/contexts/auth-context';
 import { FirebaseProvider } from '@/components/providers/firebase-provider';
@@ -10,10 +10,23 @@ export const metadata: Metadata = {
   title: 'Salesforce DevOps Command Center',
   description: 'AI-powered Salesforce development lifecycle automation',
   applicationName: 'SF DevOps Command Center',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'SF DevOps',
+  },
   icons: {
     icon: [{ url: '/images/logo.png', type: 'image/png' }],
     apple: [{ url: '/images/logo.png', type: 'image/png' }],
   },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#0a1628',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

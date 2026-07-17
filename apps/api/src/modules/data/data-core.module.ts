@@ -10,6 +10,7 @@ import { DataPreflightService } from './data-preflight.service';
 import { BulkThrottleService } from './bulk-throttle.service';
 import { QuerySectionRuntimeService } from './query-section-runtime.service';
 import { DataRollbackService } from './data-rollback.service';
+import { CustomTemplateService } from './custom-template.service';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { StreamModule } from '../stream/stream.module';
@@ -28,6 +29,7 @@ import { StreamModule } from '../stream/stream.module';
     BulkThrottleService,
     QuerySectionRuntimeService,
     DataRollbackService,
+    CustomTemplateService,
   ],
   exports: [
     RecordTypeMapperService,
@@ -41,6 +43,7 @@ import { StreamModule } from '../stream/stream.module';
     BulkThrottleService,
     QuerySectionRuntimeService,
     DataRollbackService,
+    CustomTemplateService,
   ],
 })
 export class DataCoreModule {}

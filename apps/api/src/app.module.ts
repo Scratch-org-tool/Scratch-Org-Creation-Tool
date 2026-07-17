@@ -7,6 +7,12 @@ import { EnvironmentModule } from './modules/environment/environment.module';
 import { DataModule } from './modules/data/data.module';
 import { MetadataModule } from './modules/metadata/metadata.module';
 import { DeploymentModule } from './modules/deployment/deployment.module';
+import { JenkinsModule } from './modules/jenkins/jenkins.module';
+import { ReleasesModule } from './modules/releases/releases.module';
+import { QualityModule } from './modules/quality/quality.module';
+import { CalendarModule } from './modules/calendar/calendar.module';
+import { SandboxRefreshModule } from './modules/sandbox-refresh/sandbox-refresh.module';
+import { AuditReportModule } from './modules/audit-report/audit-report.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { DriftModule } from './modules/drift/drift.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
@@ -22,6 +28,7 @@ import { OrchestratorModule } from './modules/orchestrator/orchestrator.module';
 import { AgentsModule } from './modules/agents/agents.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { HealthModule } from './modules/health/health.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { IntegrationAdaptersModule } from './integrations/foundation/integration-adapters.module';
 
@@ -39,6 +46,7 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     IntegrationAdaptersModule,
     AuthModule,
     HealthModule,
+    MetricsModule,
     QueueModule,
     WorkersModule,
     StreamModule,
@@ -49,6 +57,12 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     EnvironmentModule,
     DataModule,
     DeploymentModule,
+    JenkinsModule,
+    ReleasesModule,
+    QualityModule,
+    CalendarModule,
+    SandboxRefreshModule,
+    AuditReportModule,
     PlansModule,
     DriftModule,
     MetadataModule,

@@ -13,6 +13,10 @@ const db = vi.hoisted(() => ({
     updateMany: vi.fn(),
     count: vi.fn(),
   },
+  appUser: {
+    findUnique: vi.fn(),
+    update: vi.fn(),
+  },
 }));
 
 vi.mock('@sfcc/db', () => ({ prisma: db, Prisma: {} }));
@@ -21,8 +25,13 @@ import { NotificationsService } from './notifications.service';
 
 function createService() {
   const stream = { publish: vi.fn().mockResolvedValue(undefined) };
-  const service = new NotificationsService(stream as never);
-  return { service, stream };
+  const mail = {
+    isConfigured: vi.fn().mockReturnValue(false),
+    send: vi.fn().mockResolvedValue(true),
+  };
+  const webhooks = { dispatch: vi.fn().mockResolvedValue(undefined) };
+  const service = new NotificationsService(stream as never, mail as never, webhooks as never);
+  return { service, stream, mail, webhooks };
 }
 
 function settingsRow(overrides: Record<string, unknown> = {}) {
@@ -157,6 +166,130 @@ describe('NotificationsService.notify gating', () => {
     await expect(
       service.notify({ userId: 'DPT_user', category: 'system', title: 'x' }),
     ).resolves.toBeNull();
+  });
+});
+
+describe('NotificationsService email delivery', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function enabledEmailRow() {
+    return settingsRow({ channels: { inApp: true, email: true } });
+  }
+
+  it('emails opted-in users when the email channel is on and SMTP configured', async () => {
+    db.notificationSetting.findUnique.mockResolvedValue(enabledEmailRow());
+    db.notification.create.mockResolvedValue({
+      id: 'n1', category: 'defects', level: 'info', title: 'T', body: null,
+      link: '/defects-command-centre', jobId: null, metadata: null, readAt: null,
+      createdAt: new Date(),
+    });
+    db.appUser.findUnique.mockResolvedValue({
+      email: 'dev@example.test',
+      emailNotifications: true,
+      status: 'active',
+    });
+    const { service, mail } = createService();
+    mail.isConfigured.mockReturnValue(true);
+
+    await service.notify({
+      userId: 'DPT_user',
+      category: 'defects',
+      title: 'Work item updated',
+      link: '/defects-command-centre?id=42',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mail.send).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'dev@example.test',
+      subject: expect.stringContaining('Work item updated'),
+    }));
+  });
+
+  it('skips email for users who have not opted in', async () => {
+    db.notificationSetting.findUnique.mockResolvedValue(enabledEmailRow());
+    db.notification.create.mockResolvedValue({
+      id: 'n1', category: 'defects', level: 'info', title: 'T', body: null,
+      link: null, jobId: null, metadata: null, readAt: null, createdAt: new Date(),
+    });
+    db.appUser.findUnique.mockResolvedValue({
+      email: 'dev@example.test',
+      emailNotifications: false,
+      status: 'active',
+    });
+    const { service, mail } = createService();
+    mail.isConfigured.mockReturnValue(true);
+
+    await service.notify({ userId: 'DPT_user', category: 'defects', title: 'T' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mail.send).not.toHaveBeenCalled();
+  });
+
+  it('skips email when the admin email channel is off', async () => {
+    db.notificationSetting.findUnique.mockResolvedValue(settingsRow());
+    db.notification.create.mockResolvedValue({
+      id: 'n1', category: 'system', level: 'info', title: 'T', body: null,
+      link: null, jobId: null, metadata: null, readAt: null, createdAt: new Date(),
+    });
+    const { service, mail } = createService();
+    mail.isConfigured.mockReturnValue(true);
+
+    await service.notify({ userId: 'DPT_user', category: 'system', title: 'T' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(db.appUser.findUnique).not.toHaveBeenCalled();
+    expect(mail.send).not.toHaveBeenCalled();
+  });
+
+  it('honours the per-call email suppression flag', async () => {
+    db.notificationSetting.findUnique.mockResolvedValue(enabledEmailRow());
+    db.notification.create.mockResolvedValue({
+      id: 'n1', category: 'defects', level: 'info', title: 'T', body: null,
+      link: null, jobId: null, metadata: null, readAt: null, createdAt: new Date(),
+    });
+    const { service, mail } = createService();
+    mail.isConfigured.mockReturnValue(true);
+
+    await service.notify(
+      { userId: 'DPT_user', category: 'defects', title: 'T' },
+      { email: false },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mail.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('NotificationsService.preferences', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the user opt-in state with global email availability', async () => {
+    db.appUser.findUnique.mockResolvedValue({ emailNotifications: true });
+    db.notificationSetting.findUnique.mockResolvedValue(
+      settingsRow({ channels: { inApp: true, email: true } }),
+    );
+    const { service, mail } = createService();
+    mail.isConfigured.mockReturnValue(true);
+
+    const prefs = await service.getPreferences('DPT_user');
+    expect(prefs).toEqual({
+      emailNotifications: true,
+      emailConfigured: true,
+      globalEmailEnabled: true,
+    });
+  });
+
+  it('persists the opt-in toggle', async () => {
+    db.appUser.update.mockResolvedValue({});
+    db.appUser.findUnique.mockResolvedValue({ emailNotifications: true });
+    db.notificationSetting.findUnique.mockResolvedValue(settingsRow());
+    const { service } = createService();
+
+    await service.updatePreferences('DPT_user', true);
+    expect(db.appUser.update).toHaveBeenCalledWith({
+      where: { id: 'DPT_user' },
+      data: { emailNotifications: true },
+    });
   });
 });
 

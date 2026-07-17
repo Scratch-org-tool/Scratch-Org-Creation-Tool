@@ -26,13 +26,6 @@ export const ORG_TYPES = {
   PROD: 'prod',
 } as const;
 
-export const PERSONAS = {
-  DEVELOPER: 'developer',
-  RELEASE_MANAGER: 'release_manager',
-  QA: 'qa',
-  ADMIN: 'admin',
-} as const;
-
 export const DEPLOYMENT_STRATEGIES = {
   AZURE: 'azure',
   JENKINS: 'jenkins',

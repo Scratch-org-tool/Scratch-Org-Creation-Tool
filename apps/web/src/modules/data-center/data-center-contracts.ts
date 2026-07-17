@@ -48,6 +48,11 @@ export interface QueryTemplateApi {
   externalIdField?: string;
   dependsOn: string[];
   order?: number;
+  /** builtin = shipped constants; custom = user-defined DB template. */
+  source?: 'builtin' | 'custom';
+  description?: string | null;
+  shared?: boolean;
+  createdBy?: string;
 }
 
 export interface ReplicationQuery extends QuerySetEntry {
@@ -185,6 +190,10 @@ export function normalizeTemplates(input: unknown): QueryTemplateApi[] {
         ? item.dependsOn.filter((v): v is string => typeof v === 'string')
         : [],
       order: typeof item.order === 'number' ? item.order : undefined,
+      source: item.source === 'custom' ? 'custom' : 'builtin',
+      description: typeof item.description === 'string' ? item.description : null,
+      shared: typeof item.shared === 'boolean' ? item.shared : undefined,
+      createdBy: typeof item.createdBy === 'string' ? item.createdBy : undefined,
     }];
   });
 }

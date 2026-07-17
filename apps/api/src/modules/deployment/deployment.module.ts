@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { DeploymentService } from './deployment.service';
+import { DeploymentRiskService } from './deployment-risk.service';
 import { DeploymentController } from './deployment.controller';
 import { MetadataDeployQueueService } from './metadata-deploy-queue.service';
 import { MetadataDeployJobService } from './metadata-deploy-job.service';
@@ -21,6 +22,7 @@ import { DeploymentArtifactStore } from './deployment-artifact.store';
   controllers: [DeploymentController, DeploymentWorkbenchController],
   providers: [
     DeploymentService,
+    DeploymentRiskService,
     DeploymentWorkbenchService,
     DeploymentWorkbenchRuntimeService,
     SafeExecFileAdapter,

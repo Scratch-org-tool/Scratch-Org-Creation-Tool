@@ -8,7 +8,9 @@
     "start": "node dist/main.js",
     "start:cluster": "node dist/cluster.js",
     "test": "vitest run",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "lint": "npm run typecheck"
   },
   "dependencies": {
     "@langchain/core": "^0.3.26",
@@ -30,6 +32,7 @@
     "diff": "^9.0.0",
     "ioredis": "^5.4.2",
     "multer": "^2.2.0",
+    "nodemailer": "^9.0.3",
     "openai": "^4.77.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -44,7 +47,9 @@
     "@types/express": "^5.0.0",
     "@types/multer": "^2.2.0",
     "@types/node": "^22.10.2",
+    "@types/nodemailer": "^8.0.1",
     "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^5.7.2",
     "vitest": "^4.1.10"
   }

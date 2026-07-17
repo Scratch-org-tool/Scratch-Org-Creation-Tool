@@ -14,6 +14,7 @@ import { DeploymentService } from '../deployment/deployment.service';
 import { MetadataPipelineService } from '../metadata/metadata-pipeline.service';
 import { DataService } from '../data/data.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FreezeWindowService } from '../calendar/freeze-window.service';
 import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
 
 const planScheduleUpdateSchema = z
@@ -58,6 +59,7 @@ export class PlansService {
     private readonly metadataPipeline: MetadataPipelineService,
     private readonly dataService: DataService,
     private readonly notifications: NotificationsService,
+    private readonly freezeWindows: FreezeWindowService,
   ) {}
 
   async list(userId: string) {
@@ -262,6 +264,10 @@ export class PlansService {
     if (!plan.sourceOrgId || !plan.targetOrgId) {
       throw new NotFoundException('Plan is missing source or target org');
     }
+
+    // Freeze gate covers all plan types (metadata plans are also gated at the
+    // deploy queue; data plans are only gated here).
+    await this.freezeWindows.assertDeployAllowed({ targetOrgId: plan.targetOrgId });
 
     const metadataConfig = (plan.metadataConfig ?? undefined) as DeploymentPlanMetadataConfig | undefined;
     const dataConfig = (plan.dataConfig ?? undefined) as DeploymentPlanDataConfig | undefined;

@@ -228,3 +228,62 @@ export interface DriftSnapshotRecord {
 
 /** Default set of types a monitor watches when none are specified. */
 export const DEFAULT_DRIFT_TYPES: readonly string[] = CURATED_COMPARE_TYPES;
+
+// ---------------------------------------------------------------------------
+// Drift remediation
+// ---------------------------------------------------------------------------
+
+export interface DriftRemediationPlan {
+  /** Components deployed source -> target (drift `new` + `changed`). */
+  deploySelections: Array<{ metadataType: string; members: string[] }>;
+  /** Extra components on the target that a destructive deploy would remove. */
+  deleteSelections: Array<{ metadataType: string; members: string[] }>;
+  deployCount: number;
+  deleteCount: number;
+}
+
+/**
+ * Convert a drift snapshot's items into an org-to-org deployment plan that
+ * brings the target back in line with the source.
+ */
+export function buildDriftRemediationPlan(items: DriftItem[]): DriftRemediationPlan {
+  const deployByType = new Map<string, Set<string>>();
+  const deleteByType = new Map<string, Set<string>>();
+  for (const item of items) {
+    const bucket = item.diffType === 'deleted' ? deleteByType : deployByType;
+    const set = bucket.get(item.metadataType) ?? new Set<string>();
+    set.add(item.fullName);
+    bucket.set(item.metadataType, set);
+  }
+  const toSelections = (map: Map<string, Set<string>>) =>
+    [...map.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([metadataType, members]) => ({
+        metadataType,
+        members: [...members].sort(),
+      }));
+  const deploySelections = toSelections(deployByType);
+  const deleteSelections = toSelections(deleteByType);
+  return {
+    deploySelections,
+    deleteSelections,
+    deployCount: deploySelections.reduce((sum, sel) => sum + sel.members.length, 0),
+    deleteCount: deleteSelections.reduce((sum, sel) => sum + sel.members.length, 0),
+  };
+}
+
+export const driftRemediateSchema = z
+  .object({
+    /** Snapshot to remediate from; defaults to the latest drifted snapshot. */
+    snapshotId: z.string().uuid().optional(),
+    /** Also delete components that exist only on the target. */
+    includeDeletions: z.boolean().default(false),
+    /** Validate-only deploy (check run, nothing saved to the org). */
+    validateOnly: z.boolean().default(false),
+    testLevel: z
+      .enum(['NoTestRun', 'RunLocalTests', 'RunAllTestsInOrg'])
+      .optional(),
+  })
+  .strict();
+
+export type DriftRemediateInput = z.infer<typeof driftRemediateSchema>;

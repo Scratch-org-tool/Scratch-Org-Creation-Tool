@@ -31,6 +31,7 @@ describe('MetadataDeployQueueService SCM payloads', () => {
     service = new MetadataDeployQueueService(
       { addJob } as unknown as QueueService,
       { requireActive } as unknown as ScmSourceService,
+      { assertDeployAllowed: vi.fn().mockResolvedValue(undefined) } as never,
     );
   });
 
