@@ -82,7 +82,7 @@ describe('QuerySectionRuntimeService review fixes', () => {
     }, 'owner');
 
     expect(result.queries.map((query) => query.id)).toEqual(['account:S1', 'account:S2']);
-    expect(result.queries.map((query) => query.records[0]?.Office)).toEqual(['S1', 'S2']);
+    expect(result.queries.map((query) => (query.records[0] as { Office?: string } | undefined)?.Office)).toEqual(['S1', 'S2']);
     expect(sfCli.query).toHaveBeenCalledTimes(2);
   });
 

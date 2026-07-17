@@ -518,6 +518,9 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     }, 'user-1');
 
     expect(resolveSource).toHaveBeenCalledTimes(1);
+    if (!('dependencies' in preview)) {
+      throw new Error('expected a full preview with dependency resolution');
+    }
     expect(preview.dependencies.resolvedSelections).toEqual([
       { metadataType: 'ApexClass', members: ['Selected'] },
     ]);

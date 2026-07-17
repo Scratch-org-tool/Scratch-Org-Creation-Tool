@@ -181,7 +181,7 @@ describe('PipelineOrchestratorService provider-neutral resume', () => {
 
 describe('PipelineOrchestratorService existing scratch target mode', () => {
   const existingConfig = {
-    mode: 'configure_existing',
+    mode: 'configure_existing' as const,
     existingOrgConnectionId: '11111111-1111-4111-8111-111111111111',
     existingOrgOptions: {
       verifyAuthentication: true,
@@ -191,9 +191,9 @@ describe('PipelineOrchestratorService existing scratch target mode', () => {
     duration: 30,
     template: 'config/project-scratch-def.json',
     definitionFile: 'config/project-scratch-def.json',
-    skipSteps: [],
-    gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
-  } as const;
+    skipSteps: [] as ('installPackages' | 'deployMetadata' | 'assignPermissions')[],
+    gitSource: { provider: 'github' as const, repo: 'repo', branch: 'main' },
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();

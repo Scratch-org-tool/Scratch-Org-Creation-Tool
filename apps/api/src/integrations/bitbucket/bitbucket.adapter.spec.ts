@@ -45,7 +45,7 @@ describe('BitbucketScmAdapter', () => {
     const store = {
       getBitbucket: vi.fn().mockResolvedValue(stored),
     } as unknown as AtlassianConnectionStore;
-    const fetch = vi.fn(async (input: string | URL | Request) => {
+    const fetch = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/user')) {
         return response({ uuid: '{account}', display_name: 'Acme Admin' });
