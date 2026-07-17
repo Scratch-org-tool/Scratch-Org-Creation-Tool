@@ -79,7 +79,7 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
       { path: '/deployment-center/git', label: 'Git Metadata Deploy', description: 'Deploy from Azure DevOps, GitHub, or Bitbucket.' },
       { path: '/deployment-center/jenkins', label: 'Jenkins', description: 'Jenkins pipeline integration for deployments.' },
       { path: '/data-deploy', label: 'Data Deployment', description: 'Pick objects, compare source vs target records, and insert or upsert between orgs with history.' },
-      { path: '/data-center', label: 'Data Operations', description: 'CONA seed with built-in or manual OnboardingConfig and Account SOQL, replication, and reusable query templates.' },
+      { path: '/data-center', label: 'Data Operations', description: 'CONA seed, query-driven Account Partner mapping, replication, and reusable query templates.' },
       { path: '/org-setup', label: 'Org Setup', description: 'Assign permission sets and configure org setup steps.' },
       { path: '/user-provisioning', label: 'User Provisioning', description: 'Bulk create or update Salesforce users.' },
       { path: '/custom-settings-load', label: 'Custom Settings Load', description: 'Load custom settings data into target orgs.' },

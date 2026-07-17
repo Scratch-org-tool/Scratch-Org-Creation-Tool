@@ -57,6 +57,26 @@ describe('SfCliClient streaming', () => {
       '--failonwarning',
     ]);
   });
+
+  it('keeps CLI update notices out of actionable command errors', async () => {
+    const client = new SfCliClient({ cliPath: process.execPath });
+    const script = [
+      "process.stderr.write('Warning: @salesforce/cli update available from 2.130.9 to 2.142.7.\\n')",
+      "process.stderr.write('Error (1): Selecting compound data not supported in Bulk Query\\n')",
+      'process.exitCode = 1',
+    ].join(';');
+
+    const result = await client.runStreaming(['-e', script], undefined, {
+      timeoutMs: 2_000,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(
+      result.error,
+      'Error (1): Selecting compound data not supported in Bulk Query',
+    );
+    assert.match(result.stderr, /update available/);
+  });
 });
 
 describe('formatRecordValues', () => {

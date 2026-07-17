@@ -43,6 +43,7 @@ export class RecordTypeMapperService {
     targetOrgId: string,
     objectApiName: string,
     manualOverrides?: Record<string, string>,
+    requiredSourceRecordTypeIds?: string[],
   ): Promise<Record<string, string>> {
     const [sourceTypes, targetTypes] = await Promise.all([
       this.discoverRecordTypes(sourceOrgId, objectApiName),
@@ -62,7 +63,21 @@ export class RecordTypeMapperService {
       if (targetId) mappings[source.id] = targetId;
     }
 
-    const unmapped = sourceTypes.filter((s) => !mappings[s.id]);
+    const requiredIds = requiredSourceRecordTypeIds
+      ? new Set(requiredSourceRecordTypeIds)
+      : undefined;
+    const requiredSourceTypes = requiredIds
+      ? sourceTypes.filter((source) => requiredIds.has(source.id))
+      : sourceTypes;
+    const unknownIds = requiredIds
+      ? [...requiredIds].filter((id) => !sourceTypes.some((source) => source.id === id))
+      : [];
+    if (unknownIds.length > 0) {
+      throw new Error(
+        `RecordType IDs were not found for ${objectApiName}: ${unknownIds.join(', ')}`,
+      );
+    }
+    const unmapped = requiredSourceTypes.filter((s) => !mappings[s.id]);
     if (unmapped.length > 0) {
       const names = unmapped.map((u) => u.developerName).join(', ');
       throw new Error(`RecordType mapping gaps for ${objectApiName}: ${names}`);

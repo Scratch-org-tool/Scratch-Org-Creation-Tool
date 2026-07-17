@@ -22,8 +22,15 @@ import {
   buildAccountSeedSoql,
   resolveManualAccountSeedQuery,
 } from './account-seed-query.builder';
-import type { ResolvedManualOnboardingQuery } from './onboarding-seed-query.builder';
-import { resolveManualOnboardingSeedQuery } from './onboarding-seed-query.builder';
+import type {
+  PreparedManualOnboardingQuery,
+  ResolvedManualOnboardingQuery,
+} from './onboarding-seed-query.builder';
+import {
+  buildManualOnboardingRecordTypeSoql,
+  prepareManualOnboardingQueryForBulk,
+  resolveManualOnboardingSeedQuery,
+} from './onboarding-seed-query.builder';
 import { RecordTypeMapperService } from './record-type-mapper.service';
 
 type SeedDataset = 'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts';
@@ -82,6 +89,7 @@ export class ConaSeedService {
     manualAccountQueries?: ConaManualAccountQuery[],
     onboardingQueryMode: 'automatic' | 'manual' = 'automatic',
     manualOnboardingQueries?: ConaManualSeedQuery[],
+    targetOrgId?: string,
   ) {
     const org = await this.resolveOrg(sourceOrgId);
     const bottlers = [...new Set((accountSeedRows ?? []).map((r) => r.bottler))];
@@ -113,9 +121,10 @@ export class ConaSeedService {
       availableCount: number;
       selectedCount: number;
     }> = [];
-    const manualOnboardingPreviews: Array<ResolvedManualOnboardingQuery & {
+    const manualOnboardingPreviews: Array<PreparedManualOnboardingQuery & {
       availableCount: number;
       selectedCount: number;
+      recordTypeMappings: Record<string, string>;
     }> = [];
     if (datasets.includes('OnboardingConfig') && onboardingQueryMode === 'automatic') {
       const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM ${ONBOARDING_OBJECT} WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
@@ -127,24 +136,68 @@ export class ConaSeedService {
       && onboardingQueryMode === 'manual'
       && manualOnboardingQueries?.length
     ) {
+      if (!targetOrgId) {
+        throw new Error('Target org is required to validate manual OnboardingConfig fields');
+      }
+      const target = await this.resolveOrg(targetOrgId);
       for (const query of manualOnboardingQueries) {
         const resolved = resolveManualOnboardingSeedQuery(query);
-        const result = await this.sfCli.query(org.alias, buildCountSoql(resolved.soql));
+        const prepared = await this.prepareManualOnboardingBulkQuery(
+          resolved,
+          org.alias,
+          target.alias,
+        );
+        const [result, recordTypesResult] = await Promise.all([
+          this.sfCli.query(org.alias, buildCountSoql(prepared.soql)),
+          this.sfCli.query(
+            org.alias,
+            buildManualOnboardingRecordTypeSoql(prepared),
+          ),
+        ]);
         if (!result.success) {
           throw new Error(
-            `Manual query "${resolved.label}" preview failed: ${result.error ?? 'unknown Salesforce query error'}`,
+            `Manual query "${prepared.label}" preview failed: ${result.error ?? 'unknown Salesforce query error'}`,
           );
         }
+        if (!recordTypesResult.success) {
+          throw new Error(
+            `Manual query "${prepared.label}" RecordType preview failed: `
+            + (recordTypesResult.error ?? 'unknown Salesforce query error'),
+          );
+        }
+        const requiredRecordTypeIds = [
+          ...new Set(
+            (
+              (recordTypesResult.data?.result as {
+                records?: Array<{ RecordTypeId?: string }>;
+              })?.records ?? []
+            )
+              .map((record) => record.RecordTypeId)
+              .filter((id): id is string => Boolean(id)),
+          ),
+        ];
+        const recordTypeMappings = await this.recordTypeMapper.buildMappings(
+          sourceOrgId,
+          targetOrgId,
+          ONBOARDING_OBJECT,
+          undefined,
+          requiredRecordTypeIds,
+        );
         const availableCount = (result.data?.result as { totalSize?: number })?.totalSize ?? 0;
-        const selectedCount = Math.min(availableCount, resolved.limit);
+        const selectedCount = Math.min(availableCount, prepared.limit);
         checks.push({
-          dataset: `OnboardingConfig:${resolved.label}`,
+          dataset: `OnboardingConfig:${prepared.label}`,
           count: selectedCount,
           ok: selectedCount > 0,
           availableCount,
-          requestedMaximum: resolved.limit,
+          requestedMaximum: prepared.limit,
         });
-        manualOnboardingPreviews.push({ ...resolved, availableCount, selectedCount });
+        manualOnboardingPreviews.push({
+          ...prepared,
+          availableCount,
+          selectedCount,
+          recordTypeMappings,
+        });
       }
     }
     if (datasets.includes('Products')) {
@@ -244,6 +297,7 @@ export class ConaSeedService {
       options.manualAccountQueries,
       onboardingQueryMode,
       options.manualOnboardingQueries,
+      options.targetOrgId,
     );
     if (!validation.ok) {
       throw new Error(`Validation failed: ${JSON.stringify(validation.checks.filter((c) => !c.ok))}`);
@@ -271,14 +325,27 @@ export class ConaSeedService {
       && onboardingQueryMode === 'manual'
       && options.manualOnboardingQueries?.length
     ) {
-      const mappings = await this.recordTypeMapper.buildMappings(
-        options.sourceOrgId,
-        options.targetOrgId,
-        ONBOARDING_OBJECT,
-      );
-      for (const [i, query] of options.manualOnboardingQueries.entries()) {
-        const resolved = resolveManualOnboardingSeedQuery(query);
+      for (const [i] of options.manualOnboardingQueries.entries()) {
+        const resolved = validation.manualOnboardingQueries[i];
+        if (!resolved) {
+          throw new Error(`Validated OnboardingConfig query is missing at index ${i}`);
+        }
+        const mappings = resolved.recordTypeMappings;
         const csv = join(workDir, `manual-onboarding-${i}.csv`);
+        for (const compound of resolved.expandedCompoundFields) {
+          await log(
+            `Expanded compound field ${compound.field} into `
+            + `${compound.components.join(', ')} for Bulk Query.`,
+          );
+        }
+        if (resolved.excludedFields.length > 0) {
+          await log(
+            `Excluded ${resolved.excludedFields.length} non-writable field(s): `
+            + resolved.excludedFields
+              .map((field) => `${field.field} (${field.reason})`)
+              .join(', '),
+          );
+        }
         await log(
           `Exporting manual OnboardingConfig query "${resolved.label}" `
           + `(up to ${resolved.limit.toLocaleString()} records)...`,
@@ -401,6 +468,32 @@ export class ConaSeedService {
         // best-effort cleanup
       }
     }
+  }
+
+  private async prepareManualOnboardingBulkQuery(
+    query: ResolvedManualOnboardingQuery,
+    sourceAlias: string,
+    targetAlias: string,
+  ): Promise<PreparedManualOnboardingQuery> {
+    const [sourceDescribe, targetDescribe] = await Promise.all([
+      this.sfCli.describeSObject(sourceAlias, ONBOARDING_OBJECT),
+      this.sfCli.describeSObject(targetAlias, ONBOARDING_OBJECT),
+    ]);
+    const sourceFields = sourceDescribe.data?.result?.fields;
+    const targetFields = targetDescribe.data?.result?.fields;
+    if (!sourceDescribe.success || !sourceFields) {
+      throw new Error(
+        sourceDescribe.error
+        ?? `Could not describe ${ONBOARDING_OBJECT} in the source org`,
+      );
+    }
+    if (!targetDescribe.success || !targetFields) {
+      throw new Error(
+        targetDescribe.error
+        ?? `Could not describe ${ONBOARDING_OBJECT} in the target org`,
+      );
+    }
+    return prepareManualOnboardingQueryForBulk(query, sourceFields, targetFields);
   }
 
   private async runQuerySetSeed(options: {

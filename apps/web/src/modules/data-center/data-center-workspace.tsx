@@ -1,10 +1,11 @@
 'use client';
 
 import { Suspense } from 'react';
-import { FileCode, RefreshCw, Sprout } from 'lucide-react';
+import { FileCode, RefreshCw, Sprout, UsersRound } from 'lucide-react';
 import { PageSkeleton, TabbedWorkspaceShell, type WorkspaceTab } from '@/components/studio';
 import { DataCenterPageHeader } from './data-center-page-header';
 import { ConaSeedDeploymentForm } from './cona-seed-deployment-form';
+import { AccountPartnersPanel } from './account-partners-panel';
 import { ReplicationPanel } from './replication-panel';
 import { QueryTemplatesPanel } from './query-templates-panel';
 import { useDataCenterWorkspace } from './use-data-center-workspace';
@@ -21,6 +22,14 @@ const TABS: WorkspaceTab[] = [
     title: 'CONA Data Seed',
     description:
       'Validate, export, and import onboarding data with guided Account filters or manual SOQL.',
+  },
+  {
+    id: 'account-partners',
+    label: 'Account Partners',
+    icon: UsersRound,
+    title: 'Account Partner Migration',
+    description:
+      'Map source Account Partner query results to existing target Accounts and Employee Masters.',
   },
   {
     id: 'replication',
@@ -50,6 +59,9 @@ function DataCenterWorkspaceInner() {
     >
       <div hidden={w.activeTab !== 'cona'}>
         <ConaSeedDeploymentForm embedded />
+      </div>
+      <div hidden={w.activeTab !== 'account-partners'}>
+        <AccountPartnersPanel />
       </div>
       <div hidden={w.activeTab !== 'replication'}>
         <ReplicationPanel />

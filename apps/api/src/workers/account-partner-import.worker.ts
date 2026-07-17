@@ -17,7 +17,7 @@ export class AccountPartnerImportWorker {
 
   async process(job: Job) {
     const data = job.data as {
-      mode: 'excel' | 'org_to_org' | 'org_to_org_matched';
+      mode: 'excel' | 'org_to_org' | 'org_to_org_matched' | 'soql_mapping';
       bottler: BottlerId | 'all';
       targetOrgId: string;
       sourceOrgId?: string;
@@ -28,6 +28,8 @@ export class AccountPartnerImportWorker {
       excelPath?: string;
       sheet?: string;
       dryRun?: boolean;
+      partnerSoql?: string;
+      recordLimit?: number;
       dbJobId: string;
     };
 
@@ -35,6 +37,22 @@ export class AccountPartnerImportWorker {
       await this.jobsService.addLog(data.dbJobId, 'stdout', line);
       await this.streamService.publishJobLog(data.dbJobId, 'stdout', line);
     };
+
+    if (data.mode === 'soql_mapping') {
+      if (!data.sourceOrgId || !data.partnerSoql || !data.recordLimit) {
+        throw new Error('sourceOrgId, partnerSoql, and recordLimit are required');
+      }
+      if (data.bottler === 'all') {
+        throw new Error('Account Partner SOQL migration requires a specific bottler');
+      }
+      return this.partnerService.migrateSoqlMapping({
+        sourceOrgId: data.sourceOrgId,
+        targetOrgId: data.targetOrgId,
+        bottler: data.bottler,
+        partnerSoql: data.partnerSoql,
+        recordLimit: data.recordLimit,
+      }, log);
+    }
 
     if (data.mode === 'org_to_org_matched') {
       if (!data.sourceOrgId) throw new Error('sourceOrgId required for org_to_org_matched transfer');

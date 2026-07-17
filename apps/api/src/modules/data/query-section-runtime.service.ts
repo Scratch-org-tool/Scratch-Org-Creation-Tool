@@ -11,6 +11,7 @@ import {
   createQueryRuntimeCheckpoint,
   escapeSoqlLiteral,
   extractFieldsFromSoql,
+  parseBulkCsv,
   pendingQueryIds,
   querySectionSchema,
   replaceOrApplyLimit,
@@ -28,39 +29,6 @@ import { BulkThrottleService } from './bulk-throttle.service';
 const PREVIEW_LIMIT = 5;
 const BULK_CHUNK_SIZE = 25_000;
 const RECONCILIATION_IN_CHUNK_SIZE = 200;
-
-function parseCsv(text: string): Array<Record<string, string>> {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let quoted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') {
-        field += '"';
-        index += 1;
-      } else if (char === '"') quoted = false;
-      else field += char;
-    } else if (char === '"') quoted = true;
-    else if (char === ',') {
-      row.push(field);
-      field = '';
-    } else if (char === '\n') {
-      row.push(field.replace(/\r$/, ''));
-      rows.push(row);
-      row = [];
-      field = '';
-    } else field += char;
-  }
-  if (field || row.length) {
-    row.push(field.replace(/\r$/, ''));
-    rows.push(row);
-  }
-  const headers = rows.shift() ?? [];
-  return rows.filter((values) => values.some(Boolean)).map((values) =>
-    Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
-}
 
 @Injectable()
 export class QuerySectionRuntimeService {
@@ -283,7 +251,7 @@ export class QuerySectionRuntimeService {
             () => this.sfCli.exportBulk(sourceQuery, sourceAlias, exportPath, 30, { cwd: workDir }),
           );
           if (!exported.success) throw new Error(exported.error ?? `Bulk export failed for ${query.id}`);
-          let rows = parseCsv(await readFile(exportPath, 'utf8'));
+          let rows = parseBulkCsv(await readFile(exportPath, 'utf8'));
           sourceRows.set(query.id, rows);
 
           const partner = plan.accountPartnerPlan;
@@ -443,7 +411,7 @@ export class QuerySectionRuntimeService {
           ),
         );
         if (!result.success) throw new Error(result.error ?? `Partner support export failed: ${query.id}`);
-        variantRows = parseCsv(await readFile(path, 'utf8'));
+        variantRows = parseBulkCsv(await readFile(path, 'utf8'));
         cache.set(query.id, variantRows);
       }
       rows.push(...variantRows);

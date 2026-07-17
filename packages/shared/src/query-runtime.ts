@@ -71,6 +71,60 @@ export function normalizeBulkCsvLineEndings(content: string): string {
   return withoutBom.replace(/\r\n?/g, '\n');
 }
 
+/** Parse Salesforce Bulk API CSV while preserving commas and newlines in quoted values. */
+export function parseBulkCsv(text: string): Array<Record<string, string>> {
+  text = normalizeBulkCsvLineEndings(text);
+  const parsedRows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '"' && text[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        field += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ',') {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field.replace(/\r$/, ''));
+      parsedRows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+  if (field || row.length) {
+    row.push(field.replace(/\r$/, ''));
+    parsedRows.push(row);
+  }
+  if (quoted) throw new Error('Malformed Bulk CSV: unterminated quoted field');
+  const headers = parsedRows.shift() ?? [];
+  if (headers[0]) headers[0] = headers[0].replace(/^\uFEFF/, '');
+  return parsedRows
+    .filter((values) => values.some(Boolean))
+    .map((values, index) => {
+      if (values.length !== headers.length) {
+        throw new Error(
+          `Malformed Bulk CSV: row ${index + 2} has ${values.length} columns; `
+          + `expected ${headers.length}`,
+        );
+      }
+      return Object.fromEntries(
+        headers.map((header, valueIndex) => [header, values[valueIndex] ?? '']),
+      );
+    });
+}
+
 /** Serialize Bulk API input with the LF-only line endings emitted by Salesforce Bulk CLI exports. */
 export function serializeBulkCsv(rows: Array<Record<string, unknown>>): string {
   const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];

@@ -6,8 +6,23 @@ import * as XLSX from 'xlsx';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import {
+  ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+  ACCOUNT_PARTNER_BOTTLER_FIELD,
+  ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
+  ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
+  ACCOUNT_PARTNER_OBJECT,
+  ACCOUNT_PARTNER_ROLE_FIELD,
+  EMPLOYEE_MASTER_OBJECT,
+  accountPartnerMigrationSchema,
+  accountPartnerValueAt,
+  buildAccountPartnerMigrationRows,
   escapeSoqlLiteral,
+  normalizeAccountPartnerAccountKey,
+  parseBulkCsv,
+  resolveAccountPartnerMigrationSoql,
+  serializeBulkCsv,
   toSoqlLiteral,
+  type AccountPartnerMigrationInput,
   type BottlerSalesOfficeConfig,
 } from '@sfcc/shared';
 import { removeTempDir } from '../../common/temp-cleanup.util';
@@ -209,6 +224,73 @@ export class AccountPartnerImportService {
     }
   }
 
+  async previewSoqlMapping(input: AccountPartnerMigrationInput) {
+    const prepared = await this.prepareSoqlMapping(input);
+    return {
+      ok: prepared.mapping.stats.ready > 0,
+      query: prepared.query,
+      stats: prepared.mapping.stats,
+      targetAccounts: prepared.targetAccountIds.size,
+      targetEmployees: prepared.targetEmployeeIds.size,
+      sample: prepared.mapping.previewRows.slice(0, 50),
+    };
+  }
+
+  async migrateSoqlMapping(
+    input: AccountPartnerMigrationInput,
+    onLog?: (line: string) => Promise<void>,
+  ) {
+    const log = async (line: string) => onLog?.(line);
+    await log('Validating Account Partner query and target mappings...');
+    const prepared = await this.prepareSoqlMapping(input);
+    const { stats } = prepared.mapping;
+    await log(
+      `Source query returned ${stats.total.toLocaleString()} rows; `
+      + `${stats.ready.toLocaleString()} mappings are ready.`,
+    );
+    await log(
+      `Skipped: ${stats.skippedTargetAccount.toLocaleString()} missing target Accounts, `
+      + `${stats.skippedTargetEmployee.toLocaleString()} missing target Employee Masters, `
+      + `${stats.duplicates.toLocaleString()} duplicates, `
+      + `${stats.externalIdCollisions.toLocaleString()} external ID collisions.`,
+    );
+    if (stats.ready === 0) {
+      throw new Error(
+        'No Account Partner mappings are ready to migrate. '
+        + `Missing target Accounts: ${stats.skippedTargetAccount}; `
+        + `missing target Employee Masters: ${stats.skippedTargetEmployee}.`,
+      );
+    }
+
+    const workDir = await mkdtemp(join(tmpdir(), `account-partner-mapping-${input.bottler}-`));
+    try {
+      const csv = join(workDir, 'account-partners.csv');
+      await writeFile(csv, serializeBulkCsv(prepared.mapping.rows), 'utf8');
+      await log(`Upserting ${stats.ready.toLocaleString()} Account Partner records...`);
+      const result = await this.sfCli.upsertBulk(
+        ACCOUNT_PARTNER_OBJECT,
+        csv,
+        ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
+        prepared.target.alias,
+        15,
+        { cwd: workDir },
+      );
+      if (!result.success) {
+        throw new Error(result.error ?? 'Account Partner migration failed');
+      }
+      await log('Account Partner migration completed');
+      return {
+        success: true,
+        query: prepared.query,
+        stats,
+        targetAccounts: prepared.targetAccountIds.size,
+        targetEmployees: prepared.targetEmployeeIds.size,
+      };
+    } finally {
+      await removeTempDir(workDir);
+    }
+  }
+
   async transferOrgToOrgMatched(
     sourceOrgId: string,
     targetOrgId: string,
@@ -374,6 +456,194 @@ export class AccountPartnerImportService {
   async preview(options: ProcessOptions) {
     const summary = await this.processExcel(options);
     return { preview: true, ...summary };
+  }
+
+  private async prepareSoqlMapping(rawInput: AccountPartnerMigrationInput) {
+    const input = accountPartnerMigrationSchema.parse(rawInput);
+    const [source, target] = await Promise.all([
+      this.resolveOrg(input.sourceOrgId),
+      this.resolveOrg(input.targetOrgId),
+    ]);
+    const targetSchema = await this.assertTargetMappingSchema(target.alias);
+    const query = resolveAccountPartnerMigrationSoql(input);
+    const sourceWorkDir = await mkdtemp(join(tmpdir(), 'account-partner-source-'));
+    try {
+      const exportPath = join(sourceWorkDir, 'source-account-partners.csv');
+      const targetAccountPath = join(sourceWorkDir, 'target-accounts.csv');
+      const targetEmployeePath = join(sourceWorkDir, 'target-employees.csv');
+      const safeBottler = escapeSoqlLiteral(input.bottler);
+      const [sourceResult, targetAccountResult, targetEmployeeResult] = await Promise.all([
+        this.sfCli.exportBulk(
+          query,
+          source.alias,
+          exportPath,
+          15,
+          { cwd: sourceWorkDir },
+        ),
+        this.sfCli.exportBulk(
+          'SELECT Id, cfs_ob__u_CustomerNumber__c FROM Account '
+          + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
+          + 'AND cfs_ob__u_CustomerNumber__c != null',
+          target.alias,
+          targetAccountPath,
+          15,
+          { cwd: sourceWorkDir },
+        ),
+        this.sfCli.exportBulk(
+          `SELECT Id, cfs_ob__EmployeeNo__c FROM ${EMPLOYEE_MASTER_OBJECT} `
+          + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
+          + 'AND cfs_ob__EmployeeNo__c != null',
+          target.alias,
+          targetEmployeePath,
+          15,
+          { cwd: sourceWorkDir },
+        ),
+      ]);
+      if (!sourceResult.success) {
+        throw new Error(sourceResult.error ?? 'Account Partner source query failed');
+      }
+      if (!targetAccountResult.success) {
+        throw new Error(targetAccountResult.error ?? 'Target Account lookup failed');
+      }
+      if (!targetEmployeeResult.success) {
+        throw new Error(targetEmployeeResult.error ?? 'Target Employee Master lookup failed');
+      }
+      const records = parseBulkCsv(await readFile(exportPath, 'utf8'));
+      const targetAccountRecords = parseBulkCsv(
+        await readFile(targetAccountPath, 'utf8'),
+      );
+      const targetEmployeeRecords = parseBulkCsv(
+        await readFile(targetEmployeePath, 'utf8'),
+      );
+      const targetAccountIds = new Map<string, string>();
+      const ambiguousAccountKeys = new Set<string>();
+      for (const record of targetAccountRecords) {
+        const key = accountPartnerValueAt(record, 'cfs_ob__u_CustomerNumber__c');
+        const id = accountPartnerValueAt(record, 'Id');
+        const normalized = normalizeAccountPartnerAccountKey(key);
+        if (!id) continue;
+        if (!normalized || ambiguousAccountKeys.has(normalized)) continue;
+        const existing = targetAccountIds.get(normalized);
+        if (existing && existing !== id) {
+          targetAccountIds.delete(normalized);
+          ambiguousAccountKeys.add(normalized);
+        } else {
+          targetAccountIds.set(normalized, id);
+        }
+      }
+      const targetEmployeeIds = new Map<string, string>();
+      const ambiguousEmployeeKeys = new Set<string>();
+      for (const record of targetEmployeeRecords) {
+        const key = accountPartnerValueAt(record, 'cfs_ob__EmployeeNo__c');
+        const id = accountPartnerValueAt(record, 'Id');
+        if (!key || !id || ambiguousEmployeeKeys.has(key)) continue;
+        const existing = targetEmployeeIds.get(key);
+        if (existing && existing !== id) {
+          targetEmployeeIds.delete(key);
+          ambiguousEmployeeKeys.add(key);
+        } else {
+          targetEmployeeIds.set(key, id);
+        }
+      }
+      const mapping = buildAccountPartnerMigrationRows({
+        records,
+        bottler: input.bottler,
+        targetAccountIds,
+        targetEmployeeIds,
+        externalIdMaxLength: targetSchema.externalIdMaxLength,
+      });
+      return {
+        target,
+        query,
+        mapping,
+        targetAccountIds,
+        targetEmployeeIds,
+      };
+    } finally {
+      await removeTempDir(sourceWorkDir);
+    }
+  }
+
+  private async assertTargetMappingSchema(alias: string) {
+    const [partnerResult, accountResult, employeeResult] = await Promise.all([
+      this.sfCli.describeSObject(alias, ACCOUNT_PARTNER_OBJECT),
+      this.sfCli.describeSObject(alias, 'Account'),
+      this.sfCli.describeSObject(alias, EMPLOYEE_MASTER_OBJECT),
+    ]);
+    if (!partnerResult.success) {
+      throw new Error(partnerResult.error ?? 'Target Account Partner schema lookup failed');
+    }
+    if (!accountResult.success) {
+      throw new Error(accountResult.error ?? 'Target Account schema lookup failed');
+    }
+    if (!employeeResult.success) {
+      throw new Error(employeeResult.error ?? 'Target Employee Master schema lookup failed');
+    }
+    type DescribedField = {
+      name: string;
+      externalId?: boolean;
+      idLookup?: boolean;
+      createable?: boolean;
+      updateable?: boolean;
+      filterable?: boolean;
+      length?: number;
+    };
+    const fields = (result: unknown) =>
+      new Map<string, DescribedField>(
+        ((result as { data?: { result?: { fields?: DescribedField[] } } })
+          ?.data?.result?.fields ?? [])
+          .map((field): [string, DescribedField] => [field.name.toLowerCase(), field]),
+      );
+    const partnerFields = fields(partnerResult);
+    for (const fieldName of [
+      ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
+      ACCOUNT_PARTNER_ROLE_FIELD,
+      ACCOUNT_PARTNER_BOTTLER_FIELD,
+      'cfs_ob__Account__c',
+      'cfs_ob__EmployeeMaster__c',
+    ]) {
+      const field = partnerFields.get(fieldName.toLowerCase());
+      if (!field) throw new Error(`Target Account Partner field is missing: ${fieldName}`);
+      if (!field.createable || !field.updateable) {
+        throw new Error(
+          `Target Account Partner field must be createable and updateable: ${fieldName}`,
+        );
+      }
+    }
+    const partnerExternalId = partnerFields.get(
+      ACCOUNT_PARTNER_EXTERNAL_ID_FIELD.toLowerCase(),
+    );
+    if (!partnerExternalId?.externalId && !partnerExternalId?.idLookup) {
+      throw new Error(
+        `Target ${ACCOUNT_PARTNER_EXTERNAL_ID_FIELD} is not configured as an external ID`,
+      );
+    }
+    const assertQueryKey = (
+      describedFields: Map<string, DescribedField>,
+      objectName: string,
+      fieldName: string,
+    ) => {
+      const field = describedFields.get(fieldName.toLowerCase());
+      if (!field) throw new Error(`Target ${objectName} field is missing: ${fieldName}`);
+      if (field.filterable === false) {
+        throw new Error(`Target ${objectName}.${fieldName} is not filterable`);
+      }
+    };
+    assertQueryKey(
+      fields(accountResult),
+      'Account',
+      'cfs_ob__u_CustomerNumber__c',
+    );
+    assertQueryKey(
+      fields(employeeResult),
+      EMPLOYEE_MASTER_OBJECT,
+      'cfs_ob__EmployeeNo__c',
+    );
+    const externalIdMaxLength = partnerExternalId.length ?? 255;
+    if (externalIdMaxLength < 1) {
+      throw new Error(`Target ${ACCOUNT_PARTNER_EXTERNAL_ID_FIELD} has an invalid length`);
+    }
+    return { externalIdMaxLength };
   }
 
   private orgLinkCustomer(

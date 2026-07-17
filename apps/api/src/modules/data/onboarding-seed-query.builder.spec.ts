@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { ONBOARDING_OBJECT } from '@sfcc/shared';
-import { resolveManualOnboardingSeedQuery } from './onboarding-seed-query.builder';
+import {
+  buildManualOnboardingRecordTypeSoql,
+  prepareManualOnboardingQueryForBulk,
+  resolveManualOnboardingSeedQuery,
+} from './onboarding-seed-query.builder';
 
 describe('manual CONA OnboardingConfig queries', () => {
   it('normalizes a bounded query and retains its filter', () => {
@@ -39,5 +43,97 @@ describe('manual CONA OnboardingConfig queries', () => {
       soql: `SELECT RecordTypeId, RecordType.DeveloperName FROM ${ONBOARDING_OBJECT}`,
       limit: 10,
     })).toThrow(/unsupported field expression/i);
+  });
+
+  it('expands compound fields and removes target fields that cannot be inserted', () => {
+    const resolved = resolveManualOnboardingSeedQuery({
+      id: 'compound',
+      label: 'Compound fields',
+      soql: `SELECT RecordTypeId, cfs_ob__Bottler__c, Geo__c, Address__c, Formula__c, OwnerId `
+        + `FROM ${ONBOARDING_OBJECT} WHERE cfs_ob__Bottler__c = '5000'`,
+      limit: 100,
+    });
+    const sourceFields = [
+      { name: 'RecordTypeId', type: 'reference' },
+      { name: 'cfs_ob__Bottler__c', type: 'string' },
+      { name: 'Geo__c', type: 'location' },
+      { name: 'Geo__Latitude__s', type: 'double', compoundFieldName: 'Geo__c' },
+      { name: 'Geo__Longitude__s', type: 'double', compoundFieldName: 'Geo__c' },
+      { name: 'Address__c', type: 'address' },
+      { name: 'Address__Street__s', type: 'string', compoundFieldName: 'Address__c' },
+      { name: 'Formula__c', type: 'string' },
+      { name: 'OwnerId', type: 'reference' },
+    ];
+    const targetFields = sourceFields.map((field) => ({
+      ...field,
+      createable: field.name !== 'Formula__c',
+      calculated: field.name === 'Formula__c',
+    }));
+
+    const prepared = prepareManualOnboardingQueryForBulk(
+      resolved,
+      sourceFields,
+      targetFields,
+    );
+
+    expect(prepared.soql).toContain(
+      'SELECT RecordTypeId, cfs_ob__Bottler__c, '
+      + 'Geo__Latitude__s, Geo__Longitude__s, Address__Street__s',
+    );
+    expect(prepared.soql).not.toMatch(/\bGeo__c\b/);
+    expect(prepared.soql).not.toMatch(/\bAddress__c\b/);
+    expect(prepared.soql).not.toContain('Formula__c');
+    expect(prepared.soql).not.toContain('OwnerId');
+    expect(prepared.soql).toContain("WHERE cfs_ob__Bottler__c = '5000' LIMIT 100");
+    expect(prepared.expandedCompoundFields).toEqual([
+      {
+        field: 'Geo__c',
+        components: ['Geo__Latitude__s', 'Geo__Longitude__s'],
+      },
+      {
+        field: 'Address__c',
+        components: ['Address__Street__s'],
+      },
+    ]);
+    expect(prepared.excludedFields).toEqual([
+      {
+        field: 'Formula__c',
+        reason: 'target field Formula__c is not createable',
+      },
+      {
+        field: 'OwnerId',
+        reason: 'source relationship IDs are not portable between orgs',
+      },
+    ]);
+    expect(buildManualOnboardingRecordTypeSoql(prepared)).toBe(
+      `SELECT RecordTypeId FROM ${ONBOARDING_OBJECT} `
+      + "WHERE cfs_ob__Bottler__c = '5000' GROUP BY RecordTypeId LIMIT 200",
+    );
+  });
+
+  it('rejects compound fields in Bulk Query filters or ordering', () => {
+    const resolved = resolveManualOnboardingSeedQuery({
+      id: 'compound-filter',
+      label: 'Compound filter',
+      soql: `SELECT RecordTypeId, cfs_ob__Bottler__c FROM ${ONBOARDING_OBJECT} `
+        + 'WHERE DISTANCE(Geo__c, GEOLOCATION(40, -70), \'mi\') < 10',
+      limit: 100,
+    });
+    const fields = [
+      { name: 'RecordTypeId', type: 'reference', createable: true },
+      { name: 'cfs_ob__Bottler__c', type: 'string', createable: true },
+      { name: 'Geo__c', type: 'location', createable: true },
+      {
+        name: 'Geo__Latitude__s',
+        type: 'double',
+        compoundFieldName: 'Geo__c',
+        createable: true,
+      },
+    ];
+
+    expect(() =>
+      prepareManualOnboardingQueryForBulk(resolved, fields, fields)).toThrow(
+      /uses compound field Geo__c outside the SELECT list/i,
+    );
   });
 });

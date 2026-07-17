@@ -5,6 +5,7 @@ import {
   buildAccountPartnerRows,
   createQueryRuntimeCheckpoint,
   pendingQueryIds,
+  parseBulkCsv,
   selectCompiledSupportQueries,
   serializeBulkCsv,
   normalizeBulkCsvLineEndings,
@@ -141,6 +142,21 @@ describe('query runtime CSV and office support', () => {
     assert.equal(csv.endsWith('\n'), true);
     assert.equal(csv.includes('\r\n'), false);
     assert.equal(csv, 'External__c,Name\nA,"Comma, quoted"\n');
+  });
+
+  it('parses CRLF Bulk CSV with quoted commas and multiline values', () => {
+    assert.deepEqual(
+      parseBulkCsv('\uFEFFId,Name,Notes\r\n1,"Doe, Jane","Line 1\r\nLine 2"\r\n'),
+      [{ Id: '1', Name: 'Doe, Jane', Notes: 'Line 1\nLine 2' }],
+    );
+    assert.throws(
+      () => parseBulkCsv('Id,Name\n1,"unterminated'),
+      /unterminated quoted field/,
+    );
+    assert.throws(
+      () => parseBulkCsv('Id,Name\n1,Jane,extra\n'),
+      /has 3 columns; expected 2/,
+    );
   });
 
   it('normalizes Windows CRLF and UTF-8 BOM bulk exports to LF', () => {

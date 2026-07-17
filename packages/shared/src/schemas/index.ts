@@ -391,6 +391,22 @@ export const conaSeedRunSchema = z.object({
   message: 'Source and target org must differ',
   path: ['targetOrgId'],
 }).superRefine((data, context) => {
+  for (const [field, queries] of [
+    ['manualAccountQueries', data.manualAccountQueries],
+    ['manualOnboardingQueries', data.manualOnboardingQueries],
+  ] as const) {
+    const seen = new Set<string>();
+    queries?.forEach((query, index) => {
+      if (seen.has(query.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field, index, 'id'],
+          message: `Duplicate manual query id: ${query.id}`,
+        });
+      }
+      seen.add(query.id);
+    });
+  }
   if (
     data.datasets.includes('Accounts')
     && data.accountQueryMode === 'manual'

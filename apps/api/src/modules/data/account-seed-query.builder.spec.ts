@@ -87,5 +87,22 @@ describe('manual CONA Account seed queries', () => {
         limit: 500,
       }],
     }).manualOnboardingQueries).toHaveLength(1);
+    expect(conaSeedRunSchema.safeParse({
+      ...base,
+      manualOnboardingQueries: [
+        {
+          id: 'duplicate',
+          label: 'First',
+          soql: 'SELECT RecordTypeId, Name FROM cfs_ob__Onboarding_Config__c',
+          limit: 10,
+        },
+        {
+          id: 'duplicate',
+          label: 'Second',
+          soql: 'SELECT RecordTypeId, Name FROM cfs_ob__Onboarding_Config__c',
+          limit: 10,
+        },
+      ],
+    }).success).toBe(false);
   });
 });
