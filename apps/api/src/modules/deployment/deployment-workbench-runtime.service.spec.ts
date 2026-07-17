@@ -173,7 +173,12 @@ describe('Deployment Workbench dependency preview', () => {
         explanation: expect.stringContaining('ApexClass:MissingRef'),
       }),
     ]);
-    expect(preview.blocking[0]).toContain('required dependencies are missing');
+    // The blocker must NAME the missing components and who requires them so
+    // the user knows exactly what to fix — never just a count.
+    expect(preview.blocking[0]).toContain('1 required dependency is missing');
+    expect(preview.blocking[0]).toContain('CustomObject:Missing__c');
+    expect(preview.blocking[0]).toContain('required by ApexClass:MissingRef');
+    expect(preview.blocking[0]).toContain('Block on missing required dependencies');
   });
 
   it('keeps selected-only plans exact and produces identical approved execution batches', () => {
