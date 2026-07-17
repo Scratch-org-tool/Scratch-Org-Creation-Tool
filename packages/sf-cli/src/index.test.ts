@@ -78,6 +78,7 @@ describe('Salesforce bulk CSV line endings', () => {
     const root = mkdtempSync(join(tmpdir(), 'sfcc-bulk-csv-'));
     writeFileSync(join(root, 'import.csv'), 'Name,Value\r\nA,1\r\n');
     writeFileSync(join(root, 'upsert.csv'), 'Name,ExternalId\nA,1\n');
+    writeFileSync(join(root, 'bom.csv'), '\uFEFFName,Value\r\nB,2\r\n');
     const client = new SfCliClient({ cwd: root });
     const received: Array<{ args: string[]; content: string; file: string }> = [];
     client.runStreaming = async (args) => {
@@ -94,6 +95,7 @@ describe('Salesforce bulk CSV line endings', () => {
     try {
       await client.importBulk('Example__c', 'import.csv', 'target');
       await client.upsertBulk('Example__c', 'upsert.csv', 'ExternalId', 'target');
+      await client.importBulk('Example__c', 'bom.csv', 'target');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -104,11 +106,12 @@ describe('Salesforce bulk CSV line endings', () => {
       [
         ['--line-ending', 'LF'],
         ['--line-ending', 'LF'],
+        ['--line-ending', 'LF'],
       ],
     );
     assert.deepEqual(
       received.map(({ content }) => content),
-      ['Name,Value\nA,1\n', 'Name,ExternalId\nA,1\n'],
+      ['Name,Value\nA,1\n', 'Name,ExternalId\nA,1\n', 'Name,Value\nB,2\n'],
     );
     assert.equal(received.every(({ file }) => !existsSync(file)), true);
   });

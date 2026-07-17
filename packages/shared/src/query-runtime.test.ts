@@ -7,6 +7,7 @@ import {
   pendingQueryIds,
   selectCompiledSupportQueries,
   serializeBulkCsv,
+  normalizeBulkCsvLineEndings,
 } from './query-runtime.js';
 
 describe('query runtime checkpoints', () => {
@@ -140,6 +141,11 @@ describe('query runtime CSV and office support', () => {
     assert.equal(csv.endsWith('\n'), true);
     assert.equal(csv.includes('\r\n'), false);
     assert.equal(csv, 'External__c,Name\nA,"Comma, quoted"\n');
+  });
+
+  it('normalizes Windows CRLF and UTF-8 BOM bulk exports to LF', () => {
+    const normalized = normalizeBulkCsvLineEndings('\uFEFFName,Value\r\nA,1\r\n');
+    assert.equal(normalized, 'Name,Value\nA,1\n');
   });
 
   it('selects support rows by compiled query ID and office without overwriting variants', () => {

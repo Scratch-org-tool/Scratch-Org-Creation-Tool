@@ -65,6 +65,12 @@ function csvEscape(value: unknown): string {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+/** Normalize Bulk API CSV bytes to LF and strip a UTF-8 BOM when present. */
+export function normalizeBulkCsvLineEndings(content: string): string {
+  const withoutBom = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+  return withoutBom.replace(/\r\n?/g, '\n');
+}
+
 /** Serialize Bulk API input with the LF-only line endings emitted by Salesforce Bulk CLI exports. */
 export function serializeBulkCsv(rows: Array<Record<string, unknown>>): string {
   const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
