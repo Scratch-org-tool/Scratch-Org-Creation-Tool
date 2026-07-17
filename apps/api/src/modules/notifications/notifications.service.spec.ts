@@ -29,8 +29,9 @@ function createService() {
     isConfigured: vi.fn().mockReturnValue(false),
     send: vi.fn().mockResolvedValue(true),
   };
-  const service = new NotificationsService(stream as never, mail as never);
-  return { service, stream, mail };
+  const webhooks = { dispatch: vi.fn().mockResolvedValue(undefined) };
+  const service = new NotificationsService(stream as never, mail as never, webhooks as never);
+  return { service, stream, mail, webhooks };
 }
 
 function settingsRow(overrides: Record<string, unknown> = {}) {

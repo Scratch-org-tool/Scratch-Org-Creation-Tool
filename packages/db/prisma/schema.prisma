@@ -929,6 +929,25 @@ model WorkItemSnapshot {
   @@index([providerUpdatedAt])
 }
 
+/// Outbound chat webhook (Slack or Microsoft Teams). The webhook URL is
+/// encrypted at rest; an empty categories list means "all categories".
+model NotificationChannelWebhook {
+  id            String    @id @default(uuid())
+  type          String
+  name          String
+  encryptedUrl  String
+  enabled       Boolean   @default(true)
+  categories    String[]  @default([])
+  createdBy     String    @default("system")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastSuccessAt DateTime?
+  lastErrorAt   DateTime?
+  lastError     String?
+
+  @@index([enabled])
+}
+
 /// Tracks the last notified change per external work item so webhook-driven
 /// Developer Board alerts never notify the same revision twice and email
 /// bursts are rate limited per item.

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -13,16 +14,22 @@ import {
   notificationListQuerySchema,
   notificationPreferencesUpdateSchema,
   notificationSettingsUpdateSchema,
+  notificationWebhookCreateSchema,
+  notificationWebhookUpdateSchema,
 } from '@sfcc/shared';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { RequireRole, RoleGuard } from '../../common/role.guard';
+import { ChannelWebhookService } from './channel-webhook.service';
 import { NotificationsService } from './notifications.service';
 
 @Controller('notifications')
 @UseGuards(AuthGuard, RoleGuard)
 export class NotificationsController {
-  constructor(private readonly service: NotificationsService) {}
+  constructor(
+    private readonly service: NotificationsService,
+    private readonly webhooks: ChannelWebhookService,
+  ) {}
 
   @Get()
   list(@CurrentUser() userId: string, @Query() query: Record<string, unknown>) {
@@ -82,5 +89,47 @@ export class NotificationsController {
   @RequireRole('admin')
   sendTest(@CurrentUser() userId: string) {
     return this.service.sendTest(userId);
+  }
+
+  @Get('webhooks')
+  @RequireRole('admin')
+  listWebhooks() {
+    return this.webhooks.list();
+  }
+
+  @Post('webhooks')
+  @RequireRole('admin')
+  createWebhook(@CurrentUser() userId: string, @Body() body: unknown) {
+    const parsed = notificationWebhookCreateSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues[0]?.message ?? 'Invalid webhook configuration',
+      );
+    }
+    return this.webhooks.create(parsed.data, userId);
+  }
+
+  @Patch('webhooks/:id')
+  @RequireRole('admin')
+  updateWebhook(@Param('id') id: string, @Body() body: unknown) {
+    const parsed = notificationWebhookUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues[0]?.message ?? 'Invalid webhook update',
+      );
+    }
+    return this.webhooks.update(id, parsed.data);
+  }
+
+  @Delete('webhooks/:id')
+  @RequireRole('admin')
+  deleteWebhook(@Param('id') id: string) {
+    return this.webhooks.remove(id);
+  }
+
+  @Post('webhooks/:id/test')
+  @RequireRole('admin')
+  testWebhook(@Param('id') id: string) {
+    return this.webhooks.sendTest(id);
   }
 }

@@ -16,6 +16,7 @@ import {
 } from '@sfcc/shared';
 import { StreamService } from '../stream/stream.service';
 import { MailService } from './mail.service';
+import { ChannelWebhookService } from './channel-webhook.service';
 
 const GLOBAL_SETTINGS_ID = 'global';
 
@@ -39,6 +40,7 @@ export class NotificationsService {
   constructor(
     private readonly stream: StreamService,
     private readonly mail: MailService,
+    private readonly channelWebhooks: ChannelWebhookService,
   ) {}
 
   /** Current global settings, falling back to the (disabled) defaults. */
@@ -121,11 +123,12 @@ export class NotificationsService {
       await this.stream
         .publish('notification', { ...record, userId: input.userId }, input.userId)
         .catch(() => undefined);
-      // Outbound email is fire-and-forget: it must never delay or fail the
-      // originating job, so errors are swallowed inside deliverEmail.
+      // Outbound email and chat webhooks are fire-and-forget: they must never
+      // delay or fail the originating job.
       if (options?.email !== false) {
         void this.deliverEmail(settings, input);
       }
+      void this.channelWebhooks.dispatch(input);
       return record;
     } catch (error) {
       this.logger.warn(
