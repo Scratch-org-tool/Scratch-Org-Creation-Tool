@@ -275,7 +275,9 @@ export class WorkerRegistry implements OnModuleInit {
             if (current?.status !== terminalStatus) {
               await this.jobsService.updateStatus(dbJobId, terminalStatus);
               await this.streamService.publish('job_status', { jobId: dbJobId, status: terminalStatus });
-              void this.notifyJobTerminal(dbJobId, terminalStatus);
+              if (terminalStatus !== 'cancelled') {
+                void this.notifyJobTerminal(dbJobId, terminalStatus);
+              }
             }
             if (terminalStatus === 'cancelled') return result;
           }

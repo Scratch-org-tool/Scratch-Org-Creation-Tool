@@ -59,7 +59,10 @@ describe('DataDeployOrchestratorService cancellation', () => {
     );
     service = new DataDeployOrchestratorService(
       { enqueueJob } as never,
-      { withSchedulerLock } as never,
+      {
+        withSchedulerLock,
+        acquire: vi.fn().mockResolvedValue({ release: vi.fn().mockResolvedValue(undefined) }),
+      } as never,
       { removeJob, addJob } as never,
       { cancel: cancelProcess, isCancellationRequested: vi.fn() } as never,
     );
