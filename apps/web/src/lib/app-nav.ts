@@ -8,6 +8,7 @@ import {
   GitCompare,
   LayoutDashboard,
   Rocket,
+  ScrollText,
   Shield,
 } from 'lucide-react';
 import { canAccessModule, type AppModule } from '@/lib/auth-utils';
@@ -101,6 +102,7 @@ export interface AdminNavItem {
 export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { href: '/admin/users', label: 'User Access', icon: Shield },
   { href: '/admin/notifications', label: 'Notifications', icon: Bell },
+  { href: '/admin/audit', label: 'Audit Report', icon: ScrollText },
 ];
 
 /** @deprecated Prefer {@link ADMIN_NAV_ITEMS}. Kept for existing imports. */
