@@ -5,7 +5,11 @@ import { QuerySectionRuntimeService } from '../modules/data/query-section-runtim
 import { JobsService } from '../modules/jobs/jobs.service';
 import { StreamService } from '../modules/stream/stream.service';
 import type { AccountSeedRow } from '../modules/data/account-seed-query.builder';
-import type { BottlerSalesOfficeConfig, DataSeedQuerySet } from '@sfcc/shared';
+import type {
+  BottlerSalesOfficeConfig,
+  ConaManualAccountQuery,
+  DataSeedQuerySet,
+} from '@sfcc/shared';
 
 @Injectable()
 export class ConaSeedWorker {
@@ -17,11 +21,26 @@ export class ConaSeedWorker {
   ) {}
 
   async process(job: Job) {
-    const { sourceOrgId, targetOrgId, datasets, accountSeedRows, dataSeedMode, querySet, querySection, salesOfficeConfig, dbJobId, automationRunId } = job.data as {
+    const {
+      sourceOrgId,
+      targetOrgId,
+      datasets,
+      accountSeedRows,
+      accountQueryMode,
+      manualAccountQueries,
+      dataSeedMode,
+      querySet,
+      querySection,
+      salesOfficeConfig,
+      dbJobId,
+      automationRunId,
+    } = job.data as {
       sourceOrgId: string;
       targetOrgId: string;
       datasets?: Array<'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts'>;
       accountSeedRows?: AccountSeedRow[];
+      accountQueryMode?: 'guided' | 'manual';
+      manualAccountQueries?: ConaManualAccountQuery[];
       dataSeedMode?: 'automatic' | 'query_json' | 'hybrid' | 'query_section';
       querySet?: DataSeedQuerySet;
       querySection?: unknown;
@@ -57,6 +76,8 @@ export class ConaSeedWorker {
       targetOrgId,
       datasets,
       accountSeedRows,
+      accountQueryMode,
+      manualAccountQueries,
       dataSeedMode,
       querySet,
       salesOfficeConfig,

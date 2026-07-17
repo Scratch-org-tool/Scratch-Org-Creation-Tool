@@ -365,15 +365,39 @@ export const accountSeedPreviewSchema = z.object({
   })),
 });
 
+export const conaManualAccountQuerySchema = z.object({
+  id: z.string().trim().min(1).max(80).regex(
+    /^[A-Za-z0-9_-]+$/,
+    'Query id may contain only letters, numbers, underscores, and hyphens',
+  ),
+  label: z.string().trim().min(1).max(120),
+  soql: z.string().trim().min(1).max(100_000),
+  limit: z.number().int().min(1).max(100_000).default(500),
+});
+
 export const conaSeedRunSchema = z.object({
   automationRunId: z.string().uuid().optional(),
   sourceOrgId: z.string().uuid(),
   targetOrgId: z.string().uuid(),
   datasets: z.array(z.enum(['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'])),
   accountSeedRows: accountSeedPreviewSchema.shape.rows.optional(),
+  accountQueryMode: z.enum(['guided', 'manual']).default('guided'),
+  manualAccountQueries: z.array(conaManualAccountQuerySchema).max(20).optional(),
 }).refine((data) => data.sourceOrgId !== data.targetOrgId, {
   message: 'Source and target org must differ',
   path: ['targetOrgId'],
+}).superRefine((data, context) => {
+  if (
+    data.datasets.includes('Accounts')
+    && data.accountQueryMode === 'manual'
+    && !data.manualAccountQueries?.length
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['manualAccountQueries'],
+      message: 'Add at least one manual Account query',
+    });
+  }
 });
 
 export const partnerImportProcessSchema = z.object({
@@ -567,6 +591,7 @@ export type OrgSetupAssignScope = z.infer<typeof orgSetupAssignScopeSchema>;
 export type OrgSetupInput = z.infer<typeof orgSetupSchema>;
 export type UserProvisionInput = z.infer<typeof userProvisionSchema>;
 export type ConaUserProvisionInput = z.infer<typeof conaUserProvisionSchema>;
+export type ConaManualAccountQuery = z.infer<typeof conaManualAccountQuerySchema>;
 export type ConaSeedRunInput = z.infer<typeof conaSeedRunSchema>;
 export type PartnerImportProcessInput = z.infer<typeof partnerImportProcessSchema>;
 export type PipelineRunActionsInput = z.infer<typeof pipelineRunActionsSchema>;

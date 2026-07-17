@@ -20,7 +20,7 @@ const TABS: WorkspaceTab[] = [
     icon: Sprout,
     title: 'CONA Data Seed',
     description:
-      'Validate, export, and import onboarding config, products, visit plans, and account slices using dynamic SOQL.',
+      'Validate, export, and import onboarding data with guided Account filters or manual SOQL.',
   },
   {
     id: 'replication',
