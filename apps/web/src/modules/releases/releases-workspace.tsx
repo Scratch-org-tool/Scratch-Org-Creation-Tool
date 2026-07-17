@@ -65,6 +65,7 @@ export function ReleasesWorkspace() {
 
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [removingItemId, setRemovingItemId] = useState<string | null>(null);
 
   const [showAddItem, setShowAddItem] = useState(false);
   const [itemKind, setItemKind] = useState<'deployment' | 'work_item'>('deployment');
@@ -154,6 +155,19 @@ export function ReleasesWorkspace() {
     }
   };
 
+  const removeItem = async (itemId: string) => {
+    if (removingItemId) return;
+    setRemovingItemId(itemId);
+    setActionError(null);
+    try {
+      await detail.removeItem(itemId);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to remove item');
+    } finally {
+      setRemovingItemId(null);
+    }
+  };
+
   const renderReleaseRow = (row: ReleaseRecord) => (
     <li key={row.id}>
       <button
@@ -194,8 +208,8 @@ export function ReleasesWorkspace() {
         showBreadcrumbs
         actions={(
           <>
-            <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-              <RefreshCw className={loading ? 'animate-spin' : ''} aria-hidden />
+            <Button variant="outline" size="sm" onClick={() => void refresh()} loading={loading}>
+              {!loading && <RefreshCw aria-hidden />}
               Refresh
             </Button>
             <Button size="sm" onClick={() => setShowCreate((current) => !current)}>
@@ -527,10 +541,12 @@ export function ReleasesWorkspace() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => void detail.removeItem(item.id)}
+                              onClick={() => void removeItem(item.id)}
+                              loading={removingItemId === item.id}
+                              disabled={Boolean(removingItemId)}
                               aria-label={`Remove ${item.title}`}
                             >
-                              <Trash2 aria-hidden />
+                              {removingItemId !== item.id && <Trash2 aria-hidden />}
                             </Button>
                           )}
                         </div>

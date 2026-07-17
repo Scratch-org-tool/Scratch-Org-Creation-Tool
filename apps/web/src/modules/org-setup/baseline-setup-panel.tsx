@@ -115,7 +115,10 @@ export function BaselineSetupPanel({ w }: BaselineSetupPanelProps) {
         </GlassCard>
 
         <GlassCard title="Recent baseline runs" description="Permission set and theme setup runs for this org.">
-          <ListRowGroup emptyMessage={w.orgId ? 'No runs yet.' : 'Select an org to see runs.'}>
+          <ListRowGroup
+            loading={w.runsLoading}
+            emptyMessage={w.orgId ? 'No runs yet.' : 'Select an org to see runs.'}
+          >
             {w.runs.map((r) => (
               <ListRow
                 key={r.id}

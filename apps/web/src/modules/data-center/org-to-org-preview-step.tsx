@@ -1,11 +1,14 @@
 'use client';
 
+import { BusyRow } from '@/components/studio';
 import type { OrgToOrgObjectDeployConfig, OrgToOrgObjectInfo } from './types';
 
 interface OrgToOrgPreviewStepProps {
   checkedObjects: OrgToOrgObjectInfo[];
   objectConfigs: Map<string, OrgToOrgObjectDeployConfig>;
   selectedRecordIds: Map<string, Set<string>>;
+  /** True while record previews for the review step are still being fetched. */
+  loading?: boolean;
   onToggleRecord: (objectName: string, recordId: string) => void;
   onToggleAll: (objectName: string, recordIds: string[]) => void;
 }
@@ -14,6 +17,7 @@ export function OrgToOrgPreviewStep({
   checkedObjects,
   objectConfigs,
   selectedRecordIds,
+  loading,
   onToggleRecord,
   onToggleAll,
 }: OrgToOrgPreviewStepProps) {
@@ -45,7 +49,11 @@ export function OrgToOrgPreviewStep({
             </div>
             <div className="min-w-0 overflow-x-auto overflow-y-auto max-h-64">
               {records.length === 0 ? (
-                <p className="p-4 text-xs text-muted-foreground">No records match the current filter.</p>
+                loading ? (
+                  <BusyRow label="Loading matching records…" className="text-xs" />
+                ) : (
+                  <p className="p-4 text-xs text-muted-foreground">No records match the current filter.</p>
+                )
               ) : (
                 <table className="text-xs w-max min-w-full">
                   <thead className="sticky top-0 z-10 bg-card [&_th]:bg-card border-b border-border/60">

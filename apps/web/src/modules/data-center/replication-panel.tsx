@@ -92,6 +92,7 @@ export function ReplicationPanel() {
   const [movement, setMovement] = useState<Movement | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]);
+  const [loadingMovements, setLoadingMovements] = useState(true);
   const [replicateError, setReplicateError] = useState<string | null>(null);
   const [queuedMessage, setQueuedMessage] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<{
@@ -135,6 +136,8 @@ export function ReplicationPanel() {
       if (request === movementListRequestRef.current) setMovements(data);
     } catch {
       /* ignore */
+    } finally {
+      if (request === movementListRequestRef.current) setLoadingMovements(false);
     }
   }, []);
 
@@ -699,7 +702,7 @@ export function ReplicationPanel() {
         </GlassCard>
 
         <GlassCard title="Recent replications" description="Past SFDMU replication runs.">
-          <ListRowGroup emptyMessage="No replications yet." maxHeight="420px">
+          <ListRowGroup loading={loadingMovements} emptyMessage="No replications yet." maxHeight="420px">
             {movements.map((m) => (
               <div key={m.id} className="border-b border-border/40 p-2 last:border-0">
                 <ListRow

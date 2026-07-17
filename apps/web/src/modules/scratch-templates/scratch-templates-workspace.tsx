@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Plus, Copy, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ConfirmDialog } from '@/components/studio';
 import { api } from '@/services/api';
 import { getSessionCache, hasFreshSessionCache, setSessionCache } from '@/lib/session-cache';
 import { ScratchTemplateForm } from './scratch-template-form';
@@ -39,6 +40,7 @@ export function ScratchTemplatesWorkspace() {
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
   const [mutationErrors, setMutationErrors] = useState<Record<string, string>>({});
   const [announcement, setAnnouncement] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState<TemplateRow | null>(null);
   const busyRef = useRef(new Set<string>());
   const tokensRef = useRef(new Map<string, number>());
   const templatesRef = useRef<TemplateRow[]>(cached ?? []);
@@ -128,7 +130,7 @@ export function ScratchTemplatesWorkspace() {
   };
 
   const remove = async (id: string) => {
-    if (!confirm('Delete this template?')) return;
+    setConfirmDelete(null);
     if (busyRef.current.size > 0) return;
     const token = (tokensRef.current.get(id) ?? 0) + 1;
     tokensRef.current.set(id, token);
@@ -274,8 +276,14 @@ export function ScratchTemplatesWorkspace() {
                         <Pencil className="w-3.5 h-3.5 mr-1" />
                         Edit
                       </Button>
-                      <Button size="sm" variant="outline" disabled={collectionBusy} onClick={() => void remove(t.id)}>
-                        <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        loading={Boolean(busyIds[t.id])}
+                        disabled={collectionBusy}
+                        onClick={() => setConfirmDelete(t)}
+                      >
+                        {!busyIds[t.id] && <Trash2 className="w-3.5 h-3.5 mr-1" />}
                         Delete
                       </Button>
                     </>
@@ -287,6 +295,19 @@ export function ScratchTemplatesWorkspace() {
         ))}
       </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        title="Delete scratch org template?"
+        message={`"${confirmDelete?.name ?? ''}" will be permanently removed. If deletion fails the template is restored automatically.`}
+        confirmLabel="Delete template"
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+        onConfirm={() => {
+          if (confirmDelete) void remove(confirmDelete.id);
+        }}
+      />
     </div>
   );
 }

@@ -58,13 +58,16 @@ export function CustomSettingsLoadPanel() {
   const [sourceOrgId, setSourceOrgId] = useState('');
   const [targetOrgId, setTargetOrgId] = useState('');
   const [validation, setValidation] = useState<{ objectCount: number; warnings: string[] } | null>(null);
+  const [validating, setValidating] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobData | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [sfdmuReadiness, setSfdmuReadiness] = useState<SfdmuReadiness | null>(null);
+  const [provisioningSfdmu, setProvisioningSfdmu] = useState(false);
   const [movements, setMovements] = useState<DataMovement[]>([]);
+  const [loadingMovements, setLoadingMovements] = useState(true);
   const [expandedMovementId, setExpandedMovementId] = useState<string | null>(null);
   const [orgConfigCompletedByMovement, setOrgConfigCompletedByMovement] = useState<
     Record<string, boolean>
@@ -83,11 +86,14 @@ export function CustomSettingsLoadPanel() {
       setMovements(data);
     } catch {
       /* ignore */
+    } finally {
+      setLoadingMovements(false);
     }
   }, []);
 
   const provisionSfdmu = useCallback(async () => {
     setSfdmuReadiness(null);
+    setProvisioningSfdmu(true);
     try {
       const readiness = await api<SfdmuReadiness>('/data/custom-settings/plugins/ensure', {
         method: 'POST',
@@ -99,13 +105,19 @@ export function CustomSettingsLoadPanel() {
         action: 'failed',
         error: error instanceof Error ? error.message : 'Automatic SFDMU provisioning failed',
       });
+    } finally {
+      setProvisioningSfdmu(false);
     }
   }, []);
 
   useEffect(() => {
-    api<unknown>('/data/custom-settings/template').then((t) => {
-      setCustomJson(JSON.stringify(t, null, 2));
-    });
+    api<unknown>('/data/custom-settings/template')
+      .then((t) => {
+        setCustomJson(JSON.stringify(t, null, 2));
+      })
+      .catch(() => {
+        /* template is only a convenience default for the custom editor */
+      });
     void provisionSfdmu();
     void loadMovements();
   }, [loadMovements, provisionSfdmu]);
@@ -159,6 +171,8 @@ export function CustomSettingsLoadPanel() {
   }, [job?.status, targetOrgId]);
 
   const validate = async () => {
+    if (validating) return;
+    setValidating(true);
     setConfigError(null);
     try {
       const body = mode === 'bundled' ? await api('/data/custom-settings/template') : JSON.parse(customJson);
@@ -172,6 +186,8 @@ export function CustomSettingsLoadPanel() {
       setConfigError(err instanceof SyntaxError
         ? 'Custom export config is not valid JSON.'
         : err instanceof Error ? err.message : 'Validation failed');
+    } finally {
+      setValidating(false);
     }
   };
 
@@ -242,7 +258,13 @@ export function CustomSettingsLoadPanel() {
               ? `@${sfdmuReadiness.requiredVersion}`
               : ''}</code>.
           </p>
-          <Button type="button" size="sm" variant="outline" onClick={() => void provisionSfdmu()}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void provisionSfdmu()}
+            loading={provisioningSfdmu}
+          >
             Retry plugin setup
           </Button>
         </InlineAlert>
@@ -289,7 +311,13 @@ export function CustomSettingsLoadPanel() {
                 onChange={(e) => setCustomJson(e.target.value)}
               />
             )}
-            <Button size="sm" variant="outline" className="mt-3" onClick={() => void validate()}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3"
+              onClick={() => void validate()}
+              loading={validating}
+            >
               Validate
             </Button>
             {validation && (
@@ -341,7 +369,11 @@ export function CustomSettingsLoadPanel() {
           description="Past SFDMU runs and post-load actions."
           className="h-full"
         >
-          <ListRowGroup emptyMessage="No custom settings loads yet." maxHeight="520px">
+          <ListRowGroup
+            loading={loadingMovements}
+            emptyMessage="No custom settings loads yet."
+            maxHeight="520px"
+          >
             {movements.map((m) => (
               <div key={m.id}>
                 <ListRow

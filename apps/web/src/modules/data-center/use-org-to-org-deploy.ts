@@ -74,6 +74,7 @@ export function useOrgToOrgDeploy() {
   const [selectedRecordIds, setSelectedRecordIds] = useState<Map<string, Set<string>>>(new Map());
   const [targetCompare, setTargetCompare] = useState<Map<string, OrgToOrgObjectCompareState>>(new Map());
   const [loadingCompare, setLoadingCompare] = useState(false);
+  const [loadingReview, setLoadingReview] = useState(false);
   const [resetRevision, setResetRevision] = useState(0);
   const [wizardStep, setWizardStep] = useState<OrgToOrgWizardStep>('configure');
   const [loadingObjects, setLoadingObjects] = useState(false);
@@ -241,6 +242,7 @@ export function useOrgToOrgDeploy() {
     setSelectedRecordIds(new Map());
     setTargetCompare(new Map());
     setLoadingCompare(false);
+    setLoadingReview(false);
     setWizardStep('configure');
     setPreflightResult(null);
     setPreflightPayloadKey(null);
@@ -669,27 +671,40 @@ export function useOrgToOrgDeploy() {
   const canDeploy = wizardStep === 'preview' && checkedObjects.size > 0 && !selectedDependencyError;
 
   const goToPreview = useCallback(async () => {
-    if (!canGoNext) return;
+    if (!canGoNext || loadingReview) return;
     setWizardStep('preview');
     setError(null);
-    const compareEntries: Array<{ objectName: string; soql: string; matchField: string }> = [];
-    for (const apiName of checkedObjects) {
-      const config = objectConfigs.get(apiName);
-      if (!config) continue;
-      const result = await runPreviewForObject(apiName, config);
-      if (result?.soql) {
-        compareEntries.push({
-          objectName: apiName,
-          soql: result.soql,
-          matchField:
-            config.matchField
-            || objectMetaCache.get(apiName)?.matchField
-            || 'Name',
-        });
+    setLoadingReview(true);
+    try {
+      const compareEntries: Array<{ objectName: string; soql: string; matchField: string }> = [];
+      for (const apiName of checkedObjects) {
+        const config = objectConfigs.get(apiName);
+        if (!config) continue;
+        const result = await runPreviewForObject(apiName, config);
+        if (result?.soql) {
+          compareEntries.push({
+            objectName: apiName,
+            soql: result.soql,
+            matchField:
+              config.matchField
+              || objectMetaCache.get(apiName)?.matchField
+              || 'Name',
+          });
+        }
       }
+      void runTargetCompare(compareEntries);
+    } finally {
+      setLoadingReview(false);
     }
-    void runTargetCompare(compareEntries);
-  }, [canGoNext, checkedObjects, objectConfigs, objectMetaCache, runPreviewForObject, runTargetCompare]);
+  }, [
+    canGoNext,
+    checkedObjects,
+    loadingReview,
+    objectConfigs,
+    objectMetaCache,
+    runPreviewForObject,
+    runTargetCompare,
+  ]);
 
   const buildDeployPayload = useCallback((dryRun: boolean) => {
     const configured = objectOrder.map((objectName, order) => {
@@ -877,6 +892,7 @@ export function useOrgToOrgDeploy() {
     loadingObjects,
     loadingMeta,
     loadingPreview,
+    loadingReview,
     loadingDeploy,
     error,
     setError,

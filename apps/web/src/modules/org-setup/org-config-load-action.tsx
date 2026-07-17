@@ -110,7 +110,8 @@ export function OrgConfigLoadAction({
 
       <Button
         onClick={run}
-        disabled={phase === 'loading' || !orgId.trim()}
+        loading={phase === 'loading'}
+        disabled={!orgId.trim()}
         variant={phase === 'completed' ? 'outline' : 'default'}
       >
         {phase === 'loading'

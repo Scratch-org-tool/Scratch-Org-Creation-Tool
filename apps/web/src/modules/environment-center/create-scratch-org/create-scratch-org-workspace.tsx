@@ -59,6 +59,16 @@ function ConfigCard({
   onRequestCancelConflict: (runId: string) => void;
 }) {
   const pipelineSummary = w.desktopStep === 2 && !!w.automationRunId;
+  const [resettingForm, setResettingForm] = useState(false);
+
+  const resetForm = async () => {
+    setResettingForm(true);
+    try {
+      await w.loadDefaults();
+    } finally {
+      setResettingForm(false);
+    }
+  };
 
   return (
     <GlassCard
@@ -76,10 +86,11 @@ function ConfigCard({
           variant="outline"
           size="sm"
           className="gap-1.5 shrink-0"
-          onClick={() => void w.loadDefaults()}
+          onClick={() => void resetForm()}
+          loading={resettingForm}
           disabled={!!w.isRunning}
         >
-          <RotateCcw className="w-3.5 h-3.5" />
+          {!resettingForm && <RotateCcw className="w-3.5 h-3.5" />}
           Reset Form
         </Button>
       }

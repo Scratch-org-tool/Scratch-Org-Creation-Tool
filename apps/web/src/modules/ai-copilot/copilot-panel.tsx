@@ -366,12 +366,13 @@ export function CopilotPanel() {
               />
               <Button
                 onClick={() => void send()}
-                disabled={!isOpen || isBusy || !input.trim()}
+                loading={isBusy}
+                disabled={!isOpen || !input.trim()}
                 size="sm"
                 className="self-end shrink-0"
                 aria-label="Send message"
               >
-                <Send className="w-4 h-4" />
+                {!isBusy && <Send className="w-4 h-4" />}
               </Button>
             </div>
           </div>

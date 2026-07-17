@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { describeSchedule, type DeploymentSchedule } from '@sfcc/shared';
 import {
+  ConfirmDialog,
   GlassCard,
   InlineAlert,
   PageHeader,
@@ -51,6 +52,8 @@ function PlanCard({ plan, orgAlias, onExecute, onRemove, onUpdateSchedule, listR
   const [schedule, setSchedule] = useState<DeploymentSchedule>(plan.schedule ?? DEFAULT_SCHEDULE);
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [showRuns, setShowRuns] = useState(false);
@@ -89,11 +92,26 @@ function PlanCard({ plan, orgAlias, onExecute, onRemove, onUpdateSchedule, listR
       setRunsLoading(true);
       try {
         setRuns(await listRuns(plan.id));
-      } catch {
+      } catch (err) {
         setRuns([]);
+        setError(err instanceof Error ? err.message : 'Failed to load run history');
       } finally {
         setRunsLoading(false);
       }
+    }
+  };
+
+  const removePlan = async () => {
+    setRemoving(true);
+    setError(null);
+    try {
+      await onRemove(plan.id);
+      setConfirmingDelete(false);
+    } catch (err) {
+      setConfirmingDelete(false);
+      setError(err instanceof Error ? err.message : 'Failed to delete plan');
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -183,11 +201,22 @@ function PlanCard({ plan, orgAlias, onExecute, onRemove, onUpdateSchedule, listR
           size="icon"
           className="ml-auto text-muted-foreground hover:text-red-400"
           aria-label={`Delete ${plan.name}`}
-          onClick={() => void onRemove(plan.id)}
+          loading={removing}
+          onClick={() => setConfirmingDelete(true)}
         >
           <Trash2 className="size-4" />
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title="Delete deployment plan?"
+        message={`"${plan.name}" and its schedule will be permanently removed. Past runs stay in the deployment history.`}
+        confirmLabel="Delete plan"
+        loading={removing}
+        onOpenChange={setConfirmingDelete}
+        onConfirm={() => void removePlan()}
+      />
 
       {showRuns && (
         <div className="mt-3 border-t border-border/50 pt-3">

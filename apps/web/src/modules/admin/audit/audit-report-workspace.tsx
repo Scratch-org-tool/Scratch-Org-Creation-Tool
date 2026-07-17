@@ -119,8 +119,8 @@ export function AuditReportWorkspace() {
         showBreadcrumbs={false}
         actions={(
           <>
-            <Button variant="outline" size="sm" onClick={() => void load(0)} disabled={loading}>
-              <RefreshCw className={loading ? 'animate-spin' : ''} aria-hidden />
+            <Button variant="outline" size="sm" onClick={() => void load(0)} loading={loading}>
+              {!loading && <RefreshCw aria-hidden />}
               Refresh
             </Button>
             <Button size="sm" onClick={() => void exportCsv()} loading={exporting}>

@@ -78,12 +78,16 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ref,
   ) => {
     const Comp = asChild ? Slot : 'button';
+    // Icon-size buttons have no room for spinner + icon, so the spinner
+    // replaces the content entirely while loading.
+    const hideChildrenWhileLoading = loading && size === 'icon';
     return (
       <Comp
         type={asChild ? undefined : type}
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         disabled={disabled || loading}
+        aria-busy={loading || undefined}
         onClick={asChild ? onClick : (event) => handleButtonClick(onClick, event)}
         {...props}
       >
@@ -91,8 +95,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           children
         ) : (
           <>
-            {loading ? <Spinner size="sm" className="mr-2" /> : null}
-            {children}
+            {loading ? <Spinner size="sm" /> : null}
+            {hideChildrenWhileLoading ? null : children}
           </>
         )}
       </Comp>

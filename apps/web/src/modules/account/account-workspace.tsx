@@ -42,6 +42,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { InlineAlert } from '@/components/studio/inline-alert';
 import { useAuth } from '@/contexts/auth-context';
@@ -162,6 +163,8 @@ interface NotificationPreferences {
 
 function EmailAlertsSection() {
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -172,14 +175,45 @@ function EmailAlertsSection() {
         if (!cancelled) setPrefs(data);
       })
       .catch(() => {
-        if (!cancelled) setPrefs(null);
+        if (!cancelled) {
+          setPrefs(null);
+          setLoadFailed(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  if (!prefs) return null;
+  if (loading) {
+    return (
+      <div className="border-t border-border pt-5" aria-busy role="status" aria-label="Loading email alert preferences">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="mt-2 h-4 w-72" />
+      </div>
+    );
+  }
+
+  if (!prefs) {
+    return (
+      <div className="border-t border-border pt-5">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <BellRing className="size-4 text-primary" aria-hidden />
+          Email alerts
+        </h3>
+        {loadFailed && (
+          <div className="mt-3">
+            <InlineAlert variant="warning">
+              Could not load your notification preferences. Reload the page to try again.
+            </InlineAlert>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const handleToggle = async (next: boolean) => {
     setError('');

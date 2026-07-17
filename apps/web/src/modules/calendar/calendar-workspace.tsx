@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
-import { GlassCard, InlineAlert, PageHeader, StatusBadge } from '@/components/studio';
+import { ConfirmDialog, GlassCard, InlineAlert, PageHeader, StatusBadge } from '@/components/studio';
 import { useAuth } from '@/contexts/auth-context';
 import { useOrgs } from '@/hooks/use-orgs';
 import { api } from '@/services/api';
@@ -98,7 +98,8 @@ export function CalendarWorkspace() {
   const [showFreezeForm, setShowFreezeForm] = useState(false);
   const [freezeForm, setFreezeForm] = useState<FreezeFormState>(EMPTY_FREEZE);
   const [savingFreeze, setSavingFreeze] = useState(false);
-  const [freezeBusy, setFreezeBusy] = useState<string | null>(null);
+  const [freezeBusy, setFreezeBusy] = useState<{ id: string; action: 'toggle' | 'delete' } | null>(null);
+  const [confirmDeleteFreeze, setConfirmDeleteFreeze] = useState<FreezeWindowRecord | null>(null);
 
   const cells = useMemo(() => buildMonthCells(anchor), [anchor]);
 
@@ -164,7 +165,7 @@ export function CalendarWorkspace() {
   };
 
   const toggleFreeze = async (freeze: FreezeWindowRecord) => {
-    setFreezeBusy(freeze.id);
+    setFreezeBusy({ id: freeze.id, action: 'toggle' });
     try {
       await api(`/calendar/freeze-windows/${freeze.id}`, {
         method: 'PATCH',
@@ -179,11 +180,13 @@ export function CalendarWorkspace() {
   };
 
   const deleteFreeze = async (freeze: FreezeWindowRecord) => {
-    setFreezeBusy(freeze.id);
+    setFreezeBusy({ id: freeze.id, action: 'delete' });
     try {
       await api(`/calendar/freeze-windows/${freeze.id}`, { method: 'DELETE' });
+      setConfirmDeleteFreeze(null);
       await load();
     } catch (err) {
+      setConfirmDeleteFreeze(null);
       setError(err instanceof Error ? err.message : 'Failed to delete freeze window');
     } finally {
       setFreezeBusy(null);
@@ -209,8 +212,8 @@ export function CalendarWorkspace() {
         showBreadcrumbs={false}
         actions={(
           <>
-            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-              <RefreshCw className={loading ? 'animate-spin' : ''} aria-hidden />
+            <Button variant="outline" size="sm" onClick={() => void load()} loading={loading}>
+              {!loading && <RefreshCw aria-hidden />}
               Refresh
             </Button>
             {isAdmin && (
@@ -471,18 +474,21 @@ export function CalendarWorkspace() {
                         <Switch
                           checked={freeze.enabled}
                           onChange={() => void toggleFreeze(freeze)}
-                          disabled={freezeBusy === freeze.id}
+                          disabled={freezeBusy?.id === freeze.id}
                           size="sm"
                           aria-label={`Toggle ${freeze.name}`}
                         />
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => void deleteFreeze(freeze)}
-                          disabled={freezeBusy === freeze.id}
+                          onClick={() => setConfirmDeleteFreeze(freeze)}
+                          loading={freezeBusy?.id === freeze.id && freezeBusy.action === 'delete'}
+                          disabled={freezeBusy?.id === freeze.id}
                           aria-label={`Delete ${freeze.name}`}
                         >
-                          <Trash2 aria-hidden />
+                          {!(freezeBusy?.id === freeze.id && freezeBusy.action === 'delete') && (
+                            <Trash2 aria-hidden />
+                          )}
                         </Button>
                       </div>
                     )}
@@ -493,6 +499,20 @@ export function CalendarWorkspace() {
           </GlassCard>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(confirmDeleteFreeze)}
+        title="Delete freeze window?"
+        message={`"${confirmDeleteFreeze?.name ?? ''}" will no longer block deployments during its window.`}
+        confirmLabel="Delete freeze"
+        loading={freezeBusy?.action === 'delete'}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDeleteFreeze(null);
+        }}
+        onConfirm={() => {
+          if (confirmDeleteFreeze) void deleteFreeze(confirmDeleteFreeze);
+        }}
+      />
     </div>
   );
 }

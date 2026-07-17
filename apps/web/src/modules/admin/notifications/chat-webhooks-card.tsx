@@ -13,8 +13,9 @@ import {
 } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
-import { GlassCard, InlineAlert, StatusBadge } from '@/components/studio';
+import { ConfirmDialog, GlassCard, InlineAlert, StatusBadge } from '@/components/studio';
 import { api } from '@/services/api';
 
 interface FormState {
@@ -26,6 +27,8 @@ interface FormState {
 
 const EMPTY_FORM: FormState = { type: 'slack', name: '', url: '', categories: [] };
 
+type WebhookAction = 'toggle' | 'test' | 'delete';
+
 export function ChatWebhooksCard() {
   const [webhooks, setWebhooks] = useState<NotificationWebhookRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +37,11 @@ export function ChatWebhooksCard() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ id: string; action: WebhookAction } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<NotificationWebhookRecord | null>(null);
+
+  const isBusy = (id: string, action?: WebhookAction) =>
+    busy !== null && busy.id === id && (action === undefined || busy.action === action);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -77,7 +84,7 @@ export function ChatWebhooksCard() {
   };
 
   const toggleEnabled = async (webhook: NotificationWebhookRecord) => {
-    setBusyId(webhook.id);
+    setBusy({ id: webhook.id, action: 'toggle' });
     try {
       const updated = await api<NotificationWebhookRecord>(
         `/notifications/webhooks/${webhook.id}`,
@@ -87,12 +94,12 @@ export function ChatWebhooksCard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update webhook');
     } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   };
 
   const sendTest = async (webhook: NotificationWebhookRecord) => {
-    setBusyId(webhook.id);
+    setBusy({ id: webhook.id, action: 'test' });
     setNotice(null);
     setError(null);
     try {
@@ -109,19 +116,21 @@ export function ChatWebhooksCard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Test failed');
     } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   };
 
   const remove = async (webhook: NotificationWebhookRecord) => {
-    setBusyId(webhook.id);
+    setBusy({ id: webhook.id, action: 'delete' });
     try {
       await api(`/notifications/webhooks/${webhook.id}`, { method: 'DELETE' });
       setWebhooks((current) => current.filter((row) => row.id !== webhook.id));
+      setConfirmDelete(null);
     } catch (err) {
+      setConfirmDelete(null);
       setError(err instanceof Error ? err.message : 'Failed to delete webhook');
     } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   };
 
@@ -244,7 +253,10 @@ export function ChatWebhooksCard() {
       )}
 
       {loading ? (
-        <p className="py-4 text-center text-sm text-muted-foreground">Loading webhooks…</p>
+        <div className="space-y-2" aria-busy role="status" aria-label="Loading webhooks">
+          <Skeleton className="h-16 w-full rounded-lg" />
+          <Skeleton className="h-16 w-full rounded-lg" />
+        </div>
       ) : webhooks.length === 0 ? (
         <p className="py-4 text-center text-sm text-muted-foreground">
           No chat webhooks yet. Add one to post alerts into Slack or Teams.
@@ -281,7 +293,7 @@ export function ChatWebhooksCard() {
                 <Switch
                   checked={webhook.enabled}
                   onChange={() => void toggleEnabled(webhook)}
-                  disabled={busyId === webhook.id}
+                  disabled={isBusy(webhook.id)}
                   aria-label={`Toggle ${webhook.name}`}
                   size="sm"
                 />
@@ -289,25 +301,41 @@ export function ChatWebhooksCard() {
                   size="sm"
                   variant="outline"
                   onClick={() => void sendTest(webhook)}
-                  disabled={busyId === webhook.id}
+                  loading={isBusy(webhook.id, 'test')}
+                  disabled={isBusy(webhook.id)}
                 >
-                  <Send aria-hidden />
+                  {!isBusy(webhook.id, 'test') && <Send aria-hidden />}
                   Test
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => void remove(webhook)}
-                  disabled={busyId === webhook.id}
+                  onClick={() => setConfirmDelete(webhook)}
+                  loading={isBusy(webhook.id, 'delete')}
+                  disabled={isBusy(webhook.id)}
                   aria-label={`Delete ${webhook.name}`}
                 >
-                  <Trash2 aria-hidden />
+                  {!isBusy(webhook.id, 'delete') && <Trash2 aria-hidden />}
                 </Button>
               </div>
             </li>
           ))}
         </ul>
       )}
+
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        title="Delete chat webhook?"
+        message={`"${confirmDelete?.name ?? ''}" will stop receiving notifications. The webhook URL cannot be recovered after deletion.`}
+        confirmLabel="Delete webhook"
+        loading={confirmDelete ? isBusy(confirmDelete.id, 'delete') : false}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+        onConfirm={() => {
+          if (confirmDelete) void remove(confirmDelete);
+        }}
+      />
     </GlassCard>
   );
 }

@@ -64,6 +64,7 @@ export function useOrgSetupWorkspace() {
   const [job, setJob] = useState<JobData | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [runs, setRuns] = useState<OrgSetupRun[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
   const logBottomRef = useRef<HTMLDivElement>(null);
 
   const [csvOrgId, setCsvOrgId] = useState('');
@@ -81,12 +82,18 @@ export function useOrgSetupWorkspace() {
   }, [csv]);
 
   const loadRuns = useCallback(async () => {
-    if (!orgId) return;
+    if (!orgId) {
+      setRuns([]);
+      return;
+    }
+    setRunsLoading(true);
     try {
       const data = await api<OrgSetupRun[]>(`/org-setup/runs?orgId=${orgId}`);
       setRuns(data);
     } catch {
       /* ignore */
+    } finally {
+      setRunsLoading(false);
     }
   }, [orgId]);
 
@@ -295,6 +302,7 @@ export function useOrgSetupWorkspace() {
     logs,
     logBottomRef,
     runs,
+    runsLoading,
     csvOrgId,
     setCsvOrgId,
     csv,
