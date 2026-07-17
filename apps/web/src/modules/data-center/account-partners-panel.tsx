@@ -136,6 +136,7 @@ export function AccountPartnersPanel() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobData | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [jobOutputOpen, setJobOutputOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const logBottomRef = useRef<HTMLDivElement>(null);
   const previewGenerationRef = useRef(0);
@@ -165,6 +166,9 @@ export function AccountPartnersPanel() {
         setError(null);
         setJob(current);
         setLogs(current.logs?.map((entry) => entry.line) ?? []);
+        if (['failed', 'partial', 'cancelled'].includes(current.status)) {
+          setJobOutputOpen(true);
+        }
         if (!TERMINAL_STATUSES.includes(current.status)) {
           timer = setTimeout(poll, 2_000);
         }
@@ -228,6 +232,7 @@ export function AccountPartnersPanel() {
     setJobId(null);
     setJob(null);
     setLogs([]);
+    setJobOutputOpen(false);
     setSubmittedPlan(null);
     try {
       validate();
@@ -652,9 +657,9 @@ export function AccountPartnersPanel() {
             </InlineAlert>
           )}
           <details
-            key={jobFailed ? 'failed-output' : 'job-output'}
             className="rounded-lg border border-border/60 bg-background/50 p-3 text-xs"
-            defaultOpen={jobFailed}
+            open={jobOutputOpen}
+            onToggle={(event) => setJobOutputOpen(event.currentTarget.open)}
           >
             <summary className="cursor-pointer font-medium">Technical job output</summary>
             <div className="studio-console mt-3 h-52 overflow-y-auto rounded-lg p-3 text-xs">
