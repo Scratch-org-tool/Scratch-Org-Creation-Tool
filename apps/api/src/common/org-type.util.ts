@@ -16,6 +16,19 @@ export function resolveOrgTypeFromInstance(
   if (isDevHub) return 'prod';
   if (isLikelyScratchOrg({ instanceUrl })) return 'sandbox';
   const url = instanceUrl?.toLowerCase() ?? '';
-  if (url.includes('test.salesforce.com')) return 'sandbox';
+  let hostname = url;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    // Keep accepting the legacy string values already stored in the database.
+  }
+  if (
+    hostname === 'test.salesforce.com'
+    || hostname.endsWith('.sandbox.my.salesforce.com')
+    || hostname.endsWith('.sandbox.lightning.force.com')
+    || /^cs\d+\./.test(hostname)
+  ) {
+    return 'sandbox';
+  }
   return 'prod';
 }
