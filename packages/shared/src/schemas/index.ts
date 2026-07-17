@@ -365,7 +365,7 @@ export const accountSeedPreviewSchema = z.object({
   })),
 });
 
-export const conaManualAccountQuerySchema = z.object({
+export const conaManualSeedQuerySchema = z.object({
   id: z.string().trim().min(1).max(80).regex(
     /^[A-Za-z0-9_-]+$/,
     'Query id may contain only letters, numbers, underscores, and hyphens',
@@ -375,6 +375,8 @@ export const conaManualAccountQuerySchema = z.object({
   limit: z.number().int().min(1).max(100_000).default(500),
 });
 
+export const conaManualAccountQuerySchema = conaManualSeedQuerySchema;
+
 export const conaSeedRunSchema = z.object({
   automationRunId: z.string().uuid().optional(),
   sourceOrgId: z.string().uuid(),
@@ -383,6 +385,8 @@ export const conaSeedRunSchema = z.object({
   accountSeedRows: accountSeedPreviewSchema.shape.rows.optional(),
   accountQueryMode: z.enum(['guided', 'manual']).default('guided'),
   manualAccountQueries: z.array(conaManualAccountQuerySchema).max(20).optional(),
+  onboardingQueryMode: z.enum(['automatic', 'manual']).default('automatic'),
+  manualOnboardingQueries: z.array(conaManualSeedQuerySchema).max(20).optional(),
 }).refine((data) => data.sourceOrgId !== data.targetOrgId, {
   message: 'Source and target org must differ',
   path: ['targetOrgId'],
@@ -396,6 +400,17 @@ export const conaSeedRunSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['manualAccountQueries'],
       message: 'Add at least one manual Account query',
+    });
+  }
+  if (
+    data.datasets.includes('OnboardingConfig')
+    && data.onboardingQueryMode === 'manual'
+    && !data.manualOnboardingQueries?.length
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['manualOnboardingQueries'],
+      message: 'Add at least one manual OnboardingConfig query',
     });
   }
 });
@@ -591,6 +606,7 @@ export type OrgSetupAssignScope = z.infer<typeof orgSetupAssignScopeSchema>;
 export type OrgSetupInput = z.infer<typeof orgSetupSchema>;
 export type UserProvisionInput = z.infer<typeof userProvisionSchema>;
 export type ConaUserProvisionInput = z.infer<typeof conaUserProvisionSchema>;
+export type ConaManualSeedQuery = z.infer<typeof conaManualSeedQuerySchema>;
 export type ConaManualAccountQuery = z.infer<typeof conaManualAccountQuerySchema>;
 export type ConaSeedRunInput = z.infer<typeof conaSeedRunSchema>;
 export type PartnerImportProcessInput = z.infer<typeof partnerImportProcessSchema>;

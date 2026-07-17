@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ONBOARDING_OBJECT } from '@sfcc/shared';
 import { ACCOUNT_SEED_EXTERNAL_ID } from './account-seed-query.builder';
 
 const mocks = vi.hoisted(() => ({
@@ -32,6 +33,14 @@ const manualQuery = {
   limit: 25,
 };
 
+const manualOnboardingQuery = {
+  id: 'primary-groups',
+  label: 'Primary groups',
+  soql: `SELECT Id, RecordTypeId, cfs_ob__Bottler__c FROM ${ONBOARDING_OBJECT} `
+    + "WHERE cfs_ob__Record_Category__c = 'Primary Group'",
+  limit: 50,
+};
+
 describe('ConaSeedService manual Account queries', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -47,6 +56,7 @@ describe('ConaSeedService manual Account queries', () => {
       data: { result: { totalSize: 12 } },
     });
     mocks.sfCli.exportBulk.mockResolvedValue({ success: true });
+    mocks.sfCli.importBulk.mockResolvedValue({ success: true });
     mocks.sfCli.upsertBulk.mockResolvedValue({ success: true });
   });
 
@@ -107,5 +117,63 @@ describe('ConaSeedService manual Account queries', () => {
       expect.any(Object),
     );
     expect(logs).toContain('Seed complete');
+  });
+
+  it('previews and imports a manual OnboardingConfig query with record type mapping', async () => {
+    const recordTypeMapper = {
+      buildMappings: vi.fn().mockResolvedValue({ sourceRt: 'targetRt' }),
+    };
+    const service = new ConaSeedService(recordTypeMapper as never);
+    const applyMappings = vi.spyOn(
+      service as unknown as { applyRecordTypeMappings: () => Promise<void> },
+      'applyRecordTypeMappings',
+    ).mockResolvedValue();
+
+    const preview = await service.validate(
+      'source-id',
+      ['OnboardingConfig'],
+      undefined,
+      'guided',
+      undefined,
+      'manual',
+      [manualOnboardingQuery],
+    );
+    expect(preview.manualOnboardingQueries).toEqual([
+      expect.objectContaining({
+        id: 'primary-groups',
+        availableCount: 12,
+        selectedCount: 12,
+        soql: expect.stringMatching(/LIMIT 50$/),
+      }),
+    ]);
+
+    await service.runSeed({
+      sourceOrgId: 'source-id',
+      targetOrgId: 'target-id',
+      datasets: ['OnboardingConfig'],
+      onboardingQueryMode: 'manual',
+      manualOnboardingQueries: [manualOnboardingQuery],
+    });
+
+    expect(recordTypeMapper.buildMappings).toHaveBeenCalledWith(
+      'source-id',
+      'target-id',
+      ONBOARDING_OBJECT,
+    );
+    expect(applyMappings).toHaveBeenCalledOnce();
+    expect(mocks.sfCli.exportBulk).toHaveBeenCalledWith(
+      expect.stringMatching(/LIMIT 50$/),
+      'source',
+      expect.stringContaining('manual-onboarding-0.csv'),
+      10,
+      expect.any(Object),
+    );
+    expect(mocks.sfCli.importBulk).toHaveBeenCalledWith(
+      ONBOARDING_OBJECT,
+      expect.stringContaining('manual-onboarding-0.csv'),
+      'target',
+      10,
+      expect.any(Object),
+    );
   });
 });

@@ -69,4 +69,23 @@ describe('manual CONA Account seed queries', () => {
       }],
     }).manualAccountQueries).toHaveLength(1);
   });
+
+  it('requires an OnboardingConfig query when its manual mode is selected', () => {
+    const base = {
+      sourceOrgId: SOURCE,
+      targetOrgId: TARGET,
+      datasets: ['OnboardingConfig'],
+      onboardingQueryMode: 'manual',
+    };
+    expect(conaSeedRunSchema.safeParse(base).success).toBe(false);
+    expect(conaSeedRunSchema.parse({
+      ...base,
+      manualOnboardingQueries: [{
+        id: 'onboarding-1',
+        label: 'Onboarding 1',
+        soql: 'SELECT RecordTypeId, cfs_ob__Bottler__c FROM cfs_ob__Onboarding_Config__c',
+        limit: 500,
+      }],
+    }).manualOnboardingQueries).toHaveLength(1);
+  });
 });

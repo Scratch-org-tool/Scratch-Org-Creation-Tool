@@ -965,6 +965,8 @@ export class DataService {
         accountSeedRows: input.accountSeedRows,
         accountQueryMode: input.accountQueryMode,
         manualAccountQueries: input.manualAccountQueries,
+        onboardingQueryMode: input.onboardingQueryMode,
+        manualOnboardingQueries: input.manualOnboardingQueries,
         automationRunId: input.automationRunId,
       },
       { parentRunId: input.automationRunId, createdBy: userId },
