@@ -96,6 +96,24 @@ export function prepareManualOnboardingQueryForBulk(
   const excludedFields: PreparedManualOnboardingQuery['excludedFields'] = [];
   const expandedCompoundFields:
     PreparedManualOnboardingQuery['expandedCompoundFields'] = [];
+  const fromIndex = findTopLevelKeyword(query.soql, 'FROM');
+  if (fromIndex === -1) {
+    throw new Error(`Manual query "${query.label}" has no FROM clause`);
+  }
+  const clauses = query.soql.slice(fromIndex);
+  const unsupportedClauseField = sourceFields.find((field) => {
+    const type = field.type?.toLowerCase();
+    return (
+      (type === 'address' || type === 'location')
+      && containsSoqlIdentifierOutsideStrings(clauses, field.name)
+    );
+  });
+  if (unsupportedClauseField) {
+    throw new Error(
+      `Manual query "${query.label}" uses compound field ${unsupportedClauseField.name} `
+      + 'outside the SELECT list. Bulk Query filters and ordering must use its component fields.',
+    );
+  }
 
   const includeTargetWritableField = (fieldName: string, selectedFrom: string) => {
     const target = targetByName.get(fieldName.toLowerCase());
@@ -130,6 +148,16 @@ export function prepareManualOnboardingQueryForBulk(
       );
     }
     const sourceType = source.type?.toLowerCase();
+    if (
+      sourceType === 'reference'
+      && source.name.toLowerCase() !== 'recordtypeid'
+    ) {
+      excludedFields.push({
+        field: source.name,
+        reason: 'source relationship IDs are not portable between orgs',
+      });
+      continue;
+    }
     if (sourceType === 'address' || sourceType === 'location') {
       const components = sourceFields.filter(
         (field) =>
@@ -168,14 +196,45 @@ export function prepareManualOnboardingQueryForBulk(
     );
   }
 
-  const fromIndex = findTopLevelKeyword(query.soql, 'FROM');
-  if (fromIndex === -1) {
-    throw new Error(`Manual query "${query.label}" has no FROM clause`);
-  }
   return {
     ...query,
     soql: `SELECT ${selectedFields.join(', ')} ${query.soql.slice(fromIndex)}`,
     excludedFields,
     expandedCompoundFields,
   };
+}
+
+export function buildManualOnboardingRecordTypeSoql(
+  query: PreparedManualOnboardingQuery,
+): string {
+  const parsed = parseOrgToOrgSoql(query.soql);
+  const where = parsed.whereClause ? ` WHERE ${parsed.whereClause}` : '';
+  return `SELECT RecordTypeId FROM ${ONBOARDING_OBJECT}${where} `
+    + 'GROUP BY RecordTypeId LIMIT 200';
+}
+
+function containsSoqlIdentifierOutsideStrings(text: string, identifier: string): boolean {
+  const expected = identifier.toLowerCase();
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index <= text.length - identifier.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === "'") quoted = false;
+      continue;
+    }
+    if (char === "'") {
+      quoted = true;
+      continue;
+    }
+    if (text.slice(index, index + identifier.length).toLowerCase() !== expected) {
+      continue;
+    }
+    const before = text[index - 1] ?? '';
+    const after = text[index + identifier.length] ?? '';
+    if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) return true;
+  }
+  return false;
 }

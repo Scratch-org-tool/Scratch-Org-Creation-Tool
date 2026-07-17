@@ -27,6 +27,7 @@ import type {
   ResolvedManualOnboardingQuery,
 } from './onboarding-seed-query.builder';
 import {
+  buildManualOnboardingRecordTypeSoql,
   prepareManualOnboardingQueryForBulk,
   resolveManualOnboardingSeedQuery,
 } from './onboarding-seed-query.builder';
@@ -123,6 +124,7 @@ export class ConaSeedService {
     const manualOnboardingPreviews: Array<PreparedManualOnboardingQuery & {
       availableCount: number;
       selectedCount: number;
+      recordTypeMappings: Record<string, string>;
     }> = [];
     if (datasets.includes('OnboardingConfig') && onboardingQueryMode === 'automatic') {
       const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM ${ONBOARDING_OBJECT} WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
@@ -145,12 +147,42 @@ export class ConaSeedService {
           org.alias,
           target.alias,
         );
-        const result = await this.sfCli.query(org.alias, buildCountSoql(prepared.soql));
+        const [result, recordTypesResult] = await Promise.all([
+          this.sfCli.query(org.alias, buildCountSoql(prepared.soql)),
+          this.sfCli.query(
+            org.alias,
+            buildManualOnboardingRecordTypeSoql(prepared),
+          ),
+        ]);
         if (!result.success) {
           throw new Error(
             `Manual query "${prepared.label}" preview failed: ${result.error ?? 'unknown Salesforce query error'}`,
           );
         }
+        if (!recordTypesResult.success) {
+          throw new Error(
+            `Manual query "${prepared.label}" RecordType preview failed: `
+            + (recordTypesResult.error ?? 'unknown Salesforce query error'),
+          );
+        }
+        const requiredRecordTypeIds = [
+          ...new Set(
+            (
+              (recordTypesResult.data?.result as {
+                records?: Array<{ RecordTypeId?: string }>;
+              })?.records ?? []
+            )
+              .map((record) => record.RecordTypeId)
+              .filter((id): id is string => Boolean(id)),
+          ),
+        ];
+        const recordTypeMappings = await this.recordTypeMapper.buildMappings(
+          sourceOrgId,
+          targetOrgId,
+          ONBOARDING_OBJECT,
+          undefined,
+          requiredRecordTypeIds,
+        );
         const availableCount = (result.data?.result as { totalSize?: number })?.totalSize ?? 0;
         const selectedCount = Math.min(availableCount, prepared.limit);
         checks.push({
@@ -160,7 +192,12 @@ export class ConaSeedService {
           availableCount,
           requestedMaximum: prepared.limit,
         });
-        manualOnboardingPreviews.push({ ...prepared, availableCount, selectedCount });
+        manualOnboardingPreviews.push({
+          ...prepared,
+          availableCount,
+          selectedCount,
+          recordTypeMappings,
+        });
       }
     }
     if (datasets.includes('Products')) {
@@ -288,19 +325,12 @@ export class ConaSeedService {
       && onboardingQueryMode === 'manual'
       && options.manualOnboardingQueries?.length
     ) {
-      const mappings = await this.recordTypeMapper.buildMappings(
-        options.sourceOrgId,
-        options.targetOrgId,
-        ONBOARDING_OBJECT,
-      );
-      for (const [i, query] of options.manualOnboardingQueries.entries()) {
-        const resolved =
-          validation.manualOnboardingQueries.find((candidate) => candidate.id === query.id)
-          ?? await this.prepareManualOnboardingBulkQuery(
-            resolveManualOnboardingSeedQuery(query),
-            source.alias,
-            target.alias,
-          );
+      for (const [i] of options.manualOnboardingQueries.entries()) {
+        const resolved = validation.manualOnboardingQueries[i];
+        if (!resolved) {
+          throw new Error(`Validated OnboardingConfig query is missing at index ${i}`);
+        }
+        const mappings = resolved.recordTypeMappings;
         const csv = join(workDir, `manual-onboarding-${i}.csv`);
         for (const compound of resolved.expandedCompoundFields) {
           await log(

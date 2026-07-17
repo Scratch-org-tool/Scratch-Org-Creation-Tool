@@ -55,10 +55,16 @@ describe('ConaSeedService manual Account queries', () => {
         username: null,
       }),
     );
-    mocks.sfCli.query.mockResolvedValue({
-      success: true,
-      data: { result: { totalSize: 12 } },
-    });
+    mocks.sfCli.query.mockImplementation(async (_alias: string, soql: string) =>
+      soql.includes('GROUP BY RecordTypeId')
+        ? {
+            success: true,
+            data: { result: { records: [{ RecordTypeId: 'sourceRt' }] } },
+          }
+        : {
+            success: true,
+            data: { result: { totalSize: 12 } },
+          });
     mocks.sfCli.describeSObject.mockResolvedValue({
       success: true,
       data: {
@@ -175,6 +181,8 @@ describe('ConaSeedService manual Account queries', () => {
       'source-id',
       'target-id',
       ONBOARDING_OBJECT,
+      undefined,
+      ['sourceRt'],
     );
     expect(applyMappings).toHaveBeenCalledOnce();
     expect(mocks.sfCli.exportBulk).toHaveBeenCalledWith(
