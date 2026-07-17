@@ -45,11 +45,19 @@ const DEFAULT_SF_FORM: SalesforceConnectForm = {
 };
 
 const INTEGRATIONS_CACHE_KEY = 'integrations:workspace:v2';
+const AUTHORIZATION_POLL_INTERVAL_MS = 1500;
+const AUTHORIZATION_TIMEOUT_MS = 5.5 * 60 * 1000;
 
 type IntegrationsCache = {
   orgs: ConnectedOrg[];
   scratchOrgs: ScratchOrg[];
   azureStatus: AzureStatus | null;
+};
+
+type AuthorizationStatus = {
+  alias: string;
+  status: 'authorizing' | 'authorized' | 'failed' | 'cancelled';
+  error?: string;
 };
 
 export function useIntegrationsWorkspace() {
@@ -90,6 +98,7 @@ export function useIntegrationsWorkspace() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authVariant, setAuthVariant] = useState<'info' | 'success' | 'error'>('info');
   const abortRef = useRef<AbortController | null>(null);
+  const activeAuthorizationAliasRef = useRef<string | null>(null);
   const defaultDevHubBusyRef = useRef(new Set<string>());
   const defaultDevHubSequenceRef = useRef(0);
   const orgsRequestRef = useRef(0);
@@ -148,6 +157,39 @@ export function useIntegrationsWorkspace() {
       orgConnectionId: connectionIds.get(org.alias),
     })));
   }, []);
+
+  const applyAuthorizationStatus = useCallback((result: AuthorizationStatus): boolean => {
+    if (
+      !activeAuthorizationAliasRef.current
+      || result.alias !== activeAuthorizationAliasRef.current
+      || result.status === 'authorizing'
+    ) {
+      return false;
+    }
+
+    activeAuthorizationAliasRef.current = null;
+    setAuthorizing(false);
+    setAuthorizingAlias(null);
+
+    if (result.status === 'authorized') {
+      setAuthMessage(`Authorized: ${result.alias}`);
+      setAuthVariant('success');
+      setSfForm({ ...DEFAULT_SF_FORM });
+      invalidateOrgsCache();
+      void refreshOrgs();
+      void refreshScratchOrgs().catch(() => undefined);
+      return true;
+    }
+
+    setAuthMessage(
+      result.error
+      ?? (result.status === 'cancelled'
+        ? 'Authorization cancelled.'
+        : 'Authorization failed. Check the Salesforce login and try again.'),
+    );
+    setAuthVariant(result.status === 'cancelled' ? 'info' : 'error');
+    return true;
+  }, [refreshOrgs, refreshScratchOrgs]);
 
   const loadAzureStatus = useCallback(async () => {
     try {
@@ -216,31 +258,73 @@ export function useIntegrationsWorkspace() {
           };
           if (data.type !== 'auth_status') return;
           const { alias, status, error: authErr } = data.payload;
-          if (status === 'cancelled' || status === 'failed') {
-            setAuthorizing(false);
-            setAuthorizingAlias(null);
-            setAuthMessage(authErr ?? `Authorization ${status}`);
-            setAuthVariant('error');
-          }
-          if (status === 'authorized') {
-            setAuthorizing(false);
-            setAuthorizingAlias(null);
-            setAuthMessage(`Authorized: ${alias}`);
-            setAuthVariant('success');
-            void refreshOrgs();
-            void refreshScratchOrgs();
+          if (
+            alias
+            && (
+              status === 'authorizing'
+              || status === 'authorized'
+              || status === 'failed'
+              || status === 'cancelled'
+            )
+          ) {
+            const handled = applyAuthorizationStatus({ alias, status, error: authErr });
+            if (!handled && status === 'authorized') {
+              invalidateOrgsCache();
+              void refreshOrgs();
+              void refreshScratchOrgs().catch(() => undefined);
+            }
           }
         } catch {
           /* ignore */
         }
       };
-    })();
+    })().catch(() => {
+      // Polling below is the fallback when the event stream is unavailable.
+    });
 
     return () => {
       cancelled = true;
       es?.close();
     };
-  }, [refreshOrgs, refreshScratchOrgs]);
+  }, [applyAuthorizationStatus, refreshOrgs, refreshScratchOrgs]);
+
+  useEffect(() => {
+    if (!authorizing || !authorizingAlias) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const startedAt = Date.now();
+
+    const poll = async () => {
+      try {
+        const result = await api<AuthorizationStatus>(
+          `/orgs/authorize/${encodeURIComponent(authorizingAlias)}/status`,
+        );
+        if (cancelled || applyAuthorizationStatus(result)) return;
+      } catch {
+        // A transient polling failure should not override a successful browser
+        // login; the event stream or a later poll can still complete the flow.
+      }
+
+      if (cancelled) return;
+      if (Date.now() - startedAt >= AUTHORIZATION_TIMEOUT_MS) {
+        if (activeAuthorizationAliasRef.current === authorizingAlias) {
+          activeAuthorizationAliasRef.current = null;
+          setAuthorizing(false);
+          setAuthorizingAlias(null);
+          setAuthMessage('Authorization timed out. Finish or restart the Salesforce login.');
+          setAuthVariant('error');
+        }
+        return;
+      }
+      timer = setTimeout(() => void poll(), AUTHORIZATION_POLL_INTERVAL_MS);
+    };
+
+    timer = setTimeout(() => void poll(), AUTHORIZATION_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [applyAuthorizationStatus, authorizing, authorizingAlias]);
 
   const setOrgType = (orgType: OrgConnectType) => {
     const isDevHub = orgType === 'devhub';
@@ -250,38 +334,42 @@ export function useIntegrationsWorkspace() {
 
   const authorize = async () => {
     if (!sfForm.alias.trim()) return;
+    const alias = sfForm.alias.trim();
     const payload = {
-      alias: sfForm.alias,
+      alias,
       instanceUrl: sfForm.instanceUrl,
       isDevHub: sfForm.isDevHub,
     };
+    activeAuthorizationAliasRef.current = alias;
     setAuthorizing(true);
-    setAuthorizingAlias(sfForm.alias);
+    setAuthorizingAlias(alias);
     setAuthMessage('Opening browser for Salesforce login…');
     setAuthVariant('info');
-    abortRef.current = new AbortController();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       await api('/orgs/authorize', {
         method: 'POST',
         body: JSON.stringify(payload),
-        signal: abortRef.current.signal,
+        signal: controller.signal,
       });
-      setAuthMessage(`Authorized: ${sfForm.alias}`);
-      setAuthVariant('success');
-      setSfForm({ ...DEFAULT_SF_FORM });
-      await refreshOrgs();
-      await refreshScratchOrgs();
+      if (activeAuthorizationAliasRef.current === alias) {
+        setAuthMessage('Browser login opened. Finish signing in; this page will update automatically.');
+        setAuthVariant('info');
+      }
     } catch (err) {
+      if (activeAuthorizationAliasRef.current !== alias) return;
+      activeAuthorizationAliasRef.current = null;
+      setAuthorizing(false);
+      setAuthorizingAlias(null);
       if (err instanceof Error && err.name === 'AbortError') {
         setAuthMessage('Authorization stopped.');
       } else {
-        setAuthMessage(err instanceof Error ? err.message : 'Authorization failed');
+        setAuthMessage(parseApiError(err, 'Authorization failed'));
       }
       setAuthVariant('error');
     } finally {
-      setAuthorizing(false);
-      setAuthorizingAlias(null);
-      abortRef.current = null;
+      if (abortRef.current === controller) abortRef.current = null;
     }
   };
 
@@ -294,6 +382,7 @@ export function useIntegrationsWorkspace() {
       /* ignore */
     }
     abortRef.current?.abort();
+    activeAuthorizationAliasRef.current = null;
     setAuthorizing(false);
     setAuthorizingAlias(null);
     setAuthMessage('Authorization cancelled.');

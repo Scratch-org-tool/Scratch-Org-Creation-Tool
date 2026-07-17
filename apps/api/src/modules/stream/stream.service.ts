@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Subject, Observable } from 'rxjs';
 import { filter, map } from 'rxjs/operators';
@@ -12,6 +12,7 @@ const EVENT_DEDUP_MAX = 5000;
 
 @Injectable()
 export class StreamService implements OnModuleInit {
+  private readonly logger = new Logger(StreamService.name);
   private readonly events$ = new Subject<StreamEvent>();
   private subscriber: IORedis | null = null;
   private redisReady = false;
@@ -62,11 +63,28 @@ export class StreamService implements OnModuleInit {
     };
     const redis = this.queueService.getConnection();
     if (redis) {
+      let deliveredLocally = false;
       if (!this.redisReady) {
         this.rememberEvent(event.id!);
         this.events$.next(event);
+        deliveredLocally = true;
       }
-      await redis.publish('sfcc:events', JSON.stringify(event));
+      try {
+        await redis.publish('sfcc:events', JSON.stringify(event));
+      } catch (error) {
+        // Event delivery is best-effort and must never fail the operation that
+        // produced it. Fall back to this process while Redis is unavailable.
+        this.redisReady = false;
+        if (!deliveredLocally) {
+          this.rememberEvent(event.id!);
+          this.events$.next(event);
+        }
+        this.logger.warn(
+          `Redis event publish failed; delivered locally instead: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     } else {
       this.events$.next(event);
     }
