@@ -29,23 +29,22 @@ export const WORKBENCH_STEPS = [
 export const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'cancelled', 'rejected'] as const;
 
 /**
- * Every analyzer the platform knows about. Static analysis is fully automatic:
+ * Every analyzer the platform knows about (from the shared catalog, including
+ * the always-available built-in engine). Static analysis is fully automatic:
  * all engines are requested on every deployment and the server silently skips
  * any analyzer that is not installed on the host.
  */
-export const AUTO_STATIC_ANALYSIS_ENGINES = ['code-analyzer', 'pmd', 'eslint'] as const;
+export const AUTO_STATIC_ANALYSIS_ENGINES: readonly string[] = STATIC_ANALYSIS_ENGINES.map(
+  (engine) => engine.id,
+);
 
-/** Engines to request, preferring what the server reports as installed. */
+/** Engines to request automatically, preferring what the server reports as installed. */
 export function autoStaticAnalysisEngines(capabilities: WorkbenchCapabilities | null): string[] {
-  const known = capabilities?.staticAnalysisEngines?.length
-    ? capabilities.staticAnalysisEngines
-    : [...AUTO_STATIC_ANALYSIS_ENGINES];
-  const availability = capabilities?.staticAnalysisAvailability;
-  if (availability) {
-    const available = known.filter((engine) => availability[engine] !== false);
-    if (available.length > 0) return available;
-  }
-  return [...known];
+  const options = staticAnalysisEngineOptions(capabilities);
+  const available = options.filter((engine) => engine.available).map((engine) => engine.id);
+  if (available.length > 0) return available;
+  // The built-in analyzer runs inside the API process and is always available.
+  return options.length ? options.map((engine) => engine.id) : [...AUTO_STATIC_ANALYSIS_ENGINES];
 }
 
 /**
@@ -122,11 +121,7 @@ export function policyForEnvironment(
       tests: { level: 'RunLocalTests', tests: [], minimumCoverage: 75 },
       staticAnalysis: {
         enabled: true,
-<<<<<<< cursor/workbench-ux-overhaul-cef8
-        engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
-=======
-        engines: defaultStaticAnalysisEngines(capabilities),
->>>>>>> main
+        engines: autoStaticAnalysisEngines(capabilities),
         severityThreshold: 'error',
         maxCounts: { info: null, warning: null, error: 0, critical: 0 },
         blockMode: 'threshold',
@@ -141,7 +136,7 @@ export function policyForEnvironment(
       tests: { level: 'RunLocalTests', tests: [], minimumCoverage: 75 },
       staticAnalysis: {
         enabled: true,
-        engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
+        engines: autoStaticAnalysisEngines(capabilities),
         severityThreshold: 'error',
         maxCounts: { info: null, warning: null, error: 0, critical: 0 },
         // Analysis always runs in the background; outside production it
@@ -157,7 +152,7 @@ export function policyForEnvironment(
     tests: { level: 'NoTestRun', tests: [], minimumCoverage: 0 },
     staticAnalysis: {
       enabled: true,
-      engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
+      engines: autoStaticAnalysisEngines(capabilities),
       severityThreshold: 'error',
       maxCounts: { info: null, warning: null, error: 0, critical: 0 },
       blockMode: 'never',
