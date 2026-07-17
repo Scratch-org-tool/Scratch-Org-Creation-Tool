@@ -11,6 +11,7 @@ export const NOTIFICATION_CATEGORIES = [
   'data',
   'environment',
   'provisioning',
+  'defects',
   'system',
 ] as const;
 
@@ -21,6 +22,7 @@ export const NOTIFICATION_CATEGORY_LABELS: Record<NotificationCategory, string> 
   data: 'Data movements',
   environment: 'Environments & scratch orgs',
   provisioning: 'User provisioning',
+  defects: 'Developer Board work items',
   system: 'System & account',
 };
 
@@ -29,6 +31,7 @@ export const NOTIFICATION_CATEGORY_DESCRIPTIONS: Record<NotificationCategory, st
   data: 'Org-to-org data loads, SFDMU runs, and seed jobs.',
   environment: 'Scratch org creation and org setup / configuration jobs.',
   provisioning: 'Bulk user provisioning batch outcomes.',
+  defects: 'Updates to assigned work items on the Developer Board (webhook driven).',
   system: 'General account, security, and administrative messages.',
 };
 
@@ -76,6 +79,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     data: true,
     environment: true,
     provisioning: true,
+    defects: true,
     system: true,
   },
 };
@@ -235,6 +239,7 @@ const notificationCategoryTogglesSchema = z
     data: z.boolean().optional(),
     environment: z.boolean().optional(),
     provisioning: z.boolean().optional(),
+    defects: z.boolean().optional(),
     system: z.boolean().optional(),
   })
   .strict();
@@ -263,3 +268,22 @@ export const notificationListQuerySchema = z.object({
 });
 
 export type NotificationListQuery = z.infer<typeof notificationListQuerySchema>;
+
+/** Per-user delivery preferences (self-service, non-privileged). */
+export const notificationPreferencesUpdateSchema = z
+  .object({
+    emailNotifications: z.boolean(),
+  })
+  .strict();
+
+export type NotificationPreferencesUpdateInput = z.infer<
+  typeof notificationPreferencesUpdateSchema
+>;
+
+export interface NotificationPreferences {
+  emailNotifications: boolean;
+  /** Whether the server has a working SMTP transport configured. */
+  emailConfigured: boolean;
+  /** Whether the admin master switch + email channel are both on. */
+  globalEmailEnabled: boolean;
+}

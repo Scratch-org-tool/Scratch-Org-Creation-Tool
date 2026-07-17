@@ -706,6 +706,10 @@ model AppUser {
   grantedModules String[]    @default([])
   status         String      @default("active")
   lastActiveAt   DateTime?
+  /// Personal opt-in for outbound email alerts (work-item updates, job
+  /// notifications). Off by default — the user must explicitly enable it and
+  /// the admin email channel must also be on before anything is sent.
+  emailNotifications Boolean @default(false)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -923,6 +927,24 @@ model WorkItemSnapshot {
   @@unique([workItemConnectionId, externalProjectId, externalItemId])
   @@index([state])
   @@index([providerUpdatedAt])
+}
+
+/// Tracks the last notified change per external work item so webhook-driven
+/// Developer Board alerts never notify the same revision twice and email
+/// bursts are rate limited per item.
+model WorkItemChangeNotification {
+  id                String    @id @default(uuid())
+  provider          String    @default("azure_boards")
+  externalProjectId String
+  externalItemId    String
+  lastRevision      Int?
+  lastChangedDate   DateTime?
+  lastNotifiedAt    DateTime  @default(now())
+  lastEmailAt       DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([provider, externalProjectId, externalItemId])
+  @@index([lastNotifiedAt])
 }
 
 /// The unique idempotencyKey makes webhook receipt safe to retry.

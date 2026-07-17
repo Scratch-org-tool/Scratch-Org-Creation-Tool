@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import {
   notificationListQuerySchema,
+  notificationPreferencesUpdateSchema,
   notificationSettingsUpdateSchema,
 } from '@sfcc/shared';
 import { AuthGuard } from '../../common/auth.guard';
@@ -43,6 +44,20 @@ export class NotificationsController {
   @Post('read-all')
   markAllRead(@CurrentUser() userId: string) {
     return this.service.markAllRead(userId);
+  }
+
+  @Get('preferences')
+  getPreferences(@CurrentUser() userId: string) {
+    return this.service.getPreferences(userId);
+  }
+
+  @Patch('preferences')
+  updatePreferences(@CurrentUser() userId: string, @Body() body: unknown) {
+    const parsed = notificationPreferencesUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException('Invalid notification preferences');
+    }
+    return this.service.updatePreferences(userId, parsed.data.emailNotifications);
   }
 
   @Get('settings')

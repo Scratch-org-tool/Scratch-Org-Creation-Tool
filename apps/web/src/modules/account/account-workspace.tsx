@@ -8,6 +8,7 @@ import {
   type AppModule,
 } from '@sfcc/shared';
 import {
+  BellRing,
   Eye,
   EyeOff,
   KeyRound,
@@ -41,6 +42,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group';
+import { Switch } from '@/components/ui/switch';
 import { InlineAlert } from '@/components/studio/inline-alert';
 import { useAuth } from '@/contexts/auth-context';
 import { avatarColor, userInitials } from '@/lib/app-nav';
@@ -148,6 +150,91 @@ function ReadOnlyDetail({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-border/70 bg-secondary/25 px-3 py-2.5">
       <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
       <dd className="mt-1 text-sm capitalize text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+interface NotificationPreferences {
+  emailNotifications: boolean;
+  emailConfigured: boolean;
+  globalEmailEnabled: boolean;
+}
+
+function EmailAlertsSection() {
+  const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api<NotificationPreferences>('/notifications/preferences')
+      .then((data) => {
+        if (!cancelled) setPrefs(data);
+      })
+      .catch(() => {
+        if (!cancelled) setPrefs(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!prefs) return null;
+
+  const handleToggle = async (next: boolean) => {
+    setError('');
+    setSaving(true);
+    const previous = prefs;
+    setPrefs({ ...prefs, emailNotifications: next });
+    try {
+      const updated = await api<NotificationPreferences>('/notifications/preferences', {
+        method: 'PATCH',
+        body: JSON.stringify({ emailNotifications: next }),
+      });
+      setPrefs(updated);
+    } catch (err) {
+      setPrefs(previous);
+      setError(err instanceof Error ? err.message : 'Could not save your preference.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deliveryBlocked = !prefs.emailConfigured || !prefs.globalEmailEnabled;
+
+  return (
+    <div className="border-t border-border pt-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold">
+            <BellRing className="size-4 text-primary" aria-hidden />
+            Email alerts
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Receive an email when your assigned work items change or your jobs finish.
+          </p>
+        </div>
+        <Switch
+          checked={prefs.emailNotifications}
+          onChange={(next) => void handleToggle(next)}
+          disabled={saving}
+          aria-label="Toggle email alerts"
+        />
+      </div>
+      {prefs.emailNotifications && deliveryBlocked && (
+        <div className="mt-3">
+          <InlineAlert variant="warning">
+            {!prefs.emailConfigured
+              ? 'The server has no SMTP transport configured, so no email will be sent yet.'
+              : 'An administrator must also enable the email channel under Admin > Notifications.'}
+          </InlineAlert>
+        </div>
+      )}
+      {error && (
+        <div className="mt-3" aria-live="assertive">
+          <InlineAlert variant="error">{error}</InlineAlert>
+        </div>
+      )}
     </div>
   );
 }
@@ -550,6 +637,8 @@ export function AccountWorkspace() {
                   Send reset email
                 </Button>
               </div>
+
+              <EmailAlertsSection />
 
               <div className="border-t border-border pt-5">
                 <h3 className="text-sm font-semibold">Sessions</h3>
