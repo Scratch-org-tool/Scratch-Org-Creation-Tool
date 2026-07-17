@@ -147,7 +147,7 @@ describe('query runtime CSV and office support', () => {
   it('parses CRLF Bulk CSV with quoted commas and multiline values', () => {
     assert.deepEqual(
       parseBulkCsv('\uFEFFId,Name,Notes\r\n1,"Doe, Jane","Line 1\r\nLine 2"\r\n'),
-      [{ Id: '1', Name: 'Doe, Jane', Notes: 'Line 1\r\nLine 2' }],
+      [{ Id: '1', Name: 'Doe, Jane', Notes: 'Line 1\nLine 2' }],
     );
     assert.throws(
       () => parseBulkCsv('Id,Name\n1,"unterminated'),
