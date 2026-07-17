@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { ZodError } from 'zod';
 import {
+  STATIC_ANALYSIS_ENGINES,
   buildDeploymentStagePlan,
   deploymentWorkbenchInputSchema,
   evaluateDeploymentQualityGate,
+  formatZodIssues,
   normalizeLegacyDeploymentPayload,
 } from './deployment-workbench.js';
 
@@ -59,6 +62,28 @@ describe('deployment workbench policy defaults', () => {
         approval: { required: false },
       },
     }), /Production deployments require/);
+  });
+
+  it('formats schema failures as readable path-scoped sentences', () => {
+    let error: unknown;
+    try {
+      deploymentWorkbenchInputSchema.parse({
+        ...input('scratch'),
+        policy: { staticAnalysis: { enabled: true, engines: [] } },
+      });
+    } catch (cause) {
+      error = cause;
+    }
+    assert.ok(error instanceof ZodError);
+    const message = formatZodIssues(error);
+    assert.match(message, /policy\.staticAnalysis\.engines: At least one static analysis engine is required/);
+  });
+
+  it('publishes a static analysis engine catalog led by the built-in engine', () => {
+    assert.equal(STATIC_ANALYSIS_ENGINES[0].id, 'built-in');
+    assert.equal(STATIC_ANALYSIS_ENGINES[0].requires, null);
+    const ids = STATIC_ANALYSIS_ENGINES.map((engine) => engine.id);
+    assert.deepEqual(ids, ['built-in', 'code-analyzer', 'pmd', 'eslint']);
   });
 });
 

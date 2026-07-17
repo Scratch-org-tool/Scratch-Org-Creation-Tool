@@ -9,15 +9,18 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import type { ZodError } from 'zod';
 import { prisma, Prisma } from '@sfcc/db';
 import {
   DEFAULT_METADATA_API_VERSION,
+  STATIC_ANALYSIS_ENGINES,
   buildPackageXml,
   buildDestructiveChangesXml,
   buildDeploymentStagePlan,
   deploymentPolicySchema,
   deploymentWorkbenchCreateSchema,
   deploymentWorkbenchPreviewSchema,
+  formatZodIssues,
   parsePackageXml,
   type DeploymentWorkbenchCapabilities,
   type DeploymentWorkbenchInput,
@@ -94,7 +97,7 @@ export class DeploymentWorkbenchService {
   async capabilities(): Promise<DeploymentWorkbenchCapabilities & {
     staticAnalysisAvailability: Record<string, boolean>;
   }> {
-    const staticAnalysisEngines = ['code-analyzer', 'pmd', 'eslint'];
+    const staticAnalysisEngines = STATIC_ANALYSIS_ENGINES.map((engine) => engine.id);
     const staticAnalysisAvailability = await this.staticAnalysis.detectAvailability(
       staticAnalysisEngines,
     );
@@ -106,6 +109,13 @@ export class DeploymentWorkbenchService {
       testLevels: ['NoTestRun', 'RunSpecifiedTests', 'RunLocalTests', 'RunAllTestsInOrg'],
       staticAnalysisEngines,
       staticAnalysisAvailability,
+      staticAnalysisEngineInfo: STATIC_ANALYSIS_ENGINES.map((engine) => ({
+        id: engine.id,
+        label: engine.label,
+        description: engine.description,
+        available: staticAnalysisAvailability[engine.id] !== false,
+        requires: engine.requires,
+      })),
       limitations: {
         includeOptional: 'Dependency discovery does not classify optional edges, so optional dependencies are not included.',
       },
@@ -122,7 +132,7 @@ export class DeploymentWorkbenchService {
   }
 
   async preview(body: unknown, userId: string) {
-    const input = deploymentWorkbenchPreviewSchema.parse(body);
+    const input = parseWorkbenchInput(deploymentWorkbenchPreviewSchema, body);
     const access = await this.assertInputAccess(input, userId);
     const stages = buildDeploymentStagePlan(input);
     const cacheKey = createHash('sha256')
@@ -148,6 +158,7 @@ export class DeploymentWorkbenchService {
           type: input.source.type,
           ...sourceResolution,
         },
+        destructiveReview: destructiveReviewPreview(input.destructiveSelections, prepared.apiVersion),
         dependencies: {
           nodes: dependency.graph.nodes,
           edges: dependency.graph.edges,
@@ -172,7 +183,7 @@ export class DeploymentWorkbenchService {
   }
 
   async create(body: unknown, userId: string) {
-    const input = deploymentWorkbenchCreateSchema.parse(body);
+    const input = parseWorkbenchInput(deploymentWorkbenchCreateSchema, body);
     const access = await this.assertInputAccess(input, userId);
     const stagePlan = buildDeploymentStagePlan(input);
     const prepared = await this.prepareSource(input, access, `create-${createHash('sha256')
@@ -1433,11 +1444,23 @@ export class DeploymentWorkbenchService {
         ) {
           throw new BadRequestException('Metadata comparison source and target do not match this request');
         }
-        if (!['completed', 'partial'].includes(comparison.status)) {
-          throw new BadRequestException('Metadata comparison is not terminal');
+        if (comparison.status === 'failed') {
+          throw new BadRequestException(
+            'The metadata comparison failed. Rerun the comparison from the Source step, then reselect components.',
+          );
+        }
+        const comparedItems = Array.isArray(comparison.items) ? comparison.items : [];
+        // A comparison keeps the `running` status while it classifies each
+        // component's XML in the background, which can take a long time. The
+        // selected components are already listed and bound below, so only an
+        // empty in-flight comparison blocks planning.
+        if (!['completed', 'partial'].includes(comparison.status) && comparedItems.length === 0) {
+          throw new BadRequestException(
+            'The metadata comparison is still discovering components. Wait for the comparison to list components, then reselect them.',
+          );
         }
         const compared = new Map(
-          (Array.isArray(comparison.items) ? comparison.items : []).map((item) => {
+          comparedItems.map((item) => {
             const value = record(item);
             return [`${String(value.metadataType)}:${String(value.fullName)}`, value] as const;
           }),
@@ -1460,7 +1483,8 @@ export class DeploymentWorkbenchService {
             const item = compared.get(`${selection.metadataType}:${member}`);
             if (member === '*' || !item || item.diffType === 'deleted') {
               throw new BadRequestException(
-                `Selected component ${selection.metadataType}:${member} is not bound to the comparison`,
+                `Selected component ${selection.metadataType}:${member} is not part of this comparison. `
+                + 'Refresh the comparison and reselect the component.',
               );
             }
           }
@@ -1470,7 +1494,8 @@ export class DeploymentWorkbenchService {
             const item = compared.get(`${selection.metadataType}:${member}`);
             if (member === '*' || !item || item.diffType !== 'deleted') {
               throw new BadRequestException(
-                `Destructive component ${selection.metadataType}:${member} is not a target-only comparison item`,
+                `Destructive component ${selection.metadataType}:${member} is not a target-only (deleted) comparison item. `
+                + 'Only components that exist solely in the target org can be removed.',
               );
             }
           }
@@ -1668,6 +1693,49 @@ export class DeploymentWorkbenchService {
       },
     });
   }
+}
+
+function parseWorkbenchInput(
+  schema: typeof deploymentWorkbenchPreviewSchema,
+  body: unknown,
+): DeploymentWorkbenchInput {
+  try {
+    return schema.parse(body);
+  } catch (error) {
+    if (isZodError(error)) {
+      throw new BadRequestException(`Invalid deployment plan: ${formatZodIssues(error)}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Structural detection instead of `instanceof` so validation failures are
+ * recognized even when the shared package resolves its own zod instance.
+ */
+function isZodError(error: unknown): error is ZodError {
+  return error instanceof Error
+    && error.name === 'ZodError'
+    && Array.isArray((error as { issues?: unknown }).issues);
+}
+
+/**
+ * Preview equivalent of the persisted-run destructive review payload so the
+ * Plan Review step can display the exact manifest and hash before the plan is
+ * created. Execution still requires the hash-bound acknowledgement recorded
+ * against the persisted run.
+ */
+function destructiveReviewPreview(selections: MetadataSelection[], apiVersion: string) {
+  const components = selections.reduce((count, item) => count + item.members.length, 0);
+  if (!components) return null;
+  return {
+    requiresReview: true as const,
+    componentCount: components,
+    apiVersion,
+    manifestXml: buildDestructiveChangesXml(selections, apiVersion),
+    digest: destructiveDigest(selections, apiVersion),
+    warning: 'Destructive changes are irreversible and rollback snapshots cannot recreate net-new cleanup targets.',
+  };
 }
 
 function groupComponentIds(items: Array<{ metadataType: string; member: string }>): MetadataSelection[] {

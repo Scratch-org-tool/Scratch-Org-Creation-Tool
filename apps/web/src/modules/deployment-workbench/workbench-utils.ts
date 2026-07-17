@@ -1,8 +1,10 @@
+import { STATIC_ANALYSIS_ENGINES } from '@sfcc/shared';
 import type {
   DeploymentEnvironment,
   DeploymentPolicy,
   DeploymentWorkbenchInput,
   MetadataSelection,
+  StaticAnalysisEngineInfo,
 } from '@sfcc/shared';
 import type {
   CompareItem,
@@ -71,13 +73,60 @@ export function profileForOrgType(type?: string): DeploymentEnvironment {
   return 'scratch';
 }
 
-export function policyForEnvironment(profile: DeploymentEnvironment): DeploymentPolicy {
+/**
+ * Normalized engine catalog for the picker. Prefers the server-provided
+ * catalog (labels, availability, install hints) and falls back to the shared
+ * catalog merged with the availability map for older API responses.
+ */
+export function staticAnalysisEngineOptions(
+  capabilities: WorkbenchCapabilities | null,
+): StaticAnalysisEngineInfo[] {
+  if (capabilities?.staticAnalysisEngineInfo?.length) {
+    return capabilities.staticAnalysisEngineInfo;
+  }
+  const known = new Map(STATIC_ANALYSIS_ENGINES.map((engine) => [engine.id, engine]));
+  const availability = capabilities?.staticAnalysisAvailability ?? {};
+  const ids = capabilities?.staticAnalysisEngines?.length
+    ? capabilities.staticAnalysisEngines
+    : STATIC_ANALYSIS_ENGINES.map((engine) => engine.id);
+  return ids.map((id) => {
+    const catalog = known.get(id as (typeof STATIC_ANALYSIS_ENGINES)[number]['id']);
+    return {
+      id,
+      label: catalog?.label ?? id,
+      description: catalog?.description ?? '',
+      available: availability[id] !== false,
+      requires: catalog?.requires ?? null,
+    };
+  });
+}
+
+/** Default engine selection: the official analyzer when installed, otherwise the built-in engine. */
+export function defaultStaticAnalysisEngines(
+  capabilities: WorkbenchCapabilities | null,
+): string[] {
+  const options = staticAnalysisEngineOptions(capabilities);
+  const available = options.filter((engine) => engine.available);
+  const preferred = available.find((engine) => engine.id === 'code-analyzer')
+    ?? available.find((engine) => engine.id === 'built-in')
+    ?? available[0];
+  return preferred ? [preferred.id] : ['built-in'];
+}
+
+export function policyForEnvironment(
+  profile: DeploymentEnvironment,
+  capabilities: WorkbenchCapabilities | null = null,
+): DeploymentPolicy {
   if (profile === 'production') {
     return {
       tests: { level: 'RunLocalTests', tests: [], minimumCoverage: 75 },
       staticAnalysis: {
         enabled: true,
+<<<<<<< HEAD
         engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
+=======
+        engines: defaultStaticAnalysisEngines(capabilities),
+>>>>>>> origin/main
         severityThreshold: 'error',
         maxCounts: { info: null, warning: null, error: 0, critical: 0 },
         blockMode: 'threshold',
@@ -294,7 +343,12 @@ export function payloadFromForm(
 ): DeploymentWorkbenchInput {
   let chainedData: DeploymentWorkbenchInput['chainedData'];
   if (form.chainedDataEnabled) {
-    const parsed = JSON.parse(form.chainedDataJson) as unknown;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(form.chainedDataJson) as unknown;
+    } catch {
+      throw new Error('Chained data configuration is not valid JSON. Provide a JSON array of object configurations.');
+    }
     if (!Array.isArray(parsed) || parsed.length === 0) {
       throw new Error('Chained data configuration must be a non-empty JSON array.');
     }

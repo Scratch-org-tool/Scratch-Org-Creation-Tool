@@ -5,6 +5,7 @@ import {
   compareTypeSummaries,
   componentCount,
   createInitialForm,
+  defaultStaticAnalysisEngines,
   filterCompareItems,
   groupQualityResults,
   invalidateSourceState,
@@ -17,8 +18,31 @@ import {
   selectionsFromCompareItems,
   splitCompareKey,
   stageRisk,
+  staticAnalysisEngineOptions,
   validateWorkbenchForm,
 } from './workbench-utils';
+import type { WorkbenchCapabilities } from './types';
+
+function capabilitiesWith(overrides: Partial<WorkbenchCapabilities>): WorkbenchCapabilities {
+  return {
+    executionAvailable: true,
+    strategies: ['direct'],
+    sourceTypes: ['org_compare'],
+    environments: ['scratch', 'sandbox', 'production'],
+    testLevels: ['NoTestRun'],
+    staticAnalysisEngines: ['built-in', 'code-analyzer', 'pmd', 'eslint'],
+    supports: {
+      dependencies: true,
+      includeOptional: false,
+      destructiveChanges: true,
+      snapshots: true,
+      rollback: true,
+      approvals: true,
+      chainedData: true,
+    },
+    ...overrides,
+  };
+}
 
 describe('deployment workbench utilities', () => {
   it('maps connected org types to backend environment profiles', () => {
@@ -49,6 +73,54 @@ describe('deployment workbench utilities', () => {
     expect(locked.approval.required).toBe(true);
     expect(locked.tests.level).toBe('RunLocalTests');
     expect(locked.tests.minimumCoverage).toBe(75);
+  });
+
+  it('normalizes engine options from the server catalog with local fallback', () => {
+    const fromServer = staticAnalysisEngineOptions(capabilitiesWith({
+      staticAnalysisEngineInfo: [{
+        id: 'built-in',
+        label: 'Built-in Salesforce rules',
+        description: 'Bundled analyzer',
+        available: true,
+        requires: null,
+      }],
+    }));
+    expect(fromServer).toHaveLength(1);
+    expect(fromServer[0]).toMatchObject({ id: 'built-in', available: true });
+
+    const fallback = staticAnalysisEngineOptions(capabilitiesWith({
+      staticAnalysisAvailability: { 'code-analyzer': false, pmd: false, eslint: true },
+    }));
+    expect(fallback.map((engine) => engine.id)).toEqual([
+      'built-in',
+      'code-analyzer',
+      'pmd',
+      'eslint',
+    ]);
+    expect(fallback.find((engine) => engine.id === 'built-in')).toMatchObject({
+      available: true,
+      label: expect.stringContaining('Built-in'),
+    });
+    expect(fallback.find((engine) => engine.id === 'code-analyzer')).toMatchObject({
+      available: false,
+      requires: expect.stringContaining('Salesforce CLI'),
+    });
+  });
+
+  it('defaults static analysis to an engine that is actually available', () => {
+    expect(defaultStaticAnalysisEngines(capabilitiesWith({
+      staticAnalysisAvailability: { 'code-analyzer': true },
+    }))).toEqual(['code-analyzer']);
+    expect(defaultStaticAnalysisEngines(capabilitiesWith({
+      staticAnalysisAvailability: { 'code-analyzer': false, pmd: false, eslint: false },
+    }))).toEqual(['built-in']);
+    expect(defaultStaticAnalysisEngines(null)).toEqual(['code-analyzer']);
+
+    const production = policyForEnvironment('production', capabilitiesWith({
+      staticAnalysisAvailability: { 'code-analyzer': false, pmd: false, eslint: false },
+    }));
+    expect(production.staticAnalysis.enabled).toBe(true);
+    expect(production.staticAnalysis.engines).toEqual(['built-in']);
   });
 
   it('reports blockers separately from review warnings', () => {
@@ -90,6 +162,8 @@ describe('deployment workbench utilities', () => {
     }]);
     form.chainedDataJson = '{}';
     expect(() => payloadFromForm(form, source)).toThrow(/non-empty JSON array/);
+    form.chainedDataJson = '[{"objectName":';
+    expect(() => payloadFromForm(form, source)).toThrow(/not valid JSON/);
   });
 
   it('invalidates every source-specific selection when mode or org changes', () => {
