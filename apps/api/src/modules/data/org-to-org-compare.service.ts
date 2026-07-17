@@ -41,6 +41,11 @@ export class OrgToOrgCompareService {
 
     const paginatedSoql = applySoqlPagination(resolvedSoql, input.page, input.pageSize);
     const sourcePageResult = await this.sfCli.query(sourceAlias, paginatedSoql);
+    if (!sourcePageResult.success) {
+      throw new BadRequestException(
+        `Source record query failed: ${sourcePageResult.error ?? 'unknown error'}`,
+      );
+    }
     const sourceRecords = sourcePageResult.data?.result?.records ?? [];
     const sourceTotalSize = sourcePageResult.data?.result?.totalSize ?? sourceRecords.length;
 
@@ -49,6 +54,16 @@ export class OrgToOrgCompareService {
       this.sfCli.query(sourceAlias, keySoql),
       this.sfCli.query(targetAlias, keySoql),
     ]);
+    if (!sourceKeyResult.success) {
+      throw new BadRequestException(
+        `Source match-key query failed: ${sourceKeyResult.error ?? 'unknown error'}`,
+      );
+    }
+    if (!targetKeyResult.success) {
+      throw new BadRequestException(
+        `Target match-key query failed: ${targetKeyResult.error ?? 'unknown error'}`,
+      );
+    }
 
     const sourceKeyRecords = sourceKeyResult.data?.result?.records ?? [];
     const targetKeyRecords = targetKeyResult.data?.result?.records ?? [];
