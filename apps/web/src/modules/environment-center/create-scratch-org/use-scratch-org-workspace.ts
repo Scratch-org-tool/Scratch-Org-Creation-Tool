@@ -208,6 +208,7 @@ export function useScratchOrgWorkspace() {
   const [submitting, setSubmitting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [openingRunId, setOpeningRunId] = useState<string | null>(null);
   const [automationRunId, setAutomationRunId] = useState<string | null>(() => eagerRunId);
   const [run, setRun] = useState<AutomationRunView | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -1216,7 +1217,14 @@ export function useScratchOrgWorkspace() {
     syncRunIdInUrl(null);
   };
 
-  const openRun = (runId: string) => restoreRun(runId);
+  const openRun = async (runId: string) => {
+    setOpeningRunId(runId);
+    try {
+      await restoreRun(runId);
+    } finally {
+      if (isMountedRef.current) setOpeningRunId(null);
+    }
+  };
 
   const cancelConflictRun = async (runId: string) => {
     setStopping(true);
@@ -1348,6 +1356,7 @@ export function useScratchOrgWorkspace() {
     cancelRun,
     resumeRun,
     openRun,
+    openingRunId,
     cancelConflictRun,
     regenerateExistingPassword,
     resetForm,

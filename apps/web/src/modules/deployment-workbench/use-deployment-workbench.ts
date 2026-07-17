@@ -159,6 +159,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     totalPages: 0,
   });
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [openingHistoryRunId, setOpeningHistoryRunId] = useState<string | null>(null);
   const compareRequest = useRef(0);
   const comparisonAbort = useRef<AbortController | null>(null);
   const comparisonAttemptKey = useRef<string | null>(null);
@@ -905,6 +906,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
 
   const openHistoryRun = useCallback(async (id: string) => {
     activeRunId.current = id;
+    setOpeningHistoryRunId(id);
     setRunId(id);
     setStep(5);
     setError(null);
@@ -913,6 +915,8 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       await loadDestructiveReview(id).catch(() => null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not open deployment history.');
+    } finally {
+      setOpeningHistoryRunId(null);
     }
   }, [loadDestructiveReview, loadRun]);
 
@@ -1011,6 +1015,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     historyLoading,
     loadHistory,
     openHistoryRun,
+    openingHistoryRunId,
     resetPlan,
     validation,
   };

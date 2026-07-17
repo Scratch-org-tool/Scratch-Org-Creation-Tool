@@ -57,6 +57,8 @@ interface ScratchOrgFormProps {
   eligibilityLoading: boolean;
   eligibilityError: string | null;
   onOpenRun: (runId: string) => void;
+  /** Run id currently being opened/restored, if any. */
+  openingRunId?: string | null;
   onCancelConflict: (runId: string) => void;
   stoppingConflict: boolean;
 }
@@ -131,6 +133,7 @@ export function ScratchOrgForm({
   eligibilityLoading,
   eligibilityError,
   onOpenRun,
+  openingRunId,
   onCancelConflict,
   stoppingConflict,
 }: ScratchOrgFormProps) {
@@ -289,8 +292,13 @@ export function ScratchOrgForm({
                     variant="outline"
                     className="h-7 text-xs"
                     onClick={() => onOpenRun(eligibility.conflictRunId!)}
+                    loading={openingRunId === eligibility.conflictRunId}
+                    disabled={Boolean(openingRunId)}
                   >
-                    <ExternalLink className="w-3 h-3 mr-1" />Open active run
+                    {openingRunId !== eligibility.conflictRunId && (
+                      <ExternalLink className="w-3 h-3 mr-1" />
+                    )}
+                    Open active run
                   </Button>
                   <Button
                     type="button"
@@ -311,8 +319,13 @@ export function ScratchOrgForm({
                   variant="outline"
                   className="h-7 text-xs mt-3"
                   onClick={() => onOpenRun(selectedExisting.latestRun!.id)}
+                  loading={openingRunId === selectedExisting.latestRun.id}
+                  disabled={Boolean(openingRunId)}
                 >
-                  <ExternalLink className="w-3 h-3 mr-1" />Open latest active run
+                  {openingRunId !== selectedExisting.latestRun.id && (
+                    <ExternalLink className="w-3 h-3 mr-1" />
+                  )}
+                  Open latest active run
                 </Button>
               )}
             </div>

@@ -2103,9 +2103,12 @@ function HistoryView({ w }: { w: DeploymentWorkbenchState }) {
                     <td className="p-3">
                       <button
                         type="button"
-                        className="font-medium text-primary hover:underline"
+                        className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline disabled:cursor-wait disabled:opacity-70"
                         onClick={() => void w.openHistoryRun(row.id)}
+                        disabled={Boolean(w.openingHistoryRunId)}
+                        aria-busy={w.openingHistoryRunId === row.id || undefined}
                       >
+                        {w.openingHistoryRunId === row.id && <Spinner size="sm" className="w-3.5 h-3.5" />}
                         {row.name || row.id.slice(0, 8)}
                       </button>
                       <p className="text-xs text-muted-foreground">{row.owner.displayName ?? row.owner.id}</p>

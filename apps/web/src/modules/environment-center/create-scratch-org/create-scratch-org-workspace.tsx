@@ -118,6 +118,7 @@ function ConfigCard({
           eligibilityLoading={w.eligibilityLoading}
           eligibilityError={w.eligibilityError}
           onOpenRun={(runId) => void w.openRun(runId)}
+          openingRunId={w.openingRunId}
           onCancelConflict={onRequestCancelConflict}
           stoppingConflict={w.stopping}
         />
@@ -284,6 +285,8 @@ function RecentRunsPanel({ w }: { w: ReturnType<typeof useScratchOrgWorkspace> }
                   size="sm"
                   className="h-7 px-2 text-xs"
                   onClick={() => void w.openRun(recent.id)}
+                  loading={w.openingRunId === recent.id}
+                  disabled={Boolean(w.openingRunId)}
                   aria-label={`Open run for ${alias}`}
                 >
                   Open
@@ -371,6 +374,7 @@ export function CreateScratchOrgWorkspace() {
                   eligibilityLoading={w.eligibilityLoading}
                   eligibilityError={w.eligibilityError}
                   onOpenRun={(runId) => void w.openRun(runId)}
+                  openingRunId={w.openingRunId}
                   onCancelConflict={setPendingConflictCancel}
                   stoppingConflict={w.stopping}
                 />
