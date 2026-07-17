@@ -462,7 +462,7 @@ export function JenkinsDeployWorkspace() {
                 </GlassCard>
 
                 <GlassCard title="Build history" description="Latest 20 builds. Click a row to stream its console log.">
-                  <div className="max-h-[280px] overflow-y-auto">
+                  <div className="max-h-[280px] overflow-y-auto overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-border/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
