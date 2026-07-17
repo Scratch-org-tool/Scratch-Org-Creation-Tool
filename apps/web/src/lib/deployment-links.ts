@@ -5,6 +5,7 @@ import {
   Database,
   GitBranch,
   Layers,
+  Package,
   Settings2,
   Users,
   Wrench,
@@ -88,6 +89,15 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
         iconBg: 'bg-pink-500/10 text-pink-400',
         modules: ['deployment'],
         activePrefixes: ['/deployment-center/automations'],
+      },
+      {
+        label: 'Releases',
+        description: 'Group deployments and work items into versioned releases with approvals and notes.',
+        href: '/releases',
+        icon: Package,
+        iconBg: 'bg-fuchsia-500/10 text-fuchsia-400',
+        modules: ['deployment'],
+        activePrefixes: ['/releases'],
       },
       {
         label: 'Jenkins',

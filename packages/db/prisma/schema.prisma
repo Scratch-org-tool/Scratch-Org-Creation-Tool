@@ -67,6 +67,7 @@ model OrgConnection {
   dataDeployBatchesSource DataDeployBatch[]   @relation("BatchSourceOrg")
   dataDeployBatchesTarget DataDeployBatch[]   @relation("BatchTargetOrg")
   automationRunsTarget     AutomationRun[]    @relation("AutomationRunTarget")
+  releases                Release[]           @relation("ReleaseTargetOrg")
 
   @@index([createdBy])
 }
@@ -927,6 +928,66 @@ model WorkItemSnapshot {
   @@unique([workItemConnectionId, externalProjectId, externalItemId])
   @@index([state])
   @@index([providerUpdatedAt])
+}
+
+/// A release groups deployments and work items into one versioned unit that
+/// moves through draft -> in_review -> approved -> released with an approval
+/// trail and (optionally AI-generated) release notes.
+model Release {
+  id               String            @id @default(uuid())
+  name             String
+  version          String
+  description      String?
+  status           String            @default("draft")
+  targetOrgId      String?
+  targetOrg        OrgConnection?    @relation("ReleaseTargetOrg", fields: [targetOrgId], references: [id], onDelete: SetNull)
+  releaseNotes     String?
+  notesGeneratedAt DateTime?
+  scheduledAt      DateTime?
+  releasedAt       DateTime?
+  createdBy        String            @default("system")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  items            ReleaseItem[]
+  approvals        ReleaseApproval[]
+
+  @@unique([name, version])
+  @@index([status])
+  @@index([createdBy])
+}
+
+/// One linked artifact inside a release: an internal deployment or an
+/// external work item reference (provider + project + item id).
+model ReleaseItem {
+  id                 String   @id @default(uuid())
+  releaseId          String
+  release            Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  kind               String
+  deploymentId       String?
+  workItemProvider   String?
+  workItemProjectId  String?
+  workItemExternalId String?
+  title              String?
+  metadata           Json?
+  addedBy            String   @default("system")
+  createdAt          DateTime @default(now())
+
+  @@index([releaseId])
+  @@index([deploymentId])
+}
+
+/// Approval decisions are append-once per actor (change of mind requires a
+/// new review round after the release returns to draft).
+model ReleaseApproval {
+  id        String   @id @default(uuid())
+  releaseId String
+  release   Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  actorId   String
+  decision  String
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@unique([releaseId, actorId])
 }
 
 /// Outbound chat webhook (Slack or Microsoft Teams). The webhook URL is
