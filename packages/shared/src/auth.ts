@@ -127,6 +127,7 @@ export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
   // Explicitly registered authenticated-only routes are available regardless
   // of module grants. Authentication and active status remain server/guarded.
   '/account': null,
+  '/calendar': null,
   '/dashboard': 'dashboard',
   '/environment-center': 'environment',
   '/scratch-templates': 'environment',

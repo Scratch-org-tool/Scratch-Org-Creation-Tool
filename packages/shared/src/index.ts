@@ -32,3 +32,4 @@ export * from './template-config-migration.js';
 export * from './integrations.js';
 export * from './jenkins.js';
 export * from './releases.js';
+export * from './calendar.js';

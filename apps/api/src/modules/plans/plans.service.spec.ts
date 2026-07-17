@@ -45,13 +45,15 @@ function createService() {
   const metadataPipeline = { startPipeline: vi.fn().mockResolvedValue({ automationRunId: 'run-1' }) };
   const dataService = { deployOrgToOrgBatch: vi.fn().mockResolvedValue({ groupId: 'g1' }) };
   const notifications = { notify: vi.fn().mockResolvedValue(null) };
+  const freezeWindows = { assertDeployAllowed: vi.fn().mockResolvedValue(undefined) };
   const service = new PlansService(
     deploymentService as never,
     metadataPipeline as never,
     dataService as never,
     notifications as never,
+    freezeWindows as never,
   );
-  return { service, deploymentService, metadataPipeline, dataService, notifications };
+  return { service, deploymentService, metadataPipeline, dataService, notifications, freezeWindows };
 }
 
 describe('PlansService.runScheduledPlan', () => {
