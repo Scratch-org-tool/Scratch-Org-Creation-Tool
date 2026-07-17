@@ -23,6 +23,7 @@ import { OrchestratorModule } from './modules/orchestrator/orchestrator.module';
 import { AgentsModule } from './modules/agents/agents.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { HealthModule } from './modules/health/health.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { IntegrationAdaptersModule } from './integrations/foundation/integration-adapters.module';
 
@@ -40,6 +41,7 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     IntegrationAdaptersModule,
     AuthModule,
     HealthModule,
+    MetricsModule,
     QueueModule,
     WorkersModule,
     StreamModule,
