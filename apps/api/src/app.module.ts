@@ -11,6 +11,7 @@ import { JenkinsModule } from './modules/jenkins/jenkins.module';
 import { ReleasesModule } from './modules/releases/releases.module';
 import { QualityModule } from './modules/quality/quality.module';
 import { CalendarModule } from './modules/calendar/calendar.module';
+import { SandboxRefreshModule } from './modules/sandbox-refresh/sandbox-refresh.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { DriftModule } from './modules/drift/drift.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
@@ -59,6 +60,7 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     ReleasesModule,
     QualityModule,
     CalendarModule,
+    SandboxRefreshModule,
     PlansModule,
     DriftModule,
     MetadataModule,

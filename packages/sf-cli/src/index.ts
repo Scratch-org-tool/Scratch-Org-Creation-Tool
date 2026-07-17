@@ -593,6 +593,27 @@ export class SfCliClient extends EventEmitter {
     return this.run(['data', 'query', '--query', soql, '--target-org', alias], { json: true });
   }
 
+  /**
+   * Kick off a sandbox refresh from its production org (requires prod auth).
+   * Runs async — Salesforce completes the refresh in the background; poll the
+   * sandbox status from Setup or via `sf org resume sandbox`.
+   */
+  async refreshSandbox(
+    prodOrgAlias: string,
+    sandboxName: string,
+  ): Promise<SfCommandResult> {
+    return this.run(
+      [
+        'org', 'refresh', 'sandbox',
+        '--name', sandboxName,
+        '--target-org', prodOrgAlias,
+        '--no-prompt',
+        '--async',
+      ],
+      { json: true },
+    );
+  }
+
   /** SOQL against the Tooling API (ApexOrgWideCoverage, ApexCodeCoverage, …). */
   async queryTooling(
     alias: string,

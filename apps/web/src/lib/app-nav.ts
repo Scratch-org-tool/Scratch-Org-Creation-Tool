@@ -71,8 +71,9 @@ export const APP_NAV: NavItem[] = [
       { href: '/environment-center?tab=source-control', label: 'Source Control' },
       { href: '/environment-center?tab=work-management', label: 'Work Management' },
       { href: '/environment-center/create-scratch-org', label: 'Create Scratch Org' },
+      { href: '/sandbox-refresh', label: 'Sandbox Refresh' },
     ],
-    activePrefixes: ['/scratch-templates'],
+    activePrefixes: ['/scratch-templates', '/sandbox-refresh'],
   },
   { href: '/scratch-templates', label: 'Templates', icon: FileStack, module: 'environment' },
   {

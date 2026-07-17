@@ -131,6 +131,7 @@ export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
   '/dashboard': 'dashboard',
   '/environment-center': 'environment',
   '/scratch-templates': 'environment',
+  '/sandbox-refresh': 'environment',
   '/data-center': 'data',
   '/data-deploy': 'data',
   '/custom-settings-load': 'data',
