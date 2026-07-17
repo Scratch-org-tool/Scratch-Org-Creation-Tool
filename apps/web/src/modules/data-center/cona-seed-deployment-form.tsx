@@ -36,6 +36,14 @@ interface ManualAccountQuery {
 
 type ManualOnboardingQuery = ManualAccountQuery;
 
+interface ManualOnboardingPreview extends ManualOnboardingQuery {
+  availableCount: number;
+  selectedCount: number;
+  soql: string;
+  excludedFields: Array<{ field: string; reason: string }>;
+  expandedCompoundFields: Array<{ field: string; components: string[] }>;
+}
+
 interface SeedValidationCheck {
   dataset: string;
   count: number;
@@ -103,11 +111,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
       selectedCount: number;
       soql: string;
     }>;
-    manualOnboardingQueries?: Array<ManualOnboardingQuery & {
-      availableCount: number;
-      selectedCount: number;
-      soql: string;
-    }>;
+    manualOnboardingQueries?: ManualOnboardingPreview[];
   } | null>(null);
   const [loadingAction, setLoadingAction] = useState<'preview' | 'run' | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -213,11 +217,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
             selectedCount: number;
             soql: string;
           }>;
-          manualOnboardingQueries?: Array<ManualOnboardingQuery & {
-            availableCount: number;
-            selectedCount: number;
-            soql: string;
-          }>;
+          manualOnboardingQueries?: ManualOnboardingPreview[];
         }>(
           '/data/seed/preview',
           {
@@ -404,7 +404,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                   Queries must target <code>cfs_ob__Onboarding_Config__c</code> and select{' '}
                   <code>RecordTypeId</code> plus at least one field to seed. Source record IDs are
                   removed and RecordType IDs are mapped to the target org. The maximum records
-                  value replaces any LIMIT in the query.
+                  value replaces any LIMIT in the query. Compound Address and Geolocation fields
+                  are expanded into Bulk-compatible components; non-createable fields are shown
+                  and excluded during preview.
                 </InlineAlert>
                 <div className="space-y-3 mt-3">
                   {manualOnboardingQueries.map((query, index) => (
@@ -769,6 +771,22 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                   {query.availableCount.toLocaleString()} matched ·{' '}
                   {query.limit.toLocaleString()} maximum
                 </summary>
+                {(query.expandedCompoundFields.length > 0
+                  || query.excludedFields.length > 0) && (
+                  <div className="mt-2 space-y-1 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-amber-700 dark:text-amber-300">
+                    {query.expandedCompoundFields.map((field) => (
+                      <p key={field.field}>
+                        Expanded <code>{field.field}</code> →{' '}
+                        <code>{field.components.join(', ')}</code>
+                      </p>
+                    ))}
+                    {query.excludedFields.map((field, index) => (
+                      <p key={`${field.field}-${index}`}>
+                        Excluded <code>{field.field}</code>: {field.reason}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 <pre className="studio-console p-2 mt-1 rounded overflow-x-auto whitespace-pre-wrap">
                   {query.soql}
                 </pre>

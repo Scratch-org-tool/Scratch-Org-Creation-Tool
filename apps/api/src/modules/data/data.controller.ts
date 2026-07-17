@@ -382,6 +382,7 @@ export class DataController {
   async previewSeed(@Body() body: unknown, @CurrentUser() userId: string) {
     const input = conaSeedRunSchema.parse(body);
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
+    await assertOrgOwned(input.targetOrgId, userId, prisma);
     try {
       return await this.conaSeedService.validate(
         input.sourceOrgId,
@@ -391,6 +392,7 @@ export class DataController {
         input.manualAccountQueries,
         input.onboardingQueryMode,
         input.manualOnboardingQueries,
+        input.targetOrgId,
       );
     } catch (error) {
       throw new BadRequestException(

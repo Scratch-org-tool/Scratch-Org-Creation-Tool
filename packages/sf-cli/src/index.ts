@@ -312,6 +312,14 @@ function compactCliError(value: string | undefined): string | undefined {
   return normalized.length > 2_000 ? normalized.slice(-2_000) : normalized;
 }
 
+function withoutCliUpdateWarnings(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .filter((line) => !/@salesforce\/cli update available from/i.test(line))
+    .join('\n')
+    .trim();
+}
+
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -654,9 +662,12 @@ export class SfCliClient extends EventEmitter {
   private parseResult<T>(stdout: string, stderr: string, exitCode: number): SfCommandResult<T> {
     if (exitCode !== 0) {
       const jsonError = this.tryParseJson<{ message?: string; name?: string }>(stdout || stderr);
+      const actionableOutput = withoutCliUpdateWarnings(stderr || stdout);
       return {
         success: false,
-        error: jsonError?.message ?? (stderr || stdout || `Command failed with exit code ${exitCode}`),
+        error:
+          jsonError?.message
+          ?? (actionableOutput || `Command failed with exit code ${exitCode}`),
         stdout,
         stderr,
         exitCode,
@@ -1377,6 +1388,7 @@ export class SfCliClient extends EventEmitter {
         updateable?: boolean;
         nillable?: boolean;
         calculated?: boolean;
+        compoundFieldName?: string;
         defaultedOnCreate?: boolean;
         custom?: boolean;
         length?: number;
