@@ -1113,12 +1113,21 @@ export class SfCliClient extends EventEmitter {
     options?: { onSpawn?: (proc: ChildProcess) => void; timeoutMs?: number },
   ): Promise<SfCommandResult> {
     const envTimeout = Number(process.env.SF_SFDMU_TIMEOUT_MINUTES ?? 180);
-    return this.runStreaming([
+    const args = [
       'sfdmu', 'run',
       '--sourceusername', sourceAlias,
       '--targetusername', targetAlias,
       '--path', path,
-    ], onLine, {
+      // Queue workers have no interactive terminal. Never let an SFDMU
+      // confirmation prompt leave a chunk running indefinitely.
+      '--noprompt',
+    ];
+    // A normal SFDMU exit can still contain rejected or skipped rows. Strict
+    // warning handling prevents those partial writes from being called success.
+    if (this.env.SFDMU_FAIL_ON_WARNING?.trim().toLowerCase() !== 'false') {
+      args.push('--failonwarning');
+    }
+    return this.runStreaming(args, onLine, {
       cwd: path,
       onSpawn: options?.onSpawn,
       timeoutMs: options?.timeoutMs ?? waitMinutesToTimeoutMs(envTimeout, 0),

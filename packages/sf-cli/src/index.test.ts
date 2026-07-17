@@ -36,6 +36,26 @@ describe('SfCliClient streaming', () => {
     assert.equal(result.success, true);
     assert.deepEqual(lines.map((line) => line.line), ['hello', 'world']);
   });
+
+  it('runs SFDMU non-interactively and fails on warnings by default', async () => {
+    const client = new SfCliClient({ env: { SFDMU_FAIL_ON_WARNING: 'true' } });
+    let received: string[] = [];
+    client.runStreaming = async (args) => {
+      received = args;
+      return { success: true, stdout: '', stderr: '', exitCode: 0 };
+    };
+
+    await client.runSfdmu('source-org', 'target-org', '/tmp/sfdmu-run');
+
+    assert.deepEqual(received, [
+      'sfdmu', 'run',
+      '--sourceusername', 'source-org',
+      '--targetusername', 'target-org',
+      '--path', '/tmp/sfdmu-run',
+      '--noprompt',
+      '--failonwarning',
+    ]);
+  });
 });
 
 describe('formatRecordValues', () => {

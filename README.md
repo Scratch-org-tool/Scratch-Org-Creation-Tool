@@ -197,6 +197,7 @@ Login and signup are **proxied through the API** (`POST /api/auth/login`, `/api/
 | `DATA_DEPLOY_CHUNK_SIZE` | Optional | Records per chunk for large deploys (default `25000`) |
 | `DATA_DEPLOY_CONCURRENCY` | Optional | Parallel data-deploy workers (default `2`) |
 | `SFDMU_RUN_CONCURRENCY` | Optional | Parallel SFDMU workers (default `2`) |
+| `SFDMU_FAIL_ON_WARNING` | Optional | Treat SFDMU warnings/skipped rows as failures (default `true`) |
 | `SFDMU_KEEP_RUN_ARTIFACTS` | Optional | Set `true` to keep temp SFDMU CSVs for debugging (default: deleted after each run) |
 | `ADMIN_EMAILS` | Optional | Comma-separated emails auto-promoted to admin |
 

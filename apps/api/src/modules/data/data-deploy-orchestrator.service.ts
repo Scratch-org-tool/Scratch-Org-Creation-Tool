@@ -335,6 +335,7 @@ export class DataDeployOrchestratorService implements OnModuleInit {
           baseSoql: input.baseSoql,
           matchField: externalIdField,
           recordTypeMappings: input.recordTypeMappings as Prisma.InputJsonValue | undefined,
+          requestedRecords: input.recordLimit,
           totalRecords: input.recordLimit,
           chunkSize,
           totalChunks: plans.length,
@@ -379,7 +380,9 @@ export class DataDeployOrchestratorService implements OnModuleInit {
       return { batch: createdBatch, deployments: created };
     });
 
-    const plannerJob = input.deferStart ? null : await this.enqueuePlanner(batch.id, input.userId);
+    const plannerJob = input.deferStart
+      ? null
+      : await this.enqueueAndTrackPlanner(batch.id, input.userId);
 
     return {
       batchId: batch.id,
@@ -404,6 +407,15 @@ export class DataDeployOrchestratorService implements OnModuleInit {
     );
   }
 
+  private async enqueueAndTrackPlanner(batchId: string, createdBy: string) {
+    const plannerJob = await this.enqueuePlanner(batchId, createdBy);
+    await prisma.dataDeployBatch.update({
+      where: { id: batchId },
+      data: { plannerJobId: plannerJob.id },
+    });
+    return plannerJob;
+  }
+
   async startBatch(batchId: string) {
     const batch = await prisma.dataDeployBatch.findUnique({ where: { id: batchId } });
     if (!batch) throw new NotFoundException('Data deploy batch not found');
@@ -413,7 +425,7 @@ export class DataDeployOrchestratorService implements OnModuleInit {
     });
     if (claimed.count === 0) return null;
     try {
-      return await this.enqueuePlanner(batchId, batch.createdBy);
+      return await this.enqueueAndTrackPlanner(batchId, batch.createdBy);
     } catch (error) {
       await prisma.dataDeployBatch.update({
         where: { id: batchId },
@@ -511,19 +523,11 @@ export class DataDeployOrchestratorService implements OnModuleInit {
       await log('stdout', `Found ${ids.length} record(s) to deploy`);
 
       if (ids.length === 0) {
-        await prisma.dataDeployChunk.updateMany({
-          where: { batchId, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
-          data: { status: 'cancelled', error: 'No records matched the deploy query' },
-        });
-        await prisma.dataMovement.updateMany({
-          where: { batchId },
-          data: { status: 'cancelled' },
-        });
         await prisma.dataDeployBatch.update({
           where: { id: batchId },
-          data: { status: 'completed', totalChunks: 0, completedChunks: 0 },
+          data: { totalRecords: 0 },
         });
-        return { batchId, totalChunks: 0 };
+        throw new Error('No source records matched the deploy query; no records were written');
       }
 
       const boundaries = computeChunkBoundaries(ids, batch.chunkSize);
@@ -668,6 +672,7 @@ export class DataDeployOrchestratorService implements OnModuleInit {
           status: 'running',
           totalChunks: boundaries.length,
           totalRecords,
+          error: null,
           boundaryArtifact: {
             kind: 'id-ranges',
             plannerQuery,
@@ -1032,12 +1037,20 @@ export class DataDeployOrchestratorService implements OnModuleInit {
   }
 
   /** Idempotent: only transitions chunks that are not already terminal. */
-  async onChunkCompleted(chunkId: string, recordCount?: number) {
+  async onChunkCompleted(
+    chunkId: string,
+    recordCount?: number,
+    outcome?: { processedRecords: number | null; failedRecords: number },
+  ) {
     const transitioned = await prisma.dataDeployChunk.updateMany({
       where: { id: chunkId, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
       data: {
         status: 'completed',
         ...(recordCount != null ? { recordCount } : {}),
+        ...(outcome?.processedRecords != null
+          ? { processedRecords: outcome.processedRecords }
+          : {}),
+        ...(outcome ? { failedRecords: outcome.failedRecords } : {}),
         error: null,
       },
     });
@@ -1059,10 +1072,18 @@ export class DataDeployOrchestratorService implements OnModuleInit {
 
   /** Idempotent: only transitions chunks that are not already terminal. */
   async onChunkFailed(chunkId: string, error: string, details?: Record<string, unknown>) {
+    const processedRecords = typeof details?.processedRecords === 'number'
+      ? details.processedRecords
+      : undefined;
+    const failedRecords = typeof details?.failedRecords === 'number'
+      ? details.failedRecords
+      : undefined;
     const transitioned = await prisma.dataDeployChunk.updateMany({
       where: { id: chunkId, status: { in: [...ACTIVE_CHUNK_STATUSES] } },
       data: {
         status: 'failed',
+        ...(processedRecords != null ? { processedRecords } : {}),
+        ...(failedRecords != null ? { failedRecords } : {}),
         error,
         errorDetails: (details ?? { message: error }) as Prisma.InputJsonValue,
       },
@@ -1273,6 +1294,8 @@ export class DataDeployOrchestratorService implements OnModuleInit {
         jobId: null,
         error: null,
         errorDetails: Prisma.DbNull,
+        processedRecords: null,
+        failedRecords: null,
         attempts: { increment: 1 },
       },
     });
@@ -1285,7 +1308,7 @@ export class DataDeployOrchestratorService implements OnModuleInit {
 
     await prisma.dataDeployBatch.update({
       where: { id: batchId },
-      data: { status: 'running' },
+      data: { status: 'running', error: null },
     });
 
     await this.releaseReadyChunks(batchId);

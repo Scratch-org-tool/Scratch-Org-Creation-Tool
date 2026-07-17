@@ -148,4 +148,30 @@ describe('WorkerRegistry parent-run terminal guards', () => {
     );
     expect(pipelineOrchestrator.handleJobSucceeded).not.toHaveBeenCalled();
   });
+
+  it('keeps a worker-declared cancellation out of the completed state', async () => {
+    db.job.findUnique
+      .mockResolvedValueOnce({
+        status: 'queued',
+        parentRun: { status: 'running' },
+      })
+      .mockResolvedValueOnce({
+        status: 'running',
+        parentRunId: null,
+        type: 'prepare_existing_org',
+        parentRun: null,
+      });
+    const { processor, jobsService, pipelineOrchestrator, worker } = createRegistry();
+    worker.process.mockResolvedValue({ cancelled: true });
+
+    await expect(processor({
+      name: 'prepare_existing_org',
+      data: { dbJobId: 'cancelled-child' },
+    } as never)).resolves.toEqual({ cancelled: true });
+
+    expect(jobsService.updateStatus).toHaveBeenNthCalledWith(1, 'cancelled-child', 'running');
+    expect(jobsService.updateStatus).toHaveBeenNthCalledWith(2, 'cancelled-child', 'cancelled');
+    expect(jobsService.updateStatus).not.toHaveBeenCalledWith('cancelled-child', 'completed');
+    expect(pipelineOrchestrator.handleJobSucceeded).not.toHaveBeenCalled();
+  });
 });

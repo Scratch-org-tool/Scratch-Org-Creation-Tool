@@ -275,11 +275,14 @@ model DataDeployBatch {
   baseSoql           String?
   matchField         String?
   recordTypeMappings Json?
+  /// Upper bound requested by the user; totalRecords becomes the matched/planned count.
+  requestedRecords   Int               @default(0)
   totalRecords       Int               @default(0)
   chunkSize          Int               @default(25000)
   totalChunks        Int               @default(1)
   completedChunks    Int               @default(0)
   failedChunks       Int               @default(0)
+  plannerJobId       String?
   maxParallelChunks  Int               @default(4)
   quotaRemaining     Int?
   quotaConfidence    String            @default("unknown")
@@ -314,6 +317,9 @@ model DataDeployChunk {
   jobId       String?
   status      JobStatus       @default(queued)
   recordCount Int?
+  /// Records explicitly reported by the write engine, when available.
+  processedRecords Int?
+  failedRecords    Int?
   error       String?
   errorDetails Json?
   attempts    Int             @default(0)

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeFile } from 'node:fs/promises';
 
 const db = vi.hoisted(() => ({
   dataDeployBatch: {
@@ -180,6 +181,84 @@ describe('DataDeployOrchestratorService cancellation', () => {
 
     expect(db.dataDeployChunk.findUnique).not.toHaveBeenCalled();
     expect(withSchedulerLock).not.toHaveBeenCalled();
+  });
+
+  it('persists write-engine counters on a completed chunk', async () => {
+    db.dataDeployChunk.updateMany.mockResolvedValueOnce({ count: 1 });
+    db.dataDeployChunk.findUnique.mockResolvedValue({
+      id: 'chunk-1',
+      batchId: 'batch-1',
+      movementId: null,
+    });
+
+    await service.onChunkCompleted('chunk-1', 35_000, {
+      processedRecords: 35_000,
+      failedRecords: 0,
+    });
+
+    expect(db.dataDeployChunk.updateMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'completed',
+        recordCount: 35_000,
+        processedRecords: 35_000,
+        failedRecords: 0,
+      }),
+    }));
+  });
+
+  it('tracks the planner job id when a deferred batch starts', async () => {
+    db.dataDeployBatch.findUnique.mockResolvedValue({
+      id: 'batch-1',
+      status: 'pending',
+      createdBy: 'owner',
+    });
+
+    await expect(service.startBatch('batch-1')).resolves.toEqual({ id: 'planner-job' });
+
+    expect(db.dataDeployBatch.update).toHaveBeenCalledWith({
+      where: { id: 'batch-1' },
+      data: { plannerJobId: 'planner-job' },
+    });
+  });
+
+  it('fails planning instead of reporting success when no source rows match', async () => {
+    db.dataDeployBatch.findUnique.mockResolvedValue({
+      id: 'batch-1',
+      status: 'planning',
+      baseSoql: 'SELECT Name FROM Account',
+      requestedRecords: 35_000,
+      totalRecords: 35_000,
+      totalChunks: 2,
+      chunkSize: 25_000,
+      boundaryArtifact: null,
+      chunks: [],
+      sourceOrg: { alias: 'source', username: null },
+      targetOrg: { alias: 'target', username: null },
+    });
+    const sfCli = (service as unknown as {
+      sfCli: {
+        exportBulk: (
+          soql: string,
+          alias: string,
+          outputPath: string,
+        ) => Promise<{ success: boolean }>;
+      };
+    }).sfCli;
+    sfCli.exportBulk = vi.fn(async (_soql, _alias, outputPath) => {
+      await writeFile(outputPath, 'Id\n', 'utf8');
+      return { success: true };
+    });
+
+    await expect(service.planBatch('batch-1', vi.fn())).rejects.toThrow(
+      'No source records matched',
+    );
+
+    expect(db.dataDeployBatch.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('No source records matched'),
+      }),
+    }));
   });
 
   it('resumes a running planner artifact and atomically fills every chunk bound', async () => {
