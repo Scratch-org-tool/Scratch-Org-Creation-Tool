@@ -42,7 +42,6 @@ import {
   profileForOrgType,
   selectionsFromCompareItems,
   serverRunActions,
-  supportsDestructiveAcknowledgement,
   TERMINAL_RUN_STATUSES,
   validateWorkbenchForm,
 } from './workbench-utils';
@@ -270,7 +269,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
         sourceOrgId: sourceOrgId || current.sourceOrgId,
         targetOrgId: targetOrgId || current.targetOrgId,
         targetProfile: targetOrgId ? profile : current.targetProfile,
-        policy: targetOrgId ? policyForEnvironment(profile) : current.policy,
+        policy: targetOrgId ? policyForEnvironment(profile, nextCapabilities) : current.policy,
       }));
       const requestedRun = params.get('runId') ?? params.get('run');
       if (requestedRun) {
@@ -589,17 +588,17 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       ...invalidateSourceState(current, { targetOrgId }),
       targetOrgId,
       targetProfile: profile,
-      policy: policyForEnvironment(profile),
+      policy: policyForEnvironment(profile, capabilities),
     }));
-  }, [clearComparison, clearPlanResolution, orgs]);
+  }, [capabilities, clearComparison, clearPlanResolution, orgs]);
 
   const selectProfile = useCallback((targetProfile: DeploymentEnvironment) => {
     setForm((current) => ({
       ...current,
       targetProfile,
-      policy: policyForEnvironment(targetProfile),
+      policy: policyForEnvironment(targetProfile, capabilities),
     }));
-  }, []);
+  }, [capabilities]);
 
   const setPolicy = useCallback((updater: (policy: WorkbenchForm['policy']) => WorkbenchForm['policy']) => {
     setForm((current) => {
@@ -702,34 +701,16 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       });
       if (request !== previewRequest.current || controller.signal.aborted) return false;
       setPreview(response);
-      const destructiveCount = componentCount(form.destructiveSelections);
-      if (response.destructiveReview) {
-        setDestructiveReviewLoading(true);
-        try {
-          const review = response.destructiveReview ?? (
-            supportsDestructiveAcknowledgement(capabilities)
-              ? await api<DestructiveReview>('/deployment-workbench/destructive-review', {
-                  method: 'POST',
-                  signal: controller.signal,
-                  body: JSON.stringify(payload),
-                })
-              : null
-          );
-          if (request === previewRequest.current && !controller.signal.aborted) {
-            setDestructiveReview(
-              review?.manifestXml && review.manifestHash ? review : null,
-            );
+      const review = response.destructiveReview;
+      setDestructiveReview(review?.requiresReview && review.manifestXml && review.digest
+        ? {
+            manifestXml: review.manifestXml,
+            manifestHash: review.digest,
+            componentCount: review.componentCount,
+            apiVersion: review.apiVersion,
+            warning: review.warning,
           }
-        } catch (cause) {
-          if (request === previewRequest.current && !controller.signal.aborted) {
-            setError(cause instanceof Error
-              ? `Destructive manifest review failed: ${cause.message}`
-              : 'Destructive manifest review failed.');
-          }
-        } finally {
-          if (request === previewRequest.current) setDestructiveReviewLoading(false);
-        }
-      }
+        : null);
       setStep(4);
       requestAnimationFrame(() => document.querySelector<HTMLElement>('#workbench-main')?.focus());
       return true;
@@ -741,7 +722,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     } finally {
       if (request === previewRequest.current) setPreviewing(false);
     }
-  }, [buildPayload, capabilities, form.destructiveSelections]);
+  }, [buildPayload]);
 
   const createRun = useCallback(async () => {
     const destructiveCount = componentCount(form.destructiveSelections);

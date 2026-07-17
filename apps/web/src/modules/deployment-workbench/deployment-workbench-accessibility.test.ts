@@ -54,4 +54,13 @@ describe('deployment workbench component semantics', () => {
     expect(source).toContain("['passed', 'failed', 'cancelled', 'rejected'].includes(w.status.status)");
     expect(source).toContain('<ComponentsStep w={w} />');
   });
+
+  it('presents static analysis engines with availability and install guidance', () => {
+    expect(source).toContain('staticAnalysisEngineOptions(w.capabilities)');
+    expect(source).toContain('defaultStaticAnalysisEngines(w.capabilities)');
+    expect(source).toContain('Not installed');
+    expect(source).toContain('{engine.requires}');
+    expect(source).toContain('disabled={!engine.available}');
+    expect(hookSource).toContain('policyForEnvironment(profile, capabilities)');
+  });
 });

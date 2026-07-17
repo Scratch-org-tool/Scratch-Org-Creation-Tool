@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { Injectable } from '@nestjs/common';
 import type { StaticAnalysisIssue } from '@sfcc/shared';
+import { BUILT_IN_ENGINE, runBuiltInAnalysis } from './built-in-analyzer';
 
 export interface ExecFileResult {
   exitCode: number;
@@ -79,26 +80,47 @@ export interface StaticAnalysisRunResult {
   timedOut: boolean;
 }
 
-type Engine = 'code-analyzer' | 'pmd' | 'eslint';
+type Engine = 'built-in' | 'code-analyzer' | 'pmd' | 'eslint';
+
+interface AvailabilityCacheEntry {
+  expiresAt: number;
+  available: boolean;
+}
 
 @Injectable()
 export class StaticAnalysisService {
+  private readonly availabilityCache = new Map<Engine, AvailabilityCacheEntry>();
+
   constructor(private readonly runner: SafeExecFileAdapter) {}
 
+  /**
+   * External engine probes spawn a CLI process, so results are cached for a
+   * short TTL. Capabilities and preview requests both consult this, keeping
+   * the wizard responsive instead of re-probing three binaries per request.
+   */
   async detectAvailability(engines: readonly string[]): Promise<Record<string, boolean>> {
     const entries = await Promise.all(
       [...new Set(engines)].map(async (raw) => {
         const engine = normalizeEngine(raw);
         if (!engine) return [raw, false] as const;
+        if (engine === BUILT_IN_ENGINE) return [raw, true] as const;
+        const cached = this.availabilityCache.get(engine);
+        if (cached && cached.expiresAt > Date.now()) return [raw, cached.available] as const;
         const command = this.command(engine);
+        let available = false;
         try {
           const result = await this.runner.run(command.file, command.versionArgs, {
             timeoutMs: 10_000,
           }).promise;
-          return [raw, result.exitCode === 0] as const;
+          available = result.exitCode === 0;
         } catch {
-          return [raw, false] as const;
+          available = false;
         }
+        this.availabilityCache.set(engine, {
+          available,
+          expiresAt: Date.now() + detectionTtlMs(),
+        });
+        return [raw, available] as const;
       }),
     );
     return Object.fromEntries(entries);
@@ -140,6 +162,31 @@ export class StaticAnalysisService {
         if (!this.isApplicable(engine, input.projectRoot)) {
           result.skippedEngines.push({ engine: requested, reason: 'No applicable source files found' });
           result.engineResults.push({ engine: requested, status: 'not_applicable' });
+          continue;
+        }
+
+        if (engine === BUILT_IN_ENGINE) {
+          result.availableEngines.push(requested);
+          try {
+            const report = runBuiltInAnalysis(input.projectRoot);
+            const content = JSON.stringify(report, null, 2);
+            result.artifacts.push({
+              engine: requested,
+              content,
+              checksum: createHash('sha256').update(content).digest('hex'),
+              artifactId: await input.persistArtifact?.(requested, content),
+            });
+            result.issues.push(...report.issues);
+            result.engineResults.push({ engine: requested, status: 'passed', exitCode: 0 });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            result.engineResults.push({ engine: requested, status: 'crashed', message });
+            result.issues.push(makeIssue(requested, {
+              ruleId: 'ANALYZER_CRASH',
+              severity: 'error',
+              message,
+            }));
+          }
           continue;
         }
 
@@ -209,7 +256,7 @@ export class StaticAnalysisService {
   }
 
   private command(
-    engine: Engine,
+    engine: Exclude<Engine, 'built-in'>,
     projectRoot?: string,
     outputPath?: string,
   ): { file: string; versionArgs: string[]; args: string[] } {
@@ -235,7 +282,7 @@ export class StaticAnalysisService {
   }
 
   private isApplicable(engine: Engine, projectRoot: string): boolean {
-    if (engine === 'code-analyzer') return true;
+    if (engine === 'code-analyzer' || engine === BUILT_IN_ENGINE) return true;
     const extensions = engine === 'pmd'
       ? new Set(['.cls', '.trigger', '.java'])
       : new Set(['.js', '.jsx', '.ts', '.tsx']);
@@ -245,11 +292,19 @@ export class StaticAnalysisService {
 
 function normalizeEngine(value: string): Engine | null {
   const normalized = value.trim().toLowerCase().replace(/^sf-/, '');
+  if (normalized === BUILT_IN_ENGINE || normalized === 'builtin' || normalized === 'local') {
+    return BUILT_IN_ENGINE;
+  }
   if (normalized === 'salesforce-code-analyzer' || normalized === 'code-analyzer') {
     return 'code-analyzer';
   }
   if (normalized === 'pmd' || normalized === 'eslint') return normalized;
   return null;
+}
+
+function detectionTtlMs(): number {
+  const configured = Number.parseInt(process.env.STATIC_ANALYSIS_DETECT_TTL_MS ?? '', 10);
+  return Number.isFinite(configured) ? Math.min(Math.max(configured, 0), 3_600_000) : 60_000;
 }
 
 function containsExtension(root: string, extensions: Set<string>): boolean {
