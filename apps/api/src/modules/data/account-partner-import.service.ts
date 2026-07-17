@@ -23,6 +23,7 @@ import {
   serializeBulkCsv,
   toSoqlLiteral,
   type AccountPartnerMigrationInput,
+  type AccountPartnerTargetReference,
   type BottlerSalesOfficeConfig,
 } from '@sfcc/shared';
 import { removeTempDir } from '../../common/temp-cleanup.util';
@@ -230,8 +231,14 @@ export class AccountPartnerImportService {
       ok: prepared.mapping.stats.ready > 0,
       query: prepared.query,
       stats: prepared.mapping.stats,
-      targetAccounts: prepared.targetAccountIds.size,
-      targetEmployees: prepared.targetEmployeeIds.size,
+      targetAccounts: prepared.targetAccounts.size,
+      targetEmployees: prepared.targetEmployees.size,
+      nameField: {
+        fieldName: prepared.targetSchema.nameFieldName,
+        mode: prepared.targetSchema.nameWriteConfig
+          ? 'employee-master-name' as const
+          : 'salesforce-managed' as const,
+      },
       sample: prepared.mapping.previewRows.slice(0, 50),
     };
   }
@@ -247,6 +254,16 @@ export class AccountPartnerImportService {
     await log(
       `Source query returned ${stats.total.toLocaleString()} rows; `
       + `${stats.ready.toLocaleString()} mappings are ready.`,
+    );
+    await log(
+      `${stats.toCreate.toLocaleString()} Account Partners will be created; `
+      + `${stats.toUpdate.toLocaleString()} existing Account Partners will be updated.`,
+    );
+    await log(
+      prepared.targetSchema.nameWriteConfig
+        ? 'Account Partner Name will be set from the matched target Employee Master name.'
+        : 'Account Partner Name is Salesforce-managed in the target org; '
+          + 'matched Employee Master names remain available in the migration preview.',
     );
     await log(
       `Skipped: ${stats.skippedTargetAccount.toLocaleString()} missing target Accounts, `
@@ -283,8 +300,14 @@ export class AccountPartnerImportService {
         success: true,
         query: prepared.query,
         stats,
-        targetAccounts: prepared.targetAccountIds.size,
-        targetEmployees: prepared.targetEmployeeIds.size,
+        targetAccounts: prepared.targetAccounts.size,
+        targetEmployees: prepared.targetEmployees.size,
+        nameField: {
+          fieldName: prepared.targetSchema.nameFieldName,
+          mode: prepared.targetSchema.nameWriteConfig
+            ? 'employee-master-name' as const
+            : 'salesforce-managed' as const,
+        },
       };
     } finally {
       await removeTempDir(workDir);
@@ -471,8 +494,14 @@ export class AccountPartnerImportService {
       const exportPath = join(sourceWorkDir, 'source-account-partners.csv');
       const targetAccountPath = join(sourceWorkDir, 'target-accounts.csv');
       const targetEmployeePath = join(sourceWorkDir, 'target-employees.csv');
+      const targetPartnerPath = join(sourceWorkDir, 'target-account-partners.csv');
       const safeBottler = escapeSoqlLiteral(input.bottler);
-      const [sourceResult, targetAccountResult, targetEmployeeResult] = await Promise.all([
+      const [
+        sourceResult,
+        targetAccountResult,
+        targetEmployeeResult,
+        targetPartnerResult,
+      ] = await Promise.all([
         this.sfCli.exportBulk(
           query,
           source.alias,
@@ -481,7 +510,7 @@ export class AccountPartnerImportService {
           { cwd: sourceWorkDir },
         ),
         this.sfCli.exportBulk(
-          'SELECT Id, cfs_ob__u_CustomerNumber__c FROM Account '
+          'SELECT Id, Name, cfs_ob__u_CustomerNumber__c FROM Account '
           + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
           + 'AND cfs_ob__u_CustomerNumber__c != null',
           target.alias,
@@ -490,11 +519,20 @@ export class AccountPartnerImportService {
           { cwd: sourceWorkDir },
         ),
         this.sfCli.exportBulk(
-          `SELECT Id, cfs_ob__EmployeeNo__c FROM ${EMPLOYEE_MASTER_OBJECT} `
+          `SELECT Id, Name, cfs_ob__EmployeeNo__c FROM ${EMPLOYEE_MASTER_OBJECT} `
           + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
           + 'AND cfs_ob__EmployeeNo__c != null',
           target.alias,
           targetEmployeePath,
+          15,
+          { cwd: sourceWorkDir },
+        ),
+        this.sfCli.exportBulk(
+          `SELECT ${ACCOUNT_PARTNER_EXTERNAL_ID_FIELD} FROM ${ACCOUNT_PARTNER_OBJECT} `
+          + `WHERE ${ACCOUNT_PARTNER_BOTTLER_FIELD} = '${safeBottler}' `
+          + `AND ${ACCOUNT_PARTNER_EXTERNAL_ID_FIELD} != null`,
+          target.alias,
+          targetPartnerPath,
           15,
           { cwd: sourceWorkDir },
         ),
@@ -508,6 +546,9 @@ export class AccountPartnerImportService {
       if (!targetEmployeeResult.success) {
         throw new Error(targetEmployeeResult.error ?? 'Target Employee Master lookup failed');
       }
+      if (!targetPartnerResult.success) {
+        throw new Error(targetPartnerResult.error ?? 'Existing Account Partner lookup failed');
+      }
       const records = parseBulkCsv(await readFile(exportPath, 'utf8'));
       const targetAccountRecords = parseBulkCsv(
         await readFile(targetAccountPath, 'utf8'),
@@ -515,49 +556,62 @@ export class AccountPartnerImportService {
       const targetEmployeeRecords = parseBulkCsv(
         await readFile(targetEmployeePath, 'utf8'),
       );
-      const targetAccountIds = new Map<string, string>();
+      const targetPartnerRecords = parseBulkCsv(
+        await readFile(targetPartnerPath, 'utf8'),
+      );
+      const targetAccounts = new Map<string, AccountPartnerTargetReference>();
       const ambiguousAccountKeys = new Set<string>();
       for (const record of targetAccountRecords) {
         const key = accountPartnerValueAt(record, 'cfs_ob__u_CustomerNumber__c');
         const id = accountPartnerValueAt(record, 'Id');
+        const name = accountPartnerValueAt(record, 'Name');
         const normalized = normalizeAccountPartnerAccountKey(key);
         if (!id) continue;
         if (!normalized || ambiguousAccountKeys.has(normalized)) continue;
-        const existing = targetAccountIds.get(normalized);
-        if (existing && existing !== id) {
-          targetAccountIds.delete(normalized);
+        const existing = targetAccounts.get(normalized);
+        if (existing && existing.id !== id) {
+          targetAccounts.delete(normalized);
           ambiguousAccountKeys.add(normalized);
         } else {
-          targetAccountIds.set(normalized, id);
+          targetAccounts.set(normalized, { id, key, name });
         }
       }
-      const targetEmployeeIds = new Map<string, string>();
+      const targetEmployees = new Map<string, AccountPartnerTargetReference>();
       const ambiguousEmployeeKeys = new Set<string>();
       for (const record of targetEmployeeRecords) {
         const key = accountPartnerValueAt(record, 'cfs_ob__EmployeeNo__c');
         const id = accountPartnerValueAt(record, 'Id');
+        const name = accountPartnerValueAt(record, 'Name');
         if (!key || !id || ambiguousEmployeeKeys.has(key)) continue;
-        const existing = targetEmployeeIds.get(key);
-        if (existing && existing !== id) {
-          targetEmployeeIds.delete(key);
+        const existing = targetEmployees.get(key);
+        if (existing && existing.id !== id) {
+          targetEmployees.delete(key);
           ambiguousEmployeeKeys.add(key);
         } else {
-          targetEmployeeIds.set(key, id);
+          targetEmployees.set(key, { id, key, name });
         }
       }
+      const existingExternalIds = new Set(
+        targetPartnerRecords
+          .map((record) => accountPartnerValueAt(record, ACCOUNT_PARTNER_EXTERNAL_ID_FIELD))
+          .filter(Boolean),
+      );
       const mapping = buildAccountPartnerMigrationRows({
         records,
         bottler: input.bottler,
-        targetAccountIds,
-        targetEmployeeIds,
+        targetAccounts,
+        targetEmployees,
+        existingExternalIds,
         externalIdMaxLength: targetSchema.externalIdMaxLength,
+        nameWriteConfig: targetSchema.nameWriteConfig,
       });
       return {
         target,
+        targetSchema,
         query,
         mapping,
-        targetAccountIds,
-        targetEmployeeIds,
+        targetAccounts,
+        targetEmployees,
       };
     } finally {
       await removeTempDir(sourceWorkDir);
@@ -587,6 +641,8 @@ export class AccountPartnerImportService {
       updateable?: boolean;
       filterable?: boolean;
       length?: number;
+      type?: string;
+      calculated?: boolean;
     };
     const fields = (result: unknown) =>
       new Map<string, DescribedField>(
@@ -643,7 +699,25 @@ export class AccountPartnerImportService {
     if (externalIdMaxLength < 1) {
       throw new Error(`Target ${ACCOUNT_PARTNER_EXTERNAL_ID_FIELD} has an invalid length`);
     }
-    return { externalIdMaxLength };
+    const nameField = partnerFields.get('name');
+    const nameFieldName = nameField?.name ?? 'Name';
+    const nameIsWritable = Boolean(
+      nameField?.createable
+      && nameField.updateable
+      && !nameField.calculated
+      && nameField.type?.toLowerCase() !== 'autonumber',
+    );
+    const nameMaxLength = nameField?.length ?? 80;
+    if (nameIsWritable && nameMaxLength < 1) {
+      throw new Error(`Target ${ACCOUNT_PARTNER_OBJECT}.${nameFieldName} has an invalid length`);
+    }
+    return {
+      externalIdMaxLength,
+      nameFieldName,
+      nameWriteConfig: nameIsWritable
+        ? { fieldName: nameFieldName, maxLength: nameMaxLength }
+        : undefined,
+    };
   }
 
   private orgLinkCustomer(

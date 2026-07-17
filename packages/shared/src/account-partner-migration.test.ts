@@ -13,6 +13,12 @@ import {
 
 const SOURCE = '11111111-1111-4111-8111-111111111111';
 const TARGET = '22222222-2222-4222-8222-222222222222';
+const targetAccounts = new Map([
+  ['123', { id: '001-account-id', key: '000123', name: 'North Market' }],
+]);
+const targetEmployees = new Map([
+  ['E-1', { id: '001-employee-id', key: 'E-1', name: 'Alex Employee' }],
+]);
 const validSoql = `SELECT
   cfs_ob__AccountPartnerExternalId__c,
   cfs_ob__PartnerRole__c,
@@ -47,8 +53,9 @@ describe('Account Partner migration contract', () => {
   it('joins nested relationship keys to target Accounts and Employee Masters', () => {
     const result = buildAccountPartnerMigrationRows({
       bottler: '5000',
-      targetAccountIds: new Map([['123', '001-account-id']]),
-      targetEmployeeIds: new Map([['E-1', '001-employee-id']]),
+      targetAccounts,
+      targetEmployees,
+      nameWriteConfig: { fieldName: 'Name', maxLength: 80 },
       records: [{
         cfs_ob__Bottler__c: '5000',
         cfs_ob__Sales_Office__c: 'S003',
@@ -65,9 +72,16 @@ describe('Account Partner migration contract', () => {
       cfs_ob__Bottler__c: '5000',
       [ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD]: '001-account-id',
       [ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD]: '001-employee-id',
+      Name: 'Alex Employee',
     });
-    assert.equal(result.previewRows[0]?.accountKey, '123');
+    assert.equal(result.previewRows[0]?.accountKey, '000123');
+    assert.equal(result.previewRows[0]?.accountName, 'North Market');
     assert.equal(result.previewRows[0]?.employeeKey, 'E-1');
+    assert.equal(result.previewRows[0]?.employeeName, 'Alex Employee');
+    assert.equal(result.previewRows[0]?.partnerName, 'Alex Employee');
+    assert.equal(result.previewRows[0]?.action, 'create');
+    assert.equal(result.stats.toCreate, 1);
+    assert.equal(result.stats.toUpdate, 0);
   });
 
   it('preserves source external IDs and reports invalid or duplicate mappings', () => {
@@ -81,8 +95,9 @@ describe('Account Partner migration contract', () => {
     };
     const result = buildAccountPartnerMigrationRows({
       bottler: '5000',
-      targetAccountIds: new Map([['123', '001-account-id']]),
-      targetEmployeeIds: new Map([['E-1', '001-employee-id']]),
+      targetAccounts,
+      targetEmployees,
+      existingExternalIds: new Set(['SOURCE-AP-1']),
       records: [
         valid,
         { ...valid, cfs_ob__AccountPartnerExternalId__c: 'DUPLICATE' },
@@ -93,9 +108,12 @@ describe('Account Partner migration contract', () => {
     });
 
     assert.equal(result.rows[0]?.[ACCOUNT_PARTNER_EXTERNAL_ID_FIELD], 'SOURCE-AP-1');
+    assert.equal(result.previewRows[0]?.action, 'update');
     assert.deepEqual(result.stats, {
       total: 5,
       ready: 1,
+      toCreate: 0,
+      toUpdate: 1,
       duplicates: 1,
       externalIdCollisions: 0,
       skippedWrongBottler: 1,
@@ -118,10 +136,10 @@ describe('Account Partner migration contract', () => {
     };
     const result = buildAccountPartnerMigrationRows({
       bottler: '5000',
-      targetAccountIds: new Map([['123', '001-account-id']]),
-      targetEmployeeIds: new Map([
-        ['E-1', '001-employee-1'],
-        ['E-2', '001-employee-2'],
+      targetAccounts,
+      targetEmployees: new Map([
+        ['E-1', { id: '001-employee-1', key: 'E-1', name: 'Alex Employee' }],
+        ['E-2', { id: '001-employee-2', key: 'E-2', name: 'Blair Employee' }],
       ]),
       records: [
         { ...base, [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1' },
@@ -136,8 +154,8 @@ describe('Account Partner migration contract', () => {
   it('fits generated or source external IDs to the described target length', () => {
     const result = buildAccountPartnerMigrationRows({
       bottler: '5000',
-      targetAccountIds: new Map([['123', '001-account-id']]),
-      targetEmployeeIds: new Map([['E-1', '001-employee-id']]),
+      targetAccounts,
+      targetEmployees,
       externalIdMaxLength: 32,
       records: [{
         cfs_ob__AccountPartnerExternalId__c: 'X'.repeat(300),

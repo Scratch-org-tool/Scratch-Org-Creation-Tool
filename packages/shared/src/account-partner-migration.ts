@@ -93,6 +93,8 @@ export type AccountPartnerMigrationInput = z.infer<typeof accountPartnerMigratio
 export interface AccountPartnerMigrationStats {
   total: number;
   ready: number;
+  toCreate: number;
+  toUpdate: number;
   duplicates: number;
   externalIdCollisions: number;
   skippedWrongBottler: number;
@@ -104,12 +106,27 @@ export interface AccountPartnerMigrationStats {
   skippedTargetEmployee: number;
 }
 
+export interface AccountPartnerTargetReference {
+  id: string;
+  key: string;
+  name: string;
+}
+
+export interface AccountPartnerNameWriteConfig {
+  fieldName: string;
+  maxLength: number;
+}
+
 export interface AccountPartnerMigrationResult {
   rows: Array<Record<string, string>>;
   previewRows: Array<{
     externalId: string;
     accountKey: string;
+    accountName: string;
     employeeKey: string;
+    employeeName: string;
+    partnerName: string;
+    action: 'create' | 'update';
     role: string;
     targetAccountId: string;
     targetEmployeeId: string;
@@ -149,9 +166,11 @@ export function resolveAccountPartnerMigrationSoql(
 export function buildAccountPartnerMigrationRows(input: {
   records: Array<Record<string, unknown>>;
   bottler: AccountPartnerMigrationInput['bottler'];
-  targetAccountIds: ReadonlyMap<string, string>;
-  targetEmployeeIds: ReadonlyMap<string, string>;
+  targetAccounts: ReadonlyMap<string, AccountPartnerTargetReference>;
+  targetEmployees: ReadonlyMap<string, AccountPartnerTargetReference>;
+  existingExternalIds?: ReadonlySet<string>;
   externalIdMaxLength?: number;
+  nameWriteConfig?: AccountPartnerNameWriteConfig;
 }): AccountPartnerMigrationResult {
   const rows: Array<Record<string, string>> = [];
   const previewRows: AccountPartnerMigrationResult['previewRows'] = [];
@@ -160,6 +179,8 @@ export function buildAccountPartnerMigrationRows(input: {
   const stats: AccountPartnerMigrationStats = {
     total: input.records.length,
     ready: 0,
+    toCreate: 0,
+    toUpdate: 0,
     duplicates: 0,
     externalIdCollisions: 0,
     skippedWrongBottler: 0,
@@ -201,13 +222,13 @@ export function buildAccountPartnerMigrationRows(input: {
       stats.skippedMissingRole += 1;
       continue;
     }
-    const targetAccountId = input.targetAccountIds.get(account);
-    if (!targetAccountId) {
+    const targetAccount = input.targetAccounts.get(account);
+    if (!targetAccount) {
       stats.skippedTargetAccount += 1;
       continue;
     }
-    const targetEmployeeId = input.targetEmployeeIds.get(employee);
-    if (!targetEmployeeId) {
+    const targetEmployee = input.targetEmployees.get(employee);
+    if (!targetEmployee) {
       stats.skippedTargetEmployee += 1;
       continue;
     }
@@ -233,20 +254,40 @@ export function buildAccountPartnerMigrationRows(input: {
     }
     seen.add(dedupeKey);
     seenExternalIds.set(externalId, dedupeKey);
-    rows.push({
+    const partnerName = targetEmployee.name
+      || [targetAccount.name, role].filter(Boolean).join(' — ')
+      || 'Account Partner';
+    const row: Record<string, string> = {
       [ACCOUNT_PARTNER_EXTERNAL_ID_FIELD]: externalId,
       [ACCOUNT_PARTNER_ROLE_FIELD]: role,
       [ACCOUNT_PARTNER_BOTTLER_FIELD]: input.bottler,
-      [ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD]: targetAccountId,
-      [ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD]: targetEmployeeId,
-    });
+      [ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD]: targetAccount.id,
+      [ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD]: targetEmployee.id,
+    };
+    if (input.nameWriteConfig) {
+      row[input.nameWriteConfig.fieldName] = partnerName.slice(
+        0,
+        input.nameWriteConfig.maxLength,
+      );
+    }
+    rows.push(row);
+    const action = input.existingExternalIds?.has(externalId) ? 'update' : 'create';
+    if (action === 'update') {
+      stats.toUpdate += 1;
+    } else {
+      stats.toCreate += 1;
+    }
     previewRows.push({
       externalId,
-      accountKey: account,
-      employeeKey: employee,
+      accountKey: targetAccount.key,
+      accountName: targetAccount.name,
+      employeeKey: targetEmployee.key,
+      employeeName: targetEmployee.name,
+      partnerName,
+      action,
       role,
-      targetAccountId,
-      targetEmployeeId,
+      targetAccountId: targetAccount.id,
+      targetEmployeeId: targetEmployee.id,
     });
   }
   stats.ready = rows.length;

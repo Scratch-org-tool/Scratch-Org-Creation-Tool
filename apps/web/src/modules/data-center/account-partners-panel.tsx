@@ -1,10 +1,28 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Check,
+  Circle,
+  Database,
+  Link2,
+  Loader2,
+  Search,
+  UploadCloud,
+  UserRound,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
-import { FormSection, InlineAlert, StatusBadge } from '@/components/studio';
+import {
+  FormSection,
+  InlineAlert,
+  LoadingOverlay,
+  StatCard,
+  StatCardGrid,
+  StatusBadge,
+} from '@/components/studio';
 import { useOrgs } from '@/hooks/use-orgs';
+import { cn } from '@/lib/utils';
 import { api } from '@/services/api';
 
 type Bottler = '5000' | '4900' | '4600';
@@ -12,6 +30,8 @@ type Bottler = '5000' | '4900' | '4600';
 interface MigrationStats {
   total: number;
   ready: number;
+  toCreate: number;
+  toUpdate: number;
   duplicates: number;
   externalIdCollisions: number;
   skippedWrongBottler: number;
@@ -29,10 +49,18 @@ interface MappingPreview {
   stats: MigrationStats;
   targetAccounts: number;
   targetEmployees: number;
+  nameField: {
+    fieldName: string;
+    mode: 'employee-master-name' | 'salesforce-managed';
+  };
   sample: Array<{
     externalId: string;
     accountKey: string;
+    accountName: string;
     employeeKey: string;
+    employeeName: string;
+    partnerName: string;
+    action: 'create' | 'update';
     role: string;
     targetAccountId: string;
     targetEmployeeId: string;
@@ -47,6 +75,37 @@ interface JobData {
 }
 
 const TERMINAL_STATUSES = ['completed', 'partial', 'failed', 'cancelled'];
+const MIGRATION_STEPS = [
+  {
+    label: 'Queued',
+    description: 'Migration job accepted',
+    icon: Database,
+  },
+  {
+    label: 'Match records',
+    description: 'Resolve target Accounts and Employee Masters',
+    icon: Search,
+  },
+  {
+    label: 'Prepare changes',
+    description: 'Separate records to create and update',
+    icon: Link2,
+  },
+  {
+    label: 'Apply changes',
+    description: 'Upsert Account Partners in Salesforce',
+    icon: UploadCloud,
+  },
+] as const;
+
+function migrationStage(job: JobData | null, logs: string[]) {
+  if (job?.status === 'completed') return MIGRATION_STEPS.length;
+  if (logs.some((line) => line.includes('Upserting '))) return 3;
+  if (logs.some((line) => line.includes('will be created'))) return 2;
+  if (logs.some((line) => line.includes('Validating '))) return 1;
+  return 0;
+}
+
 function defaultPartnerSoql(bottler: Bottler) {
   return `SELECT
   cfs_ob__AccountPartnerExternalId__c,
@@ -72,6 +131,7 @@ export function AccountPartnersPanel() {
   const [recordLimit, setRecordLimit] = useState(10_000);
   const [partnerSoql, setPartnerSoql] = useState(() => defaultPartnerSoql('5000'));
   const [preview, setPreview] = useState<MappingPreview | null>(null);
+  const [submittedPlan, setSubmittedPlan] = useState<MappingPreview | null>(null);
   const [action, setAction] = useState<'preview' | 'migrate' | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobData | null>(null);
@@ -168,14 +228,20 @@ export function AccountPartnersPanel() {
     setJobId(null);
     setJob(null);
     setLogs([]);
+    setSubmittedPlan(null);
     try {
       validate();
+      const migrationPlan = preview;
+      if (!migrationPlan?.ok) {
+        throw new Error('Build a valid migration plan before starting the migration');
+      }
       const result = await api<{ jobId: string }>('/data/account-partners/mapping/run', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
       setJobId(result.jobId);
       setJob({ id: result.jobId, status: 'queued' });
+      setSubmittedPlan(migrationPlan);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Account Partner migration failed');
     } finally {
@@ -185,20 +251,33 @@ export function AccountPartnersPanel() {
 
   const jobActive = ['pending', 'queued', 'running'].includes(job?.status ?? '');
   const configurationLocked = action !== null || jobActive;
-  const disabled =
+  const actionDisabled =
     !sourceOrgId
     || !targetOrgId
     || sourceOrgId === targetOrgId
     || !partnerSoql.trim()
     || action !== null
     || jobActive;
+  const currentJobStage = migrationStage(job, logs);
+  const jobFailed = ['failed', 'partial', 'cancelled'].includes(job?.status ?? '');
 
   return (
-    <div className="space-y-6">
+    <div className="relative space-y-6">
+      {action && (
+        <LoadingOverlay
+          label={action === 'preview' ? 'Building migration plan…' : 'Starting migration…'}
+          sublabel={
+            action === 'preview'
+              ? 'Matching source records to target Accounts and Employee Masters by business key.'
+              : 'Submitting the validated create and update plan to the background worker.'
+          }
+        />
+      )}
       <InlineAlert variant="info" title="Query-driven Account Partner migration">
         This migration creates or updates Account Partner records only. Referenced Accounts and
-        Employee Masters must already exist in the target org. Preview shows every mapping that
-        will be skipped before you migrate.
+        Employee Masters must already exist in the target org. The migration resolves their names
+        and IDs in the target, shows the names for review, and uses IDs only for Salesforce lookup
+        fields.
       </InlineAlert>
 
       <FormSection title="Orgs">
@@ -313,23 +392,35 @@ export function AccountPartnersPanel() {
       <div className="flex flex-wrap gap-2">
         <Button
           variant="outline"
-          disabled={disabled}
+          disabled={actionDisabled}
           loading={action === 'preview'}
           onClick={() => void handlePreview()}
         >
-          Preview mappings
+          Build migration plan
         </Button>
         <Button
-          disabled={disabled}
+          disabled={actionDisabled || !preview?.ok}
           loading={action === 'migrate'}
           onClick={() => void handleMigrate()}
         >
-          Migrate Account Partners
+          Create / update Account Partners
         </Button>
       </div>
+      {!preview && !jobActive && (
+        <p className="-mt-4 text-xs text-muted-foreground">
+          Build and review the migration plan before Salesforce changes are enabled.
+        </p>
+      )}
 
       {preview && (
-        <div className="space-y-4 rounded-lg border border-border/60 p-4">
+        <section className="space-y-5 rounded-xl border border-border/60 bg-card/40 p-5 shadow-sm">
+          <div>
+            <p className="text-sm font-semibold">Migration plan</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Names and business keys below come from the target org. Internal Salesforce IDs are
+              resolved in the background and are no longer used as display labels.
+            </p>
+          </div>
           <InlineAlert
             variant={preview.ok ? 'success' : 'warning'}
             title={preview.ok ? 'Mappings ready' : 'No mappings ready'}
@@ -337,55 +428,101 @@ export function AccountPartnersPanel() {
             {preview.stats.ready.toLocaleString()} of{' '}
             {preview.stats.total.toLocaleString()} queried records can be migrated.
           </InlineAlert>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              ['Ready', preview.stats.ready],
-              ['Skipped', skippedCount(preview.stats)],
-              ['Target Accounts', preview.targetAccounts],
-              ['Target Employees', preview.targetEmployees],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-md border border-border/60 p-3">
-                <p className="text-xs text-muted-foreground">{label}</p>
-                <p className="text-lg font-semibold">{Number(value).toLocaleString()}</p>
+          <InlineAlert
+            variant={preview.nameField.mode === 'employee-master-name' ? 'success' : 'warning'}
+            title={
+              preview.nameField.mode === 'employee-master-name'
+                ? 'Employee Master names will be written'
+                : 'Salesforce controls the Account Partner Name'
+            }
+          >
+            {preview.nameField.mode === 'employee-master-name'
+              ? `The target ${preview.nameField.fieldName} field is writable. Each Account Partner `
+                + 'will use its matched Employee Master name instead of an ID.'
+              : `The target ${preview.nameField.fieldName} field is auto-numbered or read-only, so `
+                + 'Salesforce—not this application—controls that value. The employee name is '
+                + 'still shown below and the Employee Master lookup is mapped correctly.'}
+          </InlineAlert>
+          <StatCardGrid cols={4}>
+            <StatCard
+              label="Create"
+              value={preview.stats.toCreate.toLocaleString()}
+              icon={UserRound}
+              trend="New Account Partners"
+            />
+            <StatCard
+              label="Update"
+              value={preview.stats.toUpdate.toLocaleString()}
+              icon={UploadCloud}
+              trend="Matched by external ID"
+            />
+            <StatCard
+              label="Skipped"
+              value={skippedCount(preview.stats).toLocaleString()}
+              icon={Circle}
+              trend="No Salesforce changes"
+            />
+            <StatCard
+              label="Source queried"
+              value={preview.stats.total.toLocaleString()}
+              icon={Database}
+              trend={`Maximum ${recordLimit.toLocaleString()}`}
+            />
+          </StatCardGrid>
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span className="rounded-full border border-border/60 bg-background/70 px-3 py-1.5">
+              {preview.targetAccounts.toLocaleString()} target Accounts indexed
+            </span>
+            <span className="rounded-full border border-border/60 bg-background/70 px-3 py-1.5">
+              {preview.targetEmployees.toLocaleString()} target Employee Masters indexed
+            </span>
+          </div>
+          {skippedCount(preview.stats) > 0 && (
+            <details className="rounded-lg border border-border/60 bg-background/50 p-3 text-xs">
+              <summary className="cursor-pointer font-medium">
+                Why {skippedCount(preview.stats).toLocaleString()} records will be skipped
+              </summary>
+              <div className="mt-3 grid gap-x-6 gap-y-2 text-muted-foreground sm:grid-cols-2">
+                <p>
+                  Missing target Accounts: {preview.stats.skippedTargetAccount.toLocaleString()}
+                </p>
+                <p>
+                  Missing target Employee Masters:{' '}
+                  {preview.stats.skippedTargetEmployee.toLocaleString()}
+                </p>
+                <p>Duplicate mappings: {preview.stats.duplicates.toLocaleString()}</p>
+                <p>
+                  External ID collisions:{' '}
+                  {preview.stats.externalIdCollisions.toLocaleString()}
+                </p>
+                <p>Wrong bottler: {preview.stats.skippedWrongBottler.toLocaleString()}</p>
+                <p>
+                  Missing source keys:{' '}
+                  {(
+                    preview.stats.skippedMissingAccountKey
+                    + preview.stats.skippedMissingEmployeeKey
+                  ).toLocaleString()}
+                </p>
+                <p>
+                  Missing office/role:{' '}
+                  {(
+                    preview.stats.skippedMissingOffice
+                    + preview.stats.skippedMissingRole
+                  ).toLocaleString()}
+                </p>
               </div>
-            ))}
-          </div>
-          <div className="grid gap-x-6 gap-y-1 text-xs text-muted-foreground sm:grid-cols-2">
-            <p>Missing target Accounts: {preview.stats.skippedTargetAccount.toLocaleString()}</p>
-            <p>
-              Missing target Employee Masters:{' '}
-              {preview.stats.skippedTargetEmployee.toLocaleString()}
-            </p>
-            <p>Duplicate mappings: {preview.stats.duplicates.toLocaleString()}</p>
-            <p>
-              External ID collisions:{' '}
-              {preview.stats.externalIdCollisions.toLocaleString()}
-            </p>
-            <p>Wrong bottler: {preview.stats.skippedWrongBottler.toLocaleString()}</p>
-            <p>
-              Missing source keys:{' '}
-              {(
-                preview.stats.skippedMissingAccountKey
-                + preview.stats.skippedMissingEmployeeKey
-              ).toLocaleString()}
-            </p>
-            <p>
-              Missing office/role:{' '}
-              {(
-                preview.stats.skippedMissingOffice
-                + preview.stats.skippedMissingRole
-              ).toLocaleString()}
-            </p>
-          </div>
+            </details>
+          )}
           {preview.sample.length > 0 && (
             <div className="overflow-x-auto rounded-md border border-border/60">
               <table className="w-full text-left text-xs">
                 <thead className="bg-secondary/40 text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2">External ID</th>
                     <th className="px-3 py-2">Account</th>
-                    <th className="px-3 py-2">Employee</th>
+                    <th className="px-3 py-2">Employee Master</th>
                     <th className="px-3 py-2">Role</th>
+                    <th className="px-3 py-2">Change</th>
+                    <th className="px-3 py-2">External ID</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -394,10 +531,43 @@ export function AccountPartnersPanel() {
                       key={`${row.externalId ?? 'mapping'}-${index}`}
                       className="border-t border-border/60"
                     >
-                      <td className="px-3 py-2 font-mono">{row.externalId}</td>
-                      <td className="px-3 py-2 font-mono">{row.accountKey}</td>
-                      <td className="px-3 py-2 font-mono">{row.employeeKey}</td>
+                      <td className="px-3 py-3">
+                        <p className="font-medium text-foreground">
+                          {row.accountName || 'Account name unavailable'}
+                        </p>
+                        <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                          Customer #{row.accountKey}
+                        </p>
+                      </td>
+                      <td className="px-3 py-3">
+                        <p className="font-medium text-foreground">
+                          {row.employeeName || 'Employee name unavailable'}
+                        </p>
+                        <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                          Employee #{row.employeeKey}
+                        </p>
+                        {preview.nameField.mode === 'employee-master-name' && (
+                          <p className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+                            Written to Account Partner Name
+                          </p>
+                        )}
+                      </td>
                       <td className="px-3 py-2">{row.role}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={cn(
+                            'inline-flex rounded-full px-2 py-0.5 font-medium',
+                            row.action === 'create'
+                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-blue-500/10 text-blue-700 dark:text-blue-300',
+                          )}
+                        >
+                          {row.action === 'create' ? 'Create' : 'Update'}
+                        </span>
+                      </td>
+                      <td className="max-w-56 truncate px-3 py-2 font-mono text-[11px]">
+                        {row.externalId}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -410,31 +580,97 @@ export function AccountPartnersPanel() {
               {preview.query}
             </pre>
           </details>
-        </div>
+        </section>
       )}
 
       {jobId && (
-        <div className="space-y-3 rounded-lg border border-border/60 p-4">
+        <section className="space-y-5 rounded-xl border border-border/60 bg-card/40 p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">Account Partner migration</p>
+            <div>
+              <p className="text-sm font-semibold">Account Partner migration</p>
+              <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                Job {jobId}
+              </p>
+            </div>
             {job?.status && <StatusBadge status={job.status} />}
           </div>
+          <ol
+            aria-label="Migration progress"
+            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+          >
+            {MIGRATION_STEPS.map((step, index) => {
+              const done = currentJobStage > index;
+              const active = currentJobStage === index && jobActive;
+              const failed = currentJobStage === index && jobFailed;
+              const StepIcon = step.icon;
+              return (
+                <li
+                  key={step.label}
+                  aria-current={active ? 'step' : undefined}
+                  className={cn(
+                    'rounded-lg border p-3 transition-colors',
+                    done && 'border-emerald-500/30 bg-emerald-500/5',
+                    active && 'border-primary/40 bg-primary/5',
+                    failed && 'border-destructive/40 bg-destructive/5',
+                    !done && !active && !failed && 'border-border/60 bg-background/40',
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'flex size-7 items-center justify-center rounded-full',
+                        done && 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
+                        active && 'bg-primary/10 text-primary',
+                        failed && 'bg-destructive/10 text-destructive',
+                        !done && !active && !failed && 'bg-muted text-muted-foreground',
+                      )}
+                    >
+                      {done ? (
+                        <Check className="size-3.5" />
+                      ) : active ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <StepIcon className="size-3.5" />
+                      )}
+                    </span>
+                    <p className="text-xs font-medium">{step.label}</p>
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {step.description}
+                  </p>
+                </li>
+              );
+            })}
+          </ol>
           {job?.error && <InlineAlert variant="error">{job.error}</InlineAlert>}
           {job?.status === 'completed' && (
-            <InlineAlert variant="success">
-              Account Partner migration completed successfully.
+            <InlineAlert variant="success" title="Account Partner migration completed">
+              {submittedPlan
+                ? `${submittedPlan.stats.toCreate.toLocaleString()} records were planned for `
+                  + `creation and ${submittedPlan.stats.toUpdate.toLocaleString()} for update.`
+                : 'All prepared Account Partner changes were submitted successfully.'}
             </InlineAlert>
           )}
-          <div className="studio-console h-52 overflow-y-auto rounded-lg p-3 text-xs">
-            {logs.length === 0 && (
-              <p className="text-muted-foreground">
-                {jobActive ? 'Preparing migration output…' : 'No job output was captured.'}
-              </p>
-            )}
-            {logs.map((line, index) => <div key={index}>{line}</div>)}
-            <div ref={logBottomRef} />
-          </div>
-        </div>
+          <details
+            key={jobFailed ? 'failed-output' : 'job-output'}
+            className="rounded-lg border border-border/60 bg-background/50 p-3 text-xs"
+            defaultOpen={jobFailed}
+          >
+            <summary className="cursor-pointer font-medium">Technical job output</summary>
+            <div className="studio-console mt-3 h-52 overflow-y-auto rounded-lg p-3 text-xs">
+              {logs.length === 0 && (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  {jobActive && <Loader2 className="size-3.5 animate-spin" />}
+                  <p>
+                    {jobActive ? 'Waiting for worker output…' : 'No job output was captured.'}
+                  </p>
+                </div>
+              )}
+              {logs.map((line, index) => <div key={index}>{line}</div>)}
+              <div ref={logBottomRef} />
+            </div>
+          </details>
+        </section>
       )}
     </div>
   );
