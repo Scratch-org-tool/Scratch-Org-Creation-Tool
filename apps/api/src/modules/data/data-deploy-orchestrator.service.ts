@@ -30,6 +30,7 @@ import { createSfCliClient } from '@sfcc/sf-cli';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { generateSfdmuConfigFromSoql } from './sfdmu-config.generator';
 import { BulkThrottleService } from './bulk-throttle.service';
+import { ensureBulkCsvLf } from './bulk-csv.util';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 import { ACTIVE_CHUNK_STATUSES, aggregateBatchStatus, countChunkStatuses } from './batch-status.util';
 import { isSafeIdempotentUpsertRetry } from './retry-safety.util';
@@ -518,6 +519,8 @@ export class DataDeployOrchestratorService implements OnModuleInit {
       if (!exportResult.success) {
         throw new Error(exportResult.error ?? 'Chunk boundary export failed');
       }
+
+      await ensureBulkCsvLf(idCsvPath);
 
       const ids = await this.readIdColumn(idCsvPath, batch.totalRecords);
       await log('stdout', `Found ${ids.length} record(s) to deploy`);

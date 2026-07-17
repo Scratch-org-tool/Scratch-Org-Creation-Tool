@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import { Logger, UnauthorizedException, type ExecutionContext } from '@nestjs/common';
 import type { StreamEvent } from '@sfcc/shared';
 
 const db = vi.hoisted(() => ({
@@ -49,6 +49,19 @@ class FakePubSubRedis {
   async publish(channel: string, message: string) {
     this.subscriber?.messageHandler?.(channel, message);
     return 1;
+  }
+}
+
+class FailingPubSubRedis {
+  duplicate() {
+    return {
+      subscribe: () => Promise.resolve(1),
+      on: () => undefined,
+    };
+  }
+
+  async publish() {
+    throw new Error('Redis unavailable');
   }
 }
 
@@ -176,5 +189,23 @@ describe('stream ownership', () => {
 
     expect(received).toHaveLength(1);
     expect(received[0].id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('falls back to local delivery when Redis publication fails', async () => {
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const service = new StreamService({
+      getConnection: () => new FailingPubSubRedis(),
+    } as never);
+    service.onModuleInit();
+    const received: StreamEvent[] = [];
+    service.subscribe(undefined, { userId: 'DPT_owner', isAdmin: false })
+      .subscribe((event) => received.push(event));
+    await Promise.resolve();
+
+    await expect(
+      service.publish('auth_status', { status: 'authorized' }, 'DPT_owner'),
+    ).resolves.toBeUndefined();
+
+    expect(received.map((event) => event.payload.status)).toEqual(['authorized']);
   });
 });

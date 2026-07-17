@@ -65,7 +65,7 @@ export class SafeExecFileAdapter implements ExecFileRunner {
         else stderr += text;
       };
 
-      child = spawn(
+      const spawned = spawn(
         file,
         [...args],
         {
@@ -75,6 +75,12 @@ export class SafeExecFileAdapter implements ExecFileRunner {
           detached: process.platform !== 'win32',
         },
       );
+      if (!spawned) {
+        stderr += 'Failed to start analyzer process';
+        finish(1);
+        return;
+      }
+      child = spawned;
       child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
       child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
       child.on('error', (error) => {

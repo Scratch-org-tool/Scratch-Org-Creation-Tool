@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
-import { escapeSoqlLiteral, ONBOARDING_CONFIG_OBJECT, ONBOARDING_CONFIG_QUEUE_MAP } from '@sfcc/shared';
+import { escapeSoqlLiteral, ONBOARDING_CONFIG_OBJECT, ONBOARDING_CONFIG_QUEUE_MAP, ONBOARDING_REQUEST_OBJECT } from '@sfcc/shared';
 
 export interface OrgConfigLoadOptions {
   upsertQueueIds?: boolean;
@@ -79,7 +79,7 @@ export class OrgConfigLoaderService {
     }
 
     if (flags.upsertRequestId) {
-      const createResult = await this.sfCli.createRecord(alias, 'u_Request__c', { Name: 'Sample Request for Config' });
+      const createResult = await this.sfCli.createRecord(alias, ONBOARDING_REQUEST_OBJECT, { Name: 'Sample Request for Config' });
       if (!createResult.success) {
         throw new Error(createResult.error ?? 'Failed to create temporary Request');
       }
@@ -87,7 +87,7 @@ export class OrgConfigLoaderService {
       if (!newId) {
         throw new Error('Salesforce did not return an id for the temporary Request');
       }
-      const deleteResult = await this.sfCli.deleteRecord(alias, 'u_Request__c', newId);
+      const deleteResult = await this.sfCli.deleteRecord(alias, ONBOARDING_REQUEST_OBJECT, newId);
       if (!deleteResult.success) {
         throw new Error(
           deleteResult.error

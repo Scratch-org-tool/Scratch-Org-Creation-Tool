@@ -12,6 +12,7 @@ import { JobsService } from '../modules/jobs/jobs.service';
 import { JobProcessRegistryService } from '../modules/jobs/job-process-registry.service';
 import { StreamService } from '../modules/stream/stream.service';
 import { BulkThrottleService } from '../modules/data/bulk-throttle.service';
+import { ensureBulkCsvLf } from '../modules/data/bulk-csv.util';
 import { DataDeployOrchestratorService } from '../modules/data/data-deploy-orchestrator.service';
 import { DataRollbackService } from '../modules/data/data-rollback.service';
 
@@ -209,6 +210,8 @@ export class DataDeployWorker {
       if (!exportResult.success) {
         throw new Error(exportResult.error ?? 'Bulk export failed');
       }
+
+      await ensureBulkCsvLf(csvPath);
 
       let recordCount = 0;
       try {

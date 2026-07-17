@@ -18,29 +18,38 @@ const DEFAULT_PLUGIN_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 
 class CsvLfNormalizer extends Transform {
   private pendingCr = false;
+  private bomChecked = false;
 
   _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-    const output = Buffer.allocUnsafe(chunk.length + 1);
+    let input = chunk;
+    if (!this.bomChecked) {
+      this.bomChecked = true;
+      if (input.length >= 3 && input[0] === 0xef && input[1] === 0xbb && input[2] === 0xbf) {
+        input = input.subarray(3);
+      }
+    }
+
+    const output = Buffer.allocUnsafe(input.length + 1);
     let inputIndex = 0;
     let outputIndex = 0;
 
     if (this.pendingCr) {
       output[outputIndex++] = 0x0a;
-      if (chunk[0] === 0x0a) inputIndex = 1;
+      if (input[0] === 0x0a) inputIndex = 1;
       this.pendingCr = false;
     }
 
-    for (; inputIndex < chunk.length; inputIndex += 1) {
-      const byte = chunk[inputIndex];
+    for (; inputIndex < input.length; inputIndex += 1) {
+      const byte = input[inputIndex];
       if (byte !== 0x0d) {
         output[outputIndex++] = byte;
         continue;
       }
-      if (inputIndex + 1 >= chunk.length) {
+      if (inputIndex + 1 >= input.length) {
         this.pendingCr = true;
       } else {
         output[outputIndex++] = 0x0a;
-        if (chunk[inputIndex + 1] === 0x0a) inputIndex += 1;
+        if (input[inputIndex + 1] === 0x0a) inputIndex += 1;
       }
     }
     callback(null, output.subarray(0, outputIndex));
@@ -929,6 +938,7 @@ export class SfCliClient extends EventEmitter {
       '--target-org', targetOrg,
       '--output-file', outputFile,
       '--result-format', 'csv',
+      '--line-ending', 'LF',
       '--wait', String(waitMinutes),
     ], undefined, {
       cwd: options?.cwd,

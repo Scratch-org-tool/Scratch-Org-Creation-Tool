@@ -8,6 +8,7 @@ import {
   parseBulkCsv,
   selectCompiledSupportQueries,
   serializeBulkCsv,
+  normalizeBulkCsvLineEndings,
 } from './query-runtime.js';
 
 describe('query runtime checkpoints', () => {
@@ -156,6 +157,11 @@ describe('query runtime CSV and office support', () => {
       () => parseBulkCsv('Id,Name\n1,Jane,extra\n'),
       /has 3 columns; expected 2/,
     );
+  });
+
+  it('normalizes Windows CRLF and UTF-8 BOM bulk exports to LF', () => {
+    const normalized = normalizeBulkCsvLineEndings('\uFEFFName,Value\r\nA,1\r\n');
+    assert.equal(normalized, 'Name,Value\nA,1\n');
   });
 
   it('selects support rows by compiled query ID and office without overwriting variants', () => {

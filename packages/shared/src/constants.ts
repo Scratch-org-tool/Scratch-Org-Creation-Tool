@@ -85,6 +85,7 @@ export const USER_TRIGGERED_PIPELINE_STEPS = [
 export type UserTriggeredPipelineStepId = (typeof USER_TRIGGERED_PIPELINE_STEPS)[number];
 
 export const ONBOARDING_CONFIG_OBJECT = 'cfs_ob__OnboardingConfig__c';
+export const ONBOARDING_REQUEST_OBJECT = 'cfs_ob__u_Request__c';
 
 export const ONBOARDING_CONFIG_QUEUE_MAP = {
   u_Commissions_User_Group: 'cfs_ob__Commissions_Queue_Id__c',

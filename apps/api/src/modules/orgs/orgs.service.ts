@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { prisma } from '@sfcc/db';
-import { createSfCliClient } from '@sfcc/sf-cli';
+import { createSfCliClient, type SfCommandResult } from '@sfcc/sf-cli';
 import { encrypt, decrypt } from '../../common/crypto.util';
 import { resolveOrgTypeFromInstance } from '../../common/org-type.util';
 import { StreamService } from '../stream/stream.service';
@@ -12,16 +18,28 @@ interface ActiveAuth {
   orgId: string;
 }
 
-function mapSfAuthError(message: string): Error {
+type AuthorizationOutcomeStatus = 'authorized' | 'failed' | 'cancelled';
+
+interface AuthorizationOutcome {
+  status: AuthorizationOutcomeStatus;
+  error?: string;
+  recordedAt: number;
+}
+
+const AUTHORIZATION_OUTCOME_TTL_MS = 10 * 60 * 1000;
+
+function describeSfAuthError(message: string): string {
   if (message.includes('1717') || message.toLowerCase().includes('oauth redirect server')) {
-    return new BadRequestException(
-      'Salesforce OAuth port 1717 is already in use. Click Stop on any in-progress connect, run `npm run dev:restart`, then try again.',
-    );
+    return 'Salesforce OAuth port 1717 is already in use. Click Stop on any in-progress connect, run `npm run dev:restart`, then try again.';
   }
   if (message.toLowerCase().includes('authorization cancelled') || message.toLowerCase().includes('cancelled')) {
-    return new BadRequestException('Authorization was cancelled.');
+    return 'Authorization was cancelled.';
   }
-  return new BadRequestException(message);
+  return message;
+}
+
+function mapSfAuthError(message: string): Error {
+  return new BadRequestException(describeSfAuthError(message));
 }
 
 function resolveAuthorizeOrgType(input: AuthorizeOrgInput): 'prod' | 'sandbox' {
@@ -43,8 +61,10 @@ function isScratchOrgAlreadyGone(error?: string): boolean {
 
 @Injectable()
 export class OrgsService {
+  private readonly logger = new Logger(OrgsService.name);
   private readonly sfCli = createSfCliClient();
   private readonly activeAuthorizations = new Map<string, ActiveAuth>();
+  private readonly authorizationOutcomes = new Map<string, AuthorizationOutcome>();
 
   constructor(private readonly streamService: StreamService) {}
 
@@ -83,23 +103,25 @@ export class OrgsService {
   async cancelAuthorize(alias: string, userId?: string) {
     if (userId) await this.requireOrgByAlias(alias, userId);
     const active = this.activeAuthorizations.get(alias);
-    if (active) {
-      active.kill();
-      this.activeAuthorizations.delete(alias);
+    const org = await prisma.orgConnection.findUnique({ where: { alias } });
+    if (!org || org.status !== 'authorizing') {
+      return { cancelled: false, alias, status: org?.status ?? 'not_found' };
     }
 
-    const org = await prisma.orgConnection.findUnique({ where: { alias } });
-    if (org?.status === 'authorizing') {
-      await prisma.orgConnection.update({
-        where: { alias },
-        data: { status: 'revoked' },
-      });
-      await this.streamService.publish('auth_status', {
-        orgId: org.id,
-        alias,
-        status: 'cancelled',
-      }, org.createdBy);
+    active?.kill();
+    if (this.activeAuthorizations.get(alias) === active) {
+      this.activeAuthorizations.delete(alias);
     }
+    await prisma.orgConnection.update({
+      where: { alias },
+      data: { status: 'revoked' },
+    });
+    this.rememberAuthorizationOutcome(alias, 'cancelled');
+    this.publishAuthStatus({
+      orgId: org.id,
+      alias,
+      status: 'cancelled',
+    }, org.createdBy);
 
     try {
       await this.sfCli.logout(alias);
@@ -112,7 +134,7 @@ export class OrgsService {
 
   async authorize(input: AuthorizeOrgInput, userId = 'system') {
     if (this.activeAuthorizations.has(input.alias)) {
-      throw new Error(`Authorization already in progress for alias "${input.alias}"`);
+      throw new ConflictException(`Authorization already in progress for alias "${input.alias}"`);
     }
 
     const existing = await prisma.orgConnection.findUnique({ where: { alias: input.alias } });
@@ -142,39 +164,85 @@ export class OrgsService {
           },
         });
 
-    await this.streamService.publish('auth_status', {
+    try {
+      const authorization = this.sfCli.loginWebCancellable(
+        input.alias,
+        input.instanceUrl,
+        input.isDevHub,
+      );
+      const active = { kill: authorization.kill, orgId: org.id };
+      this.activeAuthorizations.set(input.alias, active);
+      this.authorizationOutcomes.delete(input.alias);
+      this.publishAuthStatus({
+        orgId: org.id,
+        alias: input.alias,
+        status: 'authorizing',
+      }, userId);
+      void this.completeAuthorization(
+        input,
+        userId,
+        orgType,
+        active,
+        authorization.promise,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.markAuthorizationFailed(org.id, input.alias, userId, message);
+      throw mapSfAuthError(message);
+    }
+
+    // Browser-based OAuth can take several minutes. Return immediately and
+    // report completion through auth_status events and the status endpoint.
+    return this.sanitizeOrg(org);
+  }
+
+  async getAuthorizationStatus(alias: string, userId: string) {
+    const org = await this.requireOrgByAlias(alias, userId);
+    if (org.status === 'active') {
+      return { alias, orgId: org.id, status: 'authorized' as const };
+    }
+
+    const outcome = this.getAuthorizationOutcome(alias);
+    if (outcome) {
+      return {
+        alias,
+        orgId: org.id,
+        status: outcome.status,
+        ...(outcome.error ? { error: outcome.error } : {}),
+      };
+    }
+
+    if (org.status === 'authorizing') {
+      return { alias, orgId: org.id, status: 'authorizing' as const };
+    }
+
+    return {
+      alias,
       orgId: org.id,
-      alias: input.alias,
-      status: 'authorizing',
-    }, userId);
+      status: 'failed' as const,
+      error: 'Authorization did not complete. Start the connection again.',
+    };
+  }
 
-    const { promise, kill } = this.sfCli.loginWebCancellable(
-      input.alias,
-      input.instanceUrl,
-      input.isDevHub,
-    );
-
-    this.activeAuthorizations.set(input.alias, { kill, orgId: org.id });
-
+  private async completeAuthorization(
+    input: AuthorizeOrgInput,
+    userId: string,
+    orgType: 'prod' | 'sandbox',
+    active: ActiveAuth,
+    promise: Promise<SfCommandResult>,
+  ): Promise<void> {
     try {
       const result = await promise;
-
-      if (!this.activeAuthorizations.has(input.alias)) {
-        throw new Error('Authorization was cancelled');
-      }
+      if (this.activeAuthorizations.get(input.alias) !== active) return;
 
       if (!result.success) {
-        await prisma.orgConnection.update({
-          where: { id: org.id },
-          data: { status: 'revoked' },
-        });
-        await this.streamService.publish('auth_status', {
-          orgId: org.id,
-          alias: input.alias,
-          status: 'failed',
-          error: result.error,
-        }, userId);
-        throw mapSfAuthError(result.error ?? 'Authorization failed');
+        await this.markAuthorizationFailed(
+          active.orgId,
+          input.alias,
+          userId,
+          result.error ?? 'Salesforce authorization failed.',
+        );
+        return;
       }
 
       const data = result.data as {
@@ -186,48 +254,105 @@ export class OrgsService {
           orgId?: string;
         };
       };
-
-      const r = data?.result;
-      const updated = await prisma.orgConnection.update({
-        where: { id: org.id },
+      const authorized = data?.result;
+      await prisma.orgConnection.update({
+        where: { id: active.orgId },
         data: {
           status: 'active',
           type: orgType,
-          accessToken: r?.accessToken ? encrypt(r.accessToken) : null,
-          refreshToken: r?.refreshToken ? encrypt(r.refreshToken) : null,
-          instanceUrl: r?.instanceUrl ?? input.instanceUrl,
-          username: r?.username,
-          orgId: r?.orgId,
+          accessToken: authorized?.accessToken ? encrypt(authorized.accessToken) : null,
+          refreshToken: authorized?.refreshToken ? encrypt(authorized.refreshToken) : null,
+          instanceUrl: authorized?.instanceUrl ?? input.instanceUrl,
+          username: authorized?.username,
+          orgId: authorized?.orgId,
         },
       });
 
-      await this.streamService.publish('auth_status', {
-        orgId: org.id,
+      this.rememberAuthorizationOutcome(input.alias, 'authorized');
+      this.publishAuthStatus({
+        orgId: active.orgId,
         alias: input.alias,
         status: 'authorized',
       }, userId);
-
-      return this.sanitizeOrg(updated);
     } catch (error) {
-      const wasCancelled = !this.activeAuthorizations.has(input.alias);
-      if (!wasCancelled) {
-        const message = error instanceof Error ? error.message : String(error);
-        await prisma.orgConnection.update({
-          where: { id: org.id },
-          data: { status: 'revoked' },
-        }).catch(() => undefined);
-        await this.streamService.publish('auth_status', {
-          orgId: org.id,
-          alias: input.alias,
-          status: 'failed',
-          error: message,
-        }, userId);
-        throw mapSfAuthError(message);
-      }
-      throw new BadRequestException('Authorization cancelled');
+      if (this.activeAuthorizations.get(input.alias) !== active) return;
+      this.logger.error(
+        `Failed to finish Salesforce authorization for alias "${input.alias}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await this.markAuthorizationFailed(
+        active.orgId,
+        input.alias,
+        userId,
+        'Salesforce authorization completed, but the connection could not be saved. Try again.',
+      );
     } finally {
-      this.activeAuthorizations.delete(input.alias);
+      if (this.activeAuthorizations.get(input.alias) === active) {
+        this.activeAuthorizations.delete(input.alias);
+      }
     }
+  }
+
+  private async markAuthorizationFailed(
+    orgId: string,
+    alias: string,
+    userId: string,
+    rawMessage: string,
+  ): Promise<void> {
+    const message = describeSfAuthError(rawMessage);
+    try {
+      await prisma.orgConnection.update({
+        where: { id: orgId },
+        data: { status: 'revoked' },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to persist authorization failure for alias "${alias}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    this.rememberAuthorizationOutcome(alias, 'failed', message);
+    this.publishAuthStatus({
+      orgId,
+      alias,
+      status: 'failed',
+      error: message,
+    }, userId);
+  }
+
+  private publishAuthStatus(payload: Record<string, unknown>, ownerId: string): void {
+    void this.streamService.publish('auth_status', payload, ownerId).catch((error) => {
+      // Status polling remains available if event delivery is unavailable.
+      this.logger.warn(
+        `Could not publish Salesforce authorization status: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+  }
+
+  private rememberAuthorizationOutcome(
+    alias: string,
+    status: AuthorizationOutcomeStatus,
+    error?: string,
+  ): void {
+    const now = Date.now();
+    for (const [key, outcome] of this.authorizationOutcomes) {
+      if (now - outcome.recordedAt > AUTHORIZATION_OUTCOME_TTL_MS) {
+        this.authorizationOutcomes.delete(key);
+      }
+    }
+    this.authorizationOutcomes.set(alias, { status, error, recordedAt: now });
+  }
+
+  private getAuthorizationOutcome(alias: string): AuthorizationOutcome | undefined {
+    const outcome = this.authorizationOutcomes.get(alias);
+    if (!outcome) return undefined;
+    if (Date.now() - outcome.recordedAt <= AUTHORIZATION_OUTCOME_TTL_MS) return outcome;
+    this.authorizationOutcomes.delete(alias);
+    return undefined;
   }
 
   async revoke(alias: string, userId: string) {
