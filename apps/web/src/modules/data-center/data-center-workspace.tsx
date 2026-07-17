@@ -1,15 +1,34 @@
 'use client';
 
 import { Suspense } from 'react';
+import dynamic from 'next/dynamic';
 import { FileCode, RefreshCw, Sprout, UsersRound } from 'lucide-react';
-import { PageSkeleton, TabbedWorkspaceShell, type WorkspaceTab } from '@/components/studio';
+import {
+  LazyTabPanel,
+  PageSkeleton,
+  TabbedWorkspaceShell,
+  type WorkspaceTab,
+} from '@/components/studio';
 import { DataCenterPageHeader } from './data-center-page-header';
 import { ConaSeedDeploymentForm } from './cona-seed-deployment-form';
-import { AccountPartnersPanel } from './account-partners-panel';
-import { ReplicationPanel } from './replication-panel';
-import { QueryTemplatesPanel } from './query-templates-panel';
 import { useDataCenterWorkspace } from './use-data-center-workspace';
 import type { DataCenterTab } from './types';
+
+// Non-default tabs are code-split and mounted on first visit only. Mounting
+// all four panels eagerly made every visit pay for four panels' worth of
+// JavaScript, effects, and org fetches.
+const AccountPartnersPanel = dynamic(
+  () => import('./account-partners-panel').then((m) => m.AccountPartnersPanel),
+  { ssr: false, loading: () => <PageSkeleton /> },
+);
+const ReplicationPanel = dynamic(
+  () => import('./replication-panel').then((m) => m.ReplicationPanel),
+  { ssr: false, loading: () => <PageSkeleton /> },
+);
+const QueryTemplatesPanel = dynamic(
+  () => import('./query-templates-panel').then((m) => m.QueryTemplatesPanel),
+  { ssr: false, loading: () => <PageSkeleton /> },
+);
 
 // Org-to-org record deployment (the old "Generic deploy" tab) lives in the
 // Deployment Workbench data flow now — Data Operations keeps only the jobs
@@ -57,18 +76,18 @@ function DataCenterWorkspaceInner() {
       activeTab={w.activeTab}
       onTabChange={(id) => w.setTab(id as DataCenterTab)}
     >
-      <div hidden={w.activeTab !== 'cona'}>
+      <LazyTabPanel active={w.activeTab === 'cona'}>
         <ConaSeedDeploymentForm embedded />
-      </div>
-      <div hidden={w.activeTab !== 'account-partners'}>
+      </LazyTabPanel>
+      <LazyTabPanel active={w.activeTab === 'account-partners'}>
         <AccountPartnersPanel />
-      </div>
-      <div hidden={w.activeTab !== 'replication'}>
+      </LazyTabPanel>
+      <LazyTabPanel active={w.activeTab === 'replication'}>
         <ReplicationPanel />
-      </div>
-      <div hidden={w.activeTab !== 'templates'}>
+      </LazyTabPanel>
+      <LazyTabPanel active={w.activeTab === 'templates'}>
         <QueryTemplatesPanel />
-      </div>
+      </LazyTabPanel>
     </TabbedWorkspaceShell>
   );
 }

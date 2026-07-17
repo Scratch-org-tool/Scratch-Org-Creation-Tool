@@ -126,6 +126,45 @@ export function preflightKey(payload: Record<string, unknown>): string {
   return JSON.stringify(normalized);
 }
 
+/**
+ * Toggle a whole page of record ids: select every id unless all of them are
+ * already selected, in which case deselect them. Ids the caller could not
+ * resolve (empty strings) never enter the selection. Returns the original
+ * set when nothing changes so React state updates can bail out.
+ */
+export function toggleAllSelection(
+  current: ReadonlySet<string>,
+  recordIds: string[],
+): Set<string> {
+  const ids = recordIds.filter(Boolean);
+  if (ids.length === 0) return new Set(current);
+  const allSelected = ids.every((id) => current.has(id));
+  const next = new Set(current);
+  if (allSelected) {
+    for (const id of ids) next.delete(id);
+  } else {
+    for (const id of ids) next.add(id);
+  }
+  return next;
+}
+
+/**
+ * Fingerprint of the config fields that determine a filter-preview query.
+ * When the stored preview was produced by an identical config, the review
+ * step can reuse it instead of re-querying the org.
+ */
+export function previewStateKey(config: OrgToOrgObjectDeployConfig): string {
+  return JSON.stringify({
+    objectName: config.objectName,
+    recordLimit: config.recordLimit,
+    filters: config.filters,
+    selectedReferenceFields: config.selectedReferenceFields,
+    selectedDeployFields: config.selectedDeployFields,
+    queryMode: config.queryMode ?? 'builder',
+    customSoql: config.customSoql?.trim() ?? '',
+  });
+}
+
 export function isCurrentConfigurationRequest(
   request: number,
   currentRequest: number,

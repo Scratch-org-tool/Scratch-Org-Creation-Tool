@@ -202,6 +202,7 @@ export function OrgToOrgDeployPanel() {
                 selectedRecordIds={w.selectedRecordIds}
                 onToggleRecord={w.toggleRecord}
                 onToggleAll={w.toggleAllRecordsForObject}
+                onClearSelection={w.clearRecordSelection}
               />
               {w.preflightResult?.quotaSummary && (
                 <InlineAlert variant={w.preflightResult.quotaSummary.sufficient ? 'info' : 'error'}>
