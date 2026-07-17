@@ -1241,3 +1241,71 @@ model LearnedDependency {
   @@unique([fromNodeKey, toNodeKey])
   @@index([fromNodeKey])
 }
+
+/* ------------------------------------------------------------------ */
+/* Salesforce Academy (learning module)                                */
+/*                                                                     */
+/* Curriculum content is versioned in code (apps/api learning module); */
+/* the database only captures per-user training state so admin reports */
+/* survive curriculum updates.                                         */
+/* ------------------------------------------------------------------ */
+
+/// Admin-assigned learning path for a user. status: active | revoked.
+model LearningAssignment {
+  id         String    @id @default(uuid())
+  userId     String
+  pathId     String
+  assignedBy String
+  note       String?
+  dueAt      DateTime?
+  status     String    @default("active")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([userId, pathId])
+  @@index([userId, status])
+  @@index([pathId, status])
+  @@index([assignedBy])
+}
+
+/// One row per lesson a user has completed (idempotent on re-complete).
+model LearningLessonProgress {
+  id          String   @id @default(uuid())
+  userId      String
+  pathId      String
+  moduleId    String
+  lessonId    String
+  completedAt DateTime @default(now())
+
+  @@unique([userId, lessonId])
+  @@index([userId, pathId])
+  @@index([userId, moduleId])
+  @@index([pathId, completedAt])
+}
+
+/// Server-scored quiz session. `questions` retains the full question set
+/// INCLUDING correct answers + explanations (never sent to the client while
+/// status = in_progress); `answers` stores the learner's submission for review.
+model LearningQuizAttempt {
+  id             String    @id @default(uuid())
+  userId         String
+  pathId         String
+  moduleId       String
+  status         String    @default("in_progress")
+  source         String    @default("static")
+  questions      Json
+  answers        Json?
+  totalQuestions Int
+  correctCount   Int       @default(0)
+  scorePercent   Int       @default(0)
+  passed         Boolean   @default(false)
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId, moduleId, status])
+  @@index([userId, pathId])
+  @@index([moduleId, passed])
+  @@index([userId, completedAt])
+}
