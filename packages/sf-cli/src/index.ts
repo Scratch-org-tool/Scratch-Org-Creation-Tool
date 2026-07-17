@@ -5,13 +5,52 @@ import { type ChildProcess } from 'child_process';
 // with errors like "FROM was unexpected at this time.".
 import spawn from 'cross-spawn';
 import { EventEmitter } from 'events';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { Transform, type TransformCallback } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 const DEFAULT_STREAM_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const TERMINATION_GRACE_MS = 5000;
 const DEFAULT_PLUGIN_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+class CsvLfNormalizer extends Transform {
+  private pendingCr = false;
+
+  _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+    const output = Buffer.allocUnsafe(chunk.length + 1);
+    let inputIndex = 0;
+    let outputIndex = 0;
+
+    if (this.pendingCr) {
+      output[outputIndex++] = 0x0a;
+      if (chunk[0] === 0x0a) inputIndex = 1;
+      this.pendingCr = false;
+    }
+
+    for (; inputIndex < chunk.length; inputIndex += 1) {
+      const byte = chunk[inputIndex];
+      if (byte !== 0x0d) {
+        output[outputIndex++] = byte;
+        continue;
+      }
+      if (inputIndex + 1 >= chunk.length) {
+        this.pendingCr = true;
+      } else {
+        output[outputIndex++] = 0x0a;
+        if (chunk[inputIndex + 1] === 0x0a) inputIndex += 1;
+      }
+    }
+    callback(null, output.subarray(0, outputIndex));
+  }
+
+  _flush(callback: TransformCallback) {
+    if (this.pendingCr) this.push(Buffer.from('\n'));
+    callback();
+  }
+}
 
 export type RequiredSfPluginId = 'sfdmu' | 'code-analyzer';
 
@@ -374,6 +413,28 @@ export class SfCliClient extends EventEmitter {
     this.cliPath = options.cliPath ?? process.env.SF_CLI_PATH ?? 'sf';
     this.cwd = options.cwd ?? process.cwd();
     this.env = { ...process.env, ...options.env };
+  }
+
+  private async prepareBulkCsv(file: string, cwd?: string) {
+    const sourcePath = path.isAbsolute(file) ? file : path.resolve(cwd ?? this.cwd, file);
+    const normalizedPath = path.join(
+      tmpdir(),
+      `sfcc-bulk-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`,
+    );
+    try {
+      await pipeline(
+        createReadStream(sourcePath),
+        new CsvLfNormalizer(),
+        createWriteStream(normalizedPath, { flags: 'wx' }),
+      );
+      return {
+        file: normalizedPath,
+        cleanup: () => fs.rm(normalizedPath, { force: true }),
+      };
+    } catch (error) {
+      await fs.rm(normalizedPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async run<T = unknown>(
@@ -872,18 +933,23 @@ export class SfCliClient extends EventEmitter {
     waitMinutes = 10,
     options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
   ): Promise<SfCommandResult> {
-    return this.runStreaming([
-      'data', 'import', 'bulk',
-      '--sobject', sobject,
-      '--file', file,
-      '--target-org', targetOrg,
-      '--wait', String(waitMinutes),
-      '--line-ending', 'LF',
-    ], undefined, {
-      cwd: options?.cwd,
-      onSpawn: options?.onSpawn,
-      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
-    });
+    const csv = await this.prepareBulkCsv(file, options?.cwd);
+    try {
+      return await this.runStreaming([
+        'data', 'import', 'bulk',
+        '--sobject', sobject,
+        '--file', csv.file,
+        '--target-org', targetOrg,
+        '--wait', String(waitMinutes),
+        '--line-ending', 'LF',
+      ], undefined, {
+        cwd: options?.cwd,
+        onSpawn: options?.onSpawn,
+        timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+      });
+    } finally {
+      await csv.cleanup();
+    }
   }
 
   /** Bulk upsert by external id — safe to re-run (idempotent per external id). */
@@ -1176,19 +1242,24 @@ export class SfCliClient extends EventEmitter {
     waitMinutes = 15,
     options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
   ): Promise<SfCommandResult> {
-    return this.runStreaming([
-      'data', 'upsert', 'bulk',
-      '-f', file,
-      '-s', sobject,
-      '-i', externalId,
-      '--target-org', targetOrg,
-      '--wait', String(waitMinutes),
-      '--line-ending', 'CRLF',
-    ], undefined, {
-      cwd: options?.cwd,
-      onSpawn: options?.onSpawn,
-      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
-    });
+    const csv = await this.prepareBulkCsv(file, options?.cwd);
+    try {
+      return await this.runStreaming([
+        'data', 'upsert', 'bulk',
+        '-f', csv.file,
+        '-s', sobject,
+        '-i', externalId,
+        '--target-org', targetOrg,
+        '--wait', String(waitMinutes),
+        '--line-ending', 'LF',
+      ], undefined, {
+        cwd: options?.cwd,
+        onSpawn: options?.onSpawn,
+        timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+      });
+    } finally {
+      await csv.cleanup();
+    }
   }
 
   async updateBulk(
@@ -1198,18 +1269,23 @@ export class SfCliClient extends EventEmitter {
     waitMinutes = 15,
     options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
   ): Promise<SfCommandResult> {
-    return this.runStreaming([
-      'data', 'update', 'bulk',
-      '-f', file,
-      '-s', sobject,
-      '--target-org', targetOrg,
-      '--wait', String(waitMinutes),
-      '--line-ending', 'CRLF',
-    ], undefined, {
-      cwd: options?.cwd,
-      onSpawn: options?.onSpawn,
-      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
-    });
+    const csv = await this.prepareBulkCsv(file, options?.cwd);
+    try {
+      return await this.runStreaming([
+        'data', 'update', 'bulk',
+        '-f', csv.file,
+        '-s', sobject,
+        '--target-org', targetOrg,
+        '--wait', String(waitMinutes),
+        '--line-ending', 'LF',
+      ], undefined, {
+        cwd: options?.cwd,
+        onSpawn: options?.onSpawn,
+        timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+      });
+    } finally {
+      await csv.cleanup();
+    }
   }
 
   async deleteBulk(
@@ -1219,18 +1295,23 @@ export class SfCliClient extends EventEmitter {
     waitMinutes = 15,
     options?: { cwd?: string; onSpawn?: (proc: ChildProcess) => void },
   ): Promise<SfCommandResult> {
-    return this.runStreaming([
-      'data', 'delete', 'bulk',
-      '-f', file,
-      '-s', sobject,
-      '--target-org', targetOrg,
-      '--wait', String(waitMinutes),
-      '--line-ending', 'CRLF',
-    ], undefined, {
-      cwd: options?.cwd,
-      onSpawn: options?.onSpawn,
-      timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
-    });
+    const csv = await this.prepareBulkCsv(file, options?.cwd);
+    try {
+      return await this.runStreaming([
+        'data', 'delete', 'bulk',
+        '-f', csv.file,
+        '-s', sobject,
+        '--target-org', targetOrg,
+        '--wait', String(waitMinutes),
+        '--line-ending', 'LF',
+      ], undefined, {
+        cwd: options?.cwd,
+        onSpawn: options?.onSpawn,
+        timeoutMs: waitMinutesToTimeoutMs(waitMinutes),
+      });
+    } finally {
+      await csv.cleanup();
+    }
   }
 
   async listMetadataTypes(alias: string): Promise<SfCommandResult<{

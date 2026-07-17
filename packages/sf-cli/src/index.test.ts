@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -69,6 +70,47 @@ describe('formatRecordValues', () => {
       }),
       "Name='O\\'Brien & Sons' Empty='' Path='C:\\\\Temp' Plain=Acme",
     );
+  });
+});
+
+describe('Salesforce bulk CSV line endings', () => {
+  it('normalizes CSV bytes to LF before bulk import and upsert', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sfcc-bulk-csv-'));
+    writeFileSync(join(root, 'import.csv'), 'Name,Value\r\nA,1\r\n');
+    writeFileSync(join(root, 'upsert.csv'), 'Name,ExternalId\nA,1\n');
+    const client = new SfCliClient({ cwd: root });
+    const received: Array<{ args: string[]; content: string; file: string }> = [];
+    client.runStreaming = async (args) => {
+      const fileFlag = args.includes('--file') ? '--file' : '-f';
+      const normalizedFile = args[args.indexOf(fileFlag) + 1];
+      received.push({
+        args,
+        content: readFileSync(normalizedFile, 'utf8'),
+        file: normalizedFile,
+      });
+      return { success: true, stdout: '', stderr: '', exitCode: 0 };
+    };
+
+    try {
+      await client.importBulk('Example__c', 'import.csv', 'target');
+      await client.upsertBulk('Example__c', 'upsert.csv', 'ExternalId', 'target');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    assert.deepEqual(
+      received.map(({ args }) =>
+        args.slice(args.indexOf('--line-ending'), args.indexOf('--line-ending') + 2)),
+      [
+        ['--line-ending', 'LF'],
+        ['--line-ending', 'LF'],
+      ],
+    );
+    assert.deepEqual(
+      received.map(({ content }) => content),
+      ['Name,Value\nA,1\n', 'Name,ExternalId\nA,1\n'],
+    );
+    assert.equal(received.every(({ file }) => !existsSync(file)), true);
   });
 });
 

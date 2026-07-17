@@ -36,6 +36,14 @@ interface ManualAccountQuery {
 
 type ManualOnboardingQuery = ManualAccountQuery;
 
+interface SeedValidationCheck {
+  dataset: string;
+  count: number;
+  ok: boolean;
+  availableCount?: number;
+  requestedMaximum?: number;
+}
+
 interface JobData {
   id: string;
   status: string;
@@ -88,7 +96,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     useState<ManualOnboardingQuery[]>([{ ...DEFAULT_ONBOARDING_QUERY }]);
   const [preview, setPreview] = useState<{
     ok?: boolean;
-    checks?: Array<{ dataset: string; count: number; ok: boolean }>;
+    checks?: SeedValidationCheck[];
     rows?: Array<AccountSeedRow & { availableCount: number; soql: string }>;
     manualQueries?: Array<ManualAccountQuery & {
       availableCount: number;
@@ -199,7 +207,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
       const [validation, accountPreview] = await Promise.all([
         api<{
           ok: boolean;
-          checks: Array<{ dataset: string; count: number; ok: boolean }>;
+          checks: SeedValidationCheck[];
           manualQueries?: Array<ManualAccountQuery & {
             availableCount: number;
             selectedCount: number;
@@ -432,6 +440,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                               })
                             }
                           />
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Upper bound; matched records may be lower.
+                          </p>
                         </div>
                         <Button
                           type="button"
@@ -647,6 +658,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                               })
                             }
                           />
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Upper bound; matched records may be lower.
+                          </p>
                         </div>
                         <Button
                           type="button"
@@ -723,13 +737,19 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
         {preview && (
           <div className="mt-4 space-y-3">
             <InlineAlert variant={preview.ok ? 'success' : 'warning'} title="Validation">
-              {preview.ok ? 'Source org has enough records for selected datasets.' : 'Some checks failed — review counts below.'}
+              {preview.ok
+                ? 'Validation passed. Matching source records are ready to seed.'
+                : 'Some checks failed — review counts below.'}
             </InlineAlert>
             {preview.checks && (
               <ul className="text-xs space-y-1 font-mono">
                 {preview.checks.map((c) => (
                   <li key={c.dataset} className={c.ok ? 'text-muted-foreground' : 'text-amber-600'}>
-                    {c.dataset}: {c.count} {c.ok ? '✓' : '✗'}
+                    {c.dataset}:{' '}
+                    {c.requestedMaximum != null
+                      ? `${c.count.toLocaleString()} selected · ${(c.availableCount ?? c.count).toLocaleString()} matched · ${c.requestedMaximum.toLocaleString()} maximum`
+                      : c.count.toLocaleString()}{' '}
+                    {c.ok ? '✓' : '✗'}
                   </li>
                 ))}
               </ul>
@@ -745,8 +765,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
             {preview.manualOnboardingQueries?.map((query) => (
               <details key={query.id} className="text-xs" open>
                 <summary className="cursor-pointer text-muted-foreground">
-                  {query.label}: {query.selectedCount.toLocaleString()} selected from{' '}
-                  {query.availableCount.toLocaleString()} matching OnboardingConfig records
+                  {query.label}: {query.selectedCount.toLocaleString()} selected ·{' '}
+                  {query.availableCount.toLocaleString()} matched ·{' '}
+                  {query.limit.toLocaleString()} maximum
                 </summary>
                 <pre className="studio-console p-2 mt-1 rounded overflow-x-auto whitespace-pre-wrap">
                   {query.soql}
@@ -756,8 +777,9 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
             {preview.manualQueries?.map((query) => (
               <details key={query.id} className="text-xs" open>
                 <summary className="cursor-pointer text-muted-foreground">
-                  {query.label}: {query.selectedCount.toLocaleString()} selected from{' '}
-                  {query.availableCount.toLocaleString()} matching records
+                  {query.label}: {query.selectedCount.toLocaleString()} selected ·{' '}
+                  {query.availableCount.toLocaleString()} matched ·{' '}
+                  {query.limit.toLocaleString()} maximum
                 </summary>
                 <pre className="studio-console p-2 mt-1 rounded overflow-x-auto whitespace-pre-wrap">
                   {query.soql}
