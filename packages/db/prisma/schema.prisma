@@ -990,6 +990,44 @@ model ReleaseApproval {
   @@unique([releaseId, actorId])
 }
 
+/// One Apex test execution against an org, with the parsed summary and
+/// per-test results. Runs are fired from the Quality dashboard.
+model ApexTestRun {
+  id              String    @id @default(uuid())
+  orgConnectionId String
+  alias           String
+  testLevel       String    @default("RunLocalTests")
+  status          JobStatus @default(running)
+  outcome         String?
+  testsRan        Int?
+  passing         Int?
+  failing         Int?
+  skipped         Int?
+  testRunCoverage Float?
+  orgWideCoverage Float?
+  summary         Json?
+  tests           Json?
+  error           String?
+  requestedBy     String    @default("system")
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+
+  @@index([orgConnectionId, startedAt])
+  @@index([requestedBy])
+}
+
+/// Point-in-time org-wide Apex coverage, captured on demand and after each
+/// test run so the Quality dashboard can chart the trend.
+model OrgCoverageSnapshot {
+  id              String   @id @default(uuid())
+  orgConnectionId String
+  percentCovered  Float
+  source          String   @default("manual")
+  capturedAt      DateTime @default(now())
+
+  @@index([orgConnectionId, capturedAt])
+}
+
 /// Outbound chat webhook (Slack or Microsoft Teams). The webhook URL is
 /// encrypted at rest; an empty categories list means "all categories".
 model NotificationChannelWebhook {

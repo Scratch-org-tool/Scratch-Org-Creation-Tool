@@ -3,6 +3,7 @@ import {
   Boxes,
   CalendarClock,
   Database,
+  FlaskConical,
   GitBranch,
   Layers,
   Package,
@@ -98,6 +99,15 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
         iconBg: 'bg-fuchsia-500/10 text-fuchsia-400',
         modules: ['deployment'],
         activePrefixes: ['/releases'],
+      },
+      {
+        label: 'Apex Quality',
+        description: 'Run Apex tests, review failures, and track org-wide code coverage trends.',
+        href: '/quality',
+        icon: FlaskConical,
+        iconBg: 'bg-emerald-500/10 text-emerald-400',
+        modules: ['deployment'],
+        activePrefixes: ['/quality'],
       },
       {
         label: 'Jenkins',

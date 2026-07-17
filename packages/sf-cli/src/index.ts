@@ -20,6 +20,32 @@ export interface SfCommandResult<T = unknown> {
   exitCode: number;
 }
 
+/** JSON summary returned by `sf apex run test --result-format json`. */
+export interface ApexTestRunResult {
+  summary?: {
+    outcome?: string;
+    testsRan?: number;
+    passing?: number;
+    failing?: number;
+    skipped?: number;
+    passRate?: string;
+    failRate?: string;
+    testRunId?: string;
+    testExecutionTime?: string;
+    orgWideCoverage?: string;
+    testRunCoverage?: string;
+  };
+  tests?: Array<{
+    Id?: string;
+    ApexClass?: { Name?: string };
+    MethodName?: string;
+    Outcome?: string;
+    RunTime?: number;
+    Message?: string | null;
+    StackTrace?: string | null;
+  }>;
+}
+
 export interface StreamLine {
   stream: 'stdout' | 'stderr';
   line: string;
@@ -565,6 +591,47 @@ export class SfCliClient extends EventEmitter {
   // Data query
   async query(alias: string, soql: string): Promise<SfCommandResult<{ result: { records: unknown[]; totalSize: number } }>> {
     return this.run(['data', 'query', '--query', soql, '--target-org', alias], { json: true });
+  }
+
+  /** SOQL against the Tooling API (ApexOrgWideCoverage, ApexCodeCoverage, …). */
+  async queryTooling(
+    alias: string,
+    soql: string,
+  ): Promise<SfCommandResult<{ result: { records: unknown[]; totalSize: number } }>> {
+    return this.run(
+      ['data', 'query', '--query', soql, '--target-org', alias, '--use-tooling-api'],
+      { json: true },
+    );
+  }
+
+  /**
+   * Run Apex tests asynchronously and wait for the outcome. Returns the CLI
+   * JSON summary (per-test results + coverage when requested).
+   */
+  async runApexTests(
+    alias: string,
+    options?: {
+      testLevel?: 'RunLocalTests' | 'RunAllTestsInOrg' | 'RunSpecifiedTests';
+      classNames?: string[];
+      waitMinutes?: number;
+      codeCoverage?: boolean;
+    },
+  ): Promise<SfCommandResult<{ result: ApexTestRunResult }>> {
+    const waitMinutes = options?.waitMinutes ?? 60;
+    const args = [
+      'apex', 'run', 'test',
+      '--target-org', alias,
+      '--test-level', options?.testLevel ?? 'RunLocalTests',
+      '--wait', String(waitMinutes),
+      '--result-format', 'json',
+    ];
+    if (options?.codeCoverage !== false) args.push('--code-coverage');
+    if (options?.testLevel === 'RunSpecifiedTests') {
+      for (const className of options.classNames ?? []) {
+        args.push('--class-names', className);
+      }
+    }
+    return this.run(args, { json: true, timeout: waitMinutesToTimeoutMs(waitMinutes) });
   }
 
   async exportBulk(

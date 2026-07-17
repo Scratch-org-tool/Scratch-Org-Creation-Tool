@@ -137,6 +137,7 @@ export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
   '/deployment-workbench': 'deployment',
   '/metadata-deployment': 'deployment',
   '/releases': 'deployment',
+  '/quality': 'deployment',
   '/drift': 'deployment',
   '/org-setup': 'org-setup',
   '/user-provisioning': 'provisioning',
