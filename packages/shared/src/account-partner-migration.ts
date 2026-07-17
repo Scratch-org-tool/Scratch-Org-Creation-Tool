@@ -11,6 +11,8 @@ export const ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD =
   'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c';
 export const ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD =
   'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c';
+export const ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD = 'cfs_ob__Account__c';
+export const ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD = 'cfs_ob__EmployeeMaster__c';
 export const ACCOUNT_PARTNER_ROLE_FIELD = 'cfs_ob__PartnerRole__c';
 export const ACCOUNT_PARTNER_FUNCTION_FIELD = 'cfs_ob__PartnerFunction__c';
 export const ACCOUNT_PARTNER_BOTTLER_FIELD = 'cfs_ob__Bottler__c';
@@ -92,6 +94,7 @@ export interface AccountPartnerMigrationStats {
   total: number;
   ready: number;
   duplicates: number;
+  externalIdCollisions: number;
   skippedWrongBottler: number;
   skippedMissingOffice: number;
   skippedMissingAccountKey: number;
@@ -103,6 +106,14 @@ export interface AccountPartnerMigrationStats {
 
 export interface AccountPartnerMigrationResult {
   rows: Array<Record<string, string>>;
+  previewRows: Array<{
+    externalId: string;
+    accountKey: string;
+    employeeKey: string;
+    role: string;
+    targetAccountId: string;
+    targetEmployeeId: string;
+  }>;
   stats: AccountPartnerMigrationStats;
 }
 
@@ -138,15 +149,19 @@ export function resolveAccountPartnerMigrationSoql(
 export function buildAccountPartnerMigrationRows(input: {
   records: Array<Record<string, unknown>>;
   bottler: AccountPartnerMigrationInput['bottler'];
-  targetAccountKeys: ReadonlySet<string>;
-  targetEmployeeKeys: ReadonlySet<string>;
+  targetAccountIds: ReadonlyMap<string, string>;
+  targetEmployeeIds: ReadonlyMap<string, string>;
+  externalIdMaxLength?: number;
 }): AccountPartnerMigrationResult {
   const rows: Array<Record<string, string>> = [];
+  const previewRows: AccountPartnerMigrationResult['previewRows'] = [];
   const seen = new Set<string>();
+  const seenExternalIds = new Map<string, string>();
   const stats: AccountPartnerMigrationStats = {
     total: input.records.length,
     ready: 0,
     duplicates: 0,
+    externalIdCollisions: 0,
     skippedWrongBottler: 0,
     skippedMissingOffice: 0,
     skippedMissingAccountKey: 0,
@@ -186,11 +201,13 @@ export function buildAccountPartnerMigrationRows(input: {
       stats.skippedMissingRole += 1;
       continue;
     }
-    if (!input.targetAccountKeys.has(account)) {
+    const targetAccountId = input.targetAccountIds.get(account);
+    if (!targetAccountId) {
       stats.skippedTargetAccount += 1;
       continue;
     }
-    if (!input.targetEmployeeKeys.has(employee)) {
+    const targetEmployeeId = input.targetEmployeeIds.get(employee);
+    if (!targetEmployeeId) {
       stats.skippedTargetEmployee += 1;
       continue;
     }
@@ -199,23 +216,55 @@ export function buildAccountPartnerMigrationRows(input: {
       stats.duplicates += 1;
       continue;
     }
-    seen.add(dedupeKey);
 
     const sourceExternalId = accountPartnerValueAt(
       record,
       ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
     );
-    const externalId =
+    const externalId = fitAccountPartnerExternalId(
       sourceExternalId
-      || `${input.bottler}-${office}-${employee}-${role}-${account}`;
+      || `${input.bottler}-${account}-${employee}-${role}`,
+      input.externalIdMaxLength,
+    );
+    const externalIdOwner = seenExternalIds.get(externalId);
+    if (externalIdOwner && externalIdOwner !== dedupeKey) {
+      stats.externalIdCollisions += 1;
+      continue;
+    }
+    seen.add(dedupeKey);
+    seenExternalIds.set(externalId, dedupeKey);
     rows.push({
-      [ACCOUNT_PARTNER_EXTERNAL_ID_FIELD]: externalId.slice(0, 255),
+      [ACCOUNT_PARTNER_EXTERNAL_ID_FIELD]: externalId,
       [ACCOUNT_PARTNER_ROLE_FIELD]: role,
       [ACCOUNT_PARTNER_BOTTLER_FIELD]: input.bottler,
-      [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: account,
-      [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: employee,
+      [ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD]: targetAccountId,
+      [ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD]: targetEmployeeId,
+    });
+    previewRows.push({
+      externalId,
+      accountKey: account,
+      employeeKey: employee,
+      role,
+      targetAccountId,
+      targetEmployeeId,
     });
   }
   stats.ready = rows.length;
-  return { rows, stats };
+  return { rows, previewRows, stats };
+}
+
+function fitAccountPartnerExternalId(value: string, maxLength = 255): string {
+  if (value.length <= maxLength) return value;
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ code, 0x85ebca6b);
+  }
+  const hash =
+    (first >>> 0).toString(16).padStart(8, '0')
+    + (second >>> 0).toString(16).padStart(8, '0');
+  if (maxLength <= hash.length) return hash.slice(0, maxLength);
+  return `${value.slice(0, maxLength - hash.length - 1)}-${hash}`;
 }

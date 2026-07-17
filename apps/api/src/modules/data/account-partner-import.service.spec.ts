@@ -8,8 +8,8 @@ import {
 
 const mocks = vi.hoisted(() => ({
   sfCli: {
+    describeSObject: vi.fn(),
     exportBulk: vi.fn(),
-    query: vi.fn(),
     upsertBulk: vi.fn(),
   },
   orgConnection: {
@@ -69,25 +69,51 @@ describe('AccountPartnerImportService SOQL mapping', () => {
         username: null,
       }),
     );
-    mocks.sfCli.exportBulk.mockImplementation(async (
-      _soql: string,
+    mocks.sfCli.describeSObject.mockImplementation(async (
       _alias: string,
+      objectName: string,
+    ) => {
+      const writable = (name: string, externalId = false) => ({
+        name,
+        externalId,
+        createable: true,
+        updateable: true,
+        length: externalId ? 255 : undefined,
+      });
+      const fields = objectName === 'cfs_ob__AccountPartner__c'
+        ? [
+            writable('cfs_ob__AccountPartnerExternalId__c', true),
+            writable('cfs_ob__PartnerRole__c'),
+            writable('cfs_ob__Bottler__c'),
+            writable('cfs_ob__Account__c'),
+            writable('cfs_ob__EmployeeMaster__c'),
+          ]
+        : objectName === 'Account'
+          ? [writable('cfs_ob__u_CustomerNumber__c', true)]
+          : [writable('cfs_ob__EmployeeNo__c', true)];
+      return { success: true, data: { result: { fields } } };
+    });
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      soql: string,
+      alias: string,
       file: string,
     ) => {
-      await writeFile(file, sourceCsv, 'utf8');
-      return { success: true };
-    });
-    mocks.sfCli.query.mockImplementation(async (_alias: string, soql: string) => {
-      if (soql.includes('FROM Account ')) {
-        return {
-          success: true,
-          data: { result: { records: [{ cfs_ob__u_CustomerNumber__c: '123' }] } },
-        };
+      if (alias === 'source') {
+        await writeFile(file, sourceCsv, 'utf8');
+      } else if (soql.includes('FROM Account ')) {
+        await writeFile(
+          file,
+          'Id,cfs_ob__u_CustomerNumber__c\n001ACCOUNT00000001,000123\n',
+          'utf8',
+        );
+      } else {
+        await writeFile(
+          file,
+          'Id,cfs_ob__EmployeeNo__c\n001EMPLOYEE0000001,E-1\n',
+          'utf8',
+        );
       }
-      return {
-        success: true,
-        data: { result: { records: [{ cfs_ob__EmployeeNo__c: 'E-1' }] } },
-      };
+      return { success: true };
     });
     mocks.sfCli.upsertBulk.mockResolvedValue({ success: true });
   });
@@ -107,11 +133,20 @@ describe('AccountPartnerImportService SOQL mapping', () => {
     }));
     expect(preview.sample).toEqual([
       expect.objectContaining({
-        cfs_ob__AccountPartnerExternalId__c: 'AP-1',
-        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
-        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+        externalId: 'AP-1',
+        accountKey: '123',
+        employeeKey: 'E-1',
+        targetAccountId: '001ACCOUNT00000001',
+        targetEmployeeId: '001EMPLOYEE0000001',
       }),
     ]);
+    expect(mocks.sfCli.exportBulk).toHaveBeenCalledWith(
+      expect.stringContaining("cfs_ob__Bottler__c = '5000'"),
+      'target',
+      expect.stringContaining('target-accounts.csv'),
+      15,
+      expect.any(Object),
+    );
   });
 
   it('writes and upserts the mapped Account Partner CSV in one queued operation', async () => {
@@ -134,6 +169,8 @@ describe('AccountPartnerImportService SOQL mapping', () => {
     expect(result.stats.ready).toBe(1);
     expect(csv).toContain('cfs_ob__AccountPartnerExternalId__c');
     expect(csv).toContain('AP-1');
+    expect(csv).toContain('cfs_ob__Account__c');
+    expect(csv).toContain('001ACCOUNT00000001');
     expect(mocks.sfCli.upsertBulk).toHaveBeenCalledWith(
       'cfs_ob__AccountPartner__c',
       expect.stringContaining('account-partners.csv'),

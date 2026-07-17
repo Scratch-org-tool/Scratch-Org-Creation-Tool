@@ -7,9 +7,11 @@ import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import {
   ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+  ACCOUNT_PARTNER_BOTTLER_FIELD,
   ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
   ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
   ACCOUNT_PARTNER_OBJECT,
+  ACCOUNT_PARTNER_ROLE_FIELD,
   EMPLOYEE_MASTER_OBJECT,
   accountPartnerMigrationSchema,
   accountPartnerValueAt,
@@ -228,9 +230,9 @@ export class AccountPartnerImportService {
       ok: prepared.mapping.stats.ready > 0,
       query: prepared.query,
       stats: prepared.mapping.stats,
-      targetAccounts: prepared.targetAccountKeys.size,
-      targetEmployees: prepared.targetEmployeeKeys.size,
-      sample: prepared.mapping.rows.slice(0, 50),
+      targetAccounts: prepared.targetAccountIds.size,
+      targetEmployees: prepared.targetEmployeeIds.size,
+      sample: prepared.mapping.previewRows.slice(0, 50),
     };
   }
 
@@ -249,7 +251,8 @@ export class AccountPartnerImportService {
     await log(
       `Skipped: ${stats.skippedTargetAccount.toLocaleString()} missing target Accounts, `
       + `${stats.skippedTargetEmployee.toLocaleString()} missing target Employee Masters, `
-      + `${stats.duplicates.toLocaleString()} duplicates.`,
+      + `${stats.duplicates.toLocaleString()} duplicates, `
+      + `${stats.externalIdCollisions.toLocaleString()} external ID collisions.`,
     );
     if (stats.ready === 0) {
       throw new Error(
@@ -280,8 +283,8 @@ export class AccountPartnerImportService {
         success: true,
         query: prepared.query,
         stats,
-        targetAccounts: prepared.targetAccountKeys.size,
-        targetEmployees: prepared.targetEmployeeKeys.size,
+        targetAccounts: prepared.targetAccountIds.size,
+        targetEmployees: prepared.targetEmployeeIds.size,
       };
     } finally {
       await removeTempDir(workDir);
@@ -461,99 +464,186 @@ export class AccountPartnerImportService {
       this.resolveOrg(input.sourceOrgId),
       this.resolveOrg(input.targetOrgId),
     ]);
+    const targetSchema = await this.assertTargetMappingSchema(target.alias);
     const query = resolveAccountPartnerMigrationSoql(input);
     const sourceWorkDir = await mkdtemp(join(tmpdir(), 'account-partner-source-'));
     try {
       const exportPath = join(sourceWorkDir, 'source-account-partners.csv');
-      const sourceResult = await this.sfCli.exportBulk(
-        query,
-        source.alias,
-        exportPath,
-        15,
-        { cwd: sourceWorkDir },
-      );
+      const targetAccountPath = join(sourceWorkDir, 'target-accounts.csv');
+      const targetEmployeePath = join(sourceWorkDir, 'target-employees.csv');
+      const safeBottler = escapeSoqlLiteral(input.bottler);
+      const [sourceResult, targetAccountResult, targetEmployeeResult] = await Promise.all([
+        this.sfCli.exportBulk(
+          query,
+          source.alias,
+          exportPath,
+          15,
+          { cwd: sourceWorkDir },
+        ),
+        this.sfCli.exportBulk(
+          'SELECT Id, cfs_ob__u_CustomerNumber__c FROM Account '
+          + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
+          + 'AND cfs_ob__u_CustomerNumber__c != null',
+          target.alias,
+          targetAccountPath,
+          15,
+          { cwd: sourceWorkDir },
+        ),
+        this.sfCli.exportBulk(
+          `SELECT Id, cfs_ob__EmployeeNo__c FROM ${EMPLOYEE_MASTER_OBJECT} `
+          + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
+          + 'AND cfs_ob__EmployeeNo__c != null',
+          target.alias,
+          targetEmployeePath,
+          15,
+          { cwd: sourceWorkDir },
+        ),
+      ]);
       if (!sourceResult.success) {
         throw new Error(sourceResult.error ?? 'Account Partner source query failed');
       }
+      if (!targetAccountResult.success) {
+        throw new Error(targetAccountResult.error ?? 'Target Account lookup failed');
+      }
+      if (!targetEmployeeResult.success) {
+        throw new Error(targetEmployeeResult.error ?? 'Target Employee Master lookup failed');
+      }
       const records = parseBulkCsv(await readFile(exportPath, 'utf8'));
-      const sourceAccountKeys = records
-        .map((record) =>
-          accountPartnerValueAt(
-            record,
-            ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
-          ))
-        .filter(Boolean);
-      const sourceEmployeeKeys = records
-        .map((record) =>
-          accountPartnerValueAt(
-            record,
-            ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
-          ))
-        .filter(Boolean);
-      const [targetAccountKeys, targetEmployeeKeys] = await Promise.all([
-        this.queryTargetKeys(
-          target.alias,
-          'Account',
-          'cfs_ob__u_CustomerNumber__c',
-          sourceAccountKeys,
-          normalizeAccountPartnerAccountKey,
-        ),
-        this.queryTargetKeys(
-          target.alias,
-          EMPLOYEE_MASTER_OBJECT,
-          'cfs_ob__EmployeeNo__c',
-          sourceEmployeeKeys,
-        ),
-      ]);
+      const targetAccountRecords = parseBulkCsv(
+        await readFile(targetAccountPath, 'utf8'),
+      );
+      const targetEmployeeRecords = parseBulkCsv(
+        await readFile(targetEmployeePath, 'utf8'),
+      );
+      const targetAccountIds = new Map<string, string>();
+      const ambiguousAccountKeys = new Set<string>();
+      for (const record of targetAccountRecords) {
+        const key = accountPartnerValueAt(record, 'cfs_ob__u_CustomerNumber__c');
+        const id = accountPartnerValueAt(record, 'Id');
+        const normalized = normalizeAccountPartnerAccountKey(key);
+        if (!id) continue;
+        if (!normalized || ambiguousAccountKeys.has(normalized)) continue;
+        const existing = targetAccountIds.get(normalized);
+        if (existing && existing !== id) {
+          targetAccountIds.delete(normalized);
+          ambiguousAccountKeys.add(normalized);
+        } else {
+          targetAccountIds.set(normalized, id);
+        }
+      }
+      const targetEmployeeIds = new Map<string, string>();
+      const ambiguousEmployeeKeys = new Set<string>();
+      for (const record of targetEmployeeRecords) {
+        const key = accountPartnerValueAt(record, 'cfs_ob__EmployeeNo__c');
+        const id = accountPartnerValueAt(record, 'Id');
+        if (!key || !id || ambiguousEmployeeKeys.has(key)) continue;
+        const existing = targetEmployeeIds.get(key);
+        if (existing && existing !== id) {
+          targetEmployeeIds.delete(key);
+          ambiguousEmployeeKeys.add(key);
+        } else {
+          targetEmployeeIds.set(key, id);
+        }
+      }
       const mapping = buildAccountPartnerMigrationRows({
         records,
         bottler: input.bottler,
-        targetAccountKeys,
-        targetEmployeeKeys,
+        targetAccountIds,
+        targetEmployeeIds,
+        externalIdMaxLength: targetSchema.externalIdMaxLength,
       });
       return {
         target,
         query,
         mapping,
-        targetAccountKeys,
-        targetEmployeeKeys,
+        targetAccountIds,
+        targetEmployeeIds,
       };
     } finally {
       await removeTempDir(sourceWorkDir);
     }
   }
 
-  private async queryTargetKeys(
-    alias: string,
-    objectName: string,
-    field: string,
-    sourceKeys: string[],
-    normalize: (value: unknown) => string = (value) => String(value ?? '').trim(),
-  ): Promise<Set<string>> {
-    const unique = [...new Set(sourceKeys.map((key) => key.trim()).filter(Boolean))];
-    const matched = new Set<string>();
-    for (let index = 0; index < unique.length; index += 200) {
-      const chunk = unique.slice(index, index + 200);
-      const result = await this.sfCli.query(
-        alias,
-        `SELECT ${field} FROM ${objectName} WHERE ${field} IN (`
-        + `${chunk.map(toSoqlLiteral).join(', ')})`,
+  private async assertTargetMappingSchema(alias: string) {
+    const [partnerResult, accountResult, employeeResult] = await Promise.all([
+      this.sfCli.describeSObject(alias, ACCOUNT_PARTNER_OBJECT),
+      this.sfCli.describeSObject(alias, 'Account'),
+      this.sfCli.describeSObject(alias, EMPLOYEE_MASTER_OBJECT),
+    ]);
+    if (!partnerResult.success) {
+      throw new Error(partnerResult.error ?? 'Target Account Partner schema lookup failed');
+    }
+    if (!accountResult.success) {
+      throw new Error(accountResult.error ?? 'Target Account schema lookup failed');
+    }
+    if (!employeeResult.success) {
+      throw new Error(employeeResult.error ?? 'Target Employee Master schema lookup failed');
+    }
+    type DescribedField = {
+      name: string;
+      externalId?: boolean;
+      idLookup?: boolean;
+      createable?: boolean;
+      updateable?: boolean;
+      filterable?: boolean;
+      length?: number;
+    };
+    const fields = (result: unknown) =>
+      new Map<string, DescribedField>(
+        ((result as { data?: { result?: { fields?: DescribedField[] } } })
+          ?.data?.result?.fields ?? [])
+          .map((field): [string, DescribedField] => [field.name.toLowerCase(), field]),
       );
-      if (!result.success) {
+    const partnerFields = fields(partnerResult);
+    for (const fieldName of [
+      ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
+      ACCOUNT_PARTNER_ROLE_FIELD,
+      ACCOUNT_PARTNER_BOTTLER_FIELD,
+      'cfs_ob__Account__c',
+      'cfs_ob__EmployeeMaster__c',
+    ]) {
+      const field = partnerFields.get(fieldName.toLowerCase());
+      if (!field) throw new Error(`Target Account Partner field is missing: ${fieldName}`);
+      if (!field.createable || !field.updateable) {
         throw new Error(
-          result.error ?? `Target ${objectName}.${field} lookup failed`,
+          `Target Account Partner field must be createable and updateable: ${fieldName}`,
         );
       }
-      const records =
-        (result.data as {
-          result?: { records?: Array<Record<string, unknown>> };
-        })?.result?.records ?? [];
-      for (const record of records) {
-        const key = normalize(accountPartnerValueAt(record, field));
-        if (key) matched.add(key);
-      }
     }
-    return matched;
+    const partnerExternalId = partnerFields.get(
+      ACCOUNT_PARTNER_EXTERNAL_ID_FIELD.toLowerCase(),
+    );
+    if (!partnerExternalId?.externalId && !partnerExternalId?.idLookup) {
+      throw new Error(
+        `Target ${ACCOUNT_PARTNER_EXTERNAL_ID_FIELD} is not configured as an external ID`,
+      );
+    }
+    const assertQueryKey = (
+      describedFields: Map<string, DescribedField>,
+      objectName: string,
+      fieldName: string,
+    ) => {
+      const field = describedFields.get(fieldName.toLowerCase());
+      if (!field) throw new Error(`Target ${objectName} field is missing: ${fieldName}`);
+      if (field.filterable === false) {
+        throw new Error(`Target ${objectName}.${fieldName} is not filterable`);
+      }
+    };
+    assertQueryKey(
+      fields(accountResult),
+      'Account',
+      'cfs_ob__u_CustomerNumber__c',
+    );
+    assertQueryKey(
+      fields(employeeResult),
+      EMPLOYEE_MASTER_OBJECT,
+      'cfs_ob__EmployeeNo__c',
+    );
+    const externalIdMaxLength = partnerExternalId.length ?? 255;
+    if (externalIdMaxLength < 1) {
+      throw new Error(`Target ${ACCOUNT_PARTNER_EXTERNAL_ID_FIELD} has an invalid length`);
+    }
+    return { externalIdMaxLength };
   }
 
   private orgLinkCustomer(

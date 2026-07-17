@@ -148,6 +148,14 @@ describe('query runtime CSV and office support', () => {
       parseBulkCsv('\uFEFFId,Name,Notes\r\n1,"Doe, Jane","Line 1\r\nLine 2"\r\n'),
       [{ Id: '1', Name: 'Doe, Jane', Notes: 'Line 1\r\nLine 2' }],
     );
+    assert.throws(
+      () => parseBulkCsv('Id,Name\n1,"unterminated'),
+      /unterminated quoted field/,
+    );
+    assert.throws(
+      () => parseBulkCsv('Id,Name\n1,Jane,extra\n'),
+      /has 3 columns; expected 2/,
+    );
   });
 
   it('selects support rows by compiled query ID and office without overwriting variants', () => {

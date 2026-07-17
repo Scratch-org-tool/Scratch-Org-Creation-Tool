@@ -100,12 +100,22 @@ export function parseBulkCsv(text: string): Array<Record<string, string>> {
     row.push(field.replace(/\r$/, ''));
     parsedRows.push(row);
   }
+  if (quoted) throw new Error('Malformed Bulk CSV: unterminated quoted field');
   const headers = parsedRows.shift() ?? [];
   if (headers[0]) headers[0] = headers[0].replace(/^\uFEFF/, '');
   return parsedRows
     .filter((values) => values.some(Boolean))
-    .map((values) =>
-      Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
+    .map((values, index) => {
+      if (values.length !== headers.length) {
+        throw new Error(
+          `Malformed Bulk CSV: row ${index + 2} has ${values.length} columns; `
+          + `expected ${headers.length}`,
+        );
+      }
+      return Object.fromEntries(
+        headers.map((header, valueIndex) => [header, values[valueIndex] ?? '']),
+      );
+    });
 }
 
 /** Serialize Bulk API input with the LF-only line endings emitted by Salesforce Bulk CLI exports. */

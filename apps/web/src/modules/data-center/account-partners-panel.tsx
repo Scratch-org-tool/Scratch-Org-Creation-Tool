@@ -13,6 +13,7 @@ interface MigrationStats {
   total: number;
   ready: number;
   duplicates: number;
+  externalIdCollisions: number;
   skippedWrongBottler: number;
   skippedMissingOffice: number;
   skippedMissingAccountKey: number;
@@ -28,7 +29,14 @@ interface MappingPreview {
   stats: MigrationStats;
   targetAccounts: number;
   targetEmployees: number;
-  sample: Array<Record<string, string>>;
+  sample: Array<{
+    externalId: string;
+    accountKey: string;
+    employeeKey: string;
+    role: string;
+    targetAccountId: string;
+    targetEmployeeId: string;
+  }>;
 }
 
 interface JobData {
@@ -39,10 +47,6 @@ interface JobData {
 }
 
 const TERMINAL_STATUSES = ['completed', 'partial', 'failed', 'cancelled'];
-const ACCOUNT_FIELD = 'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c';
-const EMPLOYEE_FIELD = 'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c';
-const EXTERNAL_ID_FIELD = 'cfs_ob__AccountPartnerExternalId__c';
-
 function defaultPartnerSoql(bottler: Bottler) {
   return `SELECT
   cfs_ob__AccountPartnerExternalId__c,
@@ -74,6 +78,7 @@ export function AccountPartnersPanel() {
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const logBottomRef = useRef<HTMLDivElement>(null);
+  const previewGenerationRef = useRef(0);
 
   const payload = useMemo(() => ({
     sourceOrgId,
@@ -91,17 +96,30 @@ export function AccountPartnersPanel() {
     if (!jobId) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
     const poll = async () => {
       try {
         const current = await api<JobData>(`/jobs/${jobId}`);
         if (disposed) return;
+        failures = 0;
+        setError(null);
         setJob(current);
         setLogs(current.logs?.map((entry) => entry.line) ?? []);
         if (!TERMINAL_STATUSES.includes(current.status)) {
           timer = setTimeout(poll, 2_000);
         }
       } catch {
-        if (!disposed) timer = setTimeout(poll, 3_000);
+        if (disposed) return;
+        failures += 1;
+        if (failures >= 5) {
+          const message =
+            'Job status could not be refreshed after multiple attempts. '
+            + 'Check Monitoring before starting another migration.';
+          setError(message);
+          timer = setTimeout(poll, 10_000);
+        } else {
+          timer = setTimeout(poll, 3_000);
+        }
       }
     };
     void poll();
@@ -111,6 +129,11 @@ export function AccountPartnersPanel() {
     };
   }, [jobId]);
 
+  const invalidatePreview = () => {
+    previewGenerationRef.current += 1;
+    setPreview(null);
+  };
+
   const validate = () => {
     if (!sourceOrgId || !targetOrgId) throw new Error('Select source and target orgs');
     if (sourceOrgId === targetOrgId) throw new Error('Source and target org must differ');
@@ -118,6 +141,8 @@ export function AccountPartnersPanel() {
   };
 
   const handlePreview = async () => {
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
     setError(null);
     setAction('preview');
     try {
@@ -126,10 +151,12 @@ export function AccountPartnersPanel() {
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      setPreview(result);
+      if (generation === previewGenerationRef.current) setPreview(result);
     } catch (cause) {
-      setPreview(null);
-      setError(cause instanceof Error ? cause.message : 'Account Partner preview failed');
+      if (generation === previewGenerationRef.current) {
+        setPreview(null);
+        setError(cause instanceof Error ? cause.message : 'Account Partner preview failed');
+      }
     } finally {
       setAction(null);
     }
@@ -156,7 +183,8 @@ export function AccountPartnersPanel() {
     }
   };
 
-  const jobActive = job?.status === 'queued' || job?.status === 'running';
+  const jobActive = ['pending', 'queued', 'running'].includes(job?.status ?? '');
+  const configurationLocked = action !== null || jobActive;
   const disabled =
     !sourceOrgId
     || !targetOrgId
@@ -180,9 +208,10 @@ export function AccountPartnersPanel() {
             <Select
               id="partner-source-org"
               value={sourceOrgId}
+              disabled={configurationLocked}
               onChange={(event) => {
                 setSourceOrgId(event.target.value);
-                setPreview(null);
+                invalidatePreview();
               }}
             >
               <option value="">Select…</option>
@@ -196,9 +225,10 @@ export function AccountPartnersPanel() {
             <Select
               id="partner-target-org"
               value={targetOrgId}
+              disabled={configurationLocked}
               onChange={(event) => {
                 setTargetOrgId(event.target.value);
-                setPreview(null);
+                invalidatePreview();
               }}
             >
               <option value="">Select…</option>
@@ -217,6 +247,7 @@ export function AccountPartnersPanel() {
             <Select
               id="partner-bottler"
               value={bottler}
+              disabled={configurationLocked}
               onChange={(event) => {
                 const next = event.target.value as Bottler;
                 setPartnerSoql((current) =>
@@ -224,7 +255,7 @@ export function AccountPartnersPanel() {
                     ? defaultPartnerSoql(next)
                     : current);
                 setBottler(next);
-                setPreview(null);
+                invalidatePreview();
               }}
             >
               <option value="5000">5000 — Northeast</option>
@@ -240,11 +271,12 @@ export function AccountPartnersPanel() {
               min={1}
               max={100_000}
               value={recordLimit}
+              disabled={configurationLocked}
               onChange={(event) => {
                 setRecordLimit(
                   Math.min(100_000, Math.max(1, Number(event.target.value) || 1)),
                 );
-                setPreview(null);
+                invalidatePreview();
               }}
             />
             <p className="mt-1 text-xs text-muted-foreground">
@@ -263,10 +295,11 @@ export function AccountPartnersPanel() {
           id="partner-soql"
           aria-label="Account Partner SOQL"
           value={partnerSoql}
+          disabled={configurationLocked}
           className="min-h-64 font-mono text-xs"
           onChange={(event) => {
             setPartnerSoql(event.target.value);
-            setPreview(null);
+            invalidatePreview();
           }}
         />
       </FormSection>
@@ -324,6 +357,10 @@ export function AccountPartnersPanel() {
               {preview.stats.skippedTargetEmployee.toLocaleString()}
             </p>
             <p>Duplicate mappings: {preview.stats.duplicates.toLocaleString()}</p>
+            <p>
+              External ID collisions:{' '}
+              {preview.stats.externalIdCollisions.toLocaleString()}
+            </p>
             <p>Wrong bottler: {preview.stats.skippedWrongBottler.toLocaleString()}</p>
             <p>
               Missing source keys:{' '}
@@ -354,13 +391,13 @@ export function AccountPartnersPanel() {
                 <tbody>
                   {preview.sample.map((row, index) => (
                     <tr
-                      key={`${row[EXTERNAL_ID_FIELD] ?? 'mapping'}-${index}`}
+                      key={`${row.externalId ?? 'mapping'}-${index}`}
                       className="border-t border-border/60"
                     >
-                      <td className="px-3 py-2 font-mono">{row[EXTERNAL_ID_FIELD]}</td>
-                      <td className="px-3 py-2 font-mono">{row[ACCOUNT_FIELD]}</td>
-                      <td className="px-3 py-2 font-mono">{row[EMPLOYEE_FIELD]}</td>
-                      <td className="px-3 py-2">{row.cfs_ob__PartnerRole__c}</td>
+                      <td className="px-3 py-2 font-mono">{row.externalId}</td>
+                      <td className="px-3 py-2 font-mono">{row.accountKey}</td>
+                      <td className="px-3 py-2 font-mono">{row.employeeKey}</td>
+                      <td className="px-3 py-2">{row.role}</td>
                     </tr>
                   ))}
                 </tbody>

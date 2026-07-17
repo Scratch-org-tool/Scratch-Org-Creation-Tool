@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+  ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD,
   ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
+  ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD,
   ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
   accountPartnerMigrationSchema,
   buildAccountPartnerMigrationRows,
@@ -45,8 +47,8 @@ describe('Account Partner migration contract', () => {
   it('joins nested relationship keys to target Accounts and Employee Masters', () => {
     const result = buildAccountPartnerMigrationRows({
       bottler: '5000',
-      targetAccountKeys: new Set(['123']),
-      targetEmployeeKeys: new Set(['E-1']),
+      targetAccountIds: new Map([['123', '001-account-id']]),
+      targetEmployeeIds: new Map([['E-1', '001-employee-id']]),
       records: [{
         cfs_ob__Bottler__c: '5000',
         cfs_ob__Sales_Office__c: 'S003',
@@ -58,12 +60,14 @@ describe('Account Partner migration contract', () => {
 
     assert.equal(result.stats.ready, 1);
     assert.deepEqual(result.rows[0], {
-      [ACCOUNT_PARTNER_EXTERNAL_ID_FIELD]: '5000-S003-E-1-ZR-123',
+      [ACCOUNT_PARTNER_EXTERNAL_ID_FIELD]: '5000-123-E-1-ZR',
       cfs_ob__PartnerRole__c: 'ZR',
       cfs_ob__Bottler__c: '5000',
-      [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
-      [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+      [ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD]: '001-account-id',
+      [ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD]: '001-employee-id',
     });
+    assert.equal(result.previewRows[0]?.accountKey, '123');
+    assert.equal(result.previewRows[0]?.employeeKey, 'E-1');
   });
 
   it('preserves source external IDs and reports invalid or duplicate mappings', () => {
@@ -77,8 +81,8 @@ describe('Account Partner migration contract', () => {
     };
     const result = buildAccountPartnerMigrationRows({
       bottler: '5000',
-      targetAccountKeys: new Set(['123']),
-      targetEmployeeKeys: new Set(['E-1']),
+      targetAccountIds: new Map([['123', '001-account-id']]),
+      targetEmployeeIds: new Map([['E-1', '001-employee-id']]),
       records: [
         valid,
         { ...valid, cfs_ob__AccountPartnerExternalId__c: 'DUPLICATE' },
@@ -93,6 +97,7 @@ describe('Account Partner migration contract', () => {
       total: 5,
       ready: 1,
       duplicates: 1,
+      externalIdCollisions: 0,
       skippedWrongBottler: 1,
       skippedMissingOffice: 0,
       skippedMissingAccountKey: 0,
@@ -101,5 +106,53 @@ describe('Account Partner migration contract', () => {
       skippedTargetAccount: 1,
       skippedTargetEmployee: 1,
     });
+  });
+
+  it('rejects one external ID being assigned to different partner mappings', () => {
+    const base = {
+      cfs_ob__AccountPartnerExternalId__c: 'SHARED-ID',
+      cfs_ob__Bottler__c: '5000',
+      cfs_ob__Sales_Office__c: 'S003',
+      cfs_ob__PartnerRole__c: 'ZR',
+      [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+    };
+    const result = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccountIds: new Map([['123', '001-account-id']]),
+      targetEmployeeIds: new Map([
+        ['E-1', '001-employee-1'],
+        ['E-2', '001-employee-2'],
+      ]),
+      records: [
+        { ...base, [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1' },
+        { ...base, [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-2' },
+      ],
+    });
+
+    assert.equal(result.stats.ready, 1);
+    assert.equal(result.stats.externalIdCollisions, 1);
+  });
+
+  it('fits generated or source external IDs to the described target length', () => {
+    const result = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccountIds: new Map([['123', '001-account-id']]),
+      targetEmployeeIds: new Map([['E-1', '001-employee-id']]),
+      externalIdMaxLength: 32,
+      records: [{
+        cfs_ob__AccountPartnerExternalId__c: 'X'.repeat(300),
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+      }],
+    });
+
+    assert.equal(result.rows[0]?.[ACCOUNT_PARTNER_EXTERNAL_ID_FIELD].length, 32);
+    assert.match(
+      result.rows[0]?.[ACCOUNT_PARTNER_EXTERNAL_ID_FIELD] ?? '',
+      /-[0-9a-f]{16}$/,
+    );
   });
 });
