@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import type { Job } from 'bullmq';
 import { prisma } from '@sfcc/db';
-import { createSfCliClient, isSfdmuPluginMissingError } from '@sfcc/sf-cli';
+import {
+  createSfCliClient,
+  isSfdmuPluginMissingError,
+  SFDMU_PLUGIN_INSTALL_MESSAGE,
+} from '@sfcc/sf-cli';
 import { JobsService } from '../modules/jobs/jobs.service';
 import { JobProcessRegistryService } from '../modules/jobs/job-process-registry.service';
 import { StreamService } from '../modules/stream/stream.service';
@@ -98,6 +102,11 @@ export class SfdmuWorker {
         throw new Error('Job cancelled by user');
       }
 
+      // Queue time and execution time can be separated by hours. Re-check and
+      // self-heal the plugin here in case the API host was replaced or its
+      // user-plugin directory was cleared after the job was accepted.
+      await this.sfCli.ensureSfdmuPlugin();
+
       const result = await this.sfCli.runSfdmu(
         sourceOrgAlias,
         targetOrgAlias,
@@ -115,9 +124,7 @@ export class SfdmuWorker {
       if (!result.success) {
         const output = [result.stderr, result.stdout, result.error].filter(Boolean).join('\n');
         if (isSfdmuPluginMissingError(output)) {
-          throw new Error(
-            'SFDMU Salesforce CLI plugin is not installed on the API server. Run: sf plugins install sfdmu',
-          );
+          throw new Error(SFDMU_PLUGIN_INSTALL_MESSAGE);
         }
         throw new Error(result.error ?? 'SFDMU run failed');
       }

@@ -34,6 +34,37 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
+describe('SafeExecFileAdapter', () => {
+  it('preserves argument boundaries without invoking a shell', async () => {
+    const adapter = new SafeExecFileAdapter();
+    const argument = 'SELECT COUNT() FROM Account\nWHERE Name = "Acme & Sons"';
+    const result = await adapter.run(
+      process.execPath,
+      ['-e', 'process.stdout.write(process.argv[1])', argument],
+      { timeoutMs: 2_000 },
+    ).promise;
+
+    expect(result).toMatchObject({
+      exitCode: 0,
+      stdout: argument,
+      stderr: '',
+      timedOut: false,
+    });
+  });
+
+  it('terminates analyzers that exceed their timeout', async () => {
+    const adapter = new SafeExecFileAdapter();
+    const result = await adapter.run(
+      process.execPath,
+      ['-e', 'setTimeout(() => {}, 10_000)'],
+      { timeoutMs: 25 },
+    ).promise;
+
+    expect(result.timedOut).toBe(true);
+    expect(result.stderr).toContain('timed out');
+  });
+});
+
 describe('StaticAnalysisService', () => {
   it('always reports the built-in engine as available without spawning a process', async () => {
     const run = vi.fn();
@@ -100,6 +131,12 @@ describe('StaticAnalysisService', () => {
 
     const result = await service.run({ projectRoot: root, engines: ['code-analyzer'] });
 
+    expect(run).toHaveBeenNthCalledWith(
+      1,
+      'sf',
+      ['plugins', 'inspect', 'code-analyzer', '--json'],
+      expect.objectContaining({ timeoutMs: 10_000 }),
+    );
     expect(run).toHaveBeenLastCalledWith(
       'sf',
       ['code-analyzer', 'run', '--workspace', root, '--output-file', expect.any(String)],

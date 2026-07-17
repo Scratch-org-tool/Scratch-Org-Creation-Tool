@@ -53,6 +53,11 @@ export class DataController {
     return this.dataService.getCustomSettingsPreflight();
   }
 
+  @Post('custom-settings/plugins/ensure')
+  provisionSfdmuPlugin() {
+    return this.dataService.provisionSfdmuPlugin();
+  }
+
   @Post('custom-settings/validate')
   validateCustomSettings(@Body() body: unknown) {
     return this.dataService.validateCustomSettingsExport(body);

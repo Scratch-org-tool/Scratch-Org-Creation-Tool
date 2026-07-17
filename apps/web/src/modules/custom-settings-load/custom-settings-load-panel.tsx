@@ -41,6 +41,14 @@ interface DataMovement {
   targetOrg: { id: string; alias: string };
 }
 
+interface SfdmuReadiness {
+  sfdmuInstalled: boolean;
+  sfdmuVersion?: string;
+  requiredVersion?: string;
+  action: 'none' | 'missing' | 'installed' | 'updated' | 'failed';
+  error?: string;
+}
+
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
 
 export function CustomSettingsLoadPanel() {
@@ -55,7 +63,7 @@ export function CustomSettingsLoadPanel() {
   const [job, setJob] = useState<JobData | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [sfdmuInstalled, setSfdmuInstalled] = useState<boolean | null>(null);
+  const [sfdmuReadiness, setSfdmuReadiness] = useState<SfdmuReadiness | null>(null);
   const [movements, setMovements] = useState<DataMovement[]>([]);
   const [expandedMovementId, setExpandedMovementId] = useState<string | null>(null);
   const [orgConfigCompletedByMovement, setOrgConfigCompletedByMovement] = useState<
@@ -78,15 +86,29 @@ export function CustomSettingsLoadPanel() {
     }
   }, []);
 
+  const provisionSfdmu = useCallback(async () => {
+    setSfdmuReadiness(null);
+    try {
+      const readiness = await api<SfdmuReadiness>('/data/custom-settings/plugins/ensure', {
+        method: 'POST',
+      });
+      setSfdmuReadiness(readiness);
+    } catch (error) {
+      setSfdmuReadiness({
+        sfdmuInstalled: false,
+        action: 'failed',
+        error: error instanceof Error ? error.message : 'Automatic SFDMU provisioning failed',
+      });
+    }
+  }, []);
+
   useEffect(() => {
     api<unknown>('/data/custom-settings/template').then((t) => {
       setCustomJson(JSON.stringify(t, null, 2));
     });
-    api<{ sfdmuInstalled: boolean }>('/data/custom-settings/preflight')
-      .then((r) => setSfdmuInstalled(r.sfdmuInstalled))
-      .catch(() => setSfdmuInstalled(null));
+    void provisionSfdmu();
     void loadMovements();
-  }, [loadMovements]);
+  }, [loadMovements, provisionSfdmu]);
 
   useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -195,7 +217,10 @@ export function CustomSettingsLoadPanel() {
 
   return (
     <div className="p-4 md:p-6 w-full space-y-5">
-      <CustomSettingsPageHeader sfdmuInstalled={sfdmuInstalled} />
+      <CustomSettingsPageHeader
+        sfdmuInstalled={sfdmuReadiness?.sfdmuInstalled ?? null}
+        sfdmuVersion={sfdmuReadiness?.sfdmuVersion}
+      />
 
       {configError && (
         <InlineAlert variant="error" onDismiss={() => setConfigError(null)}>
@@ -203,13 +228,23 @@ export function CustomSettingsLoadPanel() {
         </InlineAlert>
       )}
 
-      {sfdmuInstalled === false && (
-        <InlineAlert variant="warning" title="SFDMU plugin not installed">
-          <p>
-            Custom settings load requires the SFDMU Salesforce CLI plugin on the machine running the API.
-            On that host, run <code className="text-xs">sf plugins install sfdmu</code> and verify with{' '}
-            <code className="text-xs">sf sfdmu --version</code>.
+      {sfdmuReadiness?.sfdmuInstalled === false && (
+        <InlineAlert variant="warning" title="Automatic SFDMU setup failed">
+          <p className="mb-2">
+            {sfdmuReadiness.error
+              ?? `The API could not install SFDMU${sfdmuReadiness.requiredVersion
+                ? ` ${sfdmuReadiness.requiredVersion}`
+                : ''}.`}
           </p>
+          <p className="mb-3">
+            Check registry access and <code className="text-xs">SF_CLI_PATH</code>, or install it on the API
+            host with <code className="text-xs">sf plugins install sfdmu{sfdmuReadiness.requiredVersion
+              ? `@${sfdmuReadiness.requiredVersion}`
+              : ''}</code>.
+          </p>
+          <Button type="button" size="sm" variant="outline" onClick={() => void provisionSfdmu()}>
+            Retry plugin setup
+          </Button>
         </InlineAlert>
       )}
 

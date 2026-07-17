@@ -115,7 +115,7 @@ export const STATIC_ANALYSIS_ENGINES = [
     id: 'code-analyzer',
     label: 'Salesforce Code Analyzer',
     description: 'Official sf code-analyzer plugin combining PMD, ESLint, and Salesforce Graph Engine rules.',
-    requires: 'Install the code-analyzer plugin for the Salesforce CLI on the API host.',
+    requires: 'Automatically provisioned on the API host; requires Java and Python for all engines.',
   },
   {
     id: 'pmd',
