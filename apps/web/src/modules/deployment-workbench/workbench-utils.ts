@@ -122,11 +122,7 @@ export function policyForEnvironment(
       tests: { level: 'RunLocalTests', tests: [], minimumCoverage: 75 },
       staticAnalysis: {
         enabled: true,
-<<<<<<< HEAD
         engines: [...AUTO_STATIC_ANALYSIS_ENGINES],
-=======
-        engines: defaultStaticAnalysisEngines(capabilities),
->>>>>>> origin/main
         severityThreshold: 'error',
         maxCounts: { info: null, warning: null, error: 0, critical: 0 },
         blockMode: 'threshold',

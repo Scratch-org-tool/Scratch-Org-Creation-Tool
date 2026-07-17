@@ -53,10 +53,9 @@ describe('deployment workbench component semantics', () => {
     expect(hookSource).toContain('void startComparison()');
     // The comparison stays available from the full report after a run finishes.
     expect(source).toContain('Deployed selection & source-versus-target XML');
-    expect(source).toContain('<ComponentsStep w={w} />');
+    expect(source).toContain('<ComponentsComparisonWindow');
   });
 
-<<<<<<< HEAD
   it('shows a dedicated success screen instead of stacking every section', () => {
     // A passed run renders ONLY the success panel until the report is opened.
     expect(source).toContain('if (terminal && succeeded && !showReport)');
@@ -85,14 +84,5 @@ describe('deployment workbench component semantics', () => {
     expect(source).toContain('onStepSelect={goToStep}');
     expect(source).toContain('isStepEnabled={stepEnabled}');
     expect(source).toContain("window.scrollTo({ top: 0, behavior: 'smooth' })");
-=======
-  it('presents static analysis engines with availability and install guidance', () => {
-    expect(source).toContain('staticAnalysisEngineOptions(w.capabilities)');
-    expect(source).toContain('defaultStaticAnalysisEngines(w.capabilities)');
-    expect(source).toContain('Not installed');
-    expect(source).toContain('{engine.requires}');
-    expect(source).toContain('disabled={!engine.available}');
-    expect(hookSource).toContain('policyForEnvironment(profile, capabilities)');
->>>>>>> origin/main
   });
 });

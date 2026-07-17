@@ -5,6 +5,7 @@ import {
   compareTypeSummaries,
   componentCount,
   createInitialForm,
+  autoStaticAnalysisEngines,
   defaultStaticAnalysisEngines,
   filterCompareItems,
   groupQualityResults,
@@ -20,6 +21,7 @@ import {
   stageRisk,
   staticAnalysisEngineOptions,
   validateWorkbenchForm,
+  withAutoStaticAnalysis,
 } from './workbench-utils';
 import type { WorkbenchCapabilities } from './types';
 
@@ -116,11 +118,14 @@ describe('deployment workbench utilities', () => {
     }))).toEqual(['built-in']);
     expect(defaultStaticAnalysisEngines(null)).toEqual(['code-analyzer']);
 
-    const production = policyForEnvironment('production', capabilitiesWith({
+    const unavailable = capabilitiesWith({
       staticAnalysisAvailability: { 'code-analyzer': false, pmd: false, eslint: false },
-    }));
+    });
+    const production = policyForEnvironment('production', unavailable);
     expect(production.staticAnalysis.enabled).toBe(true);
-    expect(production.staticAnalysis.engines).toEqual(['built-in']);
+    expect(production.staticAnalysis.engines).toEqual(['code-analyzer', 'pmd', 'eslint']);
+    expect(autoStaticAnalysisEngines(unavailable)).toEqual(['built-in']);
+    expect(withAutoStaticAnalysis(production, unavailable).staticAnalysis.engines).toEqual(['built-in']);
   });
 
   it('reports blockers separately from review warnings', () => {

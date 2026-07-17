@@ -270,16 +270,12 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
         sourceOrgId: sourceOrgId || current.sourceOrgId,
         targetOrgId: targetOrgId || current.targetOrgId,
         targetProfile: targetOrgId ? profile : current.targetProfile,
-<<<<<<< HEAD
         // Static analysis is always automatic — request every engine the
         // server knows about; unavailable analyzers are skipped server-side.
         policy: withAutoStaticAnalysis(
           targetOrgId ? policyForEnvironment(profile) : current.policy,
           nextCapabilities,
         ),
-=======
-        policy: targetOrgId ? policyForEnvironment(profile, nextCapabilities) : current.policy,
->>>>>>> origin/main
       }));
       const requestedRun = params.get('runId') ?? params.get('run');
       if (requestedRun) {
@@ -598,11 +594,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
       ...invalidateSourceState(current, { targetOrgId }),
       targetOrgId,
       targetProfile: profile,
-<<<<<<< HEAD
       policy: withAutoStaticAnalysis(policyForEnvironment(profile), capabilities),
-=======
-      policy: policyForEnvironment(profile, capabilities),
->>>>>>> origin/main
     }));
   }, [capabilities, clearComparison, clearPlanResolution, orgs]);
 
@@ -610,11 +602,7 @@ export function useDeploymentWorkbench(forcedSourceMode?: WorkbenchForm['sourceM
     setForm((current) => ({
       ...current,
       targetProfile,
-<<<<<<< HEAD
       policy: withAutoStaticAnalysis(policyForEnvironment(targetProfile), capabilities),
-=======
-      policy: policyForEnvironment(targetProfile, capabilities),
->>>>>>> origin/main
     }));
   }, [capabilities]);
 

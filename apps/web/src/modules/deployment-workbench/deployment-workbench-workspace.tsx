@@ -6,12 +6,9 @@ import {
   Boxes,
   CheckCircle2,
   Cloud,
-<<<<<<< HEAD
-  FileText,
-=======
   Database,
+  FileText,
   FlaskConical,
->>>>>>> origin/main
   GitCompare,
   History,
   Lock,
@@ -45,13 +42,11 @@ import { ComponentsComparisonWindow } from './components-comparison-window';
 import type { DependencyGraph, WorkbenchStage } from './types';
 import {
   componentCount,
-  defaultStaticAnalysisEngines,
   groupQualityResults,
   layoutDependencyGraph,
   readableStage,
   serverRunActions,
   stageRisk,
-  staticAnalysisEngineOptions,
   supportsDestructiveAcknowledgement,
   supportsOptionalDependencies,
   TERMINAL_RUN_STATUSES,
@@ -765,30 +760,12 @@ function DependenciesStep({ w }: { w: DeploymentWorkbenchState }) {
   );
 }
 
-const SEVERITY_DOTS: Record<'info' | 'warning' | 'error' | 'critical', string> = {
-  info: 'bg-sky-400',
-  warning: 'bg-amber-400',
-  error: 'bg-red-400',
-  critical: 'bg-fuchsia-400',
-};
-
-const BLOCK_MODE_HINTS: Record<'threshold' | 'any' | 'never', string> = {
-  threshold: 'The deployment is blocked when a severity at or above the threshold exceeds its configured maximum.',
-  any: 'The deployment is blocked by the first finding at or above the severity threshold.',
-  never: 'Findings are reported on the run for review but never block the deployment.',
-};
-
 function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
   const production = w.form.targetProfile === 'production';
   const [testSearch, setTestSearch] = useState('');
   const filteredTests = w.testClasses.filter((item) =>
     item.name.toLowerCase().includes(testSearch.toLowerCase()));
-<<<<<<< HEAD
-=======
-  const staticPolicy = w.form.policy.staticAnalysis;
-  const engineOptions = staticAnalysisEngineOptions(w.capabilities);
   const selectedTestCount = w.form.policy.tests.tests.length;
->>>>>>> origin/main
 
   return (
     <div className="space-y-4">
@@ -883,176 +860,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
         </div>
       </GlassCard>
 
-<<<<<<< HEAD
       <AutomaticStaticAnalysisCard w={w} />
-=======
-      <GlassCard
-        title={<SectionTitle icon={ScanSearch}>Static code analysis</SectionTitle>}
-        description="Scan the resolved deployment source for quality and security findings before it reaches the target."
-      >
-        <PolicyToggle
-          id="static-enabled"
-          label="Run static analysis"
-          description="Executes the selected engines against the exact pinned source that will be deployed."
-          checked={staticPolicy.enabled}
-          onChange={(checked) => w.setPolicy((policy) => ({
-            ...policy,
-            staticAnalysis: {
-              ...policy.staticAnalysis,
-              enabled: checked,
-              engines: checked && !policy.staticAnalysis.engines.length
-                ? defaultStaticAnalysisEngines(w.capabilities)
-                : policy.staticAnalysis.engines,
-            },
-          }))}
-        />
-        {staticPolicy.enabled && (
-          <div className="mt-4 space-y-5">
-            <fieldset>
-              <legend className="mb-2 text-sm font-medium">Analysis engines</legend>
-              <div className="grid gap-3 lg:grid-cols-2">
-                {engineOptions.map((engine) => {
-                  const selected = staticPolicy.engines.includes(engine.id);
-                  return (
-                    <label
-                      key={engine.id}
-                      className={cn(
-                        'relative flex items-start gap-3 rounded-xl border p-3.5 transition-colors focus-within:ring-2 focus-within:ring-ring',
-                        engine.available
-                          ? selected
-                            ? 'cursor-pointer border-primary/50 bg-primary/5'
-                            : 'cursor-pointer border-border/60 hover:border-primary/30'
-                          : 'cursor-not-allowed border-border/40 bg-muted/5',
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        className="mt-1"
-                        checked={selected}
-                        disabled={!engine.available}
-                        onChange={(event) => w.setPolicy((policy) => ({
-                          ...policy,
-                          staticAnalysis: {
-                            ...policy.staticAnalysis,
-                            engines: event.target.checked
-                              ? [...policy.staticAnalysis.engines, engine.id]
-                              : policy.staticAnalysis.engines.filter((item) => item !== engine.id),
-                          },
-                        }))}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className={cn('text-sm font-medium', !engine.available && 'text-muted-foreground')}>
-                            {engine.label}
-                          </span>
-                          {engine.available ? (
-                            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
-                              Ready
-                            </span>
-                          ) : (
-                            <span className="rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                              Not installed
-                            </span>
-                          )}
-                        </span>
-                        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                          {engine.description}
-                        </span>
-                        {!engine.available && engine.requires && (
-                          <span className="mt-1.5 block text-xs text-amber-300/90">{engine.requires}</span>
-                        )}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-              {!staticPolicy.engines.length && (
-                <InlineAlert variant="warning" className="mt-3">
-                  Select at least one engine to run static analysis.
-                </InlineAlert>
-              )}
-            </fieldset>
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Severity threshold" htmlFor="severity-threshold">
-                <Select
-                  id="severity-threshold"
-                  value={staticPolicy.severityThreshold}
-                  onChange={(event) => w.setPolicy((policy) => ({
-                    ...policy,
-                    staticAnalysis: {
-                      ...policy.staticAnalysis,
-                      severityThreshold: event.target.value as typeof policy.staticAnalysis.severityThreshold,
-                    },
-                  }))}
-                >
-                  <option value="info">Info and above</option>
-                  <option value="warning">Warning and above</option>
-                  <option value="error">Error and above</option>
-                  <option value="critical">Critical only</option>
-                </Select>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Findings below this severity are reported but never counted against limits.
-                </p>
-              </Field>
-              <Field label="Blocking mode" htmlFor="static-block-mode">
-                <Select
-                  id="static-block-mode"
-                  value={staticPolicy.blockMode}
-                  onChange={(event) => w.setPolicy((policy) => ({
-                    ...policy,
-                    staticAnalysis: {
-                      ...policy.staticAnalysis,
-                      blockMode: event.target.value as typeof policy.staticAnalysis.blockMode,
-                    },
-                  }))}
-                >
-                  <option value="threshold">Block over configured maximums</option>
-                  <option value="any">Block on any finding</option>
-                  <option value="never">Report only</option>
-                </Select>
-                <p className="mt-1 text-xs text-muted-foreground">{BLOCK_MODE_HINTS[staticPolicy.blockMode]}</p>
-              </Field>
-            </div>
-            {staticPolicy.blockMode === 'threshold' && (
-              <fieldset>
-                <legend className="mb-2 text-sm font-medium">Maximum allowed findings</legend>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                  {(['info', 'warning', 'error', 'critical'] as const).map((severity) => (
-                    <div key={severity}>
-                      <Label htmlFor={`max-${severity}`} className="flex items-center gap-1.5 capitalize">
-                        <span className={cn('size-2 rounded-full', SEVERITY_DOTS[severity])} aria-hidden="true" />
-                        {severity}
-                      </Label>
-                      <Input
-                        id={`max-${severity}`}
-                        type="number"
-                        min={0}
-                        placeholder="No limit"
-                        className="mt-1.5"
-                        value={staticPolicy.maxCounts[severity] ?? ''}
-                        onChange={(event) => w.setPolicy((policy) => ({
-                          ...policy,
-                          staticAnalysis: {
-                            ...policy.staticAnalysis,
-                            maxCounts: {
-                              ...policy.staticAnalysis.maxCounts,
-                              [severity]: event.target.value === '' ? null : Math.max(0, Number(event.target.value)),
-                            },
-                          },
-                        }))}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Leave a field empty to allow any number of findings at that severity.
-                </p>
-              </fieldset>
-            )}
-          </div>
-        )}
-      </GlassCard>
->>>>>>> origin/main
 
       <GlassCard
         title={<SectionTitle icon={FlaskConical}>Apex tests and coverage</SectionTitle>}
@@ -1120,17 +928,13 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
             />
             <div className="max-h-60 overflow-auto rounded-lg border border-border/60 p-2">
               {w.testClassesLoading ? (
-<<<<<<< HEAD
                 <BusyRow label="Loading Apex classes from the target org…" />
-=======
-                <p className="p-3 text-sm text-muted-foreground">Loading classes from target org…</p>
               ) : !filteredTests.length ? (
                 <p className="p-3 text-sm text-muted-foreground">
                   {w.testClasses.length
                     ? 'No Apex classes match the filter.'
                     : 'No Apex classes were found in the target org.'}
                 </p>
->>>>>>> origin/main
               ) : filteredTests.map((testClass) => (
                 <label key={testClass.name} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/30">
                   <input
@@ -1195,7 +999,23 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
   );
 }
 
-<<<<<<< HEAD
+function SectionTitle({
+  icon: Icon,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <Icon className="size-4" aria-hidden="true" />
+      </span>
+      <span className="text-base font-semibold leading-none tracking-tight">{children}</span>
+    </div>
+  );
+}
+
 function AutomaticStaticAnalysisCard({ w }: { w: DeploymentWorkbenchState }) {
   const engines = w.form.policy.staticAnalysis.engines;
   const availability = w.capabilities?.staticAnalysisAvailability;
@@ -1246,22 +1066,6 @@ function AutomaticStaticAnalysisCard({ w }: { w: DeploymentWorkbenchState }) {
         </InlineAlert>
       </div>
     </GlassCard>
-=======
-function SectionTitle({
-  icon: Icon,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-        <Icon className="size-4" aria-hidden="true" />
-      </span>
-      <span className="text-base font-semibold leading-none tracking-tight">{children}</span>
-    </div>
->>>>>>> origin/main
   );
 }
 
