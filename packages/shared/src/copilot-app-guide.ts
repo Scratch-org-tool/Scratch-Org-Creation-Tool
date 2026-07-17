@@ -86,10 +86,10 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     ],
   },
   {
-    path: '/metadata-deployment',
-    label: 'Metadata Deployment',
+    path: '/deployment-workbench',
+    label: 'Deployment Workbench',
     module: 'deployment',
-    description: 'Deploy metadata from Git branches to target Salesforce orgs with history.',
+    description: 'Metadata and data deployments: compare orgs or branches, quality gates, approvals, rollback, and audit.',
   },
   {
     path: '/monitoring',
@@ -140,14 +140,14 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
   {
     id: 'metadata-deploy',
     title: 'Deploy metadata',
-    keywords: ['metadata', 'deploy metadata', 'git deploy', 'branch deploy'],
+    keywords: ['metadata', 'deploy metadata', 'git deploy', 'branch deploy', 'workbench'],
     module: 'deployment',
     steps: [
-      'Open **Metadata Deployment** in the sidebar.',
-      'Select source repo/branch and target org.',
-      'Review components and start the deployment; view history on the same page.',
+      'Open **Deployment Workbench** in the sidebar and choose **Metadata Deployment**.',
+      'Pick the comparison source (org or repository branch) and the target org, then start the comparison.',
+      'Select components, review dependencies and quality gates, then create and execute the plan.',
     ],
-    relatedPaths: ['/metadata-deployment'],
+    relatedPaths: ['/deployment-workbench'],
   },
   {
     id: 'git-metadata-deploy',
@@ -241,7 +241,7 @@ const PATH_TITLES: Array<{ prefix: string; title: string }> = [
   { prefix: '/org-setup', title: 'Org Setup' },
   { prefix: '/user-provisioning', title: 'User Provisioning' },
   { prefix: '/custom-settings-load', title: 'Custom Settings Load' },
-  { prefix: '/metadata-deployment', title: 'Metadata Deployment' },
+  { prefix: '/deployment-workbench', title: 'Deployment Workbench' },
   { prefix: '/monitoring', title: 'Monitoring' },
   { prefix: '/defects-command-centre', title: 'AI Defects Command Centre' },
   { prefix: '/admin/users', title: 'User Access' },
@@ -258,7 +258,7 @@ const QUICK_PROMPTS: Array<{ prefix: string; prompts: string[] }> = [
     prefix: '/deployment-center',
     prompts: ['How do I deploy from Git?', 'Where do I connect a source-control provider?'],
   },
-  { prefix: '/metadata-deployment', prompts: ['How do I deploy metadata?', 'Where is deployment history?'] },
+  { prefix: '/deployment-workbench', prompts: ['How do I deploy metadata?', 'Where is deployment history?'] },
   { prefix: '/data-deploy', prompts: ['How do I deploy records to another org?', 'What is the difference between insert and upsert?'] },
   { prefix: '/data-center', prompts: ['How do I replicate data between orgs?', 'What is SFDMU in this app?'] },
   { prefix: '/monitoring', prompts: ['How do I find a failed job?', 'How do I read job logs?'] },
@@ -282,8 +282,8 @@ const NAV_KEYWORDS: Array<{
     action: { type: 'navigate', href: '/environment-center', label: 'Environment Integrations' },
   },
   {
-    patterns: /\b(metadata\s+deploy|metadata\s+deployment)\b/i,
-    action: { type: 'navigate', href: '/metadata-deployment', label: 'Metadata Deployment' },
+    patterns: /\b(metadata\s+deploy|metadata\s+deployment|deployment\s+workbench)\b/i,
+    action: { type: 'navigate', href: '/deployment-workbench?flow=metadata', label: 'Metadata Deployment' },
   },
   {
     patterns: /\b(git\s+metadata|repository\s+deploy|azure|github|bitbucket|ado\s+pipeline)\b/i,

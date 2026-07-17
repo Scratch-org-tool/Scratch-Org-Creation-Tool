@@ -5,7 +5,6 @@ import {
   Database,
   FlaskConical,
   GitBranch,
-  Layers,
   Package,
   Settings2,
   Users,
@@ -57,12 +56,12 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
     links: [
       {
         label: 'Deployment Workbench',
-        description: 'Unified planning, quality gates, intelligent execution, rollback, and audit.',
+        description: 'Metadata and data deployments with comparison, quality gates, rollback, and audit.',
         href: '/deployment-workbench',
         icon: Boxes,
         iconBg: 'bg-cyan-500/10 text-cyan-400',
         modules: ['deployment'],
-        activePrefixes: ['/deployment-workbench'],
+        activePrefixes: ['/deployment-workbench', '/metadata-deployment'],
       },
       {
         label: 'Git Metadata Deploy',
@@ -72,15 +71,6 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
         iconBg: 'bg-blue-500/10 text-blue-400',
         modules: ['deployment'],
         activePrefixes: ['/deployment-center/git', '/deployment-center/azure', '/deployment-center/releases'],
-      },
-      {
-        label: 'Org-to-Org Metadata',
-        description: 'Browse, compare, and deploy metadata between Salesforce orgs.',
-        href: '/metadata-deployment',
-        icon: Layers,
-        iconBg: 'bg-violet-500/10 text-violet-400',
-        modules: ['deployment'],
-        activePrefixes: ['/metadata-deployment'],
       },
       {
         label: 'Deployment Automations',

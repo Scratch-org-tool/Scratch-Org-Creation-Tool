@@ -1,7 +1,9 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { DeploymentWorkbenchWorkspace } from '@/modules/deployment-workbench/deployment-workbench-workspace';
-
-export default function MetadataDeploymentPage() {
-  return <DeploymentWorkbenchWorkspace sourceMode="org_compare" />;
+/**
+ * Org-to-Org Metadata was consolidated into the Deployment Workbench — one
+ * governed flow for metadata comparison and deployment.
+ */
+export default function MetadataDeploymentRedirectPage() {
+  redirect('/deployment-workbench?flow=metadata');
 }
