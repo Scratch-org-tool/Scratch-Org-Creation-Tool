@@ -133,11 +133,15 @@ export function OrgToOrgSoqlEditor({
               <p className="text-muted-foreground">
                 {parsedPreview.filterCount} filter condition(s) synced to visual builder
               </p>
+              <p className="text-muted-foreground">
+                The maximum-records setting below replaces any LIMIT for deployment.
+              </p>
             </div>
           )}
           {config.customSoql && !parsedPreview && (
             <p className="text-xs text-muted-foreground">
-              Active custom query — preview and deploy use this SOQL.
+              Active custom query — fields and filters come from this SOQL. The maximum-records
+              setting below replaces any LIMIT for deployment.
             </p>
           )}
         </>

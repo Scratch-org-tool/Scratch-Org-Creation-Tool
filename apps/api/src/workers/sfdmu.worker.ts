@@ -12,6 +12,11 @@ import { StreamService } from '../modules/stream/stream.service';
 import { BulkThrottleService, type BulkThrottleSlot } from '../modules/data/bulk-throttle.service';
 import { DataDeployOrchestratorService } from '../modules/data/data-deploy-orchestrator.service';
 import { cleanupSfdmuRunDir } from '../modules/data/sfdmu-config.generator';
+import {
+  parseSfdmuOutcome,
+  sfdmuRowFailureMessage,
+  type SfdmuOutcome,
+} from './sfdmu-outcome.util';
 
 @Injectable()
 export class SfdmuWorker {
@@ -35,6 +40,7 @@ export class SfdmuWorker {
       chunkId,
       batchId,
       chunkIndex,
+      chunkRecordCount,
     } = job.data as {
       sourceOrgAlias: string;
       targetOrgAlias: string;
@@ -44,6 +50,7 @@ export class SfdmuWorker {
       chunkId?: string;
       batchId?: string;
       chunkIndex?: number;
+      chunkRecordCount?: number;
     };
 
     const log = async (stream: 'stdout' | 'stderr', line: string) => {
@@ -92,6 +99,7 @@ export class SfdmuWorker {
     const orderedAliases = [...new Set([sourceOrgAlias, targetOrgAlias])].sort();
     const slots: BulkThrottleSlot[] = [];
     const killHolder: { unregister?: () => void } = {};
+    let outcome: SfdmuOutcome | undefined;
 
     try {
       for (const alias of orderedAliases) {
@@ -129,6 +137,24 @@ export class SfdmuWorker {
         throw new Error(result.error ?? 'SFDMU run failed');
       }
 
+      outcome = parseSfdmuOutcome([result.stdout, result.stderr].filter(Boolean).join('\n'));
+      if (outcome.failedRecords > 0) {
+        const message = sfdmuRowFailureMessage(outcome);
+        await log('stderr', message);
+        throw new Error(message);
+      }
+      if (outcome.processedRecords != null) {
+        await log(
+          'stdout',
+          `SFDMU verified ${outcome.processedRecords.toLocaleString()} processed record(s) with no row failures`,
+        );
+      } else {
+        await log(
+          'stderr',
+          'SFDMU exited successfully but did not emit row counters; completion is based on the command result',
+        );
+      }
+
       if (movementId) {
         await prisma.dataMovement.updateMany({
           where: { id: movementId, status: { in: ['pending', 'queued', 'planning', 'running'] } },
@@ -137,10 +163,10 @@ export class SfdmuWorker {
       }
 
       if (chunkId) {
-        await this.dataDeployOrchestrator.onChunkCompleted(chunkId);
+        await this.dataDeployOrchestrator.onChunkCompleted(chunkId, chunkRecordCount, outcome);
       }
 
-      return result.data;
+      return { data: result.data, outcome };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const cancelled = await this.processRegistry.isCancellationRequested(dbJobId);
@@ -158,7 +184,13 @@ export class SfdmuWorker {
           }).catch(() => undefined);
           if (batchId) await this.dataDeployOrchestrator.refreshBatchProgress(batchId);
         } else {
-          await this.dataDeployOrchestrator.onChunkFailed(chunkId, message);
+          await this.dataDeployOrchestrator.onChunkFailed(chunkId, message, outcome
+            ? {
+                phase: 'sfdmu',
+                processedRecords: outcome.processedRecords,
+                failedRecords: outcome.failedRecords,
+              }
+            : undefined);
         }
       }
       throw error;

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { ArrowLeftRight, ArrowRight, MoveRight } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, LoaderCircle, MoveRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label, Select } from '@/components/ui/input';
 import { ConfirmDialog, InlineAlert, StatusBadge, WizardSteps } from '@/components/studio';
@@ -223,12 +223,12 @@ export function OrgToOrgDeployPanel() {
             <div className="space-y-3">
               <p className="text-sm">
                 Batch <span className="font-mono text-xs">{w.batchResult.batchId}</span> queued with{' '}
-                {w.batchResult.deployments.length} object job(s).
+                {w.batchResult.deployments.length} object plan(s).
               </p>
               <ul className="text-xs space-y-1">
                 {w.batchResult.deployments.map((d) => (
                   <li key={d.movementId}>
-                    {d.objectName}: job {d.jobId}
+                    {d.objectName}: {d.jobId ? `planner job ${d.jobId}` : 'preparing planner'}
                     {d.totalChunks ? ` (${d.totalChunks} chunks)` : ''}
                   </li>
                 ))}
@@ -236,7 +236,11 @@ export function OrgToOrgDeployPanel() {
               {w.batchResult.deployments
                 .filter((d) => d.batchId)
                 .map((d) => (
-                  <DataDeployBatchProgress key={d.batchId} batchId={d.batchId!} />
+                  <DataDeployBatchProgress
+                    key={d.batchId}
+                    batchId={d.batchId!}
+                    onJobIdsChange={w.trackJobIds}
+                  />
                 ))}
               <div className="studio-console rounded-lg overflow-hidden">
                 <div className="px-3 py-2 border-b border-border/60 text-xs text-muted-foreground">
@@ -244,7 +248,13 @@ export function OrgToOrgDeployPanel() {
                 </div>
                 <div className="h-48 overflow-y-auto p-3 space-y-0.5 text-xs">
                   {w.logs.length === 0 && (
-                    <p className="text-muted-foreground">Waiting for job output…</p>
+                    <p className="flex items-center gap-2 text-muted-foreground">
+                      {!['completed', 'partial', 'failed', 'cancelled'].includes(w.deployStatus ?? '')
+                        && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+                      {['completed', 'partial', 'failed', 'cancelled'].includes(w.deployStatus ?? '')
+                        ? 'No CLI output was captured. Review the chunk result above.'
+                        : 'Preparing planner and chunk output…'}
+                    </p>
                   )}
                   {w.logs.map((line, i) => (
                     <div key={i}>{line}</div>
@@ -255,7 +265,14 @@ export function OrgToOrgDeployPanel() {
               <div className="flex flex-wrap items-center gap-3">
                 <StatusBadge status={w.deployStatus ?? 'queued'} />
                 {w.deployStatus === 'completed' && (
-                  <p className="text-sm text-muted-foreground">Deployment completed successfully.</p>
+                  <p className="text-sm text-muted-foreground">
+                    Every planned chunk completed without reported row failures.
+                  </p>
+                )}
+                {w.deployStatus === 'partial' && (
+                  <p className="text-sm text-amber-600 dark:text-amber-400">
+                    Deployment completed with failed chunks or row errors.
+                  </p>
                 )}
               </div>
               {w.deployJobError && (

@@ -4,9 +4,23 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
-import { ACCOUNT_EXPORT_FIELDS, compileAccountOfficeQueries, escapeSoqlValue, normalizeQuerySet, ONBOARDING_OBJECT, type BottlerSalesOfficeConfig, type DataSeedQuerySet } from '@sfcc/shared';
-import type { AccountSeedRow } from './account-seed-query.builder';
-import { buildAccountCountSoql, buildAccountSeedSoql } from './account-seed-query.builder';
+import {
+  ACCOUNT_EXPORT_FIELDS,
+  buildCountSoql,
+  compileAccountOfficeQueries,
+  escapeSoqlValue,
+  normalizeQuerySet,
+  ONBOARDING_OBJECT,
+  type BottlerSalesOfficeConfig,
+  type ConaManualAccountQuery,
+  type DataSeedQuerySet,
+} from '@sfcc/shared';
+import type { AccountSeedRow, ResolvedManualAccountQuery } from './account-seed-query.builder';
+import {
+  buildAccountCountSoql,
+  buildAccountSeedSoql,
+  resolveManualAccountSeedQuery,
+} from './account-seed-query.builder';
 import { RecordTypeMapperService } from './record-type-mapper.service';
 
 type SeedDataset = 'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts';
@@ -37,6 +51,10 @@ export class ConaSeedService {
 
   constructor(private readonly recordTypeMapper: RecordTypeMapperService) {}
 
+  validateManualAccountQueries(queries: ConaManualAccountQuery[]) {
+    return queries.map(resolveManualAccountSeedQuery);
+  }
+
   async previewAccountSeed(sourceOrgId: string, rows: AccountSeedRow[]) {
     const org = await this.resolveOrg(sourceOrgId);
     const results = [];
@@ -49,13 +67,30 @@ export class ConaSeedService {
     return { rows: results };
   }
 
-  async validate(sourceOrgId: string, datasets: SeedDataset[], accountSeedRows?: AccountSeedRow[]) {
+  async validate(
+    sourceOrgId: string,
+    datasets: SeedDataset[],
+    accountSeedRows?: AccountSeedRow[],
+    accountQueryMode: 'guided' | 'manual' = 'guided',
+    manualAccountQueries?: ConaManualAccountQuery[],
+  ) {
     const org = await this.resolveOrg(sourceOrgId);
     const bottlers = [...new Set((accountSeedRows ?? []).map((r) => r.bottler))];
     const defaultBottler = bottlers[0] ?? '5000';
     const checks: Array<{ dataset: string; count: number; ok: boolean }> = [];
+    if (
+      datasets.includes('Accounts')
+      && accountQueryMode === 'manual'
+      && !manualAccountQueries?.length
+    ) {
+      throw new Error('Add at least one manual Account query');
+    }
 
     const safeBottler = escapeSoqlValue(defaultBottler);
+    const manualQueryPreviews: Array<ResolvedManualAccountQuery & {
+      availableCount: number;
+      selectedCount: number;
+    }> = [];
     if (datasets.includes('OnboardingConfig')) {
       const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM ${ONBOARDING_OBJECT} WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
       const count = (r.data?.result as { totalSize?: number })?.totalSize ?? 0;
@@ -71,7 +106,11 @@ export class ConaSeedService {
       const count = (r.data?.result as { totalSize?: number })?.totalSize ?? 0;
       checks.push({ dataset: 'VisitPlans', count, ok: count > 0 });
     }
-    if (datasets.includes('Accounts') && accountSeedRows?.length) {
+    if (
+      datasets.includes('Accounts')
+      && accountQueryMode === 'guided'
+      && accountSeedRows?.length
+    ) {
       for (const row of accountSeedRows) {
         const soql = buildAccountCountSoql(row);
         const r = await this.sfCli.query(org.alias, soql);
@@ -83,9 +122,32 @@ export class ConaSeedService {
         });
       }
     }
+    if (
+      datasets.includes('Accounts')
+      && accountQueryMode === 'manual'
+      && manualAccountQueries?.length
+    ) {
+      for (const query of manualAccountQueries) {
+        const resolved = resolveManualAccountSeedQuery(query);
+        const result = await this.sfCli.query(org.alias, buildCountSoql(resolved.soql));
+        if (!result.success) {
+          throw new Error(
+            `Manual query "${resolved.label}" preview failed: ${result.error ?? 'unknown Salesforce query error'}`,
+          );
+        }
+        const availableCount = (result.data?.result as { totalSize?: number })?.totalSize ?? 0;
+        const selectedCount = Math.min(availableCount, resolved.limit);
+        checks.push({
+          dataset: `Accounts:${resolved.label}`,
+          count: selectedCount,
+          ok: selectedCount > 0,
+        });
+        manualQueryPreviews.push({ ...resolved, availableCount, selectedCount });
+      }
+    }
 
     const ok = checks.every((c) => c.ok);
-    return { ok, checks };
+    return { ok, checks, manualQueries: manualQueryPreviews };
   }
 
   async runSeed(options: {
@@ -93,6 +155,8 @@ export class ConaSeedService {
     targetOrgId: string;
     datasets?: SeedDataset[];
     accountSeedRows?: AccountSeedRow[];
+    accountQueryMode?: 'guided' | 'manual';
+    manualAccountQueries?: ConaManualAccountQuery[];
     dataSeedMode?: DataSeedMode;
     querySet?: DataSeedQuerySet;
     salesOfficeConfig?: BottlerSalesOfficeConfig;
@@ -106,11 +170,18 @@ export class ConaSeedService {
     const log = async (line: string) => options.onLog?.(line);
     const mode = options.dataSeedMode ?? 'hybrid';
     const datasets = options.datasets ?? ['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'];
+    const accountQueryMode = options.accountQueryMode ?? 'guided';
     const bottler = options.accountSeedRows?.[0]?.bottler ?? options.salesOfficeConfig?.bottler ?? '5000';
 
     try {
     if (mode === 'automatic' || mode === 'hybrid') {
-    const validation = await this.validate(options.sourceOrgId, datasets, options.accountSeedRows);
+    const validation = await this.validate(
+      options.sourceOrgId,
+      datasets,
+      options.accountSeedRows,
+      accountQueryMode,
+      options.manualAccountQueries,
+    );
     if (!validation.ok) {
       throw new Error(`Validation failed: ${JSON.stringify(validation.checks.filter((c) => !c.ok))}`);
     }
@@ -153,7 +224,11 @@ export class ConaSeedService {
       if (!imp.success) throw new Error(imp.error ?? 'VisitPlans upsert failed');
     }
 
-    if (datasets.includes('Accounts') && options.accountSeedRows?.length) {
+    if (
+      datasets.includes('Accounts')
+      && accountQueryMode === 'guided'
+      && options.accountSeedRows?.length
+    ) {
       for (const [i, row] of options.accountSeedRows.entries()) {
         const csv = join(workDir, `accounts-${i}.csv`);
         const soql = buildAccountSeedSoql(row);
@@ -163,6 +238,41 @@ export class ConaSeedService {
         await log(`Upserting accounts ${row.accountGroup}/${row.bottler}...`);
         const imp = await this.sfCli.upsertBulk('Account', csv, 'cfs_ob__u_CustomerNumber__c', target.alias, 15, { cwd: workDir });
         if (!imp.success) throw new Error(imp.error ?? `Account upsert failed for row ${i}`);
+      }
+    }
+    if (
+      datasets.includes('Accounts')
+      && accountQueryMode === 'manual'
+      && options.manualAccountQueries?.length
+    ) {
+      for (const [i, query] of options.manualAccountQueries.entries()) {
+        const resolved = resolveManualAccountSeedQuery(query);
+        const csv = join(workDir, `manual-accounts-${i}.csv`);
+        await log(
+          `Exporting manual Account query "${resolved.label}" (up to ${resolved.limit.toLocaleString()} records)...`,
+        );
+        const exp = await this.sfCli.exportBulk(
+          resolved.soql,
+          source.alias,
+          csv,
+          10,
+          { cwd: workDir },
+        );
+        if (!exp.success) {
+          throw new Error(exp.error ?? `Account export failed for "${resolved.label}"`);
+        }
+        await log(`Upserting manual Account query "${resolved.label}"...`);
+        const imp = await this.sfCli.upsertBulk(
+          resolved.objectName,
+          csv,
+          resolved.externalIdField,
+          target.alias,
+          15,
+          { cwd: workDir },
+        );
+        if (!imp.success) {
+          throw new Error(imp.error ?? `Account upsert failed for "${resolved.label}"`);
+        }
       }
     }
     }

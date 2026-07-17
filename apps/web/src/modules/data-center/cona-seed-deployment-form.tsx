@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input, Label, Select } from '@/components/ui/input';
+import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { FormSection, GlassCard, InlineAlert, StatusBadge } from '@/components/studio';
 import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
-import { Plus, Trash2 } from 'lucide-react';
+import { Code2, Plus, Trash2 } from 'lucide-react';
 
 interface Org {
   id: string;
@@ -17,11 +17,19 @@ type AccountGroup = 'Z001' | 'ZFSV' | 'Z003';
 type Bottler = '5000' | '4900' | '4600';
 type DistributionChannel = 'Z1' | 'Z3';
 type Dataset = 'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts';
+type AccountQueryMode = 'guided' | 'manual';
 
 interface AccountSeedRow {
   accountGroup: AccountGroup;
   bottler: Bottler;
   distributionChannel: DistributionChannel;
+  limit: number;
+}
+
+interface ManualAccountQuery {
+  id: string;
+  label: string;
+  soql: string;
   limit: number;
 }
 
@@ -41,6 +49,13 @@ const DEFAULT_ACCOUNT_ROW: AccountSeedRow = {
   limit: 500,
 };
 
+const DEFAULT_MANUAL_QUERY: ManualAccountQuery = {
+  id: 'manual-account-1',
+  label: 'Manual Account query 1',
+  soql: '',
+  limit: 500,
+};
+
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
 
 function isZfsv5000Blocked(row: AccountSeedRow) {
@@ -53,17 +68,27 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
   const [targetOrgId, setTargetOrgId] = useState('');
   const [datasets, setDatasets] = useState<Dataset[]>([...DATASETS]);
   const [accountRows, setAccountRows] = useState<AccountSeedRow[]>([{ ...DEFAULT_ACCOUNT_ROW }]);
+  const [accountQueryMode, setAccountQueryMode] = useState<AccountQueryMode>('guided');
+  const [manualQueries, setManualQueries] = useState<ManualAccountQuery[]>([
+    { ...DEFAULT_MANUAL_QUERY },
+  ]);
   const [preview, setPreview] = useState<{
     ok?: boolean;
     checks?: Array<{ dataset: string; count: number; ok: boolean }>;
     rows?: Array<AccountSeedRow & { availableCount: number; soql: string }>;
+    manualQueries?: Array<ManualAccountQuery & {
+      availableCount: number;
+      selectedCount: number;
+      soql: string;
+    }>;
   } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loadingAction, setLoadingAction] = useState<'preview' | 'run' | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobData | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const logBottomRef = useRef<HTMLDivElement>(null);
+  const manualQuerySequence = useRef(2);
 
   useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -82,14 +107,38 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     return () => clearInterval(poll);
   }, [jobId]);
 
-  const accountSeedPayload = datasets.includes('Accounts') ? accountRows : undefined;
+  const accountSeedPayload =
+    datasets.includes('Accounts') && accountQueryMode === 'guided'
+      ? accountRows
+      : undefined;
+  const manualAccountQueryPayload =
+    datasets.includes('Accounts') && accountQueryMode === 'manual'
+      ? manualQueries
+      : undefined;
 
-  const validateRows = useCallback(() => {
-    const blocked = accountRows.find(isZfsv5000Blocked);
-    if (blocked) {
-      throw new Error('ZFSV accounts are not available for bottler 5000');
+  const validateSelection = useCallback(() => {
+    if (datasets.length === 0) throw new Error('Select at least one dataset');
+    if (!datasets.includes('Accounts')) return;
+    if (accountQueryMode === 'guided') {
+      const blocked = accountRows.find(isZfsv5000Blocked);
+      if (blocked) throw new Error('ZFSV accounts are not available for bottler 5000');
+      return;
     }
-  }, [accountRows]);
+    if (manualQueries.length === 0) throw new Error('Add at least one manual Account query');
+    for (const [index, query] of manualQueries.entries()) {
+      if (!query.label.trim()) throw new Error(`Manual query ${index + 1} needs a label`);
+      if (!query.soql.trim()) throw new Error(`Manual query "${query.label}" needs SOQL`);
+    }
+  }, [accountQueryMode, accountRows, datasets, manualQueries]);
+
+  const seedPayload = {
+    sourceOrgId,
+    targetOrgId,
+    datasets,
+    accountQueryMode,
+    accountSeedRows: accountSeedPayload,
+    manualAccountQueries: manualAccountQueryPayload,
+  };
 
   const handlePreview = async () => {
     if (!sourceOrgId || !targetOrgId) return;
@@ -98,23 +147,26 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
       return;
     }
     setError(null);
-    setLoading(true);
+    setLoadingAction('preview');
     try {
-      validateRows();
+      validateSelection();
       const [validation, accountPreview] = await Promise.all([
-        api<{ ok: boolean; checks: Array<{ dataset: string; count: number; ok: boolean }> }>(
+        api<{
+          ok: boolean;
+          checks: Array<{ dataset: string; count: number; ok: boolean }>;
+          manualQueries?: Array<ManualAccountQuery & {
+            availableCount: number;
+            selectedCount: number;
+            soql: string;
+          }>;
+        }>(
           '/data/seed/preview',
           {
             method: 'POST',
-            body: JSON.stringify({
-              sourceOrgId,
-              targetOrgId,
-              datasets,
-              accountSeedRows: accountSeedPayload,
-            }),
+            body: JSON.stringify(seedPayload),
           },
         ),
-        datasets.includes('Accounts')
+        datasets.includes('Accounts') && accountQueryMode === 'guided'
           ? api<{ rows: Array<AccountSeedRow & { availableCount: number; soql: string }> }>(
               '/data/account-seed/preview',
               {
@@ -124,12 +176,17 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
             )
           : Promise.resolve(null),
       ]);
-      setPreview({ ok: validation.ok, checks: validation.checks, rows: accountPreview?.rows });
+      setPreview({
+        ok: validation.ok,
+        checks: validation.checks,
+        rows: accountPreview?.rows,
+        manualQueries: validation.manualQueries,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preview failed');
       setPreview(null);
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
   };
 
@@ -140,35 +197,55 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
       return;
     }
     setError(null);
-    setLoading(true);
+    setLoadingAction('run');
     setLogs([]);
     setJob(null);
     setJobId(null);
     try {
-      validateRows();
+      validateSelection();
       const res = await api<{ jobId: string }>('/data/seed/run', {
         method: 'POST',
-        body: JSON.stringify({
-          sourceOrgId,
-          targetOrgId,
-          datasets,
-          accountSeedRows: accountSeedPayload,
-        }),
+        body: JSON.stringify(seedPayload),
       });
       setJobId(res.jobId);
       setJob({ id: res.jobId, status: 'queued' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Seed run failed');
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
   };
 
   const updateRow = (index: number, patch: Partial<AccountSeedRow>) => {
     setAccountRows((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+    setPreview(null);
   };
 
-  const isRunning = job?.status === 'running' || job?.status === 'queued' || loading;
+  const updateManualQuery = (index: number, patch: Partial<ManualAccountQuery>) => {
+    setManualQueries((queries) =>
+      queries.map((query, queryIndex) =>
+        queryIndex === index ? { ...query, ...patch } : query));
+    setPreview(null);
+  };
+
+  const addManualQuery = () => {
+    const sequence = manualQuerySequence.current++;
+    setManualQueries((queries) => [
+      ...queries,
+      {
+        id: `manual-account-${sequence}`,
+        label: `Manual Account query ${sequence}`,
+        soql: '',
+        limit: 500,
+      },
+    ]);
+    setPreview(null);
+  };
+
+  const isRunning =
+    job?.status === 'running'
+    || job?.status === 'queued'
+    || loadingAction !== null;
 
   const formContent = (
     <>
@@ -206,6 +283,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                     setDatasets((prev) =>
                       e.target.checked ? [...prev, d] : prev.filter((x) => x !== d),
                     );
+                    setPreview(null);
                   }}
                 />
                 {d}
@@ -215,91 +293,216 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
         </FormSection>
 
         {datasets.includes('Accounts') && (
-          <FormSection title="Account seed rows" className="mt-6">
-            <p className="text-xs text-muted-foreground mb-3">
-              Each row builds a SOQL query by account group, bottler, and distribution channel. ZFSV + bottler 5000 is blocked.
-            </p>
-            <div className="space-y-3">
-              {accountRows.map((row, index) => (
-                <div
-                  key={index}
-                  className={`grid gap-2 md:grid-cols-6 items-end p-3 rounded-lg border ${
-                    isZfsv5000Blocked(row) ? 'border-destructive/50 bg-destructive/5' : 'border-border'
-                  }`}
-                >
-                  <div>
-                    <Label htmlFor={`cona-seed-${index}-group`}>Group</Label>
-                    <Select
-                      id={`cona-seed-${index}-group`}
-                      value={row.accountGroup}
-                      onChange={(e) => updateRow(index, { accountGroup: e.target.value as AccountGroup })}
-                    >
-                      <option value="Z001">Z001</option>
-                      <option value="ZFSV">ZFSV</option>
-                      <option value="Z003">Z003</option>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor={`cona-seed-${index}-bottler`}>Bottler</Label>
-                    <Select
-                      id={`cona-seed-${index}-bottler`}
-                      value={row.bottler}
-                      onChange={(e) => updateRow(index, { bottler: e.target.value as Bottler })}
-                    >
-                      <option value="5000">5000</option>
-                      <option value="4900">4900</option>
-                      <option value="4600">4600</option>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor={`cona-seed-${index}-channel`}>Channel</Label>
-                    <Select
-                      id={`cona-seed-${index}-channel`}
-                      value={row.distributionChannel}
-                      onChange={(e) =>
-                        updateRow(index, { distributionChannel: e.target.value as DistributionChannel })
-                      }
-                    >
-                      <option value="Z1">Z1</option>
-                      <option value="Z3">Z3</option>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor={`cona-seed-${index}-limit`}>Limit</Label>
-                    <Input
-                      id={`cona-seed-${index}-limit`}
-                      type="number"
-                      min={1}
-                      value={row.limit}
-                      onChange={(e) => updateRow(index, { limit: Number(e.target.value) || 1 })}
-                    />
-                  </div>
-                  <div className="md:col-span-2 flex gap-2">
-                    {accountRows.length > 1 && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setAccountRows((rows) => rows.filter((_, i) => i !== index))}
-                        aria-label={`Remove account seed row ${index + 1}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ))}
+          <FormSection title="Account queries" className="mt-6">
+            <div className="max-w-sm mb-4">
+              <Label htmlFor="cona-account-query-mode">Account selection mode</Label>
+              <Select
+                id="cona-account-query-mode"
+                value={accountQueryMode}
+                onChange={(event) => {
+                  setAccountQueryMode(event.target.value as AccountQueryMode);
+                  setPreview(null);
+                  setError(null);
+                }}
+              >
+                <option value="guided">Guided filters</option>
+                <option value="manual">Manual SOQL</option>
+              </Select>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-3 gap-1"
-              onClick={() => setAccountRows((rows) => [...rows, { ...DEFAULT_ACCOUNT_ROW }])}
-            >
-              <Plus className="w-4 h-4" />
-              Add account row
-            </Button>
+
+            {accountQueryMode === 'guided' ? (
+              <>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Each row builds a SOQL query by account group, bottler, and distribution channel.
+                  ZFSV + bottler 5000 is blocked.
+                </p>
+                <div className="space-y-3">
+                  {accountRows.map((row, index) => (
+                    <div
+                      key={index}
+                      className={`grid gap-2 md:grid-cols-6 items-end p-3 rounded-lg border ${
+                        isZfsv5000Blocked(row)
+                          ? 'border-destructive/50 bg-destructive/5'
+                          : 'border-border'
+                      }`}
+                    >
+                      <div>
+                        <Label htmlFor={`cona-seed-${index}-group`}>Group</Label>
+                        <Select
+                          id={`cona-seed-${index}-group`}
+                          value={row.accountGroup}
+                          onChange={(e) =>
+                            updateRow(index, { accountGroup: e.target.value as AccountGroup })
+                          }
+                        >
+                          <option value="Z001">Z001</option>
+                          <option value="ZFSV">ZFSV</option>
+                          <option value="Z003">Z003</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor={`cona-seed-${index}-bottler`}>Bottler</Label>
+                        <Select
+                          id={`cona-seed-${index}-bottler`}
+                          value={row.bottler}
+                          onChange={(e) =>
+                            updateRow(index, { bottler: e.target.value as Bottler })
+                          }
+                        >
+                          <option value="5000">5000</option>
+                          <option value="4900">4900</option>
+                          <option value="4600">4600</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor={`cona-seed-${index}-channel`}>Channel</Label>
+                        <Select
+                          id={`cona-seed-${index}-channel`}
+                          value={row.distributionChannel}
+                          onChange={(e) =>
+                            updateRow(index, {
+                              distributionChannel: e.target.value as DistributionChannel,
+                            })
+                          }
+                        >
+                          <option value="Z1">Z1</option>
+                          <option value="Z3">Z3</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor={`cona-seed-${index}-limit`}>Limit</Label>
+                        <Input
+                          id={`cona-seed-${index}-limit`}
+                          type="number"
+                          min={1}
+                          max={100_000}
+                          value={row.limit}
+                          onChange={(e) =>
+                            updateRow(index, {
+                              limit: Math.min(100_000, Math.max(1, Number(e.target.value) || 1)),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="md:col-span-2 flex gap-2">
+                        {accountRows.length > 1 && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setAccountRows((rows) => rows.filter((_, i) => i !== index));
+                              setPreview(null);
+                            }}
+                            aria-label={`Remove account seed row ${index + 1}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 gap-1"
+                  onClick={() => {
+                    setAccountRows((rows) => [...rows, { ...DEFAULT_ACCOUNT_ROW }]);
+                    setPreview(null);
+                  }}
+                >
+                  <Plus className="w-4 h-4" />
+                  Add account row
+                </Button>
+              </>
+            ) : (
+              <>
+                <InlineAlert variant="info" title="Manual Account SOQL">
+                  Queries must select Account records and include{' '}
+                  <code>cfs_ob__u_CustomerNumber__c</code> plus at least one field to seed.
+                  Relationship subqueries and aggregate expressions are not supported. The maximum
+                  records value replaces any LIMIT in the query.
+                </InlineAlert>
+                <div className="space-y-3 mt-3">
+                  {manualQueries.map((query, index) => (
+                    <div key={query.id} className="rounded-lg border border-border p-3 space-y-3">
+                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem_auto] items-end">
+                        <div>
+                          <Label htmlFor={`cona-manual-${query.id}-label`}>Query label</Label>
+                          <Input
+                            id={`cona-manual-${query.id}-label`}
+                            value={query.label}
+                            maxLength={120}
+                            onChange={(event) =>
+                              updateManualQuery(index, { label: event.target.value })
+                            }
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor={`cona-manual-${query.id}-limit`}>Maximum records</Label>
+                          <Input
+                            id={`cona-manual-${query.id}-limit`}
+                            type="number"
+                            min={1}
+                            max={100_000}
+                            value={query.limit}
+                            onChange={(event) =>
+                              updateManualQuery(index, {
+                                limit: Math.min(
+                                  100_000,
+                                  Math.max(1, Number(event.target.value) || 1),
+                                ),
+                              })
+                            }
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={manualQueries.length === 1}
+                          onClick={() => {
+                            setManualQueries((queries) =>
+                              queries.filter((_, queryIndex) => queryIndex !== index));
+                            setPreview(null);
+                          }}
+                          aria-label={`Remove manual query ${index + 1}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <div>
+                        <Label htmlFor={`cona-manual-${query.id}-soql`}>SOQL query</Label>
+                        <Textarea
+                          id={`cona-manual-${query.id}-soql`}
+                          value={query.soql}
+                          className="min-h-36 font-mono text-xs"
+                          placeholder={
+                            'SELECT Name, cfs_ob__u_CustomerNumber__c, '
+                            + 'cfs_ob__Bottler__c FROM Account WHERE ...'
+                          }
+                          onChange={(event) =>
+                            updateManualQuery(index, { soql: event.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 gap-1"
+                  onClick={addManualQuery}
+                >
+                  <Code2 className="w-4 h-4" />
+                  Add manual query
+                </Button>
+              </>
+            )}
           </FormSection>
         )}
 
@@ -314,14 +517,14 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
             variant="outline"
             onClick={() => void handlePreview()}
             disabled={!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId || isRunning}
-            loading={loading && !jobId}
+            loading={loadingAction === 'preview'}
           >
             Preview / validate
           </Button>
           <Button
             onClick={() => void handleRun()}
             disabled={!sourceOrgId || !targetOrgId || sourceOrgId === targetOrgId || isRunning}
-            loading={loading && !!jobId}
+            loading={loadingAction === 'run'}
           >
             Run CONA seed
           </Button>
@@ -347,6 +550,17 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                   Row {i + 1}: {row.accountGroup}/{row.bottler}/{row.distributionChannel} — {row.availableCount} available
                 </summary>
                 <pre className="studio-console p-2 mt-1 rounded overflow-x-auto">{row.soql}</pre>
+              </details>
+            ))}
+            {preview.manualQueries?.map((query) => (
+              <details key={query.id} className="text-xs" open>
+                <summary className="cursor-pointer text-muted-foreground">
+                  {query.label}: {query.selectedCount.toLocaleString()} selected from{' '}
+                  {query.availableCount.toLocaleString()} matching records
+                </summary>
+                <pre className="studio-console p-2 mt-1 rounded overflow-x-auto whitespace-pre-wrap">
+                  {query.soql}
+                </pre>
               </details>
             ))}
           </div>
@@ -391,7 +605,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
     <div className="space-y-4">
       <GlassCard
         title="CONA Data Seed"
-        description="Validate, export, and import onboarding config, products, visit plans, and account slices using dynamic SOQL."
+        description="Validate, export, and import onboarding data with guided Account filters or manual SOQL."
       >
         {formContent}
       </GlassCard>

@@ -963,6 +963,8 @@ export class DataService {
         targetOrgId: input.targetOrgId,
         datasets: input.datasets,
         accountSeedRows: input.accountSeedRows,
+        accountQueryMode: input.accountQueryMode,
+        manualAccountQueries: input.manualAccountQueries,
         automationRunId: input.automationRunId,
       },
       { parentRunId: input.automationRunId, createdBy: userId },

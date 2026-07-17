@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { DataService } from './data.service';
 import { QuerySetService } from './query-set.service';
@@ -370,7 +381,19 @@ export class DataController {
   async previewSeed(@Body() body: unknown, @CurrentUser() userId: string) {
     const input = conaSeedRunSchema.parse(body);
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
-    return this.conaSeedService.validate(input.sourceOrgId, input.datasets, input.accountSeedRows);
+    try {
+      return await this.conaSeedService.validate(
+        input.sourceOrgId,
+        input.datasets,
+        input.accountSeedRows,
+        input.accountQueryMode,
+        input.manualAccountQueries,
+      );
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Seed preview failed',
+      );
+    }
   }
 
   @Post('seed/run')
@@ -378,6 +401,15 @@ export class DataController {
     const input = conaSeedRunSchema.parse(body);
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
+    if (input.accountQueryMode === 'manual' && input.manualAccountQueries) {
+      try {
+        this.conaSeedService.validateManualAccountQueries(input.manualAccountQueries);
+      } catch (error) {
+        throw new BadRequestException(
+          error instanceof Error ? error.message : 'Manual Account query is invalid',
+        );
+      }
+    }
     return this.dataService.enqueueConaSeed(input, userId);
   }
 

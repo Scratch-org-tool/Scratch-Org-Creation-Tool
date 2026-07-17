@@ -267,14 +267,19 @@ export class WorkerRegistry implements OnModuleInit {
               }
               return result;
             }
-            const terminalStatus = job.name === 'cona_user_provision' && result?.partial
-              ? 'partial'
-              : 'completed';
+            const terminalStatus = result?.cancelled
+              ? 'cancelled'
+              : job.name === 'cona_user_provision' && result?.partial
+                ? 'partial'
+                : 'completed';
             if (current?.status !== terminalStatus) {
               await this.jobsService.updateStatus(dbJobId, terminalStatus);
               await this.streamService.publish('job_status', { jobId: dbJobId, status: terminalStatus });
-              void this.notifyJobTerminal(dbJobId, terminalStatus);
+              if (terminalStatus !== 'cancelled') {
+                void this.notifyJobTerminal(dbJobId, terminalStatus);
+              }
             }
+            if (terminalStatus === 'cancelled') return result;
           }
 
           const runId = data.automationRunId ?? (dbJobId

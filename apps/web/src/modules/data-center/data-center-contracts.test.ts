@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   buildGenericDeployPayload,
   buildReplicationPayload,
+  aggregateDeployStatus,
   defaultOperationForMeta,
   dependencyError,
   externalIdOptions,
   isBatchCancellable,
   isCurrentConfigurationRequest,
   isRetrySafe,
+  isTerminalDeployStatus,
   moveByIndex,
   normalizeTemplates,
   orderDeploymentObjects,
@@ -209,6 +211,18 @@ describe('Data Center dependency and recovery safety', () => {
       .toBe(true);
     expect(['completed', 'partial', 'failed', 'cancelled'].some(isBatchCancellable))
       .toBe(false);
+  });
+
+  it('does not report success until every object batch completes', () => {
+    expect(aggregateDeployStatus([])).toBe('queued');
+    expect(aggregateDeployStatus(['planning'])).toBe('running');
+    expect(aggregateDeployStatus(['completed', 'running'])).toBe('running');
+    expect(aggregateDeployStatus(['completed', 'completed'])).toBe('completed');
+    expect(aggregateDeployStatus(['completed', 'failed'])).toBe('partial');
+    expect(aggregateDeployStatus(['failed'])).toBe('failed');
+    expect(aggregateDeployStatus(['cancelled'])).toBe('cancelled');
+    expect(isTerminalDeployStatus('planning')).toBe(false);
+    expect(isTerminalDeployStatus('partial')).toBe(true);
   });
 
   it('requires a second explicit delete confirmation when rollback reports inserts', () => {
