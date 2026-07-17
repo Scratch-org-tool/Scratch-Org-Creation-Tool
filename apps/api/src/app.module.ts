@@ -7,6 +7,7 @@ import { EnvironmentModule } from './modules/environment/environment.module';
 import { DataModule } from './modules/data/data.module';
 import { MetadataModule } from './modules/metadata/metadata.module';
 import { DeploymentModule } from './modules/deployment/deployment.module';
+import { JenkinsModule } from './modules/jenkins/jenkins.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { DriftModule } from './modules/drift/drift.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
@@ -49,6 +50,7 @@ import { IntegrationAdaptersModule } from './integrations/foundation/integration
     EnvironmentModule,
     DataModule,
     DeploymentModule,
+    JenkinsModule,
     PlansModule,
     DriftModule,
     MetadataModule,
