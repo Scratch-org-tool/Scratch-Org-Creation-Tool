@@ -1261,8 +1261,8 @@ export function buildDependencyPreview(
       }))),
   };
   const blocking = [
-    ...(failOnMissing && missing.length ? [`${missing.length} required dependencies are missing`] : []),
-    ...(!allowCycles && cycles.length ? [`${cycles.length} dependency cycles require review`] : []),
+    ...(failOnMissing && missing.length ? [describeMissingDependencies(missing)] : []),
+    ...(!allowCycles && cycles.length ? [describeDependencyCycles(cycles)] : []),
   ];
   return {
     graph,
@@ -1287,6 +1287,44 @@ export function buildDependencyPreview(
       },
     },
   };
+}
+
+/** How many offending components a blocking message names before truncating. */
+const BLOCKING_DETAIL_LIMIT = 5;
+
+/**
+ * Human-actionable blocker: names the exact missing components (and who
+ * requires them) instead of only reporting a count.
+ */
+function describeMissingDependencies(
+  missing: Array<{ nodeId: string; requiredBy: string[] }>,
+): string {
+  const detail = missing
+    .slice(0, BLOCKING_DETAIL_LIMIT)
+    .map((item) => {
+      if (!item.requiredBy.length) return item.nodeId;
+      const requiredBy = item.requiredBy.slice(0, 3).join(', ');
+      const extra = item.requiredBy.length > 3 ? ` +${item.requiredBy.length - 3} more` : '';
+      return `${item.nodeId} (required by ${requiredBy}${extra})`;
+    })
+    .join('; ');
+  const remainder = missing.length > BLOCKING_DETAIL_LIMIT
+    ? `; and ${missing.length - BLOCKING_DETAIL_LIMIT} more`
+    : '';
+  const lead = missing.length === 1
+    ? '1 required dependency is missing'
+    : `${missing.length} required dependencies are missing`;
+  return `${lead}: ${detail}${remainder}. Add these components to your selection, or — if they `
+    + 'already exist in the target org — go to the Dependencies step and choose "Selected only" '
+    + 'or turn off "Block on missing required dependencies".';
+}
+
+function describeDependencyCycles(cycles: string[][]): string {
+  const example = cycles[0]?.length ? ` (e.g. ${cycles[0].join(' → ')})` : '';
+  const lead = cycles.length === 1
+    ? '1 dependency cycle requires review'
+    : `${cycles.length} dependency cycles require review`;
+  return `${lead}${example}. Enable "Allow dependency cycles" in the Dependencies step to proceed anyway.`;
 }
 
 function dependencyDepths(repo: MetadataRepository, selected: Set<string>): Map<string, number> {
