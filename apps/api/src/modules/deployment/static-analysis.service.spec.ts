@@ -35,6 +35,52 @@ afterEach(() => {
 });
 
 describe('StaticAnalysisService', () => {
+  it('always reports the built-in engine as available without spawning a process', async () => {
+    const run = vi.fn();
+    const service = new StaticAnalysisService({ run } as unknown as SafeExecFileAdapter);
+
+    await expect(service.detectAvailability(['built-in'])).resolves.toEqual({ 'built-in': true });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('caches external engine availability probes between calls', async () => {
+    const run = vi.fn().mockReturnValue(execution({ stdout: 'PMD 7' }));
+    const service = new StaticAnalysisService({ run } as unknown as SafeExecFileAdapter);
+
+    await expect(service.detectAvailability(['pmd'])).resolves.toEqual({ pmd: true });
+    await expect(service.detectAvailability(['pmd'])).resolves.toEqual({ pmd: true });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the built-in engine in-process and persists its report', async () => {
+    const run = vi.fn();
+    const service = new StaticAnalysisService({ run } as unknown as SafeExecFileAdapter);
+    const root = workspace();
+    fs.writeFileSync(path.join(root, 'Debuggy.cls'), `
+      public with sharing class Debuggy {
+        public void run() { System.debug('checkpoint'); }
+      }
+    `);
+    const persistArtifact = vi.fn(async () => 'static-analysis:built-in');
+
+    const result = await service.run({ projectRoot: root, engines: ['built-in'], persistArtifact });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(result.engineResults).toEqual([
+      expect.objectContaining({ engine: 'built-in', status: 'passed' }),
+    ]);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      engine: 'built-in',
+      ruleId: 'APEX_SYSTEM_DEBUG',
+      severity: 'info',
+    }));
+    expect(result.artifacts[0]).toEqual(expect.objectContaining({
+      engine: 'built-in',
+      artifactId: 'static-analysis:built-in',
+      checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }));
+  });
+
   it('detects tools and invokes sf code-analyzer with argument-safe exec-file arguments', async () => {
     const run = vi.fn()
       .mockReturnValueOnce(execution({ stdout: 'code-analyzer 5' }))

@@ -115,6 +115,37 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     }));
   });
 
+  it('advertises the built-in analyzer with labels and availability metadata', async () => {
+    const capabilities = await service.capabilities();
+
+    expect(capabilities.staticAnalysisEngines).toEqual([
+      'built-in',
+      'code-analyzer',
+      'pmd',
+      'eslint',
+    ]);
+    expect(capabilities.staticAnalysisEngineInfo).toContainEqual(expect.objectContaining({
+      id: 'built-in',
+      label: expect.stringContaining('Built-in'),
+      available: true,
+      requires: null,
+    }));
+  });
+
+  it('rejects an invalid plan with a readable 400 instead of an opaque parse failure', async () => {
+    await expect(service.preview({
+      source: { type: 'org_compare', sourceOrgId: '11111111-1111-4111-8111-111111111111' },
+      target: { orgId: '22222222-2222-4222-8222-222222222222', profile: 'scratch' },
+      components: [{ metadataType: 'ApexClass', members: ['Example'] }],
+      policy: {
+        staticAnalysis: { enabled: true, engines: [] },
+      },
+    }, 'user-1')).rejects.toThrow(
+      /Invalid deployment plan: .*engines: At least one static analysis engine is required/,
+    );
+    expect(resolveSource).not.toHaveBeenCalled();
+  });
+
   it('hides another user’s workbench policy as not found', async () => {
     db.deploymentQualityRun.findUnique.mockResolvedValue(null);
 
@@ -530,6 +561,172 @@ describe('DeploymentWorkbenchService authorization and approval', () => {
     }));
     expect(cleanups).toHaveLength(1);
     expect(cleanups.every((cleanup) => cleanup.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('previews while the comparison still classifies XML in the background', async () => {
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const targetId = '22222222-2222-4222-8222-222222222222';
+    const comparisonId = '33333333-3333-4333-8333-333333333333';
+    db.orgConnection.findUnique
+      .mockResolvedValueOnce({
+        id: targetId,
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'target',
+        username: null,
+        orgId: '00D-target',
+      })
+      .mockResolvedValueOnce({
+        id: sourceId,
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'source',
+        username: null,
+        orgId: '00D-source',
+      });
+    db.metadataComparison.findFirst.mockResolvedValue({
+      id: comparisonId,
+      sourceOrgId: sourceId,
+      targetOrgId: targetId,
+      status: 'running',
+      items: [
+        { metadataType: 'ApexClass', fullName: 'Selected', diffType: 'changed' },
+        { metadataType: 'ApexClass', fullName: 'Pending', diffType: 'unknown' },
+      ],
+    });
+    const root = fs.mkdtempSync(path.join(tmpdir(), 'workbench-running-compare-'));
+    tempRoots.push(root);
+    const classes = path.join(root, 'force-app', 'main', 'default', 'classes');
+    const manifestDir = path.join(root, 'manifest');
+    fs.mkdirSync(classes, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(path.join(classes, 'Selected.cls'), 'public class Selected {}');
+    resolveSource.mockImplementation(async (request: { manifestContent?: string }) => {
+      fs.writeFileSync(path.join(manifestDir, 'package.xml'), request.manifestContent ?? '');
+      return {
+        projectRoot: root,
+        manifestRelative: 'manifest/package.xml',
+        manifestAbsolutePath: path.join(manifestDir, 'package.xml'),
+        mode: 'org_to_org_manifest',
+        cleanup: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    const preview = await service.preview({
+      source: { type: 'org_compare', sourceOrgId: sourceId, comparisonId },
+      target: { orgId: targetId, profile: 'scratch' },
+      components: [{ metadataType: 'ApexClass', members: ['Selected'] }],
+      dependencyPolicy: {
+        mode: 'selected_only',
+        maxDepth: 10,
+        includeOptional: false,
+        failOnMissing: true,
+        allowCycles: false,
+      },
+    }, 'user-1');
+
+    expect(preview.readOnly).toBe(true);
+    expect(preview.dependencies.resolvedSelections).toEqual([
+      { metadataType: 'ApexClass', members: ['Selected'] },
+    ]);
+  });
+
+  it('rejects failed and empty in-flight comparisons with actionable messages', async () => {
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const targetId = '22222222-2222-4222-8222-222222222222';
+    const comparisonId = '33333333-3333-4333-8333-333333333333';
+    const orgs = () => {
+      db.orgConnection.findUnique
+        .mockResolvedValueOnce({ id: targetId, createdBy: 'user-1', type: 'scratch', alias: 'target' })
+        .mockResolvedValueOnce({ id: sourceId, createdBy: 'user-1', type: 'scratch', alias: 'source' });
+    };
+    const input = {
+      source: { type: 'org_compare', sourceOrgId: sourceId, comparisonId },
+      target: { orgId: targetId, profile: 'scratch' },
+      components: [{ metadataType: 'ApexClass', members: ['Selected'] }],
+    };
+
+    orgs();
+    db.metadataComparison.findFirst.mockResolvedValue({
+      id: comparisonId,
+      sourceOrgId: sourceId,
+      targetOrgId: targetId,
+      status: 'failed',
+      items: [],
+    });
+    await expect(service.preview(input, 'user-1')).rejects.toThrow(
+      'The metadata comparison failed. Rerun the comparison from the Source step, then reselect components.',
+    );
+
+    orgs();
+    db.metadataComparison.findFirst.mockResolvedValue({
+      id: comparisonId,
+      sourceOrgId: sourceId,
+      targetOrgId: targetId,
+      status: 'running',
+      items: [],
+    });
+    await expect(service.preview(input, 'user-1')).rejects.toThrow(
+      /still discovering components/,
+    );
+    expect(resolveSource).not.toHaveBeenCalled();
+  });
+
+  it('returns the destructive manifest and digest with the preview', async () => {
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const targetId = '22222222-2222-4222-8222-222222222222';
+    db.orgConnection.findUnique
+      .mockResolvedValueOnce({
+        id: targetId,
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'target',
+        username: null,
+        orgId: '00D-target',
+      })
+      .mockResolvedValueOnce({
+        id: sourceId,
+        createdBy: 'user-1',
+        type: 'scratch',
+        alias: 'source',
+        username: null,
+        orgId: '00D-source',
+      });
+    const root = fs.mkdtempSync(path.join(tmpdir(), 'workbench-destructive-preview-'));
+    tempRoots.push(root);
+    const manifestDir = path.join(root, 'manifest');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    resolveSource.mockImplementation(async (request: { manifestContent?: string }) => {
+      fs.writeFileSync(path.join(manifestDir, 'package.xml'), request.manifestContent ?? '');
+      return {
+        projectRoot: root,
+        manifestRelative: 'manifest/package.xml',
+        manifestAbsolutePath: path.join(manifestDir, 'package.xml'),
+        mode: 'org_to_org_manifest',
+        cleanup: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    const preview = await service.preview({
+      source: { type: 'org_compare', sourceOrgId: sourceId },
+      target: { orgId: targetId, profile: 'scratch' },
+      components: [],
+      destructiveSelections: [{ metadataType: 'ApexClass', members: ['LegacyClass'] }],
+      dependencyPolicy: {
+        mode: 'selected_only',
+        maxDepth: 10,
+        includeOptional: false,
+        failOnMissing: true,
+        allowCycles: false,
+      },
+    }, 'user-1');
+
+    expect(preview.destructiveReview).toEqual(expect.objectContaining({
+      requiresReview: true,
+      componentCount: 1,
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      manifestXml: expect.stringContaining('LegacyClass'),
+    }));
   });
 
   it('pages quality history within strict owner scope and includes gate summaries', async () => {

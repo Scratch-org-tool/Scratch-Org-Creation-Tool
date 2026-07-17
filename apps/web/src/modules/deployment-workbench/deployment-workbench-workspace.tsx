@@ -6,7 +6,12 @@ import {
   Boxes,
   CheckCircle2,
   Cloud,
+<<<<<<< cursor/workbench-ux-overhaul-cef8
   FileText,
+=======
+  Database,
+  FlaskConical,
+>>>>>>> main
   GitCompare,
   History,
   Lock,
@@ -40,11 +45,13 @@ import { ComponentsComparisonWindow } from './components-comparison-window';
 import type { DependencyGraph, WorkbenchStage } from './types';
 import {
   componentCount,
+  defaultStaticAnalysisEngines,
   groupQualityResults,
   layoutDependencyGraph,
   readableStage,
   serverRunActions,
   stageRisk,
+  staticAnalysisEngineOptions,
   supportsDestructiveAcknowledgement,
   supportsOptionalDependencies,
   TERMINAL_RUN_STATUSES,
@@ -758,20 +765,43 @@ function DependenciesStep({ w }: { w: DeploymentWorkbenchState }) {
   );
 }
 
+const SEVERITY_DOTS: Record<'info' | 'warning' | 'error' | 'critical', string> = {
+  info: 'bg-sky-400',
+  warning: 'bg-amber-400',
+  error: 'bg-red-400',
+  critical: 'bg-fuchsia-400',
+};
+
+const BLOCK_MODE_HINTS: Record<'threshold' | 'any' | 'never', string> = {
+  threshold: 'The deployment is blocked when a severity at or above the threshold exceeds its configured maximum.',
+  any: 'The deployment is blocked by the first finding at or above the severity threshold.',
+  never: 'Findings are reported on the run for review but never block the deployment.',
+};
+
 function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
   const production = w.form.targetProfile === 'production';
   const [testSearch, setTestSearch] = useState('');
   const filteredTests = w.testClasses.filter((item) =>
     item.name.toLowerCase().includes(testSearch.toLowerCase()));
+<<<<<<< cursor/workbench-ux-overhaul-cef8
+=======
+  const staticPolicy = w.form.policy.staticAnalysis;
+  const engineOptions = staticAnalysisEngineOptions(w.capabilities);
+  const selectedTestCount = w.form.policy.tests.tests.length;
+>>>>>>> main
 
   return (
     <div className="space-y-4">
       {production && <ProductionLock />}
-      <GlassCard title="Quality gates" description="These gates are evaluated by the server before target mutation.">
-        <div className="space-y-4">
+      <GlassCard
+        title={<SectionTitle icon={ShieldCheck}>Quality gates</SectionTitle>}
+        description="Server-enforced gates that must pass before the target org is mutated."
+      >
+        <div className="space-y-3">
           <PolicyToggle
             id="validation-required"
             label="Validation required"
+            description="Runs a full check-only deploy against the target and blocks on any component failure."
             checked={w.form.policy.validation.required}
             disabled={production || w.form.strategy === 'validate_then_quick'}
             locked={production || w.form.strategy === 'validate_then_quick'}
@@ -780,6 +810,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
           <PolicyToggle
             id="snapshot-required"
             label="Capture target snapshot"
+            description="Retrieves the affected metadata from the target before deploying so the previous state is preserved."
             checked={w.form.policy.snapshot.required}
             onChange={(checked) => w.setPolicy((policy) => ({
               ...policy,
@@ -792,6 +823,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
           <PolicyToggle
             id="rollback-required"
             label="Require rollback readiness"
+            description="Fails the run if a restorable snapshot could not be captured. Requires the target snapshot gate."
             checked={w.form.policy.snapshot.rollbackRequired}
             disabled={!w.form.policy.snapshot.required}
             onChange={(checked) => w.setPolicy((policy) => ({
@@ -802,6 +834,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
           <PolicyToggle
             id="approval-required"
             label="Approval required"
+            description="Pauses the run before deployment until the configured approvers sign off."
             checked={w.form.policy.approval.required}
             disabled={production}
             locked={production}
@@ -811,7 +844,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
             }))}
           />
           {w.form.policy.approval.required && (
-            <div className="grid gap-4 pl-11 md:grid-cols-2">
+            <div className="grid gap-4 rounded-lg border border-border/60 bg-muted/10 p-3 md:grid-cols-2">
               <Field label="Approver policy" htmlFor="approver-type">
                 <Select
                   id="approver-type"
@@ -850,9 +883,181 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
         </div>
       </GlassCard>
 
+<<<<<<< cursor/workbench-ux-overhaul-cef8
       <AutomaticStaticAnalysisCard w={w} />
+=======
+      <GlassCard
+        title={<SectionTitle icon={ScanSearch}>Static code analysis</SectionTitle>}
+        description="Scan the resolved deployment source for quality and security findings before it reaches the target."
+      >
+        <PolicyToggle
+          id="static-enabled"
+          label="Run static analysis"
+          description="Executes the selected engines against the exact pinned source that will be deployed."
+          checked={staticPolicy.enabled}
+          onChange={(checked) => w.setPolicy((policy) => ({
+            ...policy,
+            staticAnalysis: {
+              ...policy.staticAnalysis,
+              enabled: checked,
+              engines: checked && !policy.staticAnalysis.engines.length
+                ? defaultStaticAnalysisEngines(w.capabilities)
+                : policy.staticAnalysis.engines,
+            },
+          }))}
+        />
+        {staticPolicy.enabled && (
+          <div className="mt-4 space-y-5">
+            <fieldset>
+              <legend className="mb-2 text-sm font-medium">Analysis engines</legend>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {engineOptions.map((engine) => {
+                  const selected = staticPolicy.engines.includes(engine.id);
+                  return (
+                    <label
+                      key={engine.id}
+                      className={cn(
+                        'relative flex items-start gap-3 rounded-xl border p-3.5 transition-colors focus-within:ring-2 focus-within:ring-ring',
+                        engine.available
+                          ? selected
+                            ? 'cursor-pointer border-primary/50 bg-primary/5'
+                            : 'cursor-pointer border-border/60 hover:border-primary/30'
+                          : 'cursor-not-allowed border-border/40 bg-muted/5',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={selected}
+                        disabled={!engine.available}
+                        onChange={(event) => w.setPolicy((policy) => ({
+                          ...policy,
+                          staticAnalysis: {
+                            ...policy.staticAnalysis,
+                            engines: event.target.checked
+                              ? [...policy.staticAnalysis.engines, engine.id]
+                              : policy.staticAnalysis.engines.filter((item) => item !== engine.id),
+                          },
+                        }))}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className={cn('text-sm font-medium', !engine.available && 'text-muted-foreground')}>
+                            {engine.label}
+                          </span>
+                          {engine.available ? (
+                            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                              Ready
+                            </span>
+                          ) : (
+                            <span className="rounded-full border border-border/60 bg-muted/20 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                              Not installed
+                            </span>
+                          )}
+                        </span>
+                        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                          {engine.description}
+                        </span>
+                        {!engine.available && engine.requires && (
+                          <span className="mt-1.5 block text-xs text-amber-300/90">{engine.requires}</span>
+                        )}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {!staticPolicy.engines.length && (
+                <InlineAlert variant="warning" className="mt-3">
+                  Select at least one engine to run static analysis.
+                </InlineAlert>
+              )}
+            </fieldset>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Severity threshold" htmlFor="severity-threshold">
+                <Select
+                  id="severity-threshold"
+                  value={staticPolicy.severityThreshold}
+                  onChange={(event) => w.setPolicy((policy) => ({
+                    ...policy,
+                    staticAnalysis: {
+                      ...policy.staticAnalysis,
+                      severityThreshold: event.target.value as typeof policy.staticAnalysis.severityThreshold,
+                    },
+                  }))}
+                >
+                  <option value="info">Info and above</option>
+                  <option value="warning">Warning and above</option>
+                  <option value="error">Error and above</option>
+                  <option value="critical">Critical only</option>
+                </Select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Findings below this severity are reported but never counted against limits.
+                </p>
+              </Field>
+              <Field label="Blocking mode" htmlFor="static-block-mode">
+                <Select
+                  id="static-block-mode"
+                  value={staticPolicy.blockMode}
+                  onChange={(event) => w.setPolicy((policy) => ({
+                    ...policy,
+                    staticAnalysis: {
+                      ...policy.staticAnalysis,
+                      blockMode: event.target.value as typeof policy.staticAnalysis.blockMode,
+                    },
+                  }))}
+                >
+                  <option value="threshold">Block over configured maximums</option>
+                  <option value="any">Block on any finding</option>
+                  <option value="never">Report only</option>
+                </Select>
+                <p className="mt-1 text-xs text-muted-foreground">{BLOCK_MODE_HINTS[staticPolicy.blockMode]}</p>
+              </Field>
+            </div>
+            {staticPolicy.blockMode === 'threshold' && (
+              <fieldset>
+                <legend className="mb-2 text-sm font-medium">Maximum allowed findings</legend>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  {(['info', 'warning', 'error', 'critical'] as const).map((severity) => (
+                    <div key={severity}>
+                      <Label htmlFor={`max-${severity}`} className="flex items-center gap-1.5 capitalize">
+                        <span className={cn('size-2 rounded-full', SEVERITY_DOTS[severity])} aria-hidden="true" />
+                        {severity}
+                      </Label>
+                      <Input
+                        id={`max-${severity}`}
+                        type="number"
+                        min={0}
+                        placeholder="No limit"
+                        className="mt-1.5"
+                        value={staticPolicy.maxCounts[severity] ?? ''}
+                        onChange={(event) => w.setPolicy((policy) => ({
+                          ...policy,
+                          staticAnalysis: {
+                            ...policy.staticAnalysis,
+                            maxCounts: {
+                              ...policy.staticAnalysis.maxCounts,
+                              [severity]: event.target.value === '' ? null : Math.max(0, Number(event.target.value)),
+                            },
+                          },
+                        }))}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Leave a field empty to allow any number of findings at that severity.
+                </p>
+              </fieldset>
+            )}
+          </div>
+        )}
+      </GlassCard>
+>>>>>>> main
 
-      <GlassCard title="Apex tests and coverage">
+      <GlassCard
+        title={<SectionTitle icon={FlaskConical}>Apex tests and coverage</SectionTitle>}
+        description="Test execution and the minimum org-wide coverage enforced during validation and deployment."
+      >
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Test level" htmlFor="test-level">
             <Select
@@ -894,7 +1099,18 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
         </div>
         {w.form.policy.tests.level === 'RunSpecifiedTests' && (
           <fieldset className="mt-4">
-            <legend className="text-sm font-medium">Apex test classes</legend>
+            <legend className="flex items-center gap-2 text-sm font-medium">
+              Apex test classes
+              <span className={cn(
+                'rounded-full px-2 py-0.5 text-[11px] font-medium',
+                selectedTestCount > 0
+                  ? 'bg-primary/10 text-primary'
+                  : 'bg-amber-500/10 text-amber-300',
+              )}
+              >
+                {selectedTestCount} selected
+              </span>
+            </legend>
             <Input
               value={testSearch}
               onChange={(event) => setTestSearch(event.target.value)}
@@ -904,7 +1120,17 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
             />
             <div className="max-h-60 overflow-auto rounded-lg border border-border/60 p-2">
               {w.testClassesLoading ? (
+<<<<<<< cursor/workbench-ux-overhaul-cef8
                 <BusyRow label="Loading Apex classes from the target org…" />
+=======
+                <p className="p-3 text-sm text-muted-foreground">Loading classes from target org…</p>
+              ) : !filteredTests.length ? (
+                <p className="p-3 text-sm text-muted-foreground">
+                  {w.testClasses.length
+                    ? 'No Apex classes match the filter.'
+                    : 'No Apex classes were found in the target org.'}
+                </p>
+>>>>>>> main
               ) : filteredTests.map((testClass) => (
                 <label key={testClass.name} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/30">
                   <input
@@ -929,18 +1155,23 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
         )}
       </GlassCard>
 
-      <GlassCard title="Chained data deployment" description="Run a reviewed data configuration after metadata succeeds.">
+      <GlassCard
+        title={<SectionTitle icon={Database}>Chained data deployment</SectionTitle>}
+        description="Run a reviewed data configuration against the target after the metadata deployment succeeds."
+      >
         <PolicyToggle
           id="chained-data"
           label="Enable chained data"
+          description="Copies the configured object records from the source org once every metadata stage has passed."
           checked={w.form.chainedDataEnabled}
           onChange={(checked) => w.setForm((current) => ({ ...current, chainedDataEnabled: checked }))}
         />
         {w.form.chainedDataEnabled && (
-          <div className="mt-4 space-y-3 pl-0 md:pl-11">
+          <div className="mt-4 space-y-3">
             <PolicyToggle
               id="chained-stop"
               label="Stop data chain on first error"
+              description="Halts remaining data steps as soon as one object fails instead of continuing the chain."
               checked={w.form.chainedDataStopOnError}
               onChange={(checked) => w.setForm((current) => ({ ...current, chainedDataStopOnError: checked }))}
             />
@@ -951,7 +1182,11 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
                 value={w.form.chainedDataJson}
                 onChange={(event) => w.setForm((current) => ({ ...current, chainedDataJson: event.target.value }))}
                 className="font-mono text-xs"
+                placeholder='[{"objectName":"Account","strategy":"upsert","matchField":"Name"}]'
               />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Each entry needs an objectName plus an optional soql filter, strategy (insert or upsert), and matchField for upserts.
+              </p>
             </Field>
           </div>
         )}
@@ -960,6 +1195,7 @@ function QualityStep({ w }: { w: DeploymentWorkbenchState }) {
   );
 }
 
+<<<<<<< cursor/workbench-ux-overhaul-cef8
 function AutomaticStaticAnalysisCard({ w }: { w: DeploymentWorkbenchState }) {
   const engines = w.form.policy.staticAnalysis.engines;
   const availability = w.capabilities?.staticAnalysisAvailability;
@@ -1010,6 +1246,22 @@ function AutomaticStaticAnalysisCard({ w }: { w: DeploymentWorkbenchState }) {
         </InlineAlert>
       </div>
     </GlassCard>
+=======
+function SectionTitle({
+  icon: Icon,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <Icon className="size-4" aria-hidden="true" />
+      </span>
+      <span className="text-base font-semibold leading-none tracking-tight">{children}</span>
+    </div>
+>>>>>>> main
   );
 }
 
@@ -1091,16 +1343,17 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
             <InlineAlert variant="error" title="Destructive execution blocked">
               This backend does not advertise hash-bound destructive acknowledgement support.
             </InlineAlert>
-          ) : !w.runId ? (
-            <InlineAlert variant="warning" title="Execution will pause for destructive review">
-              Create the immutable plan to fetch its server-generated destructive manifest and
-              SHA-256 digest. Target mutation remains blocked until that exact digest is explicitly
-              acknowledged.
-            </InlineAlert>
           ) : w.destructiveReviewLoading ? (
             <BusyRow label="Loading the server-generated destructive manifest…" />
           ) : w.destructiveReview ? (
             <div className="space-y-3">
+              {!w.runId && (
+                <InlineAlert variant="warning" title="Execution will pause for destructive review">
+                  The server generated this destructive manifest from your selection. After the
+                  plan is created, target mutation stays blocked until this exact digest is
+                  explicitly acknowledged.
+                </InlineAlert>
+              )}
               <dl><SummaryTerm label="Manifest SHA-256" value={w.destructiveReview.manifestHash} /></dl>
               <pre className="max-h-80 overflow-auto rounded-lg border border-border/60 bg-background/50 p-3 text-xs">
                 {w.destructiveReview.manifestXml}
@@ -1119,6 +1372,12 @@ function ReviewStep({ w }: { w: DeploymentWorkbenchState }) {
                 </span>
               </label>
             </div>
+          ) : !w.runId ? (
+            <InlineAlert variant="warning" title="Execution will pause for destructive review">
+              Create the immutable plan to fetch its server-generated destructive manifest and
+              SHA-256 digest. Target mutation remains blocked until that exact digest is explicitly
+              acknowledged.
+            </InlineAlert>
           ) : (
             <InlineAlert variant="error" title="Destructive execution blocked">
               The server did not return a manifest and hash for this exact plan.
@@ -1949,6 +2208,7 @@ function Field({
 function PolicyToggle({
   id,
   label,
+  description,
   checked,
   disabled,
   locked,
@@ -1956,17 +2216,37 @@ function PolicyToggle({
 }: {
   id: string;
   label: string;
+  description?: string;
   checked: boolean;
   disabled?: boolean;
   locked?: boolean;
   onChange: (checked: boolean) => void;
 }) {
+  if (!description) {
+    return (
+      <div className="flex items-center gap-3">
+        <Switch id={id} checked={checked} disabled={disabled} onChange={onChange} aria-label={label} />
+        <Label htmlFor={id} className="flex items-center gap-1.5">
+          {label}{locked && <Lock className="size-3.5 text-amber-300" aria-label="Policy locked" />}
+        </Label>
+      </div>
+    );
+  }
   return (
-    <div className="flex items-center gap-3">
-      <Switch id={id} checked={checked} disabled={disabled} onChange={onChange} aria-label={label} />
-      <Label htmlFor={id} className="flex items-center gap-1.5">
-        {label}{locked && <Lock className="size-3.5 text-amber-300" aria-label="Policy locked" />}
-      </Label>
+    <div
+      className={cn(
+        'flex items-start justify-between gap-4 rounded-lg border p-3 transition-colors',
+        checked ? 'border-primary/30 bg-primary/[0.04]' : 'border-border/60 bg-muted/5',
+        disabled && 'opacity-70',
+      )}
+    >
+      <div className="min-w-0">
+        <Label htmlFor={id} className="flex items-center gap-1.5">
+          {label}{locked && <Lock className="size-3.5 text-amber-300" aria-label="Policy locked" />}
+        </Label>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+      </div>
+      <Switch id={id} checked={checked} disabled={disabled} onChange={onChange} aria-label={label} className="mt-0.5" />
     </div>
   );
 }

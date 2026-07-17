@@ -96,6 +96,53 @@ export const apexTestPolicySchema = z.object({
 });
 
 export const staticSeveritySchema = z.enum(['info', 'warning', 'error', 'critical']);
+
+/**
+ * Canonical static analysis engine catalog shared by the API (execution and
+ * availability detection) and the web client (engine picker labels and hints).
+ * `built-in` runs inside the API process and is always available.
+ */
+export const STATIC_ANALYSIS_ENGINES = [
+  {
+    id: 'built-in',
+    label: 'Built-in Salesforce rules',
+    description:
+      'Bundled analyzer for Apex, Lightning JavaScript, and metadata: SOQL/DML in loops, '
+      + 'SOQL injection, hardcoded IDs, sharing declarations, empty catch blocks, inactive flows, and more.',
+    requires: null,
+  },
+  {
+    id: 'code-analyzer',
+    label: 'Salesforce Code Analyzer',
+    description: 'Official sf code-analyzer plugin combining PMD, ESLint, and Salesforce Graph Engine rules.',
+    requires: 'Install the code-analyzer plugin for the Salesforce CLI on the API host.',
+  },
+  {
+    id: 'pmd',
+    label: 'PMD',
+    description: 'PMD rule sets for Apex classes and triggers.',
+    requires: 'Install the PMD CLI on the API host.',
+  },
+  {
+    id: 'eslint',
+    label: 'ESLint',
+    description: 'ESLint checks for Lightning Web Component and Aura JavaScript.',
+    requires: 'Install ESLint on the API host.',
+  },
+] as const;
+
+export type StaticAnalysisEngineId = (typeof STATIC_ANALYSIS_ENGINES)[number]['id'];
+export const STATIC_ANALYSIS_ENGINE_IDS = STATIC_ANALYSIS_ENGINES.map((engine) => engine.id);
+
+export const staticAnalysisEngineInfoSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string(),
+  available: z.boolean(),
+  requires: z.string().nullable(),
+}).strict();
+export type StaticAnalysisEngineInfo = z.infer<typeof staticAnalysisEngineInfoSchema>;
+
 export const staticAnalysisPolicySchema = z.object({
   enabled: z.boolean().default(false),
   engines: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
@@ -442,6 +489,19 @@ export const deploymentWorkbenchInputSchema = z.preprocess(normalizeInput, norma
 export const deploymentWorkbenchPreviewSchema = deploymentWorkbenchInputSchema;
 export const deploymentWorkbenchCreateSchema = deploymentWorkbenchInputSchema;
 
+/**
+ * Turn a Zod validation failure into a short human-readable sentence list so
+ * API consumers receive an actionable 400 instead of an opaque stack trace.
+ */
+export function formatZodIssues(error: z.ZodError, limit = 5): string {
+  const issues = error.issues.slice(0, limit).map((issue) => {
+    const path = issue.path.join('.') || 'input';
+    return `${path}: ${issue.message}`;
+  });
+  const remaining = error.issues.length - issues.length;
+  return issues.join('; ') + (remaining > 0 ? `; and ${remaining} more issue(s)` : '');
+}
+
 export type DeploymentWorkbenchInput = z.infer<typeof deploymentWorkbenchInputSchema>;
 export type DeploymentSource = z.infer<typeof deploymentSourceSchema>;
 export type DeploymentPolicy = z.infer<typeof deploymentPolicySchema>;
@@ -677,6 +737,7 @@ export const deploymentWorkbenchCapabilitiesSchema = z.object({
   environments: z.array(deploymentEnvironmentSchema),
   testLevels: z.array(apexTestLevelSchema),
   staticAnalysisEngines: z.array(z.string()),
+  staticAnalysisEngineInfo: z.array(staticAnalysisEngineInfoSchema).optional(),
   limitations: z.object({
     includeOptional: z.string().optional(),
   }).strict().optional(),
