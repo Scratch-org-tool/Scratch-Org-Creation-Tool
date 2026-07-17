@@ -5,10 +5,73 @@ import { type ChildProcess } from 'child_process';
 // with errors like "FROM was unexpected at this time.".
 import spawn from 'cross-spawn';
 import { EventEmitter } from 'events';
+import { promises as fs } from 'node:fs';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 
 const DEFAULT_STREAM_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const TERMINATION_GRACE_MS = 5000;
+const DEFAULT_PLUGIN_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+export type RequiredSfPluginId = 'sfdmu' | 'code-analyzer';
+
+export interface RequiredSfPluginDefinition {
+  id: RequiredSfPluginId;
+  label: string;
+  installName: string;
+  inspectName: string;
+  version: string;
+  requiredFor: string;
+  /** Unsigned installation is never allowed unless explicitly opted in. */
+  unsignedTrustName?: string;
+}
+
+export interface SfPluginStatus extends RequiredSfPluginDefinition {
+  installed: boolean;
+  ready: boolean;
+  installedVersion?: string;
+  action: 'none' | 'missing' | 'installed' | 'updated' | 'failed';
+  error?: string;
+}
+
+export interface SfCliReadiness {
+  checkedAt: string;
+  cliAvailable: boolean;
+  cliVersion?: string;
+  autoInstall: boolean;
+  ready: boolean;
+  plugins: SfPluginStatus[];
+  error?: string;
+}
+
+/**
+ * This is an explicit allowlist, not a general plugin installer. Plugin code
+ * runs with access to authenticated Salesforce orgs, so arbitrary package
+ * names must never come from an API request or user input.
+ */
+export function requiredSfPlugins(
+  env: NodeJS.ProcessEnv = process.env,
+): RequiredSfPluginDefinition[] {
+  return [
+    {
+      id: 'sfdmu',
+      label: 'SFDMU',
+      installName: 'sfdmu',
+      inspectName: 'sfdmu',
+      version: env.SFDMU_PLUGIN_VERSION?.trim() || '5.8.0',
+      requiredFor: 'org-to-org upsert, replication, and custom-settings data loads',
+      unsignedTrustName: 'sfdmu',
+    },
+    {
+      id: 'code-analyzer',
+      label: 'Salesforce Code Analyzer',
+      installName: 'code-analyzer',
+      inspectName: 'code-analyzer',
+      version: env.SF_CODE_ANALYZER_PLUGIN_VERSION?.trim() || '5.14.0',
+      requiredFor: 'automatic metadata static analysis',
+    },
+  ];
+}
 
 export interface SfCliOptions {
   cliPath?: string;
@@ -182,6 +245,124 @@ function configuredStreamTimeout(timeoutMs?: number): number {
   const configured = Number(process.env.SF_STREAM_TIMEOUT_MS ?? DEFAULT_STREAM_TIMEOUT_MS);
   return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_STREAM_TIMEOUT_MS;
 }
+
+function envEnabled(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined || value.trim() === '') return defaultValue;
+  return !['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
+}
+
+function configuredPluginInstallTimeout(env: NodeJS.ProcessEnv): number {
+  const value = Number(env.SF_PLUGIN_INSTALL_TIMEOUT_MS ?? DEFAULT_PLUGIN_INSTALL_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_PLUGIN_INSTALL_TIMEOUT_MS;
+}
+
+function pluginConfigDirectory(env: NodeJS.ProcessEnv): string {
+  if (env.SF_PLUGIN_CONFIG_DIR?.trim()) return path.resolve(env.SF_PLUGIN_CONFIG_DIR.trim());
+  if (process.platform === 'win32' && env.LOCALAPPDATA?.trim()) {
+    return path.join(env.LOCALAPPDATA.trim(), 'sf');
+  }
+  return path.join(homedir(), '.config', 'sf');
+}
+
+function compactCliError(value: string | undefined): string | undefined {
+  const normalized = value
+    ?.replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(/\r/g, '')
+    .trim();
+  if (!normalized) return undefined;
+  return normalized.length > 2_000 ? normalized.slice(-2_000) : normalized;
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/** Extract the installed version from `sf plugins inspect --json` output. */
+export function parseSfPluginVersion(value: unknown): string | undefined {
+  const entries = Array.isArray(value) ? value : [value];
+  for (const entry of entries) {
+    const record = asObject(entry);
+    const options = asObject(record?.options);
+    for (const candidate of [options?.tag, options?.version, record?.version]) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+async function configureUnsignedPluginTrust(
+  definition: RequiredSfPluginDefinition,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (!definition.unsignedTrustName) return;
+  // SFDMU v5 is signed. Keep verification mandatory by default; this opt-in
+  // exists only for private/offline registries where an operator has explicitly
+  // accepted the plugin's trust boundary.
+  if (!envEnabled(env.SF_ALLOW_UNSIGNED_SFDMU, false)) return;
+
+  const directory = pluginConfigDirectory(env);
+  const allowlistPath = path.join(directory, 'unsignedPluginAllowList.json');
+  await fs.mkdir(directory, { recursive: true });
+  let current: unknown = [];
+  try {
+    current = JSON.parse(await fs.readFile(allowlistPath, 'utf8')) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(
+        `Could not read Salesforce plugin trust allowlist at ${allowlistPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  if (!Array.isArray(current) || current.some((entry) => typeof entry !== 'string')) {
+    throw new Error(`Salesforce plugin trust allowlist at ${allowlistPath} must be a JSON string array`);
+  }
+  const values = new Set(current as string[]);
+  values.add(definition.unsignedTrustName);
+  await fs.writeFile(allowlistPath, `${JSON.stringify([...values].sort(), null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+}
+
+async function acquirePluginInstallFileLock(
+  env: NodeJS.ProcessEnv,
+): Promise<() => Promise<void>> {
+  const directory = pluginConfigDirectory(env);
+  await fs.mkdir(directory, { recursive: true });
+  const lockPath = path.join(directory, '.sfcc-plugin-install.lock');
+  const timeoutMs = configuredPluginInstallTimeout(env);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const handle = await fs.open(lockPath, 'wx', 0o600);
+      await handle.writeFile(`${process.pid} ${new Date().toISOString()}\n`);
+      return async () => {
+        await handle.close().catch(() => undefined);
+        await fs.unlink(lockPath).catch(() => undefined);
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      // Recover a lock abandoned by a killed installer.
+      try {
+        const stat = await fs.stat(lockPath);
+        if (Date.now() - stat.mtimeMs > timeoutMs + 60_000) {
+          await fs.unlink(lockPath);
+          continue;
+        }
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error(`Timed out waiting ${timeoutMs}ms for another Salesforce plugin installation`);
+}
+
+const pluginInstallPromises = new Map<RequiredSfPluginId, Promise<SfPluginStatus>>();
 
 export class SfCliClient extends EventEmitter {
   private readonly cliPath: string;
@@ -728,15 +909,199 @@ export class SfCliClient extends EventEmitter {
     });
   }
 
-  // SFDMU
+  // Required Salesforce CLI plugins
+  private requiredPlugin(id: RequiredSfPluginId): RequiredSfPluginDefinition {
+    const definition = requiredSfPlugins(this.env).find((plugin) => plugin.id === id);
+    if (!definition) throw new Error(`Unknown required Salesforce CLI plugin: ${id}`);
+    return definition;
+  }
+
+  private enforcePluginVersions(): boolean {
+    return envEnabled(this.env.SF_ENFORCE_PLUGIN_VERSIONS, true);
+  }
+
+  private autoInstallPlugins(): boolean {
+    return envEnabled(this.env.SF_AUTO_INSTALL_PLUGINS, true);
+  }
+
+  async getCliVersion(): Promise<{ available: boolean; version?: string; error?: string }> {
+    const result = await this.run(['--version'], { timeout: 15_000 });
+    if (!result.success) {
+      return {
+        available: false,
+        error: compactCliError(result.error) ?? `Salesforce CLI executable "${this.cliPath}" is unavailable`,
+      };
+    }
+    const version = result.stdout.trim().split(/\r?\n/).find(Boolean);
+    return { available: true, version };
+  }
+
+  async inspectRequiredPlugin(id: RequiredSfPluginId): Promise<SfPluginStatus> {
+    const definition = this.requiredPlugin(id);
+    const result = await this.run<unknown>(
+      ['plugins', 'inspect', definition.inspectName],
+      { json: true, timeout: 30_000 },
+    );
+    const installedVersion = result.success ? parseSfPluginVersion(result.data) : undefined;
+    const installed = result.success;
+    const versionMatches =
+      !this.enforcePluginVersions()
+      || definition.version === 'latest'
+      || installedVersion === definition.version;
+    return {
+      ...definition,
+      installed,
+      ready: installed && versionMatches,
+      installedVersion,
+      action: installed ? 'none' : 'missing',
+      ...(!result.success ? { error: compactCliError(result.error) } : {}),
+      ...(installed && !versionMatches ? {
+        error: `Installed ${definition.label} version ${installedVersion ?? 'unknown'} does not match required version ${definition.version}`,
+      } : {}),
+    };
+  }
+
+  private async installRequiredPlugin(id: RequiredSfPluginId): Promise<SfPluginStatus> {
+    const definition = this.requiredPlugin(id);
+    const releaseLock = await acquirePluginInstallFileLock(this.env);
+    try {
+      // Another API worker may have completed installation while this process
+      // waited on the cross-process lock.
+      const current = await this.inspectRequiredPlugin(id);
+      if (current.ready) return current;
+
+      await configureUnsignedPluginTrust(definition, this.env);
+      const installSpec = `${definition.installName}@${definition.version}`;
+      const result = await this.run(
+        ['plugins', 'install', installSpec],
+        { timeout: configuredPluginInstallTimeout(this.env) },
+      );
+      if (!result.success) {
+        return {
+          ...current,
+          ready: false,
+          action: 'failed',
+          error: compactCliError(result.error)
+            ?? `Failed to install ${definition.label} (${installSpec})`,
+        };
+      }
+
+      const verified = await this.inspectRequiredPlugin(id);
+      if (!verified.ready) {
+        return {
+          ...verified,
+          action: 'failed',
+          error: verified.error
+            ?? `${definition.label} installation completed but the plugin could not be verified`,
+        };
+      }
+      return {
+        ...verified,
+        action: current.installed ? 'updated' : 'installed',
+        error: undefined,
+      };
+    } finally {
+      await releaseLock();
+    }
+  }
+
+  async ensureRequiredPlugin(
+    id: RequiredSfPluginId,
+    options?: { installMissing?: boolean },
+  ): Promise<SfPluginStatus> {
+    const current = await this.inspectRequiredPlugin(id);
+    const installMissing = this.autoInstallPlugins() && (options?.installMissing ?? true);
+    if (current.ready || !installMissing) return current;
+
+    const inFlight = pluginInstallPromises.get(id);
+    if (inFlight) return inFlight;
+    const install = this.installRequiredPlugin(id);
+    pluginInstallPromises.set(id, install);
+    try {
+      return await install;
+    } finally {
+      if (pluginInstallPromises.get(id) === install) pluginInstallPromises.delete(id);
+    }
+  }
+
+  async getRequiredPluginsReadiness(
+    options?: { installMissing?: boolean },
+  ): Promise<SfCliReadiness> {
+    const installMissing = this.autoInstallPlugins() && (options?.installMissing ?? true);
+    const cli = await this.getCliVersion();
+    if (!cli.available) {
+      const error =
+        cli.error
+        ?? `Salesforce CLI executable "${this.cliPath}" is unavailable; install @salesforce/cli first`;
+      return {
+        checkedAt: new Date().toISOString(),
+        cliAvailable: false,
+        autoInstall: installMissing,
+        ready: false,
+        error,
+        plugins: requiredSfPlugins(this.env).map((definition) => ({
+          ...definition,
+          installed: false,
+          ready: false,
+          action: 'failed',
+          error,
+        })),
+      };
+    }
+
+    // Salesforce CLI plugin installation mutates one shared package tree, so
+    // provision sequentially even when several plugins are absent.
+    const plugins: SfPluginStatus[] = [];
+    for (const definition of requiredSfPlugins(this.env)) {
+      plugins.push(await this.ensureRequiredPlugin(definition.id, { installMissing }));
+    }
+    const ready = plugins.every((plugin) => plugin.ready);
+    return {
+      checkedAt: new Date().toISOString(),
+      cliAvailable: true,
+      cliVersion: cli.version,
+      autoInstall: installMissing,
+      ready,
+      plugins,
+      ...(!ready ? {
+        error: plugins
+          .filter((plugin) => !plugin.ready)
+          .map((plugin) => `${plugin.label}: ${plugin.error ?? 'not ready'}`)
+          .join('; '),
+      } : {}),
+    };
+  }
+
+  // SFDMU compatibility helpers
+  async getSfdmuPluginStatus(options?: { installMissing?: boolean }): Promise<SfPluginStatus> {
+    return this.ensureRequiredPlugin('sfdmu', options);
+  }
+
   async isSfdmuPluginInstalled(): Promise<boolean> {
-    const result = await this.run(['plugins', 'inspect', 'sfdmu']);
-    return result.success;
+    return (await this.inspectRequiredPlugin('sfdmu')).installed;
   }
 
   async ensureSfdmuPlugin(): Promise<void> {
-    if (!(await this.isSfdmuPluginInstalled())) {
-      throw new SfCliError(SFDMU_PLUGIN_INSTALL_MESSAGE, 1, '');
+    const status = await this.ensureRequiredPlugin('sfdmu');
+    if (!status.ready) {
+      throw new SfCliError(
+        status.error
+          ? `${sfdmuPluginInstallMessage(status.version)}: ${status.error}`
+          : sfdmuPluginInstallMessage(status.version),
+        1,
+        '',
+      );
+    }
+  }
+
+  async ensureCodeAnalyzerPlugin(): Promise<void> {
+    const status = await this.ensureRequiredPlugin('code-analyzer');
+    if (!status.ready) {
+      throw new SfCliError(
+        `Salesforce Code Analyzer plugin is unavailable: ${status.error ?? 'automatic provisioning failed'}`,
+        1,
+        '',
+      );
     }
   }
 
@@ -1088,12 +1453,21 @@ export class SfCliClient extends EventEmitter {
   }
 }
 
-export const SFDMU_PLUGIN_INSTALL_MESSAGE =
-  'SFDMU plugin not installed. Run: sf plugins install sfdmu';
+export function sfdmuPluginInstallMessage(
+  version = process.env.SFDMU_PLUGIN_VERSION?.trim() || '5.8.0',
+): string {
+  return 'SFDMU plugin is unavailable. Automatic provisioning was attempted; '
+    + `verify Salesforce CLI access or run "sf plugins install sfdmu@${version}" on the API host`;
+}
+
+export const SFDMU_PLUGIN_INSTALL_MESSAGE = sfdmuPluginInstallMessage();
 
 export function isSfdmuPluginMissingError(text: string): boolean {
   const lower = text.toLowerCase();
-  return lower.includes('not a sf command') || lower.includes('sfdmu run is not');
+  return lower.includes('not a sf command')
+    || lower.includes('sfdmu run is not')
+    || lower.includes('command sfdmu')
+    || lower.includes('plugin is unavailable');
 }
 
 export function createSfCliClient(options?: SfCliOptions): SfCliClient {
