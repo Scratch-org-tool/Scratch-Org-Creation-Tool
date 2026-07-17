@@ -103,7 +103,7 @@ describe('deployment workbench utilities', () => {
     });
     expect(fallback.find((engine) => engine.id === 'code-analyzer')).toMatchObject({
       available: false,
-      requires: expect.stringContaining('Salesforce CLI'),
+      requires: expect.stringContaining('Automatically provisioned'),
     });
   });
 

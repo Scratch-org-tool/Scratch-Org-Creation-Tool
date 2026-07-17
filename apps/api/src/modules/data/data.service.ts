@@ -26,7 +26,7 @@ import {
   buildCountSoql,
   extractObjectFromSoql,
 } from '@sfcc/shared';
-import { createSfCliClient } from '@sfcc/sf-cli';
+import { createSfCliClient, SFDMU_PLUGIN_INSTALL_MESSAGE } from '@sfcc/sf-cli';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { DataDeployOrchestratorService } from './data-deploy-orchestrator.service';
 import {
@@ -67,7 +67,7 @@ export class DataService {
       await this.sfCli.ensureSfdmuPlugin();
     } catch (err) {
       throw new BadRequestException(
-        err instanceof Error ? err.message : 'SFDMU plugin not installed. Run: sf plugins install sfdmu',
+        err instanceof Error ? err.message : SFDMU_PLUGIN_INSTALL_MESSAGE,
       );
     }
   }
@@ -82,8 +82,25 @@ export class DataService {
   }
 
   async getCustomSettingsPreflight() {
-    const sfdmuInstalled = await this.sfCli.isSfdmuPluginInstalled();
-    return { sfdmuInstalled };
+    const status = await this.sfCli.getSfdmuPluginStatus({ installMissing: false });
+    return this.sfdmuPreflightResponse(status);
+  }
+
+  async provisionSfdmuPlugin() {
+    const status = await this.sfCli.getSfdmuPluginStatus({ installMissing: true });
+    return this.sfdmuPreflightResponse(status);
+  }
+
+  private sfdmuPreflightResponse(
+    status: Awaited<ReturnType<typeof this.sfCli.getSfdmuPluginStatus>>,
+  ) {
+    return {
+      sfdmuInstalled: status.ready,
+      sfdmuVersion: status.installedVersion,
+      requiredVersion: status.version,
+      action: status.action,
+      error: status.error,
+    };
   }
 
   async previewData(sourceOrgId: string, soql: string, userId: string, recordLimit?: number) {

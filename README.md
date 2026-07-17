@@ -55,8 +55,10 @@ Install these before you start:
 | **Node.js** | 20+ | `node -v` |
 | **npm** | 10+ | Comes with Node |
 | **Docker Desktop** | Latest | For PostgreSQL + Redis |
-| **Salesforce CLI** | Latest | [Install `sf`](https://developer.salesforce.com/tools/salesforcecli) |
-| **SFDMU plugin** | Latest | `sf plugins install sfdmu` |
+| **Salesforce CLI** | 2.143.6 | [Install `sf`](https://developer.salesforce.com/tools/salesforcecli); production image pins this version |
+| **SFDMU plugin** | 5.8.0 | Automatically provisioned by the API |
+| **Salesforce Code Analyzer** | 5.14.0 | Automatically provisioned by the API |
+| **Java / Python** | Java 11+, Python 3.10+ | Code Analyzer PMD/Graph/Flow prerequisites; bundled in the API image |
 | **Firebase project** | — | [Firebase Console](https://console.firebase.google.com/) with **Email/Password** auth enabled |
 | **NVIDIA API key** | Optional | For AI Copilot features |
 
@@ -185,6 +187,12 @@ Login and signup are **proxied through the API** (`POST /api/auth/login`, `/api/
 | `NVIDIA_COPILOT_MODEL` | Optional | Default `meta/llama-3.2-3b-instruct` (fast, reliable). Avoid `google/gemma-3n-e4b-it` if requests hang. |
 | `NVIDIA_CHAT_TIMEOUT_MS` | Optional | Copilot LLM timeout (default `45000`) |
 | `SF_CLI_PATH` | Yes | Usually `sf` |
+| `SF_AUTO_INSTALL_PLUGINS` | Optional | Provision missing allowlisted plugins at startup/on use (default `true`) |
+| `SF_ENFORCE_PLUGIN_VERSIONS` | Optional | Keep plugins on tested versions (default `true`) |
+| `SFDMU_PLUGIN_VERSION` | Optional | Tested SFDMU version (default `5.8.0`) |
+| `SF_CODE_ANALYZER_PLUGIN_VERSION` | Optional | Tested Code Analyzer version (default `5.14.0`) |
+| `SF_PLUGIN_INSTALL_TIMEOUT_MS` | Optional | Plugin registry/install timeout (default `600000`) |
+| `SF_ALLOW_UNSIGNED_SFDMU` | Optional | Keep `false`; explicit trust escape hatch for private/offline registries |
 | `SF_PROJECT_ROOT` | Yes | Absolute path to this repo |
 | `DATA_DEPLOY_CHUNK_SIZE` | Optional | Records per chunk for large deploys (default `25000`) |
 | `DATA_DEPLOY_CONCURRENCY` | Optional | Parallel data-deploy workers (default `2`) |
@@ -561,7 +569,8 @@ npm run smoke-test       # Basic API smoke test
 | **Prisma errors** | Run `npm run db:generate && npm run db:push` |
 | **Redis / Postgres down** | Run `npm run docker:up` and wait for health checks |
 | **SF CLI not found** | Install `sf` and set `SF_CLI_PATH=sf` in `apps/api/.env` |
-| **SFDMU / custom settings fails** | Run `sf plugins install sfdmu` on the API host; verify with `sf sfdmu --version` |
+| **SFDMU / custom settings fails** | Check authenticated `GET /api/health/plugins`. The API auto-repairs missing plugins; verify manually with `sf plugins inspect sfdmu --json` if registry access or permissions fail. |
+| **Static analysis says Code Analyzer unavailable** | Check authenticated `GET /api/health/plugins`; verify Java/Python and `sf plugins inspect code-analyzer --json`. |
 | **CSV files in project root** | Old bulk runs before temp-dir fix — delete `*-failed-records.csv` / `*-success-records.csv`; new runs use `/tmp` only |
 | **`DataMovement.batchId` missing (500)** | Run `npm run db:push` to sync Prisma schema |
 | **Preview shows 2000 rows but limit is higher** | Expected — preview is capped; deploy uses full limit (see [Data deployment](#data-deployment)) |

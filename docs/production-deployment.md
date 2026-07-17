@@ -65,10 +65,13 @@ front of port 3000.
 
 ## 3. Salesforce CLI authentication
 
-The API image bundles the Salesforce CLI and the SFDMU plugin. Org
-authentications persist in the `sf_auth` / `sf_auth2` volumes, so
-re-authenticating after a container restart is not required. To authenticate
-an org from inside the container:
+The API image pins Salesforce CLI 2.143.6, SFDMU 5.8.0, and Salesforce Code
+Analyzer 5.14.0. It also includes Java and Python so PMD, Graph, and Flow
+analysis engines are available. At startup the API verifies these versions and
+self-repairs a missing plugin; inspect cached readiness at
+authenticated `GET /api/health/plugins`. Org authentications persist in the `sf_auth` /
+`sf_auth2` volumes, so re-authenticating after a container restart is not
+required. To authenticate an org from inside the container:
 
 ```bash
 docker compose -f docker-compose.prod.yml exec api sf org login web --instance-url https://login.salesforce.com

@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { execFile, type ExecFileException } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
+import spawn from 'cross-spawn';
 import { Injectable } from '@nestjs/common';
 import type { StaticAnalysisIssue } from '@sfcc/shared';
 import { BUILT_IN_ENGINE, runBuiltInAnalysis } from './built-in-analyzer';
@@ -34,34 +35,84 @@ export class SafeExecFileAdapter implements ExecFileRunner {
     timeoutMs: number;
     maxBuffer?: number;
   }): CancellableExec {
-    let child: ReturnType<typeof execFile>;
+    let child: ChildProcess | undefined;
+    let timedOut = false;
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    let timer: NodeJS.Timeout | undefined;
+    const maxBuffer = options.maxBuffer ?? 20 * 1024 * 1024;
+
     const promise = new Promise<ExecFileResult>((resolve) => {
-      child = execFile(
+      const finish = (exitCode: number) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve({ exitCode, stdout, stderr, timedOut });
+      };
+      const append = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
+        const text = chunk.toString();
+        const current = stream === 'stdout' ? stdout : stderr;
+        if (current.length + text.length > maxBuffer) {
+          const remaining = Math.max(0, maxBuffer - current.length);
+          if (stream === 'stdout') stdout += text.slice(0, remaining);
+          else stderr += text.slice(0, remaining);
+          stderr += `\nAnalyzer output exceeded ${maxBuffer} bytes and the process was stopped`;
+          terminateProcess(child);
+          return;
+        }
+        if (stream === 'stdout') stdout += text;
+        else stderr += text;
+      };
+
+      child = spawn(
         file,
         [...args],
         {
           cwd: options.cwd,
-          timeout: options.timeoutMs,
-          maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
+          env: process.env,
           windowsHide: true,
-          shell: false,
-        },
-        (error: ExecFileException | null, stdout, stderr) => {
-          resolve({
-            exitCode: typeof error?.code === 'number' ? error.code : error ? 1 : 0,
-            stdout: String(stdout ?? ''),
-            stderr: String(stderr ?? ''),
-            timedOut: Boolean(error?.killed && error?.signal),
-          });
+          detached: process.platform !== 'win32',
         },
       );
+      child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
+      child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
+      child.on('error', (error) => {
+        stderr += `${stderr ? '\n' : ''}${error.message}`;
+        finish(1);
+      });
+      child.on('close', (code) => finish(code ?? 1));
+
+      timer = setTimeout(() => {
+        timedOut = true;
+        stderr += `${stderr ? '\n' : ''}Analyzer timed out after ${options.timeoutMs}ms`;
+        terminateProcess(child);
+      }, options.timeoutMs);
+      timer.unref();
     });
     return {
       promise,
       kill: () => {
-        if (child && !child.killed) child.kill('SIGTERM');
+        terminateProcess(child);
       },
     };
+  }
+}
+
+function terminateProcess(child: ChildProcess | undefined): void {
+  if (!child || child.killed || !child.pid) return;
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-child.pid, 'SIGTERM');
+      return;
+    } catch {
+      // Process may have already left its group; fall through to direct kill.
+    }
+  }
+  try {
+    child.kill('SIGTERM');
+  } catch {
+    // The process exited between the state check and kill.
   }
 }
 
@@ -263,7 +314,10 @@ export class StaticAnalysisService {
     if (engine === 'code-analyzer') {
       return {
         file: process.env.SF_CLI_PATH?.trim() || 'sf',
-        versionArgs: ['code-analyzer', '--version'],
+        // `code-analyzer` is a command topic and has no root --version flag.
+        // Inspecting the plugin is read-only, respects SF_AUTO_INSTALL_PLUGINS,
+        // and exits 0 only when the command package is registered.
+        versionArgs: ['plugins', 'inspect', 'code-analyzer', '--json'],
         args: ['code-analyzer', 'run', '--workspace', projectRoot!, '--output-file', outputPath!],
       };
     }

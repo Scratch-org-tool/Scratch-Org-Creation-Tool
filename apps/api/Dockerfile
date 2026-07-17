@@ -37,13 +37,30 @@ FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /repo
 
-# git is required for SCM checkouts (metadata deploys from GitHub/Azure/etc).
+# Pin the CLI and user plugins so every image is reproducible and runtime
+# readiness checks enforce exactly the versions tested by this application.
+ARG SALESFORCE_CLI_VERSION=2.143.6
+ARG SFDMU_PLUGIN_VERSION=5.8.0
+ARG SF_CODE_ANALYZER_PLUGIN_VERSION=5.14.0
+ENV SFDMU_PLUGIN_VERSION=${SFDMU_PLUGIN_VERSION} \
+    SF_CODE_ANALYZER_PLUGIN_VERSION=${SF_CODE_ANALYZER_PLUGIN_VERSION} \
+    SF_AUTO_INSTALL_PLUGINS=true \
+    SF_ENFORCE_PLUGIN_VERSIONS=true
+
+# git is required for SCM checkouts. Java unlocks Code Analyzer's PMD/CPD/SFGE
+# engines and Python unlocks Flow analysis; Node.js already covers ESLint.
 RUN apt-get update -qq \
-  && apt-get install -y -qq --no-install-recommends git ca-certificates openssl \
+  && apt-get install -y -qq --no-install-recommends \
+       git ca-certificates openssl openjdk-17-jre-headless python3 \
   && rm -rf /var/lib/apt/lists/* \
-  && npm install -g @salesforce/cli --omit=dev \
-  && echo y | sf plugins install sfdmu \
-  && sf --version
+  && npm install -g "@salesforce/cli@${SALESFORCE_CLI_VERSION}" --omit=dev \
+  && sf plugins install "sfdmu@${SFDMU_PLUGIN_VERSION}" \
+  && sf plugins install "code-analyzer@${SF_CODE_ANALYZER_PLUGIN_VERSION}" \
+  && sf --version \
+  && sf plugins inspect sfdmu --json > /dev/null \
+  && sf plugins inspect code-analyzer --json > /dev/null \
+  && java -version \
+  && python3 --version
 
 COPY --from=builder /repo/package.json ./package.json
 COPY --from=builder /repo/node_modules ./node_modules
