@@ -72,6 +72,7 @@ export const APP_NAV: NavItem[] = [
       { href: '/environment-center?tab=source-control', label: 'Source Control' },
       { href: '/environment-center?tab=work-management', label: 'Work Management' },
       { href: '/environment-center/create-scratch-org', label: 'Create Scratch Org' },
+      { href: '/environment-center/automation', label: 'Scratch Org Automation' },
       { href: '/sandbox-refresh', label: 'Sandbox Refresh' },
     ],
     activePrefixes: ['/scratch-templates', '/sandbox-refresh'],
