@@ -9,9 +9,11 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "@sfcc/shared": "*"
+    "@sfcc/shared": "*",
+    "cross-spawn": "^7.0.6"
   },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   }

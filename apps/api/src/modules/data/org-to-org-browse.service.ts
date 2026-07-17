@@ -224,11 +224,21 @@ export class OrgToOrgBrowseService {
     }
 
     const result = await this.sfCli.query(alias, soql);
+    if (!result.success) {
+      throw new BadRequestException(
+        `Source record query failed: ${result.error ?? 'unknown error'}`,
+      );
+    }
     const records = result.data?.result?.records ?? [];
 
     let matchCount: number;
     if (deployLimit > DATA_PREVIEW_MAX_ROWS) {
       const countResult = await this.sfCli.query(alias, buildCountSoql(countBaseSoql));
+      if (!countResult.success) {
+        throw new BadRequestException(
+          `Source COUNT() query failed: ${countResult.error ?? 'unknown error'}`,
+        );
+      }
       const rawCount = countResult.data?.result?.totalSize ?? 0;
       matchCount = Math.min(rawCount, deployLimit);
     } else {
@@ -269,6 +279,11 @@ export class OrgToOrgBrowseService {
     });
 
     const result = await this.sfCli.query(alias, soql);
+    if (!result.success) {
+      throw new BadRequestException(
+        `Source record query failed: ${result.error ?? 'unknown error'}`,
+      );
+    }
     const records = result.data?.result?.records ?? [];
     const totalSize = result.data?.result?.totalSize ?? records.length;
 

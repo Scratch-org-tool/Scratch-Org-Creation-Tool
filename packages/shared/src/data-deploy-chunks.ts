@@ -3,7 +3,7 @@ import {
   DATA_RECORD_LIMIT_MAX,
 } from './org-to-org-data.js';
 import { stripLimitOffset } from './org-to-org-data.js';
-import { escapeSoqlLiteral } from './soql.js';
+import { escapeSoqlLiteral, findTopLevelKeyword } from './soql.js';
 
 export interface DataDeployChunkPlan {
   chunkIndex: number;
@@ -18,24 +18,26 @@ export interface DataDeployChunkPlan {
   boundsPending: boolean;
 }
 
-const ORDER_BY_RE = /\bORDER\s+BY\s+[\s\S]*?(?=\bLIMIT\b|\bOFFSET\b|$)/i;
-
 /** Strip trailing ORDER BY / LIMIT / OFFSET so keyset clauses can be appended safely. */
 export function stripOrderByLimitOffset(soql: string): string {
   const withoutLimit = stripLimitOffset(soql);
-  return withoutLimit.replace(ORDER_BY_RE, '').trim();
+  // Only strip a TOP-LEVEL ORDER BY — an ORDER BY inside a relationship
+  // subquery must survive untouched.
+  const orderByIndex = findTopLevelKeyword(withoutLimit, 'ORDER BY');
+  if (orderByIndex === -1) return withoutLimit.trim();
+  return withoutLimit.slice(0, orderByIndex).trim();
 }
 
 /**
- * Inject an extra condition into a SELECT query, respecting an existing WHERE clause.
- * Assumes flat SELECT queries (no GROUP BY / sub-selects in WHERE), which is what the
- * deploy builders produce.
+ * Inject an extra condition into a SELECT query, respecting an existing
+ * top-level WHERE clause. A WHERE inside a relationship subquery or semi-join
+ * is ignored when locating the insertion point.
  */
 export function injectWhereCondition(soql: string, condition: string): string {
-  const whereMatch = soql.match(/\bWHERE\b/i);
-  if (whereMatch && whereMatch.index !== undefined) {
-    const before = soql.slice(0, whereMatch.index + whereMatch[0].length);
-    const after = soql.slice(whereMatch.index + whereMatch[0].length);
+  const whereIndex = findTopLevelKeyword(soql, 'WHERE');
+  if (whereIndex !== -1) {
+    const before = soql.slice(0, whereIndex + 'WHERE'.length);
+    const after = soql.slice(whereIndex + 'WHERE'.length);
     return `${before} (${after.trim()}) AND ${condition}`;
   }
   return `${soql} WHERE ${condition}`;
@@ -70,11 +72,11 @@ export function buildIdRangeChunkSoql(
 /** Id-only query used by the batch planner to compute chunk boundaries. */
 export function buildIdOnlySoql(baseSoql: string, recordLimit: number): string {
   const stripped = stripOrderByLimitOffset(baseSoql.trim().replace(/;+\s*$/, ''));
-  const fromMatch = stripped.match(/\bFROM\b/i);
-  if (!fromMatch || fromMatch.index === undefined) {
+  const fromIndex = findTopLevelKeyword(stripped, 'FROM');
+  if (fromIndex === -1) {
     return `${stripped} ORDER BY Id LIMIT ${recordLimit}`;
   }
-  const fromClause = stripped.slice(fromMatch.index);
+  const fromClause = stripped.slice(fromIndex);
   return `SELECT Id ${fromClause} ORDER BY Id LIMIT ${recordLimit}`;
 }
 
@@ -136,9 +138,9 @@ export function chunkCountForLimit(recordLimit: number, chunkSize = DATA_DEPLOY_
 
 /** Build SELECT COUNT() query from a SOQL string (strips LIMIT/OFFSET/ORDER BY). */
 export function buildCountSoql(soql: string): string {
-  const stripped = stripLimitOffset(soql.trim().replace(/;+\s*$/, ''));
-  const fromMatch = stripped.match(/\bFROM\b/i);
-  if (!fromMatch || fromMatch.index === undefined) return stripped;
-  const fromClause = stripped.slice(fromMatch.index).replace(/\bORDER\s+BY\b[\s\S]*$/i, '').trim();
+  const stripped = stripOrderByLimitOffset(soql.trim().replace(/;+\s*$/, ''));
+  const fromIndex = findTopLevelKeyword(stripped, 'FROM');
+  if (fromIndex === -1) return stripped;
+  const fromClause = stripped.slice(fromIndex).trim();
   return `SELECT COUNT() ${fromClause}`;
 }
