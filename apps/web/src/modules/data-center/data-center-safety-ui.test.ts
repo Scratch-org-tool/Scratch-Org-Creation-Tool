@@ -34,6 +34,17 @@ describe('Data Center async and recovery controls', () => {
     expect(hook).toContain("router.replace('/deployment-workbench?flow=data')");
   });
 
+  it('exposes query-driven Account Partner migration as a dedicated data operation', () => {
+    const workspace = source('./data-center-workspace.tsx');
+    const hook = source('./use-data-center-workspace.ts');
+    const partners = source('./account-partners-panel.tsx');
+    expect(workspace).toContain('AccountPartnersPanel');
+    expect(hook).toContain("'account-partners'");
+    expect(partners).toContain('/data/account-partners/mapping/preview');
+    expect(partners).toContain('/data/account-partners/mapping/run');
+    expect(partners).toContain('Migrate Account Partners');
+  });
+
   it('offers server-authorized movement controls and explicit inserted-record deletion', () => {
     const controls = source('./data-movement-controls.tsx');
     const batch = source('./data-deploy-batch-progress.tsx');

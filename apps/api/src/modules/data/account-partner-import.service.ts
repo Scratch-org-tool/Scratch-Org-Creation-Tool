@@ -6,8 +6,21 @@ import * as XLSX from 'xlsx';
 import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import {
+  ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+  ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
+  ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
+  ACCOUNT_PARTNER_OBJECT,
+  EMPLOYEE_MASTER_OBJECT,
+  accountPartnerMigrationSchema,
+  accountPartnerValueAt,
+  buildAccountPartnerMigrationRows,
   escapeSoqlLiteral,
+  normalizeAccountPartnerAccountKey,
+  parseBulkCsv,
+  resolveAccountPartnerMigrationSoql,
+  serializeBulkCsv,
   toSoqlLiteral,
+  type AccountPartnerMigrationInput,
   type BottlerSalesOfficeConfig,
 } from '@sfcc/shared';
 import { removeTempDir } from '../../common/temp-cleanup.util';
@@ -209,6 +222,72 @@ export class AccountPartnerImportService {
     }
   }
 
+  async previewSoqlMapping(input: AccountPartnerMigrationInput) {
+    const prepared = await this.prepareSoqlMapping(input);
+    return {
+      ok: prepared.mapping.stats.ready > 0,
+      query: prepared.query,
+      stats: prepared.mapping.stats,
+      targetAccounts: prepared.targetAccountKeys.size,
+      targetEmployees: prepared.targetEmployeeKeys.size,
+      sample: prepared.mapping.rows.slice(0, 50),
+    };
+  }
+
+  async migrateSoqlMapping(
+    input: AccountPartnerMigrationInput,
+    onLog?: (line: string) => Promise<void>,
+  ) {
+    const log = async (line: string) => onLog?.(line);
+    await log('Validating Account Partner query and target mappings...');
+    const prepared = await this.prepareSoqlMapping(input);
+    const { stats } = prepared.mapping;
+    await log(
+      `Source query returned ${stats.total.toLocaleString()} rows; `
+      + `${stats.ready.toLocaleString()} mappings are ready.`,
+    );
+    await log(
+      `Skipped: ${stats.skippedTargetAccount.toLocaleString()} missing target Accounts, `
+      + `${stats.skippedTargetEmployee.toLocaleString()} missing target Employee Masters, `
+      + `${stats.duplicates.toLocaleString()} duplicates.`,
+    );
+    if (stats.ready === 0) {
+      throw new Error(
+        'No Account Partner mappings are ready to migrate. '
+        + `Missing target Accounts: ${stats.skippedTargetAccount}; `
+        + `missing target Employee Masters: ${stats.skippedTargetEmployee}.`,
+      );
+    }
+
+    const workDir = await mkdtemp(join(tmpdir(), `account-partner-mapping-${input.bottler}-`));
+    try {
+      const csv = join(workDir, 'account-partners.csv');
+      await writeFile(csv, serializeBulkCsv(prepared.mapping.rows), 'utf8');
+      await log(`Upserting ${stats.ready.toLocaleString()} Account Partner records...`);
+      const result = await this.sfCli.upsertBulk(
+        ACCOUNT_PARTNER_OBJECT,
+        csv,
+        ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
+        prepared.target.alias,
+        15,
+        { cwd: workDir },
+      );
+      if (!result.success) {
+        throw new Error(result.error ?? 'Account Partner migration failed');
+      }
+      await log('Account Partner migration completed');
+      return {
+        success: true,
+        query: prepared.query,
+        stats,
+        targetAccounts: prepared.targetAccountKeys.size,
+        targetEmployees: prepared.targetEmployeeKeys.size,
+      };
+    } finally {
+      await removeTempDir(workDir);
+    }
+  }
+
   async transferOrgToOrgMatched(
     sourceOrgId: string,
     targetOrgId: string,
@@ -374,6 +453,107 @@ export class AccountPartnerImportService {
   async preview(options: ProcessOptions) {
     const summary = await this.processExcel(options);
     return { preview: true, ...summary };
+  }
+
+  private async prepareSoqlMapping(rawInput: AccountPartnerMigrationInput) {
+    const input = accountPartnerMigrationSchema.parse(rawInput);
+    const [source, target] = await Promise.all([
+      this.resolveOrg(input.sourceOrgId),
+      this.resolveOrg(input.targetOrgId),
+    ]);
+    const query = resolveAccountPartnerMigrationSoql(input);
+    const sourceWorkDir = await mkdtemp(join(tmpdir(), 'account-partner-source-'));
+    try {
+      const exportPath = join(sourceWorkDir, 'source-account-partners.csv');
+      const sourceResult = await this.sfCli.exportBulk(
+        query,
+        source.alias,
+        exportPath,
+        15,
+        { cwd: sourceWorkDir },
+      );
+      if (!sourceResult.success) {
+        throw new Error(sourceResult.error ?? 'Account Partner source query failed');
+      }
+      const records = parseBulkCsv(await readFile(exportPath, 'utf8'));
+      const sourceAccountKeys = records
+        .map((record) =>
+          accountPartnerValueAt(
+            record,
+            ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+          ))
+        .filter(Boolean);
+      const sourceEmployeeKeys = records
+        .map((record) =>
+          accountPartnerValueAt(
+            record,
+            ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
+          ))
+        .filter(Boolean);
+      const [targetAccountKeys, targetEmployeeKeys] = await Promise.all([
+        this.queryTargetKeys(
+          target.alias,
+          'Account',
+          'cfs_ob__u_CustomerNumber__c',
+          sourceAccountKeys,
+          normalizeAccountPartnerAccountKey,
+        ),
+        this.queryTargetKeys(
+          target.alias,
+          EMPLOYEE_MASTER_OBJECT,
+          'cfs_ob__EmployeeNo__c',
+          sourceEmployeeKeys,
+        ),
+      ]);
+      const mapping = buildAccountPartnerMigrationRows({
+        records,
+        bottler: input.bottler,
+        targetAccountKeys,
+        targetEmployeeKeys,
+      });
+      return {
+        target,
+        query,
+        mapping,
+        targetAccountKeys,
+        targetEmployeeKeys,
+      };
+    } finally {
+      await removeTempDir(sourceWorkDir);
+    }
+  }
+
+  private async queryTargetKeys(
+    alias: string,
+    objectName: string,
+    field: string,
+    sourceKeys: string[],
+    normalize: (value: unknown) => string = (value) => String(value ?? '').trim(),
+  ): Promise<Set<string>> {
+    const unique = [...new Set(sourceKeys.map((key) => key.trim()).filter(Boolean))];
+    const matched = new Set<string>();
+    for (let index = 0; index < unique.length; index += 200) {
+      const chunk = unique.slice(index, index + 200);
+      const result = await this.sfCli.query(
+        alias,
+        `SELECT ${field} FROM ${objectName} WHERE ${field} IN (`
+        + `${chunk.map(toSoqlLiteral).join(', ')})`,
+      );
+      if (!result.success) {
+        throw new Error(
+          result.error ?? `Target ${objectName}.${field} lookup failed`,
+        );
+      }
+      const records =
+        (result.data as {
+          result?: { records?: Array<Record<string, unknown>> };
+        })?.result?.records ?? [];
+      for (const record of records) {
+        const key = normalize(accountPartnerValueAt(record, field));
+        if (key) matched.add(key);
+      }
+    }
+    return matched;
   }
 
   private orgLinkCustomer(

@@ -4,10 +4,10 @@ import { useCallback, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { DataCenterTab } from './types';
 
-const VALID_TABS: DataCenterTab[] = ['cona', 'replication', 'templates'];
+const VALID_TABS: DataCenterTab[] = ['cona', 'account-partners', 'replication', 'templates'];
 
 function parseTab(param: string | null): DataCenterTab {
-  if (param === 'replication' || param === 'templates') {
+  if (param === 'account-partners' || param === 'replication' || param === 'templates') {
     return param;
   }
   return 'cona';

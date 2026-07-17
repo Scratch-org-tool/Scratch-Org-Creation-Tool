@@ -28,6 +28,7 @@ import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { assertOrgOwned } from '../../common/user-tenancy.util';
 import {
   accountSeedPreviewSchema,
+  accountPartnerMigrationSchema,
   conaSeedRunSchema,
   partnerImportLoadSchema,
   partnerImportProcessSchema,
@@ -428,6 +429,34 @@ export class DataController {
   processPartners(@Body() body: unknown) {
     const input = partnerImportProcessSchema.parse(body);
     return this.partnerImportService.processExcel(input);
+  }
+
+  @Post('account-partners/mapping/preview')
+  async previewAccountPartnerMapping(
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    const input = accountPartnerMigrationSchema.parse(body);
+    await assertOrgOwned(input.sourceOrgId, userId, prisma);
+    await assertOrgOwned(input.targetOrgId, userId, prisma);
+    try {
+      return await this.partnerImportService.previewSoqlMapping(input);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Account Partner preview failed',
+      );
+    }
+  }
+
+  @Post('account-partners/mapping/run')
+  async runAccountPartnerMapping(
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    const input = accountPartnerMigrationSchema.parse(body);
+    await assertOrgOwned(input.sourceOrgId, userId, prisma);
+    await assertOrgOwned(input.targetOrgId, userId, prisma);
+    return this.dataService.enqueueAccountPartnerMigration(input, userId);
   }
 
   @Post('account-partners/load')

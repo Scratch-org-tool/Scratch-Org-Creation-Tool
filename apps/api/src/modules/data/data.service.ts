@@ -14,6 +14,7 @@ import {
   validateSoqlForObject,
   OrgToOrgSoqlParseError,
   sfdmuExportSchema,
+  type AccountPartnerMigrationInput,
   type ConaSeedRunInput,
   type OrgToOrgDeployBatchResult,
   type OrgToOrgObjectDeployConfig,
@@ -970,6 +971,26 @@ export class DataService {
         automationRunId: input.automationRunId,
       },
       { parentRunId: input.automationRunId, createdBy: userId },
+    );
+    return { jobId: job.id, status: 'queued' };
+  }
+
+  async enqueueAccountPartnerMigration(
+    input: AccountPartnerMigrationInput,
+    userId?: string,
+  ) {
+    const job = await this.orchestrator.enqueueJob(
+      QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT,
+      'account_partner_mapping',
+      {
+        mode: 'soql_mapping',
+        sourceOrgId: input.sourceOrgId,
+        targetOrgId: input.targetOrgId,
+        bottler: input.bottler,
+        partnerSoql: input.partnerSoql,
+        recordLimit: input.recordLimit,
+      },
+      { createdBy: userId },
     );
     return { jobId: job.id, status: 'queued' };
   }

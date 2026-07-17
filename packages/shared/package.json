@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/auth-account.test.js dist/user-access-admin.test.js dist/notifications.test.js dist/scheduling.test.js dist/drift.test.js dist/org-to-org-data.test.js dist/org-to-org-metadata.test.js dist/query-set.test.js dist/query-section.test.js dist/query-runtime.test.js dist/user-provision-template.test.js dist/template-config-migration.test.js dist/data-deploy-chunks.test.js dist/data-runtime.test.js dist/integrations.test.js dist/deployment-workbench.test.js"
+    "test": "npm run build && node --test dist/auth-account.test.js dist/user-access-admin.test.js dist/notifications.test.js dist/scheduling.test.js dist/drift.test.js dist/org-to-org-data.test.js dist/org-to-org-metadata.test.js dist/query-set.test.js dist/query-section.test.js dist/query-runtime.test.js dist/account-partner-migration.test.js dist/user-provision-template.test.js dist/template-config-migration.test.js dist/data-deploy-chunks.test.js dist/data-runtime.test.js dist/integrations.test.js dist/deployment-workbench.test.js"
   },
   "dependencies": {
     "zod": "^3.24.1"

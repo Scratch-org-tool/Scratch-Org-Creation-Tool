@@ -1,4 +1,4 @@
-export type DataCenterTab = 'cona' | 'replication' | 'templates';
+export type DataCenterTab = 'cona' | 'account-partners' | 'replication' | 'templates';
 
 export interface Org {
   id: string;
