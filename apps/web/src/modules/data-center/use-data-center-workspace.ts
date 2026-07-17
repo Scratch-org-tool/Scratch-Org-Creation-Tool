@@ -4,10 +4,10 @@ import { useCallback, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { DataCenterTab } from './types';
 
-const VALID_TABS: DataCenterTab[] = ['cona', 'deploy', 'replication', 'templates'];
+const VALID_TABS: DataCenterTab[] = ['cona', 'replication', 'templates'];
 
 function parseTab(param: string | null): DataCenterTab {
-  if (param === 'deploy' || param === 'replication' || param === 'templates') {
+  if (param === 'replication' || param === 'templates') {
     return param;
   }
   return 'cona';
@@ -19,9 +19,12 @@ export function useDataCenterWorkspace() {
   const tabParam = searchParams.get('tab');
   const activeTab = parseTab(tabParam);
 
-  // Org-to-org data deploy moved to its own page; honor old bookmarks/links.
+  // Org-to-org record deployment (old "org-to-org" and "Generic deploy" tabs)
+  // is consolidated into the Deployment Workbench data flow; honor old links.
   useEffect(() => {
-    if (tabParam === 'org-to-org') router.replace('/data-deploy');
+    if (tabParam === 'org-to-org' || tabParam === 'deploy') {
+      router.replace('/deployment-workbench?flow=data');
+    }
   }, [tabParam, router]);
 
   const setTab = useCallback(

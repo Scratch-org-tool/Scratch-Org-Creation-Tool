@@ -119,8 +119,8 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
     columns: 3,
     links: [
       {
-        label: 'Org-to-Org Data Deploy',
-        description: 'Pick objects, preview and compare records against the target, then insert or upsert.',
+        label: 'Data Deployment',
+        description: 'Move object records between orgs with previews, target comparison, and rollback.',
         href: '/data-deploy',
         icon: ArrowLeftRight,
         iconBg: 'bg-indigo-500/10 text-indigo-400',
@@ -129,7 +129,7 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
       },
       {
         label: 'Data Operations',
-        description: 'CONA seed, generic SOQL deploy, replication, and query templates.',
+        description: 'CONA seed, replication, and query templates.',
         href: '/data-center',
         icon: Database,
         iconBg: 'bg-green-500/10 text-green-400',

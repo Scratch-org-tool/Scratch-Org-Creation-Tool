@@ -22,7 +22,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/data-center/deployment': 'Data Deployment',
   '/data-center/replication': 'Data Replication',
   '/data-center/templates': 'Query Templates',
-  '/data-deploy': 'Org-to-Org Data Deploy',
+  '/data-deploy': 'Data Deployment',
   '/scratch-templates': 'Templates',
   '/custom-settings-load': 'Custom Settings Load',
   '/org-setup': 'Org & Users',

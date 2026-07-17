@@ -56,7 +56,7 @@ function OrgToOrgDeployWorkspaceInner() {
     <TabbedWorkspaceShell
       header={
         <DeploymentPageHeader
-          title="Org-to-Org Data Deploy"
+          title="Data Deployment"
           subtitle="Compare source vs target records and move data between Salesforce orgs safely."
           icon={ArrowLeftRight}
           accentClass="to-indigo-500/10"

@@ -78,8 +78,8 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     children: [
       { path: '/deployment-center/git', label: 'Git Metadata Deploy', description: 'Deploy from Azure DevOps, GitHub, or Bitbucket.' },
       { path: '/deployment-center/jenkins', label: 'Jenkins', description: 'Jenkins pipeline integration for deployments.' },
-      { path: '/data-deploy', label: 'Org-to-Org Data Deploy', description: 'Pick objects, compare source vs target records, and insert or upsert between orgs with history.' },
-      { path: '/data-center', label: 'Data Center', description: 'SFDMU bulk data deploy and org-to-org replication.' },
+      { path: '/data-deploy', label: 'Data Deployment', description: 'Pick objects, compare source vs target records, and insert or upsert between orgs with history.' },
+      { path: '/data-center', label: 'Data Operations', description: 'CONA seed, onboarding replication, and reusable query templates.' },
       { path: '/org-setup', label: 'Org Setup', description: 'Assign permission sets and configure org setup steps.' },
       { path: '/user-provisioning', label: 'User Provisioning', description: 'Bulk create or update Salesforce users.' },
       { path: '/custom-settings-load', label: 'Custom Settings Load', description: 'Load custom settings data into target orgs.' },
@@ -167,7 +167,7 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
     keywords: ['org to org', 'data deploy', 'insert', 'upsert', 'records', 'compare records'],
     module: 'data',
     steps: [
-      'Open **Deployment** → **Org-to-Org Data Deploy** (`/data-deploy`).',
+      'Open **Deployment Workbench** → **Data Deployment** (or **Deployment** → **Data Deployment**).',
       'Pick source org, target org, and strategy (upsert updates matches; insert always creates).',
       'Check the objects to move, then adjust filters, deploy fields, or custom SOQL per object.',
       'Click **Review & compare** to see matching records and the target impact (new vs existing).',
@@ -236,8 +236,8 @@ const PATH_TITLES: Array<{ prefix: string; title: string }> = [
   { prefix: '/deployment-center/azure', title: 'Git Metadata Deploy' },
   { prefix: '/deployment-center/jenkins', title: 'Jenkins' },
   { prefix: '/deployment-center', title: 'Deployment Center' },
-  { prefix: '/data-deploy', title: 'Org-to-Org Data Deploy' },
-  { prefix: '/data-center', title: 'Data Center' },
+  { prefix: '/data-deploy', title: 'Data Deployment' },
+  { prefix: '/data-center', title: 'Data Operations' },
   { prefix: '/org-setup', title: 'Org Setup' },
   { prefix: '/user-provisioning', title: 'User Provisioning' },
   { prefix: '/custom-settings-load', title: 'Custom Settings Load' },
@@ -295,7 +295,7 @@ const NAV_KEYWORDS: Array<{
   },
   {
     patterns: /\b(org.to.org\s+data|data\s+deploy)\b/i,
-    action: { type: 'navigate', href: '/data-deploy', label: 'Org-to-Org Data Deploy' },
+    action: { type: 'navigate', href: '/data-deploy', label: 'Data Deployment' },
   },
   {
     patterns: /\b(data\s+center|sfdmu)\b/i,

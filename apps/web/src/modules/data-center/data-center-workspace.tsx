@@ -1,16 +1,18 @@
 'use client';
 
 import { Suspense } from 'react';
-import { Database, FileCode, RefreshCw, Sprout } from 'lucide-react';
+import { FileCode, RefreshCw, Sprout } from 'lucide-react';
 import { PageSkeleton, TabbedWorkspaceShell, type WorkspaceTab } from '@/components/studio';
 import { DataCenterPageHeader } from './data-center-page-header';
 import { ConaSeedDeploymentForm } from './cona-seed-deployment-form';
-import { GenericDeployPanel } from './generic-deploy-panel';
 import { ReplicationPanel } from './replication-panel';
 import { QueryTemplatesPanel } from './query-templates-panel';
 import { useDataCenterWorkspace } from './use-data-center-workspace';
 import type { DataCenterTab } from './types';
 
+// Org-to-org record deployment (the old "Generic deploy" tab) lives in the
+// Deployment Workbench data flow now — Data Operations keeps only the jobs
+// that are NOT plain org-to-org record moves.
 const TABS: WorkspaceTab[] = [
   {
     id: 'cona',
@@ -19,13 +21,6 @@ const TABS: WorkspaceTab[] = [
     title: 'CONA Data Seed',
     description:
       'Validate, export, and import onboarding config, products, visit plans, and account slices using dynamic SOQL.',
-  },
-  {
-    id: 'deploy',
-    label: 'Generic deploy',
-    icon: Database,
-    title: 'Generic SOQL deploy',
-    description: 'Bulk export/import records between orgs with optional SOQL.',
   },
   {
     id: 'replication',
@@ -55,9 +50,6 @@ function DataCenterWorkspaceInner() {
     >
       <div hidden={w.activeTab !== 'cona'}>
         <ConaSeedDeploymentForm embedded />
-      </div>
-      <div hidden={w.activeTab !== 'deploy'}>
-        <GenericDeployPanel />
       </div>
       <div hidden={w.activeTab !== 'replication'}>
         <ReplicationPanel />

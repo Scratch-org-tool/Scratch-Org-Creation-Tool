@@ -8,29 +8,30 @@ function source(name: string): string {
 
 describe('Data Center async and recovery controls', () => {
   it('guards previews and polling with abortable generations', () => {
-    const generic = source('./generic-deploy-panel.tsx');
     const replication = source('./replication-panel.tsx');
     const orgToOrg = source('./use-org-to-org-deploy.ts');
     const batch = source('./data-deploy-batch-progress.tsx');
-    for (const value of [generic, replication]) {
-      expect(value).toContain('new AbortController()');
-      expect(value).toContain('setTimeout(() => void poll(), 2000)');
-      expect(value).not.toContain('setInterval(async () =>');
-    }
+    expect(replication).toContain('new AbortController()');
+    expect(replication).toContain('setTimeout(() => void poll(), 2000)');
+    expect(replication).not.toContain('setInterval(async () =>');
     expect(orgToOrg).toContain('jobPollGenerationRef');
     expect(orgToOrg).toContain('generation !== orgGenerationRef.current');
     expect(batch).toContain('loadAbort.current?.abort()');
   });
 
   it('guards preflight success, error, and finalization by request generation and configuration key', () => {
-    for (const value of [
-      source('./generic-deploy-panel.tsx'),
-      source('./replication-panel.tsx'),
-    ]) {
-      expect(value.match(/isCurrentConfigurationRequest\(/g)).toHaveLength(3);
-      expect(value).toContain('previous');
-      expect(value).toContain('preflightRequestRef.current += 1');
-    }
+    const replication = source('./replication-panel.tsx');
+    expect(replication.match(/isCurrentConfigurationRequest\(/g)).toHaveLength(3);
+    expect(replication).toContain('previous');
+    expect(replication).toContain('preflightRequestRef.current += 1');
+  });
+
+  it('keeps org-to-org record deployment only in the workbench data flow', () => {
+    // The legacy Generic deploy tab was removed as a duplicate of /data-deploy.
+    const workspace = source('./data-center-workspace.tsx');
+    expect(workspace).not.toContain('GenericDeployPanel');
+    const hook = source('./use-data-center-workspace.ts');
+    expect(hook).toContain("router.replace('/deployment-workbench?flow=data')");
   });
 
   it('offers server-authorized movement controls and explicit inserted-record deletion', () => {

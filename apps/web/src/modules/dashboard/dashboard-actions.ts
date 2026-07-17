@@ -27,7 +27,7 @@ export const DASHBOARD_QUICK_ACTIONS: QuickActionItem[] = [
     iconBg: 'bg-green-500/10 text-green-400',
   },
   {
-    label: 'Org-to-Org Data',
+    label: 'Data Deployment',
     description: 'Compare and deploy data between orgs',
     href: '/data-deploy',
     icon: ArrowLeftRight,
