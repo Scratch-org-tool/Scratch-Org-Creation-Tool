@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ONBOARDING_OBJECT } from '@sfcc/shared';
 import { ACCOUNT_SEED_EXTERNAL_ID } from './account-seed-query.builder';
 
@@ -175,5 +178,37 @@ describe('ConaSeedService manual Account queries', () => {
       10,
       expect.any(Object),
     );
+  });
+
+  it('normalizes exported CRLF data while applying RecordType mappings', async () => {
+    const service = new ConaSeedService({ buildMappings: vi.fn() } as never);
+    const root = await mkdtemp(join(tmpdir(), 'cona-record-types-'));
+    const csv = join(root, 'onboarding.csv');
+    await writeFile(
+      csv,
+      'RecordTypeId,cfs_ob__Bottler__c,Description__c\r\n'
+      + 'sourceRt,5000,"First line\r\nSecond line"\r\n',
+      'utf8',
+    );
+
+    try {
+      await (
+        service as unknown as {
+          applyRecordTypeMappings: (
+            path: string,
+            mappings: Record<string, string>,
+          ) => Promise<void>;
+        }
+      ).applyRecordTypeMappings(csv, { sourceRt: 'targetRt' });
+
+      const content = await readFile(csv, 'utf8');
+      expect(content).toBe(
+        'RecordTypeId,cfs_ob__Bottler__c,Description__c\n'
+        + 'targetRt,5000,"First line\nSecond line"\n',
+      );
+      expect(content).not.toContain('\r');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

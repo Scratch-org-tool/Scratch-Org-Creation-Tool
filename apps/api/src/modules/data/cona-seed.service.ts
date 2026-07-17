@@ -86,7 +86,13 @@ export class ConaSeedService {
     const org = await this.resolveOrg(sourceOrgId);
     const bottlers = [...new Set((accountSeedRows ?? []).map((r) => r.bottler))];
     const defaultBottler = bottlers[0] ?? '5000';
-    const checks: Array<{ dataset: string; count: number; ok: boolean }> = [];
+    const checks: Array<{
+      dataset: string;
+      count: number;
+      ok: boolean;
+      availableCount?: number;
+      requestedMaximum?: number;
+    }> = [];
     if (
       datasets.includes('Accounts')
       && accountQueryMode === 'manual'
@@ -135,6 +141,8 @@ export class ConaSeedService {
           dataset: `OnboardingConfig:${resolved.label}`,
           count: selectedCount,
           ok: selectedCount > 0,
+          availableCount,
+          requestedMaximum: resolved.limit,
         });
         manualOnboardingPreviews.push({ ...resolved, availableCount, selectedCount });
       }
@@ -184,6 +192,8 @@ export class ConaSeedService {
           dataset: `Accounts:${resolved.label}`,
           count: selectedCount,
           ok: selectedCount > 0,
+          availableCount,
+          requestedMaximum: resolved.limit,
         });
         manualQueryPreviews.push({ ...resolved, availableCount, selectedCount });
       }
@@ -439,13 +449,16 @@ export class ConaSeedService {
   private async applyRecordTypeMappings(csvPath: string, mappings: Record<string, string>) {
     const { readFile } = await import('fs/promises');
     const content = await readFile(csvPath, 'utf-8');
-    const lines = content.split('\n');
-    if (lines.length < 2) return;
-    const headers = splitCsvLine(lines[0]);
+    // Salesforce bulk export can emit CRLF even on Linux. Normalize before
+    // rewriting RecordTypeIds so the import's detected line-ending setting and
+    // the actual CSV bytes cannot diverge.
+    const records = splitCsvRecords(content.replace(/\r\n?/g, '\n'));
+    if (records.length < 2) return;
+    const headers = splitCsvLine(records[0]);
     const rtIdx = headers.findIndex((h) => h.trim().replace(/^"|"$/g, '') === 'RecordTypeId');
     if (rtIdx < 0) return;
 
-    const mapped = lines.map((line, i) => {
+    const mapped = records.map((line, i) => {
       if (i === 0 || !line.trim()) return line;
       const cols = splitCsvLine(line);
       const srcId = cols[rtIdx]?.trim().replace(/^"|"$/g, '');
@@ -480,4 +493,30 @@ function splitCsvLine(line: string): string[] {
   }
   cols.push(current);
   return cols;
+}
+
+/** Split normalized CSV into logical records while preserving quoted newlines. */
+function splitCsvRecords(content: string): string[] {
+  const records: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < content.length; i += 1) {
+    const ch = content[i];
+    if (ch === '"') {
+      current += ch;
+      if (inQuotes && content[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === '\n' && !inQuotes) {
+      records.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  records.push(current);
+  return records;
 }
