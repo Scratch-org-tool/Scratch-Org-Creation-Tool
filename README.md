@@ -85,7 +85,7 @@ npm run docker:up
 
 This starts:
 
-- **PostgreSQL** (pgvector) on port `5432` — user `sfcc`, password `sfcc_dev_password`, database `sfcc`
+- **PostgreSQL** (pgvector) on host port `55432` (container `5432`) — user `sfcc`, password `sfcc_dev_password`, database `sfcc`
 - **Redis** on port `6379`
 
 > **Using local Postgres instead of Docker?**  
