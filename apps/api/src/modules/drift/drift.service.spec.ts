@@ -47,8 +47,13 @@ function monitor(overrides: Record<string, unknown> = {}) {
 function createService() {
   const browseService = { listComponentsRaw: vi.fn() };
   const notifications = { notify: vi.fn().mockResolvedValue(null) };
-  const service = new DriftService(browseService as never, notifications as never);
-  return { service, browseService, notifications };
+  const deploymentService = { deployOrgToOrgMetadata: vi.fn() };
+  const service = new DriftService(
+    browseService as never,
+    notifications as never,
+    deploymentService as never,
+  );
+  return { service, browseService, notifications, deploymentService };
 }
 
 describe('DriftService.runCheck', () => {
@@ -153,6 +158,84 @@ describe('DriftService.runScheduledMonitor', () => {
     const result = await service.runScheduledMonitor('mon-1');
     expect(result.claimed).toBe(false);
     expect(runCheck).not.toHaveBeenCalled();
+  });
+});
+
+describe('DriftService remediation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.driftMonitor.findUnique.mockResolvedValue(monitor());
+  });
+
+  const driftedSnapshot = {
+    id: 'snap-9',
+    monitorId: 'mon-1',
+    status: 'drifted',
+    createdAt: new Date('2026-07-17T01:00:00Z'),
+    items: [
+      { metadataType: 'ApexClass', fullName: 'Alpha', diffType: 'new' },
+      { metadataType: 'ApexClass', fullName: 'Beta', diffType: 'changed' },
+      { metadataType: 'CustomObject', fullName: 'Extra__c', diffType: 'deleted' },
+    ],
+  };
+
+  it('builds a preview that separates deploys from deletions', async () => {
+    db.driftSnapshot.findFirst.mockResolvedValue(driftedSnapshot);
+    const { service } = createService();
+
+    const preview = await service.remediationPreview('mon-1', 'user-1');
+    expect(preview.deployCount).toBe(2);
+    expect(preview.deleteCount).toBe(1);
+    expect(preview.deploySelections).toEqual([
+      { metadataType: 'ApexClass', members: ['Alpha', 'Beta'] },
+    ]);
+    expect(preview.deleteSelections).toEqual([
+      { metadataType: 'CustomObject', members: ['Extra__c'] },
+    ]);
+  });
+
+  it('creates the org-to-org deployment from the snapshot plan', async () => {
+    db.driftSnapshot.findFirst.mockResolvedValue(driftedSnapshot);
+    const { service, deploymentService } = createService();
+    deploymentService.deployOrgToOrgMetadata.mockResolvedValue({ deploymentId: 'dep-1', jobId: 'job-1' });
+
+    const result = await service.remediate('mon-1', { includeDeletions: true }, 'user-1');
+
+    expect(deploymentService.deployOrgToOrgMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceOrgId: 'src',
+        targetOrgId: 'tgt',
+        selections: [{ metadataType: 'ApexClass', members: ['Alpha', 'Beta'] }],
+        destructiveSelections: [{ metadataType: 'CustomObject', members: ['Extra__c'] }],
+        validateOnly: false,
+      }),
+      'user-1',
+    );
+    expect(result.deployCount).toBe(2);
+    expect(result.deleteCount).toBe(1);
+  });
+
+  it('omits destructive changes unless explicitly requested', async () => {
+    db.driftSnapshot.findFirst.mockResolvedValue(driftedSnapshot);
+    const { service, deploymentService } = createService();
+    deploymentService.deployOrgToOrgMetadata.mockResolvedValue({ deploymentId: 'dep-1' });
+
+    await service.remediate('mon-1', {}, 'user-1');
+    const payload = deploymentService.deployOrgToOrgMetadata.mock.calls[0][0];
+    expect(payload.destructiveSelections).toBeUndefined();
+  });
+
+  it('rejects remediation when there is nothing to deploy', async () => {
+    db.driftSnapshot.findFirst.mockResolvedValue({
+      ...driftedSnapshot,
+      items: [{ metadataType: 'CustomObject', fullName: 'Extra__c', diffType: 'deleted' }],
+    });
+    const { service, deploymentService } = createService();
+
+    await expect(service.remediate('mon-1', {}, 'user-1')).rejects.toThrow(
+      /nothing to remediate/i,
+    );
+    expect(deploymentService.deployOrgToOrgMetadata).not.toHaveBeenCalled();
   });
 });
 
