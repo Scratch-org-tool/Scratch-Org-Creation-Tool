@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
   averagePercent,
@@ -25,6 +25,7 @@ import {
   type CurriculumModule,
   type CurriculumPath,
 } from './curriculum';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export interface UserLearningState {
   /** lessonId -> completedAt */
@@ -68,6 +69,10 @@ function toAssignmentView(
 
 @Injectable()
 export class LearningService {
+  private readonly logger = new Logger(LearningService.name);
+
+  constructor(@Optional() private readonly notifications?: NotificationsService) {}
+
   /** Load everything needed to overlay one user's progress onto the curriculum. */
   async loadUserState(userId: string): Promise<UserLearningState> {
     const [lessonRows, attemptRows, assignmentRows] = await Promise.all([
@@ -319,13 +324,53 @@ export class LearningService {
     });
 
     const isCompleteAfter = await this.isPathComplete(userId, path.id);
+    const pathJustCompleted = !wasCompleteBefore && isCompleteAfter;
+    if (pathJustCompleted) {
+      void this.notifyPathCompleted(userId, path.id, path.title);
+    }
 
     return {
       completed: true,
       completedAt: row.completedAt.toISOString(),
-      pathCompleted: !wasCompleteBefore && isCompleteAfter,
+      pathCompleted: pathJustCompleted,
       pathId: path.id,
     };
+  }
+
+  /** Cover the completion order where the final unit is a lesson, not a quiz. */
+  private async notifyPathCompleted(userId: string, pathId: string, pathTitle: string) {
+    if (!this.notifications) return;
+    try {
+      await this.notifications.notify({
+        userId,
+        category: 'system',
+        level: 'success',
+        title: `Path completed: ${pathTitle}`,
+        body: 'Congratulations — every lesson is done and every module quiz is passed. Your badge is on the academy page.',
+        link: `/learning/paths/${pathId}`,
+      });
+      const assignment = await prisma.learningAssignment.findFirst({
+        where: { userId, pathId, status: 'active' },
+      });
+      if (assignment && assignment.assignedBy !== userId) {
+        const learner = await prisma.appUser.findUnique({
+          where: { id: userId },
+          select: { displayName: true },
+        });
+        await this.notifications.notify({
+          userId: assignment.assignedBy,
+          category: 'system',
+          level: 'success',
+          title: `${learner?.displayName ?? 'A learner'} completed "${pathTitle}"`,
+          body: 'The assigned Salesforce Academy path is fully complete. Review their scores in Team Progress.',
+          link: '/learning/team',
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `path completion notification failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   async isPathComplete(userId: string, pathId: string): Promise<boolean> {

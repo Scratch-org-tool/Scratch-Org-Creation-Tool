@@ -249,6 +249,46 @@ describe('LearningService catalog + progress', () => {
       }),
     );
   });
+
+  it('notifies when the final completion unit is a lesson', async () => {
+    const path = CURRICULUM[0]!;
+    const finalLesson = path.modules.at(-1)!.lessons.at(-1)!;
+    const allLessons = path.modules.flatMap((module) => module.lessons);
+    const before = allLessons
+      .filter((lesson) => lesson.id !== finalLesson.id)
+      .map((lesson) => ({ lessonId: lesson.id, completedAt: new Date() }));
+    const after = allLessons.map((lesson) => ({
+      lessonId: lesson.id,
+      completedAt: new Date(),
+    }));
+    const passedModules = path.modules.map((module) => ({
+      moduleId: module.id,
+      scorePercent: 90,
+      passed: true,
+      completedAt: new Date(),
+    }));
+    const notifications = { notify: vi.fn().mockResolvedValue(null) };
+    service = new LearningService(notifications as unknown as NotificationsService);
+    db.learningLessonProgress.findMany
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
+    db.learningQuizAttempt.findMany.mockResolvedValue(passedModules);
+    db.learningAssignment.findMany.mockResolvedValue([]);
+    db.learningAssignment.findFirst.mockResolvedValue(null);
+    db.learningLessonProgress.upsert.mockResolvedValue({ completedAt: new Date() });
+
+    const result = await service.completeLesson(USER, finalLesson.id);
+
+    expect(result.pathCompleted).toBe(true);
+    await vi.waitFor(() =>
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: USER,
+          title: `Path completed: ${path.title}`,
+        }),
+      ),
+    );
+  });
 });
 
 describe('quiz generation helpers', () => {
