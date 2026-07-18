@@ -24,6 +24,7 @@ export const APP_MODULES = [
   'monitoring',
   'copilot',
   'defects',
+  'learning',
 ] as const;
 
 export const DEFAULT_USER_MODULES = ['dashboard', 'environment', 'data', 'defects'] as const;
@@ -34,6 +35,7 @@ export const LOCKED_MODULES = [
   'provisioning',
   'monitoring',
   'copilot',
+  'learning',
 ] as const;
 
 export type AppModule = (typeof APP_MODULES)[number];
@@ -121,6 +123,7 @@ export const MODULE_LABELS: Record<AppModule, string> = {
   monitoring: 'Monitoring',
   copilot: 'AI Copilot',
   defects: 'AI Defects Command Centre',
+  learning: 'Salesforce Academy',
 };
 
 export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
@@ -145,6 +148,7 @@ export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
   '/user-provisioning': 'provisioning',
   '/monitoring': 'monitoring',
   '/defects-command-centre': 'defects',
+  '/learning': 'learning',
   '/admin': 'dashboard',
 };
 

@@ -23,6 +23,7 @@ import { ProvisioningModule } from './modules/provisioning/provisioning.module';
 import { CopilotModule } from './modules/copilot/copilot.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { DefectsModule } from './modules/defects/defects.module';
+import { LearningModule } from './modules/learning/learning.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { QueueModule } from './modules/queue/queue.module';
 import { StreamModule } from './modules/stream/stream.module';
@@ -93,6 +94,7 @@ function resolveRateLimitPerMinute(): number {
     CopilotModule,
     MonitoringModule,
     DefectsModule,
+    LearningModule,
     AgentsModule,
   ],
   providers: [
