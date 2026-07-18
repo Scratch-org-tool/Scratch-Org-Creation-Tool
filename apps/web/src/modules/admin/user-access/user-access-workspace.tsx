@@ -44,6 +44,7 @@ export function UserAccessWorkspace() {
     openManage,
     closeManage,
     toggleDraftModule,
+    toggleDraftLearningFeature,
     saveManage,
     pendingRole,
     setPendingRole,
@@ -150,6 +151,7 @@ export function UserAccessWorkspace() {
         onClose={closeManage}
         onDraftChange={setDraft}
         onToggleModule={toggleDraftModule}
+        onToggleLearningFeature={toggleDraftLearningFeature}
         onSave={() => void saveManage()}
         isSelf={manageUser?.id === profile.id}
       />

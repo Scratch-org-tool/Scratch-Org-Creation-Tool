@@ -16,9 +16,11 @@ import {
   RotateCcw,
   Sparkles,
 } from 'lucide-react';
+import { resolveLearningFeatureAccess } from '@sfcc/shared';
 import { InlineAlert } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAuth } from '@/contexts/auth-context';
 import { cn } from '@/utils/cn';
 import { fetchPath } from './learning-api';
 import { LEVEL_THEMES, formatDuration, levelLabel } from './learning-ui';
@@ -95,11 +97,13 @@ function ModuleCard({
   index,
   accent,
   isNext,
+  quizEnabled,
 }: {
   module: LearningModuleMeta;
   index: number;
   accent: string;
   isNext: boolean;
+  quizEnabled: boolean;
 }) {
   return (
     <div
@@ -132,7 +136,8 @@ function ModuleCard({
             <p className="mt-0.5 text-xs text-muted-foreground">{module.summary}</p>
             <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
               <Clock className="size-3" />
-              {formatDuration(module.durationMinutes)} + quiz
+              {formatDuration(module.durationMinutes)}
+              {quizEnabled ? ' + quiz' : ''}
             </p>
           </div>
         </div>
@@ -171,7 +176,7 @@ function ModuleCard({
             </div>
           </Link>
         ))}
-        <QuizRow module={module} />
+        {quizEnabled && <QuizRow module={module} />}
       </div>
     </div>
   );
@@ -180,6 +185,8 @@ function ModuleCard({
 export function PathWorkspace() {
   const params = useParams<{ pathId: string }>();
   const pathId = params?.pathId;
+  const { profile } = useAuth();
+  const quizEnabled = resolveLearningFeatureAccess(profile).quiz;
   const [path, setPath] = useState<LearningPathSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -289,6 +296,7 @@ export function PathWorkspace() {
                 index={index}
                 accent={LEVEL_THEMES[path.level].accent}
                 isNext={module.id === nextModuleId}
+                quizEnabled={quizEnabled}
               />
             ))}
           </div>

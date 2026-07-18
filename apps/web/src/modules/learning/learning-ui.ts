@@ -1,7 +1,35 @@
-import { LEARNING_LEVEL_LABELS, LEARNING_RESOURCE_SOURCE_LABELS } from '@sfcc/shared';
-import type { LearningLevel, LearningResourceLink } from './types';
+import {
+  LEARNING_CATEGORY_LABELS,
+  LEARNING_CATEGORY_TAGLINES,
+  LEARNING_LEVEL_LABELS,
+  LEARNING_RESOURCE_SOURCE_LABELS,
+} from '@sfcc/shared';
+import type { LearningCategory, LearningLevel, LearningResourceLink } from './types';
 
-export { LEARNING_LEVEL_LABELS };
+export { LEARNING_LEVEL_LABELS, LEARNING_CATEGORY_LABELS, LEARNING_CATEGORY_TAGLINES };
+
+export interface CategoryTheme {
+  /** Accent hex used for the discipline header rule. */
+  accent: string;
+  /** Soft icon container classes. */
+  iconWrap: string;
+}
+
+/** Per-discipline accents so grouped sections read as distinct tracks. */
+export const CATEGORY_THEMES: Record<LearningCategory, CategoryTheme> = {
+  salesforce: { accent: '#38bdf8', iconWrap: 'bg-sky-500/15 text-sky-300' },
+  javascript: { accent: '#facc15', iconWrap: 'bg-yellow-500/15 text-yellow-300' },
+  java: { accent: '#fb923c', iconWrap: 'bg-orange-500/15 text-orange-300' },
+  devops: { accent: '#a78bfa', iconWrap: 'bg-violet-500/15 text-violet-300' },
+};
+
+export function categoryLabel(category: LearningCategory): string {
+  return LEARNING_CATEGORY_LABELS[category];
+}
+
+export function categoryTagline(category: LearningCategory): string {
+  return LEARNING_CATEGORY_TAGLINES[category];
+}
 
 export interface LevelTheme {
   /** Chip classes for the level badge. */

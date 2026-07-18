@@ -15,18 +15,28 @@ import {
   Trophy,
   Users,
 } from 'lucide-react';
+import { LEARNING_CATEGORIES } from '@sfcc/shared';
 import { GlassCard, InlineAlert, KpiCard, PageHeader } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/contexts/auth-context';
 import { cn } from '@/utils/cn';
-import { LEVEL_THEMES, formatDate, formatDuration, levelLabel } from './learning-ui';
+import {
+  CATEGORY_THEMES,
+  LEVEL_THEMES,
+  categoryLabel,
+  categoryTagline,
+  formatDate,
+  formatDuration,
+  levelLabel,
+} from './learning-ui';
 import { ProgressRing } from './progress-ring';
 import { useAcademyWorkspace } from './use-academy-workspace';
-import type { LearningCatalogResponse, LearningPathSummary } from './types';
+import type { LearningCategory, LearningCatalogResponse, LearningPathSummary } from './types';
 
 function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
   const { stats, continueTarget } = catalog;
+  const trackCount = new Set(catalog.paths.map((path) => path.category)).size;
   const overall =
     stats.totalLessons + stats.totalModules > 0
       ? Math.round(
@@ -59,12 +69,13 @@ function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
             AI-powered training
           </div>
           <h2 className="mt-2 text-2xl md:text-3xl font-bold">
-            Master Salesforce, from first login to architect
+            Master Salesforce, JavaScript, Java &amp; DevOps — fresher to architect
           </h2>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-            Four guided paths with real-world examples, curated Trailhead resources, an AI mentor
-            for every lesson, and instant quizzes after each module. Every completion and score is
-            captured on your profile.
+            {catalog.paths.length} guided path{catalog.paths.length === 1 ? '' : 's'} across{' '}
+            {trackCount} track{trackCount === 1 ? '' : 's'} — with real-world examples, code, curated
+            resources, an AI mentor for every lesson, and instant quizzes after each module. Every
+            completion and score is captured on your profile.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             {continueHref && continueTarget ? (
@@ -332,22 +343,66 @@ export function AcademyWorkspace() {
 
           <AssignmentRail paths={catalog.paths} />
 
-          <div>
-            <div className="mb-3 flex items-center justify-between">
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-lg font-semibold">Learning paths</h2>
               <p className="text-xs text-muted-foreground">
                 Beginner → Expert · {catalog.stats.totalLessons} lessons ·{' '}
                 {catalog.stats.totalModules} module quizzes
               </p>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              {catalog.paths.map((path) => (
-                <PathCard key={path.id} path={path} />
-              ))}
-            </div>
+            {groupByCategory(catalog.paths).map(({ category, paths }) => (
+              <TrackSection key={category} category={category} paths={paths} />
+            ))}
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function groupByCategory(
+  paths: LearningPathSummary[],
+): Array<{ category: LearningCategory; paths: LearningPathSummary[] }> {
+  return LEARNING_CATEGORIES.map((category) => ({
+    category,
+    paths: paths.filter((path) => path.category === category),
+  })).filter((group) => group.paths.length > 0);
+}
+
+function TrackSection({
+  category,
+  paths,
+}: {
+  category: LearningCategory;
+  paths: LearningPathSummary[];
+}) {
+  const theme = CATEGORY_THEMES[category];
+  const completed = paths.filter((path) => path.completed).length;
+  return (
+    <section>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="inline-block h-4 w-1 rounded-full"
+            style={{ background: theme.accent }}
+          />
+          <div>
+            <h3 className="text-sm font-semibold">{categoryLabel(category)}</h3>
+            <p className="text-[11px] text-muted-foreground">{categoryTagline(category)}</p>
+          </div>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {paths.length} path{paths.length === 1 ? '' : 's'}
+          {completed > 0 ? ` · ${completed} completed` : ''}
+        </span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        {paths.map((path) => (
+          <PathCard key={path.id} path={path} />
+        ))}
+      </div>
+    </section>
   );
 }

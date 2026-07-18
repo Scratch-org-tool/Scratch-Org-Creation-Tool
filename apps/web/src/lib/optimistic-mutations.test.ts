@@ -210,6 +210,7 @@ describe('admin user-access optimistic mutation', () => {
     displayName: 'User One',
     role: 'user',
     grantedModules: [],
+    learningFeatures: [],
     effectiveModules: ['dashboard', 'environment', 'data', 'defects'],
     displayRole: 'Viewer',
     status: 'active',
@@ -232,6 +233,7 @@ describe('admin user-access optimistic mutation', () => {
     const draft: ManageDraft = {
       role: 'admin',
       grantedModules: [],
+      learningFeatures: [],
       status: 'inactive',
     };
     const pending = applyAccessDraft(overview, user.id, draft);

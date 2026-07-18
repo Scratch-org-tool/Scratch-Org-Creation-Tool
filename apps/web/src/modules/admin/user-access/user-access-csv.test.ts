@@ -9,6 +9,7 @@ function row(overrides: Partial<UserAccessRow> = {}): UserAccessRow {
     displayName: 'Ada Lovelace',
     role: 'user',
     grantedModules: [],
+    learningFeatures: [],
     effectiveModules: ['dashboard', 'data'],
     displayRole: 'Viewer',
     status: 'active',

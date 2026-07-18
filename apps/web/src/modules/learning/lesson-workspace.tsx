@@ -84,9 +84,11 @@ function SectionBlock({ section }: { section: LearningLessonSection }) {
 function RealWorldPanel({
   data,
   onWatch,
+  canWatch,
 }: {
   data: LearningLessonResponse['lesson']['realWorld'];
   onWatch: () => void;
+  canWatch: boolean;
 }) {
   return (
     <div className="overflow-hidden rounded-xl border border-amber-400/25">
@@ -95,15 +97,17 @@ function RealWorldPanel({
           <Briefcase className="size-4 text-amber-300" />
           Real-world example: {data.title}
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 gap-1.5 border-amber-400/40 text-xs text-amber-200 hover:bg-amber-500/10"
-          onClick={onWatch}
-        >
-          <PlayCircle className="size-3.5" />
-          Watch animated
-        </Button>
+        {canWatch && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 border-amber-400/40 text-xs text-amber-200 hover:bg-amber-500/10"
+            onClick={onWatch}
+          >
+            <PlayCircle className="size-3.5" />
+            Watch animated
+          </Button>
+        )}
       </div>
       <div className="space-y-3 p-4 text-sm leading-relaxed">
         <div>
@@ -179,8 +183,11 @@ export function LessonWorkspace() {
       }
       if (view.nextLessonId) {
         router.push(`/learning/lessons/${view.nextLessonId}`);
-      } else {
+      } else if (view.features.quiz) {
         router.push(`/learning/modules/${view.moduleId}/quiz`);
+      } else {
+        // No quiz access — the module ends at reading; return to the path.
+        router.push(`/learning/paths/${view.pathId}`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save your progress');
@@ -235,7 +242,12 @@ export function LessonWorkspace() {
             </div>
           )}
 
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div
+            className={cn(
+              'grid gap-5',
+              view.features.mentor && 'lg:grid-cols-[minmax(0,1fr)_340px]',
+            )}
+          >
             <article className="min-w-0 space-y-6">
               <header>
                 <h1 className="text-2xl font-bold">{view.lesson.title}</h1>
@@ -246,45 +258,47 @@ export function LessonWorkspace() {
                 </p>
               </header>
 
-              {/* Read | Video session switch */}
-              <div
-                role="tablist"
-                aria-label="Lesson format"
-                className="inline-flex rounded-lg border border-border/60 bg-secondary/20 p-1"
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'read'}
-                  onClick={() => setMode('read')}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                    mode === 'read'
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
+              {/* Read | Video session switch — video is an admin-gated capability */}
+              {view.features.video && (
+                <div
+                  role="tablist"
+                  aria-label="Lesson format"
+                  className="inline-flex rounded-lg border border-border/60 bg-secondary/20 p-1"
                 >
-                  <BookOpen className="size-3.5" />
-                  Read the lesson
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'video'}
-                  onClick={() => setMode('video')}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                    mode === 'video'
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <Clapperboard className="size-3.5" />
-                  Video session
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === 'read'}
+                    onClick={() => setMode('read')}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                      mode === 'read'
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <BookOpen className="size-3.5" />
+                    Read the lesson
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === 'video'}
+                    onClick={() => setMode('video')}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                      mode === 'video'
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <Clapperboard className="size-3.5" />
+                    Video session
+                  </button>
+                </div>
+              )}
 
-              {mode === 'video' ? (
+              {mode === 'video' && view.features.video ? (
                 <VideoSessionBlock
                   lessonId={view.lesson.id}
                   onPlayAnimated={() => playStory('lesson')}
@@ -315,6 +329,7 @@ export function LessonWorkspace() {
                   <RealWorldPanel
                     data={view.lesson.realWorld}
                     onWatch={() => playStory('real-world')}
+                    canWatch={view.features.mentor}
                   />
 
                   <div className="rounded-xl border border-border/60 bg-card/60 p-4">
@@ -384,50 +399,65 @@ export function LessonWorkspace() {
                 ) : (
                   <span />
                 )}
-                <Button
-                  onClick={() => void markCompleteAndContinue()}
-                  loading={completing}
-                  className="gap-1.5"
-                >
-                  {view.completed ? (
-                    view.quizNext ? (
-                      <>
-                        <FileQuestion className="size-4" />
-                        Go to module quiz
-                      </>
-                    ) : (
-                      <>
-                        Next lesson
-                        <ArrowRight className="size-4" />
-                      </>
-                    )
-                  ) : view.quizNext ? (
-                    <>
-                      <CheckCircle2 className="size-4" />
-                      Mark complete &amp; take the quiz
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="size-4" />
-                      Mark complete &amp; continue
-                    </>
-                  )}
-                </Button>
+                {(() => {
+                  // The quiz step only exists when the learner is granted quizzes.
+                  const quizStep = view.quizNext && view.features.quiz;
+                  return (
+                    <Button
+                      onClick={() => void markCompleteAndContinue()}
+                      loading={completing}
+                      className="gap-1.5"
+                    >
+                      {view.completed ? (
+                        quizStep ? (
+                          <>
+                            <FileQuestion className="size-4" />
+                            Go to module quiz
+                          </>
+                        ) : view.nextLessonId ? (
+                          <>
+                            Next lesson
+                            <ArrowRight className="size-4" />
+                          </>
+                        ) : (
+                          <>
+                            Back to path
+                            <ArrowRight className="size-4" />
+                          </>
+                        )
+                      ) : quizStep ? (
+                        <>
+                          <CheckCircle2 className="size-4" />
+                          Mark complete &amp; take the quiz
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="size-4" />
+                          Mark complete{view.nextLessonId ? ' & continue' : ''}
+                        </>
+                      )}
+                    </Button>
+                  );
+                })()}
               </footer>
             </article>
 
-            <aside className="lg:sticky lg:top-6 h-fit">
-              <MentorPanel
-                lessonId={view.lesson.id}
-                contextKey={view.lesson.id}
-                realWorldTitle={view.lesson.realWorld.title}
-                onPlayStory={playStory}
-                className="lg:max-h-[calc(100vh-6rem)] min-h-[420px]"
-              />
-            </aside>
+            {view.features.mentor && (
+              <aside className="lg:sticky lg:top-6 h-fit">
+                <MentorPanel
+                  lessonId={view.lesson.id}
+                  contextKey={view.lesson.id}
+                  realWorldTitle={view.lesson.realWorld.title}
+                  onPlayStory={playStory}
+                  className="lg:max-h-[calc(100vh-6rem)] min-h-[420px]"
+                />
+              </aside>
+            )}
           </div>
 
-          <ExplainerDialog request={explainerRequest} onClose={() => setExplainerRequest(null)} />
+          {view.features.mentor && (
+            <ExplainerDialog request={explainerRequest} onClose={() => setExplainerRequest(null)} />
+          )}
         </>
       )}
     </div>

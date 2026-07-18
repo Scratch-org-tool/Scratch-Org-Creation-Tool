@@ -24,6 +24,7 @@ export interface UserAccessRow {
   displayName: string;
   role: 'admin' | 'user';
   grantedModules: AppModule[];
+  learningFeatures: string[];
   effectiveModules: AppModule[];
   displayRole: string;
   status: 'active' | 'inactive';
@@ -41,5 +42,7 @@ export interface UserAccessOverview {
 export interface ManageDraft {
   role: 'admin' | 'user';
   grantedModules: AppModule[];
+  /** Granular Salesforce Academy grants (`category:*` / `capability:*`). */
+  learningFeatures: string[];
   status: 'active' | 'inactive';
 }

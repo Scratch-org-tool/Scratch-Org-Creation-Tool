@@ -9,7 +9,20 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Switch } from '@/components/ui/switch';
-import { LOCKED_MODULES, MODULE_LABELS, type AppModule } from '@/lib/auth-utils';
+import {
+  DEFAULT_LEARNING_FEATURES,
+  LEARNING_CAPABILITIES,
+  LEARNING_CAPABILITY_DESCRIPTIONS,
+  LEARNING_CAPABILITY_LABELS,
+  LEARNING_CATEGORIES,
+  LEARNING_CATEGORY_LABELS,
+  LEARNING_CATEGORY_TAGLINES,
+  LOCKED_MODULES,
+  MODULE_LABELS,
+  capabilityFeature,
+  categoryFeature,
+  type AppModule,
+} from '@/lib/auth-utils';
 import { cn } from '@/utils/cn';
 import type { ManageDraft, UserAccessRow } from './types';
 
@@ -21,6 +34,7 @@ interface UserAccessManageDrawerProps {
   onClose: () => void;
   onDraftChange: (draft: ManageDraft) => void;
   onToggleModule: (module: AppModule) => void;
+  onToggleLearningFeature: (feature: string) => void;
   onSave: () => void;
   isSelf: boolean;
 }
@@ -33,9 +47,16 @@ export function UserAccessManageDrawer({
   onClose,
   onDraftChange,
   onToggleModule,
+  onToggleLearningFeature,
   onSave,
   isSelf,
 }: UserAccessManageDrawerProps) {
+  const learningGranted = Boolean(draft?.grantedModules.includes('learning'));
+  // Effective selection: explicit grants win; empty falls back to the baseline
+  // so the checkboxes reflect exactly what the learner can currently access.
+  const effectiveFeatures =
+    draft && draft.learningFeatures.length > 0 ? draft.learningFeatures : DEFAULT_LEARNING_FEATURES;
+  const hasFeature = (feature: string) => effectiveFeatures.includes(feature);
   return (
     <Sheet open={Boolean(user && draft)} onOpenChange={(open) => !open && !saving && onClose()}>
       {user && draft && (
@@ -113,9 +134,82 @@ export function UserAccessManageDrawer({
             </div>
           )}
 
+          {draft.role !== 'admin' && learningGranted && (
+            <div>
+              <div className="mb-2">
+                <p className="text-sm font-medium">Salesforce Academy features</p>
+                <p className="text-xs text-muted-foreground">
+                  Grant training tracks and capabilities one at a time. Anything left off is hidden
+                  from this learner entirely. Turn off the Salesforce Academy module above to remove
+                  all access.
+                </p>
+              </div>
+
+              <p className="mt-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Training tracks
+              </p>
+              <div className="space-y-2">
+                {LEARNING_CATEGORIES.map((category) => {
+                  const feature = categoryFeature(category);
+                  return (
+                    <label
+                      key={feature}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-sm cursor-pointer hover:bg-secondary/30"
+                    >
+                      <span className="min-w-0">
+                        <span className="block font-medium">{LEARNING_CATEGORY_LABELS[category]}</span>
+                        <span className="block text-[11px] text-muted-foreground">
+                          {LEARNING_CATEGORY_TAGLINES[category]}
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={hasFeature(feature)}
+                        disabled={saving}
+                        onChange={() => onToggleLearningFeature(feature)}
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+
+              <p className="mt-4 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Capabilities
+              </p>
+              <div className="space-y-2">
+                {LEARNING_CAPABILITIES.map((capability) => {
+                  const feature = capabilityFeature(capability);
+                  return (
+                    <label
+                      key={feature}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-sm cursor-pointer hover:bg-secondary/30"
+                    >
+                      <span className="min-w-0">
+                        <span className="block font-medium">
+                          {LEARNING_CAPABILITY_LABELS[capability]}
+                        </span>
+                        <span className="block text-[11px] text-muted-foreground">
+                          {LEARNING_CAPABILITY_DESCRIPTIONS[capability]}
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={hasFeature(feature)}
+                        disabled={saving}
+                        onChange={() => onToggleLearningFeature(feature)}
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {draft.role === 'admin' && (
             <p className="text-xs text-muted-foreground">
-              Admins have access to all modules automatically.
+              Admins have access to all modules and Academy features automatically.
             </p>
           )}
         </div>

@@ -9,7 +9,7 @@ import {
   hasFreshSessionCache,
   setSessionCache,
 } from '@/lib/session-cache';
-import type { AppModule } from '@sfcc/shared';
+import { DEFAULT_LEARNING_FEATURES, type AppModule } from '@sfcc/shared';
 import type {
   ManageDraft,
   UserAccessOverview,
@@ -126,6 +126,7 @@ export function useUserAccessWorkspace() {
     setDraft({
       role: user.role,
       grantedModules: [...user.grantedModules],
+      learningFeatures: [...(user.learningFeatures ?? [])],
       status: user.status,
     });
   };
@@ -142,6 +143,23 @@ export function useUserAccessWorkspace() {
         ? d.grantedModules.filter((m) => m !== module)
         : [...d.grantedModules, module];
       return { ...d, grantedModules: next };
+    });
+  };
+
+  /**
+   * Toggle one Academy feature. When the user has no explicit grants yet, we
+   * materialise the default baseline first so the checkbox state the admin sees
+   * (the effective access) is exactly what gets saved.
+   */
+  const toggleDraftLearningFeature = (feature: string) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const effective =
+        d.learningFeatures.length > 0 ? d.learningFeatures : [...DEFAULT_LEARNING_FEATURES];
+      const next = effective.includes(feature)
+        ? effective.filter((f) => f !== feature)
+        : [...effective, feature];
+      return { ...d, learningFeatures: next };
     });
   };
 
@@ -172,6 +190,7 @@ export function useUserAccessWorkspace() {
         body: JSON.stringify({
           role: data.role,
           grantedModules: data.grantedModules,
+          learningFeatures: data.learningFeatures,
           status: data.status,
         }),
       });
@@ -239,6 +258,7 @@ export function useUserAccessWorkspace() {
     openManage,
     closeManage,
     toggleDraftModule,
+    toggleDraftLearningFeature,
     saveManage,
     pendingRole,
     setPendingRole,
