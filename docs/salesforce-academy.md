@@ -19,16 +19,20 @@ every lesson, an instant quiz after every module, and full progress visibility f
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
 - **AI Mentor** — a two-mode studio on every lesson page, grounded in that lesson's content:
-  - **Story mode (visual + voice)** — the mentor directs an animated, scene-by-scene explainer:
-    the LLM scripts a storyboard (narration + diagram spec per scene) which the app renders as
-    animated graphics (flows, comparisons, timelines, stacks, callouts) with **spoken narration**
-    via the browser's speech engine and always-on captions. One-click stories exist for the whole
-    lesson and for the real-world scenario ("Watch animated"), plus a free-form "explain anything
-    visually" prompt. Player controls: play/pause, scene scrubbing, voice on/off, narration speed.
+  - **Story mode (generated visuals + directed voice)** — NVIDIA scripts a five-scene,
+    concept-first learning film: curiosity hook → mental model → cause/effect → boundary or
+    misconception → memorable compression. A learner can play the lesson, apply it to the curated
+    case, or turn any lesson-grounded question into a narrated visual answer. When Google Gemini
+    media is configured, each scene gets premium 16:9 concept art and natural generated narration
+    with six selectable teaching voices. The player adds cinematic motion, concept overlays,
+    optional captions, speed controls, and scene navigation. Generated media falls back
+    independently to animated diagrams and the browser's installed voices, so one provider outage
+    never breaks the story.
   - **Chat mode** — the classic Q&A tutor with real-world examples and follow-up suggestions;
     every reply has a "Listen" button for voice playback.
-  Powered by the same NVIDIA LLM integration as the platform copilot; storyboards fall back to a
-  deterministic lesson-derived script when AI is unavailable, so story mode always works.
+  Story scripts use the same NVIDIA integration as the platform copilot; generated scene media uses
+  a separate server-side Google Gemini API key. Storyboards fall back to a question-aware,
+  lesson-derived script when NVIDIA is unavailable.
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
   (with a 130-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
@@ -78,7 +82,9 @@ All routes require authentication and the `learning` module (admins always have 
 | GET | `/api/learning/modules/:moduleId/attempts` | The user's attempt history for a module |
 | POST | `/api/learning/quiz/:attemptId/submit` | Score an attempt server-side; returns full review |
 | POST | `/api/learning/tutor` | Ask the AI mentor (lesson-grounded) |
-| POST | `/api/learning/tutor/explainer` | AI-scripted animated storyboard (`{lessonId, focus?, question?}`) |
+| POST | `/api/learning/tutor/explainer` | Concept-first storyboard (`{lessonId, focus?, question?}`) + media capabilities |
+| POST | `/api/learning/tutor/explainer/image` | Generate/cache one scene image (`{...storyRequest, sceneId}`); 204 activates diagram fallback |
+| POST | `/api/learning/tutor/explainer/speech` | Generate/cache one scene narration (`{...storyRequest, sceneId, voice}`); 204 activates browser voice |
 | GET | `/api/learning/admin/overview` | Admin: team progress report |
 | GET | `/api/learning/admin/learners/:userId` | Admin: one learner's full path breakdown |
 | POST | `/api/learning/admin/assignments` | Admin: assign paths to users (`{userIds, pathIds, note?, dueAt?}`) |
@@ -98,29 +104,44 @@ All routes require authentication and the `learning` module (admins always have 
 
 ## AI configuration
 
-The Academy reuses the platform's NVIDIA NIM integration (`NVIDIA_API_KEY` etc. in `apps/api/.env`).
+The Academy uses NVIDIA NIM for grounded writing and optionally Google Gemini for generated image
+and speech media. Google credentials stay on the API server. A Firebase web API key is an app
+identifier and **must not** be treated as the Gemini server credential.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LEARNING_QUIZ_AI_TIMEOUT_MS` | `25000` | Budget for AI quiz generation before static fallback |
 | `LEARNING_TUTOR_TIMEOUT_MS` | `30000` | Budget for AI mentor answers |
 | `LEARNING_EXPLAINER_TIMEOUT_MS` | `30000` | Budget for AI storyboard scripting before static fallback |
+| `GOOGLE_GENAI_API_KEY` | — | Server-side Google AI Studio key; `GEMINI_API_KEY` and `GOOGLE_API_KEY` are accepted aliases |
+| `GOOGLE_IMAGE_MODEL` | `gemini-3.1-flash-image` | Gemini model for 16:9 scene art |
+| `GOOGLE_TTS_MODEL` | `gemini-3.1-flash-tts-preview` | Gemini model for selectable studio narration |
+| `GOOGLE_MEDIA_TIMEOUT_MS` | `45000` | Per-scene image/speech generation budget |
+| `GOOGLE_IMAGE_GENERATION_ENABLED` | `true` | Set `false` to force animated-diagram visuals |
+| `GOOGLE_TTS_ENABLED` | `true` | Set `false` to force browser narration |
 
-Without a valid key everything still works: quizzes serve the curated bank, the mentor returns
-the platform's dev-mode response, and visual stories use the lesson-derived static storyboard.
+Without a valid NVIDIA key, quizzes serve the curated bank and stories use the deterministic
+lesson-derived script. Without a Google key, stories keep their animated concept diagrams and let
+learners choose among voices installed by their browser/operating system.
 
 ### Visual story pipeline
 
-1. `POST /learning/tutor/explainer` asks the LLM for a JSON storyboard (4–6 scenes; each scene =
-   spoken narration + a diagram spec choosing from `flow | compare | stack | timeline | callout |
-   grid` with icon/accent whitelists).
-2. The response is passed through `sanitizeStoryboard` (`@sfcc/shared`): unknown icons/kinds/
-   accents fall back to safe defaults, strings are length-clamped, and boards with fewer than 3
-   usable scenes are rejected in favor of the static lesson-derived storyboard.
-3. Storyboards are cached in-process per lesson/focus/question for 6 hours.
-4. The web player renders scenes with framer-motion and narrates them with the browser's
-   SpeechSynthesis API (no audio ever leaves the machine); when voice is off or unsupported,
-   scenes auto-advance on a reading-time estimate.
+1. `POST /learning/tutor/explainer` gives NVIDIA the full lesson grounding and requests a strict
+   JSON storyboard. Every scene contains spoken-only narration, delivery direction, cinematic
+   visual direction, and a safe diagram spec (`flow | compare | stack | timeline | callout | grid`).
+   Concept stories do not force a generic business example; the separate case-story action does.
+2. `sanitizeStoryboard` (`@sfcc/shared`) clamps all generated text and whitelists deliveries,
+   icons, accents, and visual kinds. Thin/malformed output is replaced with a deterministic
+   concept arc. A custom question is preserved in this fallback instead of silently replaying the
+   generic lesson.
+3. The browser requests only the active scene's image/audio. The API reconstructs the scene prompt
+   from the trusted storyboard, calls Google server-side, validates media types/sizes, and caches
+   successful output for six hours. It preloads the next image after the active one.
+4. Google image failure reveals the animated diagram already under the scene. Google TTS failure
+   switches to the selected local `SpeechSynthesis` voice; if speech is unavailable, captions and
+   reading-time auto-advance remain functional.
+5. The player never asks generated art to reproduce Salesforce UI or render explanatory text.
+   Accurate labels stay in application-owned overlays, and the lesson remains the source of truth.
 
 ## Web routes
 

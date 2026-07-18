@@ -2,9 +2,9 @@ import { z } from 'zod';
 
 /**
  * Visual explainer ("story mode") contracts for the Salesforce Academy AI
- * mentor. The LLM scripts a storyboard — scenes with narration and a diagram
- * spec — which the web app renders as animated graphics with voice narration
- * (browser speech synthesis).
+ * mentor. The LLM scripts a storyboard — scenes with narration, cinematic
+ * direction, and a diagram spec. The web app can combine Google-generated
+ * scene art and narration with deterministic animated-diagram fallbacks.
  *
  * Everything an LLM produces is sanitized through `sanitizeStoryboard` before
  * it is served: unknown icons/kinds/accents fall back to safe defaults and all
@@ -105,6 +105,35 @@ export const EXPLAINER_MAX_ITEMS = 6;
 export const EXPLAINER_NARRATION_MAX = 520;
 export const EXPLAINER_LABEL_MAX = 48;
 export const EXPLAINER_SUBLABEL_MAX = 72;
+export const EXPLAINER_VISUAL_DESCRIPTION_MAX = 700;
+
+export const EXPLAINER_DELIVERIES = ['curious', 'clear', 'energetic', 'reflective'] as const;
+export type ExplainerDelivery = (typeof EXPLAINER_DELIVERIES)[number];
+
+/** Curated Gemini TTS voices whose delivery works well for teaching. */
+export const EXPLAINER_CLOUD_VOICES = [
+  'Sulafat',
+  'Sadaltager',
+  'Charon',
+  'Aoede',
+  'Puck',
+  'Kore',
+] as const;
+export type ExplainerCloudVoice = (typeof EXPLAINER_CLOUD_VOICES)[number];
+export const DEFAULT_EXPLAINER_CLOUD_VOICE: ExplainerCloudVoice = 'Sulafat';
+
+export const EXPLAINER_CLOUD_VOICE_OPTIONS: ReadonlyArray<{
+  id: ExplainerCloudVoice;
+  label: string;
+  tone: string;
+}> = [
+  { id: 'Sulafat', label: 'Sulafat', tone: 'Warm' },
+  { id: 'Sadaltager', label: 'Sadaltager', tone: 'Knowledgeable' },
+  { id: 'Charon', label: 'Charon', tone: 'Informative' },
+  { id: 'Aoede', label: 'Aoede', tone: 'Breezy' },
+  { id: 'Puck', label: 'Puck', tone: 'Upbeat' },
+  { id: 'Kore', label: 'Kore', tone: 'Firm' },
+];
 
 export interface ExplainerVisualItem {
   label: string;
@@ -127,7 +156,18 @@ export interface ExplainerScene {
   title: string;
   /** Spoken (and captioned) teaching narration for this scene. */
   narration: string;
+  /** Controls the narrator's emotion without putting stage directions on screen. */
+  delivery: ExplainerDelivery;
+  /** Concrete art direction used to generate a coherent 16:9 scene image. */
+  visualDescription: string;
   visual: ExplainerVisual;
+}
+
+export interface ExplainerMediaCapabilities {
+  /** Google image generation is configured; the diagram remains the fallback. */
+  generatedImages: boolean;
+  /** Google narrated audio is configured; browser speech remains the fallback. */
+  generatedSpeech: boolean;
 }
 
 export interface ExplainerStoryboard {
@@ -136,6 +176,7 @@ export interface ExplainerStoryboard {
   title: string;
   /** 'ai' when scripted by the LLM, 'static' when derived from lesson content. */
   source: 'ai' | 'static';
+  media: ExplainerMediaCapabilities;
   scenes: ExplainerScene[];
 }
 
@@ -150,6 +191,18 @@ export const learningExplainerRequestSchema = z.object({
 });
 export type LearningExplainerRequest = z.infer<typeof learningExplainerRequestSchema>;
 
+const learningExplainerSceneRequestSchema = learningExplainerRequestSchema.extend({
+  sceneId: z.string().regex(/^scene-[1-8]$/),
+});
+
+export const learningExplainerImageRequestSchema = learningExplainerSceneRequestSchema;
+export type LearningExplainerImageRequest = z.infer<typeof learningExplainerImageRequestSchema>;
+
+export const learningExplainerSpeechRequestSchema = learningExplainerSceneRequestSchema.extend({
+  voice: z.enum(EXPLAINER_CLOUD_VOICES).default(DEFAULT_EXPLAINER_CLOUD_VOICE),
+});
+export type LearningExplainerSpeechRequest = z.infer<typeof learningExplainerSpeechRequestSchema>;
+
 /* ------------------------------------------------------------------ */
 /* Sanitizing (LLM output → guaranteed-renderable storyboard)          */
 /* ------------------------------------------------------------------ */
@@ -157,6 +210,7 @@ export type LearningExplainerRequest = z.infer<typeof learningExplainerRequestSc
 const ICON_SET = new Set<string>(EXPLAINER_ICONS);
 const KIND_SET = new Set<string>(EXPLAINER_VISUAL_KINDS);
 const ACCENT_SET = new Set<string>(EXPLAINER_ACCENTS);
+const DELIVERY_SET = new Set<string>(EXPLAINER_DELIVERIES);
 
 function clampText(value: unknown, max: number): string {
   if (typeof value !== 'string') return '';
@@ -242,10 +296,23 @@ function sanitizeScene(raw: unknown, index: number): ExplainerScene | null {
   if (narration.length < 20) return null;
   const visual = sanitizeVisual(obj.visual);
   if (!visual) return null;
+  const title = clampText(obj.title, EXPLAINER_LABEL_MAX + 20) || `Step ${index + 1}`;
+  const delivery =
+    typeof obj.delivery === 'string' && DELIVERY_SET.has(obj.delivery.trim().toLowerCase())
+      ? (obj.delivery.trim().toLowerCase() as ExplainerDelivery)
+      : 'clear';
+  const visualDescription =
+    clampText(obj.visualDescription, EXPLAINER_VISUAL_DESCRIPTION_MAX) ||
+    clampText(
+      `${title}. Show ${visual.items.map((item) => item.label).join(', ')} as one clear visual composition.`,
+      EXPLAINER_VISUAL_DESCRIPTION_MAX,
+    );
   return {
     id: `scene-${index + 1}`,
-    title: clampText(obj.title, EXPLAINER_LABEL_MAX + 20) || `Step ${index + 1}`,
+    title,
     narration,
+    delivery,
+    visualDescription,
     visual,
   };
 }
@@ -277,6 +344,10 @@ export function sanitizeStoryboard(
     lessonId,
     title: clampText(obj.title, 90) || 'Visual explainer',
     source,
+    media: {
+      generatedImages: false,
+      generatedSpeech: false,
+    },
     scenes,
   };
 }

@@ -4,6 +4,7 @@ vi.mock('@sfcc/db', () => ({ prisma: {} }));
 
 import { EXPLAINER_MIN_SCENES, sanitizeStoryboard } from '@sfcc/shared';
 import type { NvidiaService } from '../../integrations/nvidia/nvidia.service';
+import type { GoogleGenerativeMediaService } from '../../integrations/google/google-generative-media.service';
 import { CURRICULUM, getLesson } from './curriculum';
 import {
   LearningExplainerService,
@@ -52,19 +53,42 @@ describe('buildStaticStoryboard', () => {
     const location = getLesson('foundations-what-is-salesforce')!;
     const board = buildStaticStoryboard(location, 'real-world');
     const titles = board.scenes.map((scene) => scene.title);
-    expect(titles).toContain('The problem');
-    expect(titles).toContain('The solution');
-    expect(titles).toContain('The outcome');
+    expect(titles).toContain('Feel the friction');
+    expect(titles).toContain('Watch the turning point');
+    expect(titles).toContain('See what changed');
+  });
+
+  it('keeps a custom visual answer question-aware without forcing a case study', () => {
+    const location = getLesson('dev-governor-limits')!;
+    const board = buildStaticStoryboard(
+      location,
+      'lesson',
+      'Why do governor limits exist?',
+    );
+    expect(board.title).toContain('Why do governor limits exist?');
+    expect(board.scenes[0]!.narration).toContain('Why do governor limits exist?');
+    expect(board.scenes.map((scene) => scene.title)).not.toContain('Meet the challenge');
   });
 });
 
 describe('LearningExplainerService', () => {
   const nvidia = { chat: vi.fn() };
+  const googleMedia = {
+    isImageConfigured: vi.fn().mockReturnValue(false),
+    isSpeechConfigured: vi.fn().mockReturnValue(false),
+    generateImage: vi.fn(),
+    generateSpeech: vi.fn(),
+  };
   let service: LearningExplainerService;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new LearningExplainerService(nvidia as unknown as NvidiaService);
+    googleMedia.isImageConfigured.mockReturnValue(false);
+    googleMedia.isSpeechConfigured.mockReturnValue(false);
+    service = new LearningExplainerService(
+      nvidia as unknown as NvidiaService,
+      googleMedia as unknown as GoogleGenerativeMediaService,
+    );
   });
 
   it('falls back to the static storyboard when AI is unavailable', async () => {
@@ -72,6 +96,7 @@ describe('LearningExplainerService', () => {
     const board = await service.getStoryboard({ lessonId: 'foundations-what-is-salesforce' });
     expect(board.source).toBe('static');
     expect(board.scenes.length).toBeGreaterThanOrEqual(EXPLAINER_MIN_SCENES);
+    expect(board.media).toEqual({ generatedImages: false, generatedSpeech: false });
   });
 
   it('uses the AI storyboard when the model returns valid JSON', async () => {
@@ -116,5 +141,48 @@ describe('LearningExplainerService', () => {
 
   it('404s for unknown lessons', async () => {
     await expect(service.getStoryboard({ lessonId: 'ghost' })).rejects.toThrow('Lesson not found');
+  });
+
+  it('generates and caches Google scene imagery only when configured', async () => {
+    googleMedia.isImageConfigured.mockReturnValue(true);
+    const generated = { buffer: Buffer.from('image'), contentType: 'image/png' };
+    googleMedia.generateImage.mockResolvedValue(generated);
+    nvidia.chat.mockResolvedValue({ content: 'nope', model: 'dev-mock' });
+    const request = {
+      lessonId: 'foundations-what-is-salesforce',
+      sceneId: 'scene-1',
+    };
+
+    await expect(service.getSceneImage(request)).resolves.toBe(generated);
+    await expect(service.getSceneImage(request)).resolves.toBe(generated);
+    expect(googleMedia.generateImage).toHaveBeenCalledTimes(1);
+    expect(googleMedia.generateImage.mock.calls[0]![0]).toContain('premium 16:9');
+  });
+
+  it('generates selected-voice narration and rejects missing scenes', async () => {
+    googleMedia.isSpeechConfigured.mockReturnValue(true);
+    const generated = { buffer: Buffer.from('audio'), contentType: 'audio/wav' };
+    googleMedia.generateSpeech.mockResolvedValue(generated);
+    nvidia.chat.mockResolvedValue({ content: 'nope', model: 'dev-mock' });
+
+    await expect(
+      service.getSceneSpeech({
+        lessonId: 'foundations-what-is-salesforce',
+        sceneId: 'scene-1',
+        voice: 'Charon',
+      }),
+    ).resolves.toBe(generated);
+    expect(googleMedia.generateSpeech).toHaveBeenCalledWith(
+      expect.any(String),
+      'Charon',
+      expect.any(String),
+    );
+    await expect(
+      service.getSceneSpeech({
+        lessonId: 'foundations-what-is-salesforce',
+        sceneId: 'scene-8',
+        voice: 'Charon',
+      }),
+    ).rejects.toThrow('Explainer scene not found');
   });
 });

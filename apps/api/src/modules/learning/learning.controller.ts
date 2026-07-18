@@ -6,14 +6,18 @@ import {
   Get,
   Param,
   Post,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
   learningAssignmentCreateSchema,
+  learningExplainerImageRequestSchema,
   learningExplainerRequestSchema,
+  learningExplainerSpeechRequestSchema,
   learningQuizSubmitSchema,
   learningTutorAskSchema,
 } from '@sfcc/shared';
+import type { Response } from 'express';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
@@ -98,6 +102,42 @@ export class LearningController {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
     return this.explainerService.getStoryboard(parsed.data);
+  }
+
+  /** Google-generated 16:9 art for one storyboard scene; 204 means use the diagram fallback. */
+  @Post('tutor/explainer/image')
+  async getExplainerImage(@Body() body: unknown, @Res() response: Response) {
+    const parsed = learningExplainerImageRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.flatten().fieldErrors);
+    }
+    const media = await this.explainerService.getSceneImage(parsed.data);
+    if (!media) {
+      response.status(204).end();
+      return;
+    }
+    response.setHeader('Content-Type', media.contentType);
+    response.setHeader('Content-Disposition', 'inline; filename="academy-scene"');
+    response.setHeader('Cache-Control', 'private, max-age=21600');
+    response.send(media.buffer);
+  }
+
+  /** Selectable Gemini TTS narration for one scene; 204 means use browser speech. */
+  @Post('tutor/explainer/speech')
+  async getExplainerSpeech(@Body() body: unknown, @Res() response: Response) {
+    const parsed = learningExplainerSpeechRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.flatten().fieldErrors);
+    }
+    const media = await this.explainerService.getSceneSpeech(parsed.data);
+    if (!media) {
+      response.status(204).end();
+      return;
+    }
+    response.setHeader('Content-Type', media.contentType);
+    response.setHeader('Content-Disposition', 'inline; filename="academy-narration.wav"');
+    response.setHeader('Cache-Control', 'private, max-age=21600');
+    response.send(media.buffer);
   }
 
   /* -------------------------- admin endpoints -------------------------- */

@@ -4,7 +4,9 @@ import {
   EXPLAINER_MAX_ITEMS,
   EXPLAINER_MAX_SCENES,
   estimateNarrationMs,
+  learningExplainerImageRequestSchema,
   learningExplainerRequestSchema,
+  learningExplainerSpeechRequestSchema,
   sanitizeExplainerAccent,
   sanitizeExplainerIcon,
   sanitizeStoryboard,
@@ -48,6 +50,9 @@ describe('sanitizeStoryboard', () => {
     assert.equal(board.source, 'ai');
     assert.equal(board.scenes[0].id, 'scene-1');
     assert.equal(board.scenes[0].visual.items.length, 3);
+    assert.equal(board.scenes[0].delivery, 'clear');
+    assert.match(board.scenes[0].visualDescription, /Scene 1/);
+    assert.deepEqual(board.media, { generatedImages: false, generatedSpeech: false });
   });
 
   it('rejects boards with fewer than 3 usable scenes', () => {
@@ -154,6 +159,28 @@ describe('sanitizeStoryboard', () => {
     assert.equal(compare.items[0].side, 'left');
     assert.equal(compare.items[1].side, 'right');
   });
+
+  it('sanitizes cinematic direction and narrator delivery', () => {
+    const board = sanitizeStoryboard(
+      {
+        scenes: [
+          {
+            ...validScene(1),
+            delivery: 'CURIOUS',
+            visualDescription: 'A glowing cloud opens to reveal carefully isolated customer records.',
+          },
+          { ...validScene(2), delivery: 'operatic', visualDescription: 'x'.repeat(1000) },
+          validScene(3),
+        ],
+      },
+      'lesson-1',
+      'ai',
+    );
+    assert.ok(board);
+    assert.equal(board.scenes[0].delivery, 'curious');
+    assert.equal(board.scenes[1].delivery, 'clear');
+    assert.ok(board.scenes[1].visualDescription.length <= 700);
+  });
 });
 
 describe('learningExplainerRequestSchema', () => {
@@ -173,6 +200,33 @@ describe('learningExplainerRequestSchema', () => {
     assert.equal(learningExplainerRequestSchema.safeParse({ lessonId: '' }).success, false);
     assert.equal(
       learningExplainerRequestSchema.safeParse({ lessonId: 'x', focus: 'cinematic' }).success,
+      false,
+    );
+    assert.equal(
+      learningExplainerImageRequestSchema.safeParse({
+        lessonId: 'x',
+        sceneId: 'scene-2',
+      }).success,
+      true,
+    );
+    assert.equal(
+      learningExplainerImageRequestSchema.safeParse({
+        lessonId: 'x',
+        sceneId: '../scene-2',
+      }).success,
+      false,
+    );
+    const speech = learningExplainerSpeechRequestSchema.parse({
+      lessonId: 'x',
+      sceneId: 'scene-1',
+    });
+    assert.equal(speech.voice, 'Sulafat');
+    assert.equal(
+      learningExplainerSpeechRequestSchema.safeParse({
+        lessonId: 'x',
+        sceneId: 'scene-1',
+        voice: 'Unknown',
+      }).success,
       false,
     );
   });
