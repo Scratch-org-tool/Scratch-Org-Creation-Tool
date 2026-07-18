@@ -89,6 +89,18 @@ describe('buildStaticStoryboard', () => {
     expect(board.scenes[0]!.narration).toContain('Why do governor limits exist?');
     expect(board.scenes.map((scene) => scene.title)).not.toContain('Meet the challenge');
   });
+
+  it('teaches the concept through the lesson’s real-world story so it lands on one listen', () => {
+    const location = getLesson('foundations-what-is-salesforce')!;
+    const board = buildStaticStoryboard(location, 'lesson');
+    const { realWorld } = location.lesson;
+    expect(board.scenes[0]!.narration).toContain('picture the story');
+    // Scenario, solution, and outcome from the curriculum case all narrate.
+    expect(board.scenes[0]!.narration).toContain(realWorld.scenario.slice(0, 40));
+    const solutionScene = board.scenes.find((scene) => scene.title === 'Watch it work in the story');
+    expect(solutionScene?.narration).toContain(realWorld.solution.slice(0, 40));
+    expect(board.scenes.at(-1)!.narration).toContain('And the payoff?');
+  });
 });
 
 describe('LearningExplainerService', () => {
@@ -229,6 +241,28 @@ describe('LearningExplainerService', () => {
     await expect(service.getSceneVideo(request)).resolves.toBe(generated);
     expect(media.generateVideo).toHaveBeenCalledTimes(1);
     expect(media.generateVideo.mock.calls[0]![0]).toContain('camera push-in');
+    // No image tier → image-to-video backends receive no base frame.
+    expect(media.generateVideo.mock.calls[0]![2]).toBeNull();
+  });
+
+  it('feeds the cached scene image into image-to-video generation', async () => {
+    media.isVideoConfigured.mockReturnValue(true);
+    media.isImageConfigured.mockReturnValue(true);
+    const still = { buffer: Buffer.from('still'), contentType: 'image/png' };
+    const clip = { buffer: Buffer.from('clip'), contentType: 'video/mp4' };
+    media.generateImage.mockResolvedValue(still);
+    media.generateVideo.mockResolvedValue(clip);
+    nvidia.chat.mockResolvedValue({ content: 'nope', model: 'dev-mock' });
+
+    await expect(
+      service.getSceneVideo({ lessonId: 'foundations-what-is-salesforce', sceneId: 'scene-1' }),
+    ).resolves.toBe(clip);
+    expect(media.generateImage).toHaveBeenCalledTimes(1);
+    expect(media.generateVideo).toHaveBeenCalledWith(
+      expect.stringContaining('camera push-in'),
+      expect.any(String),
+      still,
+    );
   });
 
   it('generates selected VibeVoice narration and rejects missing scenes', async () => {

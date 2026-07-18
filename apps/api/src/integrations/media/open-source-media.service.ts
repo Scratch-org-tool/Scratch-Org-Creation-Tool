@@ -6,6 +6,7 @@ import type {
   ExplainerMediaTierStatus,
   ExplainerStudioVoice,
 } from '@sfcc/shared';
+import { GradioSpaceClient, extractFileRef } from './gradio-space.client';
 
 /**
  * Self-hosted open-source media stack for Academy stories:
@@ -25,6 +26,9 @@ import type {
 const SPEECH_TIMEOUT_MS = 60_000;
 const IMAGE_TIMEOUT_MS = 60_000;
 const VIDEO_TIMEOUT_MS = 180_000;
+const SPACE_SPEECH_TIMEOUT_MS = 300_000;
+const SPACE_IMAGE_TIMEOUT_MS = 120_000;
+const SPACE_VIDEO_TIMEOUT_MS = 480_000;
 const VIDEO_POLL_INTERVAL_MS = 1_500;
 const PROBE_TIMEOUT_MS = 2_500;
 const PROBE_CACHE_TTL_MS = 60_000;
@@ -159,24 +163,45 @@ export class OpenSourceMediaService {
   private readonly probeCache = new Map<string, { reachable: boolean; expires: number }>();
 
   /* ----------------------------- capabilities ----------------------------- */
+  /*
+   * Each tier supports two open-source backends and picks the first configured:
+   *  1. A hosted Hugging Face Space (Gradio API) — zero self-managed infra.
+   *  2. A self-hosted server (VibeVoice server / SD-WebUI / ComfyUI).
+   */
+
+  private speechSpaceUrl(): string {
+    return configuredBaseUrl(process.env.VIBEVOICE_SPACE_URL);
+  }
+
+  private imageSpaceUrl(): string {
+    return configuredBaseUrl(process.env.ZIMAGE_SPACE_URL);
+  }
+
+  private videoSpaceUrl(): string {
+    return configuredBaseUrl(process.env.WAN_VIDEO_SPACE_URL);
+  }
+
+  private spaceClient(base: string): GradioSpaceClient {
+    return new GradioSpaceClient(base, process.env.HF_TOKEN?.trim() || undefined);
+  }
 
   isSpeechConfigured(): boolean {
     return (
-      Boolean(configuredBaseUrl(process.env.VIBEVOICE_BASE_URL)) &&
+      Boolean(this.speechSpaceUrl() || configuredBaseUrl(process.env.VIBEVOICE_BASE_URL)) &&
       process.env.VIBEVOICE_ENABLED !== 'false'
     );
   }
 
   isImageConfigured(): boolean {
     return (
-      Boolean(configuredBaseUrl(process.env.SD_WEBUI_BASE_URL)) &&
+      Boolean(this.imageSpaceUrl() || configuredBaseUrl(process.env.SD_WEBUI_BASE_URL)) &&
       process.env.SD_IMAGE_ENABLED !== 'false'
     );
   }
 
   isVideoConfigured(): boolean {
     return (
-      Boolean(configuredBaseUrl(process.env.COMFYUI_BASE_URL)) &&
+      Boolean(this.videoSpaceUrl() || configuredBaseUrl(process.env.COMFYUI_BASE_URL)) &&
       process.env.COMFYUI_VIDEO_ENABLED !== 'false'
     );
   }
@@ -188,9 +213,21 @@ export class OpenSourceMediaService {
    */
   async getMediaStatus(): Promise<ExplainerMediaStatus> {
     const [video, images, speech] = await Promise.all([
-      this.tierStatus(this.isVideoConfigured(), process.env.COMFYUI_BASE_URL, 'ComfyUI'),
-      this.tierStatus(this.isImageConfigured(), process.env.SD_WEBUI_BASE_URL, 'Stable Diffusion API'),
-      this.tierStatus(this.isSpeechConfigured(), process.env.VIBEVOICE_BASE_URL, 'VibeVoice'),
+      this.tierStatus(
+        this.isVideoConfigured(),
+        this.videoSpaceUrl() || process.env.COMFYUI_BASE_URL,
+        'Video generation (Wan/ComfyUI)',
+      ),
+      this.tierStatus(
+        this.isImageConfigured(),
+        this.imageSpaceUrl() || process.env.SD_WEBUI_BASE_URL,
+        'Image generation (Z-Image/Stable Diffusion)',
+      ),
+      this.tierStatus(
+        this.isSpeechConfigured(),
+        this.speechSpaceUrl() || process.env.VIBEVOICE_BASE_URL,
+        'VibeVoice',
+      ),
     ]);
     return { video, images, speech };
   }
@@ -236,8 +273,10 @@ export class OpenSourceMediaService {
     narration: string,
     voice: ExplainerStudioVoice,
   ): Promise<GeneratedMedia | null> {
+    if (!this.isSpeechConfigured()) return null;
+    if (this.speechSpaceUrl()) return this.generateSpeechViaSpace(narration, voice);
     const base = configuredBaseUrl(process.env.VIBEVOICE_BASE_URL);
-    if (!base || !this.isSpeechConfigured()) return null;
+    if (!base) return null;
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const apiKey = process.env.VIBEVOICE_API_KEY?.trim();
@@ -280,14 +319,57 @@ export class OpenSourceMediaService {
     }
   }
 
-  /* ------------------- images — Stable Diffusion API --------------------- */
+  /** VibeVoice via its hosted Gradio Space (`/generate_podcast_wrapper`). */
+  private async generateSpeechViaSpace(
+    narration: string,
+    voice: ExplainerStudioVoice,
+  ): Promise<GeneratedMedia | null> {
+    const base = this.speechSpaceUrl();
+    try {
+      const script = `Speaker 1: ${narration.replace(/\s+/g, ' ').trim()}`;
+      const outputs = await this.spaceClient(base).call(
+        process.env.VIBEVOICE_SPACE_API?.trim() || '/generate_podcast_wrapper',
+        [
+          1,
+          script,
+          voice,
+          'en-Carter_man',
+          'en-Frank_man',
+          'en-Maya_woman',
+          Number(process.env.VIBEVOICE_CFG_SCALE ?? '') || 1.3,
+        ],
+        envInt('HF_SPEECH_TIMEOUT_MS', SPACE_SPEECH_TIMEOUT_MS),
+      );
+      const ref = extractFileRef(outputs[0] ?? outputs);
+      if (!ref) {
+        this.logger.warn(
+          `VibeVoice Space returned no audio: ${JSON.stringify(outputs[1] ?? outputs).slice(0, 200)}`,
+        );
+        return null;
+      }
+      const media = await this.spaceClient(base).download(
+        ref,
+        envInt('HF_SPEECH_TIMEOUT_MS', SPACE_SPEECH_TIMEOUT_MS),
+      );
+      return asMedia(media.buffer, media.contentType, MAX_AUDIO_BYTES);
+    } catch (error) {
+      this.logger.warn(
+        `VibeVoice Space speech failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /* ------------- images — Z-Image Space / Stable Diffusion API ------------ */
 
   async generateImage(
     prompt: string,
     negativePrompt: string,
   ): Promise<GeneratedMedia | null> {
+    if (!this.isImageConfigured()) return null;
+    if (this.imageSpaceUrl()) return this.generateImageViaSpace(prompt, negativePrompt);
     const base = configuredBaseUrl(process.env.SD_WEBUI_BASE_URL);
-    if (!base || !this.isImageConfigured()) return null;
+    if (!base) return null;
     try {
       const checkpoint = process.env.SD_IMAGE_MODEL?.trim();
       const response = await this.fetchWithTimeout(
@@ -331,14 +413,56 @@ export class OpenSourceMediaService {
     }
   }
 
-  /* --------------------- motion clips — ComfyUI API ---------------------- */
+  /** Z-Image-Turbo via its hosted Gradio Space (`/generate_image`). */
+  private async generateImageViaSpace(
+    prompt: string,
+    negativePrompt: string,
+  ): Promise<GeneratedMedia | null> {
+    const base = this.imageSpaceUrl();
+    try {
+      // Z-Image has no negative-prompt input; fold the bans into the prompt.
+      const fullPrompt = `${prompt}. Strictly avoid: ${negativePrompt}.`;
+      const timeoutMs = envInt('HF_IMAGE_TIMEOUT_MS', SPACE_IMAGE_TIMEOUT_MS);
+      const outputs = await this.spaceClient(base).call(
+        process.env.ZIMAGE_SPACE_API?.trim() || '/generate_image',
+        [
+          fullPrompt,
+          envInt('SD_IMAGE_HEIGHT', 720),
+          envInt('SD_IMAGE_WIDTH', 1280),
+          envInt('ZIMAGE_STEPS', 9),
+          Math.floor(Math.random() * 2_147_483_647),
+          true,
+        ],
+        timeoutMs,
+      );
+      const ref = extractFileRef(outputs);
+      if (!ref) {
+        this.logger.warn('Z-Image Space returned no image');
+        return null;
+      }
+      const media = await this.spaceClient(base).download(ref, timeoutMs);
+      return asMedia(media.buffer, media.contentType, MAX_IMAGE_BYTES);
+    } catch (error) {
+      this.logger.warn(
+        `Z-Image Space generation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /* ------------- motion clips — Wan I2V Space / ComfyUI API --------------- */
 
   async generateVideo(
     prompt: string,
     negativePrompt: string,
+    baseImage?: GeneratedMedia | null,
   ): Promise<GeneratedMedia | null> {
+    if (!this.isVideoConfigured()) return null;
+    if (this.videoSpaceUrl()) {
+      return this.generateVideoViaSpace(prompt, negativePrompt, baseImage ?? null);
+    }
     const base = configuredBaseUrl(process.env.COMFYUI_BASE_URL);
-    if (!base || !this.isVideoConfigured()) return null;
+    if (!base) return null;
     const timeoutMs = envInt('COMFYUI_VIDEO_TIMEOUT_MS', VIDEO_TIMEOUT_MS);
     const deadline = Date.now() + timeoutMs;
     try {
@@ -412,6 +536,68 @@ export class OpenSourceMediaService {
     } catch (error) {
       this.logger.warn(
         `Video generation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Wan 2.2 image-to-video via its hosted Gradio Space: upload the generated
+   * scene still, then animate it (`/generate_video`). Needs the image tier —
+   * without a base frame there is nothing to animate.
+   */
+  private async generateVideoViaSpace(
+    prompt: string,
+    negativePrompt: string,
+    baseImage: GeneratedMedia | null,
+  ): Promise<GeneratedMedia | null> {
+    if (!baseImage) {
+      this.logger.warn(
+        'Wan I2V Space needs a scene image to animate — enable the image tier (ZIMAGE_SPACE_URL or SD_WEBUI_BASE_URL)',
+      );
+      return null;
+    }
+    const base = this.videoSpaceUrl();
+    try {
+      const timeoutMs = envInt('HF_VIDEO_TIMEOUT_MS', SPACE_VIDEO_TIMEOUT_MS);
+      const client = this.spaceClient(base);
+      const uploadedPath = await client.upload(
+        baseImage.buffer,
+        'academy-scene.png',
+        Math.min(timeoutMs, 60_000),
+      );
+      const outputs = await client.call(
+        process.env.WAN_VIDEO_SPACE_API?.trim() || '/generate_video',
+        [
+          { path: uploadedPath, orig_name: 'academy-scene.png', meta: { _type: 'gradio.FileData' } },
+          null,
+          prompt,
+          envInt('WAN_VIDEO_STEPS', 4),
+          negativePrompt,
+          Number(process.env.WAN_VIDEO_DURATION_SECONDS ?? '') || 2.5,
+          1,
+          1,
+          Math.floor(Math.random() * 2_147_483_647),
+          true,
+          6,
+          'UniPCMultistep',
+          3,
+          '16',
+          true,
+          true,
+        ],
+        timeoutMs,
+      );
+      const ref = extractFileRef(outputs);
+      if (!ref) {
+        this.logger.warn('Wan I2V Space returned no video');
+        return null;
+      }
+      const media = await client.download(ref, Math.min(timeoutMs, 120_000));
+      return asMedia(media.buffer, media.contentType, MAX_VIDEO_BYTES);
+    } catch (error) {
+      this.logger.warn(
+        `Wan I2V Space generation failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       return null;
     }

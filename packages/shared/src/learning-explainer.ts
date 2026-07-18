@@ -113,8 +113,8 @@ export type ExplainerDelivery = (typeof EXPLAINER_DELIVERIES)[number];
 
 /**
  * Curated Microsoft VibeVoice narrator presets (the model's stock demo
- * voices, referenced by their canonical names so any community VibeVoice
- * server resolves them out of the box). Only stock voices are exposed —
+ * voices, matching both community VibeVoice servers and the hosted
+ * VibeVoice Gradio Space). Only stock voices are exposed —
  * learner-supplied reference audio (voice cloning) is intentionally not.
  */
 export const EXPLAINER_STUDIO_VOICES = [
@@ -122,7 +122,7 @@ export const EXPLAINER_STUDIO_VOICES = [
   'en-Carter_man',
   'en-Frank_man',
   'en-Maya_woman',
-  'en-Mary_woman_bgm',
+  'en-Yasser_man',
   'in-Samuel_man',
 ] as const;
 export type ExplainerStudioVoice = (typeof EXPLAINER_STUDIO_VOICES)[number];
@@ -137,7 +137,7 @@ export const EXPLAINER_STUDIO_VOICE_OPTIONS: ReadonlyArray<{
   { id: 'en-Carter_man', label: 'Carter', tone: 'Confident' },
   { id: 'en-Frank_man', label: 'Frank', tone: 'Calm' },
   { id: 'en-Maya_woman', label: 'Maya', tone: 'Bright' },
-  { id: 'en-Mary_woman_bgm', label: 'Mary', tone: 'Storyteller' },
+  { id: 'en-Yasser_man', label: 'Yasser', tone: 'Storyteller' },
   { id: 'in-Samuel_man', label: 'Samuel', tone: 'Assured' },
 ];
 

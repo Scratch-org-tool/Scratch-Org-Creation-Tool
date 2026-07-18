@@ -243,6 +243,115 @@ describe('OpenSourceMediaService', () => {
     expect(media?.buffer).toEqual(clip);
   }, 15_000);
 
+  it('generates speech through the hosted VibeVoice Space with a single-narrator script', async () => {
+    vi.stubEnv('VIBEVOICE_SPACE_URL', 'https://vibevoice.hf.space');
+    vi.stubEnv('HF_TOKEN', 'hf_test_token');
+    const wav = pcmToWav(Buffer.alloc(2048));
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === 'https://vibevoice.hf.space/gradio_api/call/generate_podcast_wrapper') {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          'Bearer hf_test_token',
+        );
+        const body = JSON.parse(init?.body as string) as { data: unknown[] };
+        expect(body.data[0]).toBe(1);
+        expect(body.data[1]).toBe('Speaker 1: Meet Priya, a sales ops admin.');
+        expect(body.data[2]).toBe('en-Yasser_man');
+        expect(body.data[6]).toBe(1.3);
+        return new Response(JSON.stringify({ event_id: 'ev-1' }), { status: 200 });
+      }
+      if (url.endsWith('/gradio_api/call/generate_podcast_wrapper/ev-1')) {
+        return new Response(
+          'event: complete\ndata: [{"path": "/tmp/gradio/a/audio.wav", "url": "https://vibevoice.hf.space/gradio_api/file=/tmp/gradio/a/audio.wav", "meta": {"_type": "gradio.FileData"}}, "log"]\n',
+          { status: 200 },
+        );
+      }
+      if (url.includes('/gradio_api/file=')) {
+        return new Response(new Uint8Array(wav), {
+          status: 200,
+          headers: { 'content-type': 'audio/wav' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new OpenSourceMediaService();
+    const media = await service.generateSpeech('Meet Priya, a sales ops admin.', 'en-Yasser_man');
+    expect(media?.contentType).toBe('audio/wav');
+    expect(media?.buffer.subarray(0, 4).toString()).toBe('RIFF');
+  });
+
+  it('generates images through the hosted Z-Image Space with folded negatives', async () => {
+    vi.stubEnv('ZIMAGE_SPACE_URL', 'https://zimage.hf.space');
+    const png = Buffer.alloc(600, 4);
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === 'https://zimage.hf.space/gradio_api/call/generate_image') {
+        const body = JSON.parse(init?.body as string) as { data: unknown[] };
+        expect(body.data[0]).toContain('a luminous cloud platform');
+        expect(body.data[0]).toContain('Strictly avoid: text, watermark');
+        expect(body.data[1]).toBe(720);
+        expect(body.data[2]).toBe(1280);
+        expect(body.data[3]).toBe(9);
+        expect(body.data[5]).toBe(true);
+        return new Response(JSON.stringify({ event_id: 'ev-2' }), { status: 200 });
+      }
+      if (url.endsWith('/gradio_api/call/generate_image/ev-2')) {
+        return new Response(
+          'event: complete\ndata: [{"path": "/tmp/gradio/b/image.png", "meta": {"_type": "gradio.FileData"}}, 42]\n',
+          { status: 200 },
+        );
+      }
+      if (url.includes('/gradio_api/file=')) {
+        return new Response(new Uint8Array(png), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new OpenSourceMediaService();
+    const media = await service.generateImage('a luminous cloud platform', 'text, watermark');
+    expect(media?.contentType).toBe('image/png');
+    expect(media?.buffer).toEqual(png);
+  });
+
+  it('animates the scene still through the Wan I2V Space and needs a base image', async () => {
+    vi.stubEnv('WAN_VIDEO_SPACE_URL', 'https://wan.hf.space');
+    const clip = Buffer.alloc(900, 5);
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === 'https://wan.hf.space/gradio_api/upload') {
+        return new Response(JSON.stringify(['/tmp/gradio/up/academy-scene.png']), { status: 200 });
+      }
+      if (url === 'https://wan.hf.space/gradio_api/call/generate_video') {
+        const body = JSON.parse(init?.body as string) as { data: unknown[] };
+        expect(body.data[0]).toMatchObject({ path: '/tmp/gradio/up/academy-scene.png' });
+        expect(body.data[2]).toContain('camera push-in');
+        expect(body.data[3]).toBe(4);
+        expect(body.data[5]).toBe(2.5);
+        return new Response(JSON.stringify({ event_id: 'ev-3' }), { status: 200 });
+      }
+      if (url.endsWith('/gradio_api/call/generate_video/ev-3')) {
+        return new Response(
+          'event: complete\ndata: [{"video": {"path": "/tmp/gradio/c/clip.mp4", "meta": {"_type": "gradio.FileData"}}}, {"path": "/tmp/gradio/c/clip.mp4"}, 42]\n',
+          { status: 200 },
+        );
+      }
+      if (url.includes('/gradio_api/file=')) {
+        return new Response(new Uint8Array(clip), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new OpenSourceMediaService();
+    await expect(
+      service.generateVideo('slow camera push-in over the vault', 'static, blurry', null),
+    ).resolves.toBeNull();
+
+    const media = await service.generateVideo('slow camera push-in over the vault', 'static, blurry', {
+      buffer: Buffer.alloc(128, 1),
+      contentType: 'image/png',
+    });
+    expect(media?.contentType).toBe('video/mp4');
+    expect(media?.buffer).toEqual(clip);
+  });
+
   it('gives up cleanly when ComfyUI reports a workflow error', async () => {
     vi.stubEnv('COMFYUI_BASE_URL', 'http://comfy.local:8188');
     vi.stubEnv('COMFYUI_VIDEO_TIMEOUT_MS', '8000');

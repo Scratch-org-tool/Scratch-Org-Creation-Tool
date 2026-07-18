@@ -237,8 +237,8 @@ export function MentorPanel({
               Turn your question into a concept film
             </p>
             <p className="relative mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              The mentor answers it as a narrated mental model with generated motion scenes—not
-              a slide deck reading the lesson back to you.
+              The mentor answers with a narrated real-world story and generated motion scenes—so
+              you catch the concept just by listening.
             </p>
             <Textarea
               value={storyQuestion}
@@ -258,7 +258,7 @@ export function MentorPanel({
               Create narrated answer
             </Button>
             <div className="relative mt-2 flex flex-wrap justify-center gap-1.5 text-[9px] text-muted-foreground">
-              <span className="rounded-full bg-background/50 px-2 py-0.5">Concept-first</span>
+              <span className="rounded-full bg-background/50 px-2 py-0.5">Story-first</span>
               <span className="rounded-full bg-background/50 px-2 py-0.5">Motion scenes</span>
               <span className="rounded-full bg-background/50 px-2 py-0.5">VibeVoice narrators</span>
             </div>
@@ -266,7 +266,7 @@ export function MentorPanel({
           <StoryCard
             icon={Lightbulb}
             title="Catch the lesson concept"
-            description="Build the core mental model in five connected scenes, then compress it into one idea you can recall."
+            description="Live one real-world storyline that teaches the core idea in five scenes, then locks it into a single thought you can recall."
             cta="Play concept story"
             onPlay={() => onPlayStory!('lesson')}
           />

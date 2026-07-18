@@ -235,22 +235,24 @@ export function buildStaticStoryboard(
     const supporting =
       lesson.sections.find((section) => section.heading !== relevant.heading) ?? relevant;
     const questionLead = question
-      ? `You asked, "${question}" Here is the idea to catch: ${lesson.summary}`
-      : `Start with one idea: ${lesson.summary}`;
+      ? `You asked, "${question}" Here is the answer in one line: ${lesson.summary}`
+      : `Here is the idea in one line: ${lesson.summary}`;
 
+    // Teach through the lesson's own real-world case, so a learner can catch
+    // the concept just by listening — even without any AI configured.
     scenes.push({
-      title: question ? 'Catch the answer' : 'Open the idea',
+      title: question ? 'Catch the answer' : 'Step into the story',
       narration: clamp(
-        `${questionLead} Do not memorize the words yet; first, build the picture in your mind.`,
+        `${questionLead} Now picture the story behind it: ${lesson.realWorld.scenario}`,
         EXPLAINER_NARRATION_MAX,
       ),
       delivery: 'curious',
       visualDescription: conceptArt(
-        `An intriguing opening visual metaphor for this Salesforce concept: ${lesson.summary}`,
+        `A cinematic establishing moment inside this real workplace story: ${clamp(lesson.realWorld.scenario, 220)}`,
       ),
       visual: {
         kind: 'callout',
-        caption: question ? 'The answer in one picture' : 'The central idea',
+        caption: question ? 'The answer in one picture' : 'A real story to hold on to',
         items: [
           { label: clamp(lesson.title, EXPLAINER_LABEL_MAX), icon: topicIcon, accent: accentAt(0) },
         ],
@@ -261,7 +263,7 @@ export function buildStaticStoryboard(
     scenes.push({
       title: 'Build the mental model',
       narration: clamp(
-        `${firstParagraph(relevant.body)} Focus on the relationship between the parts; that relationship is what makes the concept useful.`,
+        `Inside that story, here is the idea at work. ${firstParagraph(relevant.body)} Focus on how the parts relate; that relationship is the concept.`,
         EXPLAINER_NARRATION_MAX,
       ),
       delivery: 'clear',
@@ -294,14 +296,14 @@ export function buildStaticStoryboard(
     });
 
     scenes.push({
-      title: 'Watch cause become effect',
+      title: 'Watch it work in the story',
       narration: clamp(
-        `${firstParagraph(supporting.body)} Ask yourself what changes downstream when this part changes. That cause-and-effect chain is the practical logic to remember.`,
+        `Back in the story, watch the idea earn its keep: ${lesson.realWorld.solution} That is ${lesson.title} working — the same cause-and-effect you will reuse everywhere.`,
         EXPLAINER_NARRATION_MAX,
       ),
       delivery: 'energetic',
       visualDescription: conceptArt(
-        `A left-to-right cause-and-effect transformation for ${supporting.heading}: ${firstParagraph(supporting.body)}`,
+        `The turning point of the story, where the concept visibly fixes the problem: ${clamp(lesson.realWorld.solution, 220)}`,
       ),
       visual: {
         kind: 'flow',
@@ -343,7 +345,9 @@ export function buildStaticStoryboard(
   scenes.push({
     title: 'Lock it in',
     narration: clamp(
-      `Now compress the story into one thought: ${lesson.keyTakeaways[0] ?? lesson.summary} If you can picture the journey you just saw, you already have the concept.`,
+      focus === 'real-world'
+        ? `Now compress the story into one thought: ${lesson.keyTakeaways[0] ?? lesson.summary} If you can picture the journey you just saw, you already have the concept.`
+        : `And the payoff? ${lesson.realWorld.outcome} Now compress it all into one thought: ${lesson.keyTakeaways[0] ?? lesson.summary}`,
       EXPLAINER_NARRATION_MAX,
     ),
     delivery: 'clear',
@@ -460,12 +464,14 @@ export class LearningExplainerService {
     const scene = await this.resolveScene(input, input.sceneId);
     const cacheKey = `${this.requestCacheKey(input)}|${scene.id}|video`;
     const { motionPrompt, negativePrompt } = this.buildScenePrompts(scene, input.focus);
-    return this.getCachedMedia(
-      cacheKey,
-      this.videoCache,
-      this.videoInFlight,
-      () => this.media.generateVideo(motionPrompt, negativePrompt),
-    );
+    return this.getCachedMedia(cacheKey, this.videoCache, this.videoInFlight, async () => {
+      // Image-to-video backends (Wan 2.2) animate the scene still, which also
+      // keeps the clip visually consistent with the image fallback tier.
+      const baseImage = this.media.isImageConfigured()
+        ? await this.getSceneImage(input)
+        : null;
+      return this.media.generateVideo(motionPrompt, negativePrompt, baseImage);
+    });
   }
 
   async getSceneSpeech(input: LearningExplainerSpeechRequest): Promise<GeneratedMedia | null> {
@@ -582,18 +588,20 @@ export class LearningExplainerService {
       '{"title":"...","scenes":[{"title":"...","narration":"...","delivery":"curious","visualDescription":"...","visual":{"kind":"flow","caption":"...","items":[{"label":"...","sublabel":"...","icon":"cloud","accent":"sky","side":"left"}]}}]}',
       '',
       'Story rules:',
-      '- Write 5 coherent scenes: curiosity hook → mental model → cause and effect → important boundary or misconception → memorable compression.',
+      '- Write 5 coherent scenes: story hook → the idea inside the story → the idea working (cause and effect) → the boundary or misconception → payoff and one-thought recap.',
+      '- Anchor the WHOLE film in ONE vivid real-world storyline: in scene 1, name a person, their role, and their company (e.g. "Priya, sales ops at a solar installer"), and stay inside that same storyline in every scene.',
+      '- Teach the concept THROUGH the story, not next to it: each scene shows what the character faces, what the platform does about it, and why it matters. A listener must genuinely understand the topic after ONE listen, with their eyes closed.',
       question
-        ? '- Answer the learner’s actual question in the FIRST spoken sentence, then make the reasoning intuitive.'
-        : '- Reveal the concept instead of listing the lesson sections.',
+        ? '- Answer the learner’s actual question in the FIRST spoken sentence, then continue the storyline to make the reasoning stick.'
+        : '- Reveal the concept through the storyline instead of listing the lesson sections.',
       focus === 'real-world'
-        ? '- This is explicitly a case story: make the supplied problem, turning point, and consequence concrete.'
-        : '- This is a concept story. Do NOT force a generic company or workplace example. Use an analogy only when it sharpens the mental model.',
+        ? '- Use the supplied case study as the storyline: make its problem, turning point, and consequence concrete and personal.'
+        : '- Invent a believable, specific storyline that fits the grounding content (real job titles, real business stakes — never "a company" in the abstract).',
       '- narration: 2–4 short conversational sentences, max 480 characters. Write for listening: contractions, natural emphasis, varied rhythm, and a clear causal thread.',
       '- Never read slide labels, copy a curriculum paragraph, say “as you can see”, or announce “in this scene”. The voice must add meaning the visual alone cannot.',
       '- Each scene teaches exactly one insight and flows naturally into the next. Use concrete nouns and active verbs.',
       '- delivery must be one of curious, clear, energetic, reflective and should fit the scene.',
-      '- visualDescription: 1–3 detailed sentences directing a memorable cinematic image. It must embody the idea, maintain a premium navy/sky/violet visual world, and contain no written text, logos, or fake Salesforce UI.',
+      '- visualDescription: 1–3 detailed sentences directing a memorable cinematic image of THIS story moment (the place, the character, the objects at stake) while embodying the concept. Premium navy/sky/violet visual world; no written text, logos, or fake Salesforce UI.',
       '- visual.kind must be one of: flow (process arrows), compare (two sides; give each item "side":"left"|"right"), stack (layers), timeline (ordered steps), callout (single big idea), grid (related concepts).',
       '- 1-6 items per visual. label max 40 chars, sublabel max 60 chars.',
       `- icon must be one of: ${EXPLAINER_ICONS.join(', ')}.`,
