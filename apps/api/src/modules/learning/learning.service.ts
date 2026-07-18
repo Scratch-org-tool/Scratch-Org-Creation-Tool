@@ -111,7 +111,7 @@ export class LearningService {
     }
   }
 
-  /** Same gate keyed by lesson — used by tutor/story/video-script endpoints. */
+  /** Same gate keyed by lesson — used by tutor/story/lesson-video endpoints. */
   async assertLessonVisible(userId: string, lessonId: string): Promise<void> {
     const location = getLesson(lessonId);
     if (!location) throw new NotFoundException('Lesson not found');
