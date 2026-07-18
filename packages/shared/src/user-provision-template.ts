@@ -223,11 +223,11 @@ function hashSeed(seed: string): number {
   return hash >>> 0;
 }
 
-function stableEntropy(seed: string): string {
+export function stableEntropy(seed: string): string {
   return `${hashSeed(seed).toString(36)}${hashSeed(`sfcc:${seed}`).toString(36)}`.slice(0, 13);
 }
 
-function assertAndLimitEmailUsername(username: string): string {
+export function assertAndLimitEmailUsername(username: string): string {
   const match = username.trim().match(/^([^@\s]+)@([^@\s]+)$/);
   if (!match || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(match[2])) {
     throw new Error('Username must be in email format');

@@ -1,4 +1,4 @@
-export type OrgSetupTab = 'baseline' | 'load-config' | 'users-cona' | 'users-csv';
+export type OrgSetupTab = 'baseline' | 'load-config' | 'users-cona' | 'users-lifecycle' | 'users-csv';
 
 export interface Org {
   id: string;
@@ -23,4 +23,4 @@ export const DEFAULT_ORG_CONFIG_OPTIONS: OrgConfigLoadOptions = {
   upsertRequestId: true,
 };
 
-export const ORG_SETUP_TABS: OrgSetupTab[] = ['baseline', 'load-config', 'users-cona', 'users-csv'];
+export const ORG_SETUP_TABS: OrgSetupTab[] = ['baseline', 'load-config', 'users-cona', 'users-lifecycle', 'users-csv'];

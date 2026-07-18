@@ -1,10 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
   QUEUE_NAMES,
   userProvisionSchema,
   conaUserProvisionSchema,
+  expandLifecycleUsers,
   generateEmailStyleUsername,
+  lifecycleUserGenerationSchema,
+  resolveBottlerLabel,
   resolveUserProvisioningPlan,
   userProvisioningConfigSchema,
 } from '@sfcc/shared';
@@ -136,6 +140,54 @@ export class ProvisioningService {
       conaMode: true,
     }, { createdBy: userId });
     return { jobId: job.id, totalUsers: input.users.length };
+  }
+
+  /**
+   * Lifecycle role-based generation: one user per selected Onboarding Role for
+   * a single bottler, executed by the existing CONA-mode worker (create user,
+   * set role/bottler/modules/locations picklists, assign permission sets).
+   */
+  async provisionLifecycleUsers(body: unknown, userId: string) {
+    const input = lifecycleUserGenerationSchema.parse(body);
+    await assertOrgOwned(input.orgId, userId, prisma);
+
+    // Validate and expand before any writes; the seed keeps emails and
+    // {unique} deterministic for worker retries of this batch.
+    const users = expandLifecycleUsers({
+      ...input,
+      seed: randomUUID(),
+      bottlerLabel: resolveBottlerLabel(input.bottler),
+    });
+
+    const batch = await prisma.provisioningBatch.create({
+      data: {
+        orgId: input.orgId,
+        totalRows: users.length,
+        status: 'queued',
+        createdBy: userId,
+        users: {
+          create: users.map((user) => ({
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            username: user.username,
+            profile: user.profile,
+            role: user.role,
+            permissionSets: user.permissionSets,
+            status: 'queued',
+          })),
+        },
+      },
+    });
+
+    const job = await this.orchestrator.enqueueJob(QUEUE_NAMES.USER_PROVISION, 'lifecycle_user_provision', {
+      orgId: input.orgId,
+      batchId: batch.id,
+      users,
+      conaMode: true,
+    }, { createdBy: userId });
+
+    return { batchId: batch.id, jobId: job.id, totalUsers: users.length, users };
   }
 
   async provisionFromCsv(body: unknown, userId: string) {
