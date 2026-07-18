@@ -374,7 +374,7 @@ describe('BulkDataUpdateService', () => {
     expect(preview.sample[0]?.matchValue).toBe('01003539');
   });
 
-  it('hash-joins large mapping sets from one guarded Bulk API export', async () => {
+  it('hash-joins large mapping sets from one paginated Salesforce query', async () => {
     const rowCount = 2_100;
     const sourceRows = Array.from({ length: rowCount }, (_, index) => [
       `E-BULK-${index}`,
@@ -389,21 +389,18 @@ describe('BulkDataUpdateService', () => {
         },
       },
     });
-    mocks.sfCli.exportBulk.mockImplementation(async (
-      soql: string,
-      alias: string,
-      outputPath: string,
-    ) => {
-      expect(alias).toBe('target');
+    mocks.sfCli.queryAll.mockImplementation(async (_alias, soql) => {
       expect(soql).toContain(`WHERE ${employeeNumberField} != null`);
-      const targetRows = sourceRows.map(([employeeNumber], index) =>
-        `a01${String(index).padStart(15, '0')},${employeeNumber},Original Employee ${index}`);
-      await writeFile(
-        outputPath,
-        `Id,${employeeNumberField},Name\n${targetRows.join('\n')}\n`,
-        'utf8',
-      );
-      return { success: true };
+      return {
+        success: true,
+        data: {
+          records: sourceRows.map(([employeeNumber], index) => ({
+            Id: `a01${String(index).padStart(15, '0')}`,
+            [employeeNumberField]: employeeNumber,
+            Name: `Original Employee ${index}`,
+          })),
+        },
+      };
     });
 
     const preview = await service().preview(
@@ -429,10 +426,9 @@ describe('BulkDataUpdateService', () => {
       'target',
       expect.stringContaining('SELECT COUNT()'),
     );
-    expect(mocks.sfCli.exportBulk).toHaveBeenCalledOnce();
-    expect(mocks.sfCli.queryAll).not.toHaveBeenCalled();
-    expect(acquire).toHaveBeenCalledWith('target', { maxWaitMs: 2_000 });
-    expect(release).toHaveBeenCalledOnce();
+    expect(mocks.sfCli.queryAll).toHaveBeenCalledOnce();
+    expect(mocks.sfCli.exportBulk).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
   });
 
   it('preserves case-sensitive external IDs in the bulk match index', async () => {
@@ -480,20 +476,16 @@ describe('BulkDataUpdateService', () => {
       success: true,
       data: { result: { records: [], totalSize: rowCount } },
     });
-    mocks.sfCli.exportBulk.mockImplementation(async (
-      _soql: string,
-      _alias: string,
-      outputPath: string,
-    ) => {
-      const targetRows = sourceRows.map(([employeeNumber], index) =>
-        `a01${String(index).padStart(15, '0')},${employeeNumber.toLocaleLowerCase()},Original`);
-      await writeFile(
-        outputPath,
-        `Id,${employeeNumberField},Name\n${targetRows.join('\n')}\n`,
-        'utf8',
-      );
-      return { success: true };
-    });
+    mocks.sfCli.queryAll.mockImplementation(async () => ({
+      success: true,
+      data: {
+        records: sourceRows.map(([employeeNumber], index) => ({
+          Id: `a01${String(index).padStart(15, '0')}`,
+          [employeeNumberField]: employeeNumber.toLocaleLowerCase(),
+          Name: 'Original',
+        })),
+      },
+    }));
 
     const preview = await service().preview(
       workbook([
@@ -513,7 +505,7 @@ describe('BulkDataUpdateService', () => {
       recordsToUpdate: 0,
       unmatchedRows: rowCount,
     }));
-    expect(mocks.sfCli.exportBulk).toHaveBeenCalledOnce();
-    expect(mocks.sfCli.queryAll).not.toHaveBeenCalled();
+    expect(mocks.sfCli.queryAll).toHaveBeenCalledOnce();
+    expect(mocks.sfCli.exportBulk).not.toHaveBeenCalled();
   });
 });

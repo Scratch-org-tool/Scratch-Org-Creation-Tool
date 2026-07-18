@@ -433,7 +433,9 @@ export function BulkDataUpdatePanel() {
           }
           sublabel={
             action === 'preview'
-              ? 'Comparing non-empty spreadsheet values with existing Salesforce records.'
+              ? selectedSheet && selectedSheet.rowCount >= 2_000
+                ? 'Loading Salesforce records and comparing your spreadsheet. Large files can take a few minutes.'
+                : 'Comparing non-empty spreadsheet values with existing Salesforce records.'
               : undefined
           }
         />

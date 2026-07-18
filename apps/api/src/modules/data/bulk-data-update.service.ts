@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,17 +23,18 @@ const MAX_FILE_BYTES = BULK_DATA_UPDATE_MAX_FILE_BYTES;
 const MAX_WORKBOOK_ROWS = BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS;
 const MAX_WORKBOOK_COLUMNS = 200;
 const TARGET_QUERY_CHUNK_SIZE = 500;
-const TARGET_QUERY_CHUNK_SIZE_WINDOWS = 40;
+const TARGET_QUERY_CHUNK_SIZE_WINDOWS = 80;
 const MAX_SOQL_COMMAND_CHARS = process.platform === 'win32' ? 6_000 : 12_000;
-const TARGET_QUERY_CONCURRENCY = 4;
-const TARGET_BULK_INDEX_MIN_KEYS = 2_000;
+const TARGET_QUERY_CONCURRENCY = 6;
+const TARGET_BULK_INDEX_MIN_KEYS = 500;
 const TARGET_BULK_INDEX_MIN_ROW_BUDGET = 10_000;
 const TARGET_BULK_INDEX_MAX_ROW_RATIO = 4;
-const TARGET_BULK_INDEX_MAX_ROWS = 250_000;
-const TARGET_BULK_INDEX_MAX_CELLS = 5_000_000;
-const TARGET_BULK_INDEX_MAX_BYTES = 64 * 1024 * 1024;
-const TARGET_BULK_QUERY_WAIT_MINUTES = 15;
-const TARGET_BULK_SLOT_WAIT_MS = 2_000;
+const TARGET_BULK_INDEX_MAX_ROWS = 500_000;
+const TARGET_BULK_INDEX_MAX_CELLS = 20_000_000;
+const TARGET_BULK_INDEX_MAX_BYTES = 96 * 1024 * 1024;
+const TARGET_BULK_QUERY_WAIT_MINUTES = 20;
+const TARGET_BULK_SLOT_WAIT_MS = 300_000;
+const TARGET_BULK_EXPORT_MIN_KEYS = 10_000;
 const PREVIEW_RECORD_LIMIT = 50;
 const EMPLOYEE_MASTER_OBJECT = 'cfs_ob__EmployeeMaster__c';
 const EMPLOYEE_NUMBER_FIELD = 'cfs_ob__EmployeeNo__c';
@@ -179,6 +180,7 @@ type LogCallback = (line: string) => Promise<void> | void;
 
 @Injectable()
 export class BulkDataUpdateService {
+  private readonly logger = new Logger(BulkDataUpdateService.name);
   private readonly sfCli = createSfCliClient();
 
   constructor(private readonly bulkThrottle: BulkThrottleService) {}
@@ -809,16 +811,20 @@ export class BulkDataUpdateService {
       ...(context.secondaryMatchField ? [context.secondaryMatchField.name] : []),
       ...context.mappings.map((mapping) => mapping.targetField.name),
     ])];
-    const bulkRecords = await this.queryTargetRecordsFromBulkIndex(
+    const indexedRecords = await this.queryTargetRecordsFromIndexedScan(
       context,
       matchValues,
       selectedFields,
       onLog,
     );
-    if (bulkRecords !== undefined) return bulkRecords;
+    if (indexedRecords !== undefined) return indexedRecords;
 
     const queryChunks = this.buildMatchQueryChunks(context, matchValues, selectedFields);
     if (queryChunks.length === 0) return [];
+    this.logger.warn(
+      `Bulk update falling back to ${queryChunks.length.toLocaleString()} selective SOQL batches `
+      + `for ${matchValues.length.toLocaleString()} keys`,
+    );
     if (queryChunks.length > 1) {
       await onLog?.(
         `Looking up matching records in ${queryChunks.length.toLocaleString()} selective query batches...`,
@@ -851,25 +857,67 @@ export class BulkDataUpdateService {
   }
 
   /**
-   * Large key lists are much faster as one Bulk API export followed by a hash
-   * join than as hundreds of separate `sf data query` process launches. The
-   * count guard prevents a small workbook from scanning a disproportionately
-   * large Salesforce object; unsupported Bulk Query fields fall back safely.
+   * Large key lists are much faster as one paginated SOQL scan (or Bulk API
+   * export fallback) followed by a hash join than as hundreds of separate
+   * `sf data query` process launches.
    */
-  private async queryTargetRecordsFromBulkIndex(
+  private async queryTargetRecordsFromIndexedScan(
     context: PreparedContext,
     matchValues: Array<{ primary: string; secondary?: string }>,
     selectedFields: string[],
     onLog?: LogCallback,
   ): Promise<Array<Record<string, unknown>> | undefined> {
-    if (matchValues.length < TARGET_BULK_INDEX_MIN_KEYS) return undefined;
-    if (
-      context.matchField.name !== 'Id'
-      && !context.matchField.externalId
-      && !context.matchField.idLookup
-    ) {
-      return undefined;
+    const scan = await this.prepareTargetScan(context, matchValues, selectedFields);
+    if (!scan) return undefined;
+    if (scan.targetCount === 0) return [];
+    const { targetCount, expectedKeys, predicate } = scan;
+    const soql = `SELECT ${selectedFields.join(', ')} FROM ${context.objectName} WHERE ${predicate}`;
+
+    this.logger.log(
+      `Bulk update match scan: ${matchValues.length.toLocaleString()} workbook keys, `
+      + `${targetCount.toLocaleString()} ${context.objectLabel} records, `
+      + `${selectedFields.length} Salesforce fields`,
+    );
+
+    if (matchValues.length >= TARGET_BULK_EXPORT_MIN_KEYS) {
+      const bulkRecords = await this.queryTargetRecordsFromBulkExport(
+        context,
+        soql,
+        expectedKeys,
+        onLog,
+      );
+      if (bulkRecords !== undefined) return bulkRecords;
+      this.logger.warn('Bulk API export match scan failed; falling back to paginated SOQL');
     }
+
+    await onLog?.(
+      `Loading ${targetCount.toLocaleString()} ${context.objectLabel} records for matching...`,
+    );
+    const paged = await this.sfCli.queryAll(context.alias, soql);
+    if (paged.success) {
+      return (paged.data?.records ?? [])
+        .filter((record) => expectedKeys.has(this.recordMatchKey(context, record)));
+    }
+
+    this.logger.warn('Paginated SOQL match scan failed; trying Bulk API export');
+    return this.queryTargetRecordsFromBulkExport(
+      context,
+      soql,
+      expectedKeys,
+      onLog,
+    );
+  }
+
+  private async prepareTargetScan(
+    context: PreparedContext,
+    matchValues: Array<{ primary: string; secondary?: string }>,
+    selectedFields: string[],
+  ): Promise<{
+    targetCount: number;
+    expectedKeys: Set<string>;
+    predicate: string;
+  } | undefined> {
+    if (matchValues.length < TARGET_BULK_INDEX_MIN_KEYS) return undefined;
 
     const predicate = this.targetMatchPredicate(context);
     const countResult = await this.sfCli.query(
@@ -878,7 +926,7 @@ export class BulkDataUpdateService {
     );
     const targetCount = this.queryCount(countResult.data?.result);
     if (!countResult.success || targetCount === undefined) return undefined;
-    if (targetCount === 0) return [];
+    if (targetCount === 0) return { targetCount: 0, expectedKeys: new Set(), predicate };
 
     const rowBudget = Math.min(
       TARGET_BULK_INDEX_MAX_ROWS,
@@ -894,15 +942,20 @@ export class BulkDataUpdateService {
       return undefined;
     }
 
-    await onLog?.(
-      `Building an in-memory match index from ${targetCount.toLocaleString()} `
-      + `${context.objectLabel} records in one Bulk API batch...`,
-    );
     const expectedKeys = new Set(
       matchValues
         .map((value) => this.inputMatchKey(context, value))
         .filter(Boolean),
     );
+    return { targetCount, expectedKeys, predicate };
+  }
+
+  private async queryTargetRecordsFromBulkExport(
+    context: PreparedContext,
+    soql: string,
+    expectedKeys: Set<string>,
+    onLog?: LogCallback,
+  ): Promise<Array<Record<string, unknown>> | undefined> {
     const workDir = await mkdtemp(join(tmpdir(), 'bulk-data-match-index-'));
     const csvPath = join(workDir, 'target-records.csv');
     let slot: Awaited<ReturnType<BulkThrottleService['acquire']>> | undefined;
@@ -912,7 +965,7 @@ export class BulkDataUpdateService {
         { maxWaitMs: TARGET_BULK_SLOT_WAIT_MS },
       );
       const result = await this.sfCli.exportBulk(
-        `SELECT ${selectedFields.join(', ')} FROM ${context.objectName} WHERE ${predicate}`,
+        soql,
         context.alias,
         csvPath,
         TARGET_BULK_QUERY_WAIT_MINUTES,
