@@ -2,24 +2,25 @@
 
 import { Check } from 'lucide-react';
 import { cn } from '@/utils/cn';
-import { TEMPLATE_WIZARD_STEPS } from '../types';
+import type { TemplateWizardStep } from '../types';
 
 interface TemplateStepSidebarProps {
+  steps: readonly TemplateWizardStep[];
   current: number;
   onStepClick: (step: number) => void;
 }
 
-export function TemplateStepSidebar({ current, onStepClick }: TemplateStepSidebarProps) {
+export function TemplateStepSidebar({ steps, current, onStepClick }: TemplateStepSidebarProps) {
   return (
     <nav aria-label="Template wizard steps" className="space-y-1">
-      {TEMPLATE_WIZARD_STEPS.map((label, i) => {
+      {steps.map(({ id, label }, i) => {
         const done = i < current;
         const active = i === current;
         const reachable = i <= current;
 
         return (
           <button
-            key={label}
+            key={id}
             type="button"
             disabled={!reachable}
             onClick={() => reachable && onStepClick(i)}

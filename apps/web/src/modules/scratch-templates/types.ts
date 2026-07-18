@@ -8,17 +8,90 @@ export type TemplateConfigState = ScratchPipelineTemplateConfig & {
   permissionSetsText?: string;
 };
 
-export const TEMPLATE_WIZARD_STEPS = [
-  'General',
-  'Scratch org',
-  'Source orgs',
-  'Custom settings',
-  'Permissions',
-  'Data seed',
-  'Query section',
-  'Partners & users',
-  'Review',
+export type TemplateStepId =
+  | 'general'
+  | 'scratch'
+  | 'source-orgs'
+  | 'custom-settings'
+  | 'permissions'
+  | 'data-seed'
+  | 'query-section'
+  | 'partners-users'
+  | 'review';
+
+export interface TemplateWizardStep {
+  id: TemplateStepId;
+  label: string;
+}
+
+export const TEMPLATE_WIZARD_STEPS: readonly TemplateWizardStep[] = [
+  { id: 'general', label: 'General' },
+  { id: 'scratch', label: 'Scratch org' },
+  { id: 'source-orgs', label: 'Source orgs' },
+  { id: 'custom-settings', label: 'Custom settings' },
+  { id: 'permissions', label: 'Permissions' },
+  { id: 'data-seed', label: 'Data seed' },
+  { id: 'query-section', label: 'Query section' },
+  { id: 'partners-users', label: 'Partners & users' },
+  { id: 'review', label: 'Review' },
 ] as const;
+
+const SYSTEM_TEMPLATE_STEP_IDS: Record<SystemScratchTemplateKey, readonly TemplateStepId[]> = {
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT]: [
+    'general',
+    'scratch',
+    'permissions',
+    'review',
+  ],
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES]: [
+    'general',
+    'source-orgs',
+    'data-seed',
+    'query-section',
+    'review',
+  ],
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS]: [
+    'general',
+    'source-orgs',
+    'custom-settings',
+    'permissions',
+    'data-seed',
+    'partners-users',
+    'review',
+  ],
+};
+
+const SYSTEM_TEMPLATE_STEP_LABELS: Partial<
+  Record<SystemScratchTemplateKey, Partial<Record<TemplateStepId, string>>>
+> = {
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT]: {
+    scratch: 'Scratch & source',
+  },
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES]: {
+    'source-orgs': 'Data source',
+    'data-seed': 'Data deployment',
+  },
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS]: {
+    'source-orgs': 'Seed source',
+    permissions: 'Org configuration',
+    'data-seed': 'Config seed',
+    'partners-users': 'Account partners',
+  },
+};
+
+export function getTemplateWizardSteps(
+  systemKey?: string | null,
+): readonly TemplateWizardStep[] {
+  if (!systemKey || !(systemKey in SYSTEM_TEMPLATE_STEP_IDS)) {
+    return TEMPLATE_WIZARD_STEPS;
+  }
+  const key = systemKey as SystemScratchTemplateKey;
+  const ids = new Set(SYSTEM_TEMPLATE_STEP_IDS[key]);
+  const labels = SYSTEM_TEMPLATE_STEP_LABELS[key];
+  return TEMPLATE_WIZARD_STEPS
+    .filter((step) => ids.has(step.id))
+    .map((step) => ({ ...step, label: labels?.[step.id] ?? step.label }));
+}
 
 export type AccountSeedRow = NonNullable<ScratchPipelineTemplateConfig['accountSeedRows']>[number];
 

@@ -1,8 +1,10 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
-import type { TemplateConfigState } from '../types';
-import { TEMPLATE_WIZARD_STEPS } from '../types';
+import {
+  SYSTEM_SCRATCH_TEMPLATE_KEYS,
+} from '@sfcc/shared';
+import type { TemplateConfigState, TemplateStepId, TemplateWizardStep } from '../types';
 import { formatPermissionSets } from './permission-sets-editor';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import { countConfiguredUsers } from './user-provisioning-v2-section';
@@ -12,6 +14,8 @@ interface TemplateReviewProps {
   description: string;
   config: TemplateConfigState;
   orgAliases: Record<string, string>;
+  steps: readonly TemplateWizardStep[];
+  systemKey?: string | null;
   onEditStep: (step: number) => void;
 }
 
@@ -24,7 +28,15 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function TemplateReview({ name, description, config, orgAliases, onEditStep }: TemplateReviewProps) {
+export function TemplateReview({
+  name,
+  description,
+  config,
+  orgAliases,
+  steps,
+  systemKey,
+  onEditStep,
+}: TemplateReviewProps) {
   const dataOrg = config.dataDeploymentOrgId ?? config.sourceOrgId;
   const customSettingsEnabled = config.customSettings?.enabled !== false;
   const settingsOrg = customSettingsEnabled
@@ -32,10 +44,17 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
     : undefined;
   const userCount = countConfiguredUsers(config.userProvisioning);
   const querySection = config.dataSeed?.querySection;
+  const stepIndexes = new Map(steps.map((step, index) => [step.id, index]));
+  const isScratchSourcePreset =
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT;
+  const isDataDeploymentPreset =
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES;
+  const isConfigPartnersPreset =
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS;
 
   const sections = [
     {
-      step: 0,
+      stepId: 'general' as TemplateStepId,
       title: 'General',
       rows: [
         ['Name', name],
@@ -43,7 +62,7 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
       ] as const,
     },
     {
-      step: 1,
+      stepId: 'scratch' as TemplateStepId,
       title: 'Scratch org defaults',
       rows: [
         ['Scratch def', config.template ?? '—'],
@@ -61,20 +80,22 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
       ] as const,
     },
     {
-      step: 2,
+      stepId: 'source-orgs' as TemplateStepId,
       title: 'Source orgs',
       rows: [
         ['Data deployment org', dataOrg ? orgAliases[dataOrg] ?? dataOrg : '—'],
-        [
-          'Custom settings org',
-          customSettingsEnabled
-            ? (settingsOrg ? orgAliases[settingsOrg] ?? settingsOrg : '—')
-            : 'Not used (disabled)',
-        ],
+        ...(!isDataDeploymentPreset
+          ? [[
+              'Custom settings org',
+              customSettingsEnabled
+                ? (settingsOrg ? orgAliases[settingsOrg] ?? settingsOrg : '—')
+                : 'Not used (disabled)',
+            ] as const]
+          : []),
       ] as const,
     },
     {
-      step: 3,
+      stepId: 'custom-settings' as TemplateStepId,
       title: 'Custom settings',
       rows: [
         ['Enabled', config.customSettings?.enabled !== false ? 'Yes' : 'No'],
@@ -87,18 +108,24 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
       ] as const,
     },
     {
-      step: 4,
-      title: 'Permissions & org config',
+      stepId: 'permissions' as TemplateStepId,
+      title: isConfigPartnersPreset ? 'Org configuration' : 'Permissions',
       rows: [
-        ['Permission sets', formatPermissionSets(config.permissionSets) || '—'],
-        ['Queue IDs', config.orgConfig?.upsertQueueIds ? 'Yes' : 'No'],
-        ['Domain fields', config.orgConfig?.upsertDomainFields ? 'Yes' : 'No'],
-        ['Request ID', config.orgConfig?.upsertRequestId ? 'Yes' : 'No'],
+        ...(!isConfigPartnersPreset
+          ? [['Permission sets', formatPermissionSets(config.permissionSets) || '—'] as const]
+          : []),
+        ...(!isScratchSourcePreset
+          ? [
+              ['Queue IDs', config.orgConfig?.upsertQueueIds ? 'Yes' : 'No'] as const,
+              ['Domain fields', config.orgConfig?.upsertDomainFields ? 'Yes' : 'No'] as const,
+              ['Request ID', config.orgConfig?.upsertRequestId ? 'Yes' : 'No'] as const,
+            ]
+          : []),
       ] as const,
     },
     {
-      step: 5,
-      title: 'Data seed',
+      stepId: 'data-seed' as TemplateStepId,
+      title: isConfigPartnersPreset ? 'Config seed' : 'Data deployment',
       rows: [
         ['Seed mode', config.dataSeed?.mode ?? 'hybrid'],
         ['Datasets', config.dataSeed?.datasets?.join(', ') || '—'],
@@ -107,7 +134,7 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
       ] as const,
     },
     {
-      step: 6,
+      stepId: 'query-section' as TemplateStepId,
       title: 'Query section',
       rows: [
         ['Name', querySection?.name ?? '—'],
@@ -118,22 +145,26 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
       ] as const,
     },
     {
-      step: 7,
-      title: 'Partners & users',
+      stepId: 'partners-users' as TemplateStepId,
+      title: isConfigPartnersPreset ? 'Account partners & automation' : 'Partners & users',
       rows: [
         ['Auto data seed', config.pipelineSteps?.autoRunDataSeed ? 'Yes' : 'No'],
         ['Auto partners', config.pipelineSteps?.autoRunPartners ? 'Yes' : 'No'],
-        ['Auto users', config.pipelineSteps?.autoRunUsers ? 'Yes' : 'No'],
         ['Partner import', config.partnerImport?.enabled ? config.partnerImport.mode : 'Off'],
         ['Per office', String(config.partnerImport?.perOffice ?? 20)],
         ['Sales offices JSON', config.partnerImport?.salesOfficeConfig ? 'Yes' : '—'],
-        ['User templates', String(config.userProvisioning?.templates?.length ?? 0)],
-        ['User generators', String(config.userProvisioning?.userGenerators?.length ?? 0)],
-        ['Role+bottler mappings', String(config.userProvisioning?.roleBottlerMappings?.length ?? 0)],
-        ['Users / slots', String(userCount)],
+        ...(!isConfigPartnersPreset
+          ? [
+              ['Auto users', config.pipelineSteps?.autoRunUsers ? 'Yes' : 'No'] as const,
+              ['User templates', String(config.userProvisioning?.templates?.length ?? 0)] as const,
+              ['User generators', String(config.userProvisioning?.userGenerators?.length ?? 0)] as const,
+              ['Role+bottler mappings', String(config.userProvisioning?.roleBottlerMappings?.length ?? 0)] as const,
+              ['Users / slots', String(userCount)] as const,
+            ]
+          : []),
       ] as const,
     },
-  ];
+  ].filter((section) => stepIndexes.has(section.stepId));
 
   return (
     <div className="space-y-4">
@@ -144,7 +175,12 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
         <div key={s.title} className="rounded-lg border border-border/60 bg-card/30 p-4">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-semibold">{s.title}</h3>
-            <Button type="button" size="sm" variant="ghost" onClick={() => onEditStep(s.step)}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => onEditStep(stepIndexes.get(s.stepId)!)}
+            >
               Edit
             </Button>
           </div>
@@ -156,7 +192,7 @@ export function TemplateReview({ name, description, config, orgAliases, onEditSt
         </div>
       ))}
       <p className="text-xs text-muted-foreground">
-        Step {TEMPLATE_WIZARD_STEPS.length}: review complete — save to store this pipeline preset.
+        Step {steps.length}: review complete — save to store this pipeline preset.
       </p>
     </div>
   );
