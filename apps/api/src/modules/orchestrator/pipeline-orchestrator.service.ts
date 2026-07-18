@@ -846,7 +846,15 @@ export class PipelineOrchestratorService {
       customSettingsOrgId: config.customSettingsOrgId,
       sourceOrgId: config.sourceOrgId,
     });
-    if (action === 'provision_users' && !this.hasProvisioningUsers(config)) {
+    const hasCheckpointedProvisioningPlan = Boolean(
+      checkpoint.provisioningBatchId
+      && checkpoint.resolvedProvisioningUsers?.length,
+    );
+    if (
+      action === 'provision_users'
+      && !this.hasProvisioningUsers(config)
+      && !hasCheckpointedProvisioningPlan
+    ) {
       throw new BadRequestException('No users are configured for provisioning');
     }
     if (action === 'load_data_seed' && !actionSourceOrgId) {

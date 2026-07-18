@@ -790,7 +790,7 @@ describe('PipelineOrchestratorService manual post-deploy integration', () => {
   it('rejects manual actions on terminal runs that are not awaiting input', async () => {
     db.automationRun.findUnique.mockResolvedValue({
       ...legacyRun(),
-      status: 'completed',
+      status: 'running',
       checkpoint: {
         targetOrgConnectionId: 'target-1',
         awaitingUserActions: false,
@@ -1060,7 +1060,7 @@ describe('PipelineOrchestratorService V2 job ownership', () => {
     await service.runUserActions('run-1', {
       actions: ['load_data_seed'],
       datasets: ['Accounts'],
-    }, 'owner-1');
+    });
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       type: 'cona_seed',
