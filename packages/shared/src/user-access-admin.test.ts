@@ -64,10 +64,11 @@ describe('updateUserAccessSchema', () => {
 });
 
 describe('revocable default modules', () => {
-  it('dashboard is never revocable; other defaults are', () => {
+  it('dashboard is never revocable; revocable modules are real app modules', () => {
     assert.equal((REVOCABLE_DEFAULT_MODULES as readonly string[]).includes('dashboard'), false);
+    assert.equal((DEFAULT_USER_MODULES as readonly string[]).includes('dashboard'), true);
     for (const module of REVOCABLE_DEFAULT_MODULES) {
-      assert.equal((DEFAULT_USER_MODULES as readonly string[]).includes(module), true);
+      assert.equal((APP_MODULES as readonly string[]).includes(module), true);
     }
   });
 
@@ -79,10 +80,10 @@ describe('revocable default modules', () => {
     assert.deepEqual(sanitizeRevokedModules(undefined), []);
   });
 
-  it('getEffectiveModules subtracts revoked defaults for users', () => {
+  it('getEffectiveModules subtracts revoked modules for users', () => {
     const profile: Parameters<typeof getEffectiveModules>[0] = {
       role: 'user',
-      grantedModules: ['learning'],
+      grantedModules: ['learning', 'environment', 'data', 'defects'],
       revokedModules: ['data', 'defects'],
     };
     const effective = getEffectiveModules(profile);

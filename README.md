@@ -440,7 +440,7 @@ If you open the web app directly on port **3000** from another device, set `NEXT
 | Org & Users | `/org-setup` | Tabbed: baseline setup, load org config, CONA users, CSV provisioning |
 | Monitoring | `/monitoring` | Job stats, filterable jobs table, status detail on row select |
 | AI Copilot | Sidebar button | Streaming NVIDIA-powered assistant (see [AI Copilot](#ai-copilot)) |
-| Salesforce Academy | `/learning` | Admin-assignable training: 7 paths in 3 groups — Salesforce core (beginner→architect), programming (JavaScript, Java), delivery (Release Management & DevOps) — AI mentor per lesson, instant AI quizzes, progress tracking, per-lesson 5-minute video scripts in `docs/training/` (see `docs/salesforce-academy.md`) |
+| Salesforce Academy | `/learning` | Admin-assignable training: 8 paths in 3 groups — Salesforce core (beginner→architect), programming (JavaScript, Java), delivery (Release Management & DevOps) — AI mentor per lesson, instant AI quizzes, progress tracking, per-lesson 5-minute video scripts in `docs/training/` (see `docs/salesforce-academy.md`) |
 | Academy Progress | `/learning/team` | Admin: assign training paths, track per-learner lessons/quiz scores/completions |
 | User Access | `/admin/users` | Admin user and permission management |
 | Notifications | `/admin/notifications` | Master switch, categories, email channel, Slack/Teams webhooks |

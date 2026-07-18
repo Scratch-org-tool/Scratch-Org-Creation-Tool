@@ -24,6 +24,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/contexts/auth-context';
 import { cn } from '@/utils/cn';
 import {
+  LEARNING_LEVELS,
   LEARNING_PATH_CATEGORY_DESCRIPTIONS,
   LEARNING_PATH_CATEGORY_LABELS,
   LEARNING_PATH_CATEGORY_RANK,
@@ -33,9 +34,12 @@ import { ProgressRing } from './progress-ring';
 import { useAcademyWorkspace } from './use-academy-workspace';
 import type {
   LearningCatalogResponse,
+  LearningLevel,
   LearningPathCategory,
   LearningPathSummary,
 } from './types';
+
+const LEVEL_FILTERS: Array<LearningLevel | 'all'> = ['all', ...LEARNING_LEVELS];
 
 function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
   const { stats, continueTarget } = catalog;

@@ -1,45 +1,39 @@
 # Salesforce Academy (Learning Module)
 
 An admin-controlled, AI-powered training program built into the platform. It takes a complete
-fresher to architect-level understanding through seven guided paths — the Salesforce core
+fresher to architect-level understanding through eight guided paths — the Salesforce core
 curriculum plus programming (JavaScript, Java) and delivery (release management) tracks — with an
 AI mentor on every lesson, an instant quiz after every module, and full progress visibility for
 administrators.
 
 ## What learners get
 
-- **Seven learning paths in three catalog groups** (22 modules, 69 lessons, ~55 hours of
+- **Eight learning paths in three catalog groups** (25 modules, 75 lessons, ~71 hours of
   curriculum):
 
   *Salesforce core curriculum*
   1. **Salesforce Foundations** (Beginner) — CRM concepts, the platform, navigation, data model,
      reports, collaboration. Designed so a new joiner needs zero prior knowledge.
-  2. **JavaScript Engineering** (Beginner) — modern JavaScript and TypeScript, async APIs,
-     browser accessibility and security, Jest, and production-quality Lightning Web Components.
-  3. **Admin & Configuration Mastery** (Intermediate) — the security model (profiles, permission
+  2. **Admin & Configuration Mastery** (Intermediate) — the security model (profiles, permission
      sets, OWD, sharing), Flow automation, validation/formulas, data loading, sandboxes and releases.
-  4. **Modern Salesforce Platform** (Intermediate) — Customer 360 cloud selection, OmniStudio,
+  3. **Modern Salesforce Platform** (Intermediate) — Customer 360 cloud selection, OmniStudio,
      Data Cloud, Flow Orchestration, Agentforce, trusted AI, and production operations.
-  5. **Platform Developer Track** (Advanced) — Apex, SOQL/SOSL, triggers, governor limits, testing,
+  4. **Platform Developer Track** (Advanced) — Apex, SOQL/SOSL, triggers, governor limits, testing,
      async Apex, Lightning Web Components, APIs and integration patterns.
-  6. **Java Integration Engineering** (Advanced) — modern Java, build/test tooling, Spring Boot,
-     OAuth, Salesforce APIs, resilient integration, and observability.
-  7. **Salesforce Release Management** (Advanced) — Git and release trains, metadata and packages,
-     environments, CI/CD gates, runbooks, recovery, hotfixes, and delivery improvement.
-  8. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
+  5. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
      and identity architecture, Salesforce DX, scratch orgs, packaging, CI/CD, and governance.
 
   *Programming & platform skills*
-  5. **JavaScript Mastery** (Intermediate) — language fundamentals, modern ES6+ syntax, async
+  6. **JavaScript Mastery** (Intermediate) — language fundamentals, modern ES6+ syntax, async
      programming with promises/await, the DOM and events, fetch + REST APIs, and the exact
      patterns Lightning Web Components are built on. Full code samples in every module.
-  6. **Java Programming** (Intermediate) — the JVM platform, types and control flow, OO design
+  7. **Java Programming** (Intermediate) — the JVM platform, types and control flow, OO design
      with interfaces and collections/generics/streams, exceptions, HTTP + JSON against the
      Salesforce REST API, and Maven/JUnit builds — the language of the middleware next to
      every org (and the one Apex grew from).
 
   *Delivery & release management*
-  7. **Release Management & DevOps** (Advanced) — branching and environment strategy, release
+  8. **Release Management & DevOps** (Advanced) — branching and environment strategy, release
      cadence/calendars/freeze windows, CI/CD quality gates with validate-only deploys, test
      strategy and static analysis, deployment/rollback mechanics, release planning with
      approvals and notes, go-live runbooks and hypercare, and DORA release-health metrics —
@@ -66,12 +60,14 @@ administrators.
   Storyboards fall back to a question-aware, lesson-derived script when NVIDIA is unavailable.
 - **Video sessions** — every lesson page has a `Read | Video session` switch. The video session
   block shows real training videos that an **administrator uploads for that lesson** (MP4, WebM,
-  OGG, MOV, MKV, AVI). Learners play them inline with the standard player (seek, volume,
-  fullscreen); playback is authenticated, so videos are only reachable by users with Academy
-  access (and, for assigned-only learners, only for paths assigned to them). Admins upload and
-  delete directly inside the block; files are stored on the API server under `LEARNING_VIDEO_DIR`
-  with metadata in Postgres, and the streaming endpoint supports HTTP Range requests. Production
-  scripts for recording these videos live in `docs/training/` (see below).
+  OGG, MOV, MKV, AVI). The block is watch-only: learners play the videos inline with the standard
+  player (seek, volume, fullscreen) and get no upload or delete controls. Playback is
+  authenticated, so videos are only reachable by users with Academy access (and, for assigned-only
+  learners, only for paths assigned to them). Admins manage the videos from **Academy Progress →
+  Lesson video sessions** (`/learning/team`): pick path → module → lesson, upload, and delete;
+  files are stored on the API server under `LEARNING_VIDEO_DIR` with metadata in Postgres, and the
+  streaming endpoint supports HTTP Range requests. Production scripts for recording these videos
+  live in `docs/training/` (see below).
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
   (with a 220-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
@@ -101,6 +97,9 @@ administrators.
 - **Team progress dashboard** — per-learner rows with lessons completed, quizzes passed, average
   score, last activity, and per-path progress bars; team totals (active learners, assignments,
   average score). Assignments can be revoked; progress is never deleted.
+- **Lesson video management** — the same Academy Progress page hosts the **Lesson video sessions**
+  panel: pick path → module → lesson, upload recorded training videos, and delete outdated ones.
+  Learners only ever see the resulting watch-only playback on the lesson page.
 - **Completion notifications** — when a learner completes an assigned path, the assigning admin
   is notified.
 

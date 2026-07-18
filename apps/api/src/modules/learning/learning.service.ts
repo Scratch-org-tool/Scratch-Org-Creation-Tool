@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
   averagePercent,
@@ -83,7 +89,7 @@ function toAssignmentView(
 export class LearningService {
   private readonly logger = new Logger(LearningService.name);
 
-  constructor(private readonly notifications: NotificationsService) {}
+  constructor(@Optional() private readonly notifications?: NotificationsService) {}
 
   /** Resolve the user's catalog scope. Admins always see everything. */
   async getAccessScope(userId: string): Promise<LearningAccessScope> {
@@ -404,6 +410,7 @@ export class LearningService {
 
   /** Notify once when either a lesson or quiz changes a path to complete. */
   async notifyPathCompleted(userId: string, pathId: string, pathTitle: string) {
+    if (!this.notifications) return;
     try {
       await this.notifications.notify({
         userId,

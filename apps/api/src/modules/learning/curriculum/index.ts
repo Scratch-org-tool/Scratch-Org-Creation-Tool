@@ -12,6 +12,7 @@ import { architectPath } from './architect.path';
 import { modernPlatformPath } from './modern-platform.path';
 import { javascriptPath } from './javascript.path';
 import { javaPath } from './java.path';
+import { modernPlatformPath } from './modern-platform.path';
 import { releaseManagementPath } from './release-management.path';
 
 export type {
@@ -27,9 +28,9 @@ export type {
  */
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
-  javascriptPath,
   adminPath,
   modernPlatformPath,
+  javascriptPath,
   javaPath,
   developerPath,
   releaseManagementPath,
