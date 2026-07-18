@@ -35,6 +35,14 @@ every lesson, an instant quiz after every module, and full progress visibility f
   Story scripts use the same NVIDIA integration as the platform copilot; all generated media comes
   from self-hosted open-source engines (no per-request vendor cost, nothing leaves your network).
   Storyboards fall back to a question-aware, lesson-derived script when NVIDIA is unavailable.
+- **Video sessions** — every lesson page has a `Read | Video session` switch. The video session
+  is the complete production script of that topic, end to end: a timecoded cold open, concept
+  segments, **hands-on demo segments with numbered click-paths** (how to create, how to execute),
+  the real-world story, recap, and next-step CTA — each with word-for-word narration and
+  on-screen/animation direction. One click plays it as an in-app animated session (story player);
+  exports (Copy, `.md` production script, narration-only `.txt`) feed external AI video tools
+  (HeyGen, Synthesia, InVideo, CapCut…). AI-scripted with a deterministic curriculum-derived
+  fallback, so all 42 topics always have a script. See `docs/academy-video-sessions-plan.md`.
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
   (with a 130-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
@@ -80,6 +88,7 @@ All routes require authentication and the `learning` module (admins always have 
 | GET | `/api/learning/paths/:pathId` | One path with per-lesson/quiz status |
 | GET | `/api/learning/lessons/:lessonId` | Full lesson content + prev/next navigation |
 | POST | `/api/learning/lessons/:lessonId/complete` | Idempotent lesson completion |
+| GET | `/api/learning/lessons/:lessonId/video-script` | Complete end-to-end video session script (AI-first, curriculum fallback) |
 | POST | `/api/learning/modules/:moduleId/quiz` | Start (or resume) a quiz attempt |
 | GET | `/api/learning/modules/:moduleId/attempts` | The user's attempt history for a module |
 | POST | `/api/learning/quiz/:attemptId/submit` | Score an attempt server-side; returns full review |

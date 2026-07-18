@@ -27,6 +27,7 @@ import { LearningService } from './learning.service';
 import { LearningQuizService } from './learning-quiz.service';
 import { LearningTutorService } from './learning-tutor.service';
 import { LearningExplainerService } from './learning-explainer.service';
+import { LearningVideoScriptService } from './learning-video-script.service';
 import { LearningAdminService } from './learning-admin.service';
 
 @Controller('learning')
@@ -38,6 +39,7 @@ export class LearningController {
     private readonly quizService: LearningQuizService,
     private readonly tutorService: LearningTutorService,
     private readonly explainerService: LearningExplainerService,
+    private readonly videoScriptService: LearningVideoScriptService,
     private readonly adminService: LearningAdminService,
   ) {}
 
@@ -61,6 +63,12 @@ export class LearningController {
   @Post('lessons/:lessonId/complete')
   completeLesson(@CurrentUser() userId: string, @Param('lessonId') lessonId: string) {
     return this.learningService.completeLesson(userId, lessonId);
+  }
+
+  /** Complete end-to-end video session script for one lesson (AI-first, curriculum fallback). */
+  @Get('lessons/:lessonId/video-script')
+  getVideoScript(@Param('lessonId') lessonId: string) {
+    return this.videoScriptService.getScript(lessonId);
   }
 
   @Post('modules/:moduleId/quiz')
