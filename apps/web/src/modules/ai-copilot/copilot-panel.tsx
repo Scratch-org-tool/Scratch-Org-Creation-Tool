@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { Bot, Send, ChevronDown, ChevronUp, X, Square } from 'lucide-react';
+import { Bot, Send, ChevronDown, ChevronUp, X, Square, Mic, Volume2, VolumeX } from 'lucide-react';
 import { getQuickPromptsForPath } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
@@ -12,6 +12,9 @@ import { cn } from '@/utils/cn';
 import { useCopilotStore } from '@/store';
 import { streamCopilotChat } from '@/hooks/use-copilot-stream';
 import { useCopilotContext } from '@/hooks/use-copilot-context';
+import { useVoiceSettings } from '@/hooks/use-voice-settings';
+import { useCopilotVoice, type CopilotVoiceController } from '@/hooks/use-copilot-voice';
+import { useAuth } from '@/contexts/auth-context';
 import { CopilotActionCard } from '@/modules/ai-copilot/copilot-action-handler';
 
 export function CopilotPanel() {
@@ -36,6 +39,11 @@ export function CopilotPanel() {
     setOpen,
     toggle,
   } = useCopilotStore();
+
+  const { profile } = useAuth();
+  const voiceConfig = useVoiceSettings();
+  const [muteReplies, setMuteReplies] = useState(false);
+  const voiceRef = useRef<CopilotVoiceController | null>(null);
 
   const [input, setInput] = useState('');
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
@@ -67,6 +75,8 @@ export function CopilotPanel() {
       wasOpenRef.current = false;
       launcherRef.current?.focus();
     }
+    // Never keep the mic or narration running once the panel is closed.
+    voiceRef.current?.stopAll();
   }, [isOpen]);
 
   useEffect(() => {
@@ -88,6 +98,7 @@ export function CopilotPanel() {
     }
     setLoading(false);
     setStreamStatus('idle');
+    voiceRef.current?.stopAll();
   };
 
   const sendMessage = async (text: string) => {
@@ -135,6 +146,7 @@ export function CopilotPanel() {
             isStreaming: false,
             action: event.action,
           });
+          voiceRef.current?.speakResponse(event.message.content);
         },
         onError: (message) => {
           updateMessage(assistantId, {
@@ -162,10 +174,26 @@ export function CopilotPanel() {
       setLoading(false);
       setStreamStatus('idle');
       updateMessage(assistantId, { isStreaming: false });
+      // Release the voice "thinking" state if the reply never reached onDone
+      // (e.g. an error); a no-op once a spoken reply has already started.
+      voiceRef.current?.speakResponse('');
     }
   };
 
   const send = () => void sendMessage(input);
+
+  const voice = useCopilotVoice({
+    settings: {
+      ...voiceConfig.settings,
+      speakResponses: voiceConfig.settings.speakResponses && !muteReplies,
+    },
+    available: voiceConfig.enabled,
+    displayName: profile?.displayName,
+    onCommand: (text) => {
+      void sendMessage(text);
+    },
+  });
+  voiceRef.current = voice;
 
   return (
     <>
@@ -230,6 +258,35 @@ export function CopilotPanel() {
               </div>
             </div>
             <div className="flex items-center gap-1 shrink-0">
+              {voice.available && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => voice.toggleListening()}
+                    className={cn(
+                      'p-1.5 rounded-md transition-colors',
+                      voice.listening
+                        ? 'text-red-400 bg-red-500/15 hover:bg-red-500/25 animate-pulse'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-secondary',
+                    )}
+                    aria-label={voice.listening ? 'Stop voice listening' : 'Start voice listening'}
+                    aria-pressed={voice.listening}
+                    title={voice.listening ? 'Stop listening' : 'Talk to the Copilot'}
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMuteReplies((m) => !m)}
+                    className="text-muted-foreground hover:text-foreground p-1.5 rounded-md hover:bg-secondary"
+                    aria-label={muteReplies ? 'Unmute spoken replies' : 'Mute spoken replies'}
+                    aria-pressed={!muteReplies}
+                    title={muteReplies ? 'Spoken replies off' : 'Spoken replies on'}
+                  >
+                    {muteReplies ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                  </button>
+                </>
+              )}
               {isBusy && (
                 <button
                   type="button"
@@ -260,6 +317,12 @@ export function CopilotPanel() {
                   I help you use this application — navigation, workflows, and troubleshooting on{' '}
                   <span className="text-foreground">{copilotContext.pageTitle}</span>.
                 </p>
+                {voice.available && (
+                  <p className="text-xs text-muted-foreground/80">
+                    Tip: tap the mic and say “{voiceConfig.settings.wakeWords[0]}” — I’ll greet you and
+                    answer out loud.
+                  </p>
+                )}
                 <div className="flex flex-wrap justify-center gap-1.5 pt-1">
                   {quickPrompts.map((prompt) => (
                     <button
@@ -348,6 +411,43 @@ export function CopilotPanel() {
           </div>
 
           <div className="p-3 border-t border-border shrink-0 bg-card/95">
+            {voice.available && (voice.error || voice.phase === 'listening' || voice.phase === 'thinking' || voice.phase === 'speaking') && (
+              <div className="mb-2 flex items-center gap-2 text-xs" aria-live="polite">
+                {voice.error ? (
+                  <>
+                    <span className="text-red-400 truncate flex-1">{voice.error}</span>
+                    <button
+                      type="button"
+                      onClick={() => voice.clearError()}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label="Dismiss voice error"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span
+                      className={cn(
+                        'inline-flex h-2 w-2 shrink-0 rounded-full',
+                        voice.phase === 'listening'
+                          ? 'bg-red-400 animate-pulse'
+                          : voice.phase === 'speaking'
+                            ? 'bg-emerald-400'
+                            : 'bg-purple-400',
+                      )}
+                    />
+                    <span className="text-muted-foreground truncate">
+                      {voice.phase === 'listening'
+                        ? voice.interimTranscript || 'Listening…'
+                        : voice.phase === 'thinking'
+                          ? 'Thinking…'
+                          : 'Speaking…'}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
             <div className="flex gap-2">
               <Textarea
                 ref={inputRef}
