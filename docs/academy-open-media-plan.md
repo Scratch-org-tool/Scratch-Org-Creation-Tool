@@ -20,9 +20,9 @@ a hosted **Hugging Face Space** (zero infrastructure; the default) or a **self-h
 
 | Capability | Hosted Space (default) | Self-hosted alternative | License | Why |
 |-----------|------------------------|------------------------|---------|-----|
-| Voice narration | **VibeVoice-Large Space** (`VIBEVOICE_SPACE_URL`, Gradio `/generate_podcast_wrapper`) | Community OpenAI-compatible VibeVoice server (`VIBEVOICE_BASE_URL`, `POST /v1/audio/speech`) | MIT | The user-requested engine — Microsoft's frontier long-form expressive TTS with ten stock narrators. Microsoft disabled TTS inference in the primary repo, so the Space / community servers are the supported paths. |
+| Voice narration | **Qwen3-TTS Space** (`QWEN_TTS_SPACE_URL`, Gradio `/generate_custom_voice`) — teaching-style `instruct` per scene delivery | Legacy VibeVoice Space (`VIBEVOICE_SPACE_URL`) or OpenAI-compatible VibeVoice server (`VIBEVOICE_BASE_URL`, `POST /v1/audio/speech`) | Qwen3-TTS: Apache-2.0; VibeVoice: MIT | Qwen3-TTS supports expressive instruct-driven narration (mentor tone, not read-aloud) with stock speakers (Serena, Ryan, Dylan, …). VibeVoice remains a fallback when Qwen is not configured. |
 | Scene images | **Z-Image-Turbo Space** (`ZIMAGE_SPACE_URL`, Gradio `/generate_image`) | FLUX.1-schnell / SDXL behind an SD-WebUI-compatible API (`SD_WEBUI_BASE_URL`, `POST /sdapi/v1/txt2img`) | Z-Image: Apache-2.0; FLUX.1-schnell: Apache-2.0 | Z-Image-Turbo (Tongyi) generates strong 1280×720 scene art in ~9 steps / ~10 s on the free Space. Self-host path keeps the de-facto SD-WebUI REST standard. |
-| Motion scenes (video) | **Wan 2.2 I2V Space** (`WAN_VIDEO_SPACE_URL`, Gradio `/generate_video`) — animates the generated scene still (image-to-video + Lightning LoRA, 4–8 steps) | LTX-Video / Wan 2.2 in ComfyUI (`COMFYUI_BASE_URL`, workflow template) | Wan 2.2: Apache-2.0; LTX: Apache-2.0 | Image-to-video keeps every clip visually consistent with the still-art tier and needs no text-to-video prompt fidelity. ComfyUI remains the fully-controlled option. |
+| Motion scenes (video) | **Wan555 I2V Space** (`WAN_VIDEO_SPACE_URL`, Gradio `/generate_video`) — animates the generated scene still (image-to-video, 4–8 steps) | LTX-Video / Wan 2.2 in ComfyUI (`COMFYUI_BASE_URL`, workflow template) | Wan 2.2: Apache-2.0; LTX: Apache-2.0 | Image-to-video keeps every clip visually consistent with the still-art tier and needs no text-to-video prompt fidelity. ComfyUI remains the fully-controlled option. |
 
 Set `HF_TOKEN` (a free Hugging Face account token) when using Spaces: public **ZeroGPU** Spaces
 strictly limit anonymous GPU time, and long jobs (voice, video) are typically rejected without a
@@ -35,17 +35,19 @@ because clips are generated per scene from the same art direction, the look stay
 ## 3. Architecture (implemented in this change)
 
 ```
-Learner ──> Web player (video → image → animated diagram; VibeVoice → device voice → captions)
+Learner ──> Web player (video → image → animated diagram; Qwen studio voice → device voice → captions)
                  │  POST /api/learning/tutor/explainer            (storyboard + capabilities)
                  │  POST /api/learning/tutor/explainer/video      (per scene, 204 = fall back)
                  │  POST /api/learning/tutor/explainer/image      (per scene, 204 = fall back)
-                 │  POST /api/learning/tutor/explainer/speech     (per scene + voice, 204 = fall back)
+                 │  POST /api/learning/tutor/explainer/speech     (per scene + voice + delivery, 204 = fall back)
                  ▼
 NestJS API ── OpenSourceMediaService
-                 ├── VIBEVOICE_BASE_URL   → POST {base}/v1/audio/speech   (OpenAI-compatible, WAV out)
-                 ├── SD_WEBUI_BASE_URL    → POST {base}/sdapi/v1/txt2img  (base64 PNG out)
-                 └── COMFYUI_BASE_URL     → POST {base}/prompt + poll     (webp/mp4/webm clip out)
-                                            workflow from COMFYUI_VIDEO_WORKFLOW template
+                 ├── QWEN_TTS_SPACE_URL    → Gradio /generate_custom_voice (WAV/MP3 out)
+                 ├── ZIMAGE_SPACE_URL      → Gradio /generate_image
+                 ├── WAN_VIDEO_SPACE_URL   → Gradio /generate_video (I2V)
+                 ├── VIBEVOICE_BASE_URL    → POST {base}/v1/audio/speech   (OpenAI-compatible, WAV out)
+                 ├── SD_WEBUI_BASE_URL     → POST {base}/sdapi/v1/txt2img  (base64 PNG out)
+                 └── COMFYUI_BASE_URL      → POST {base}/prompt + poll     (webp/mp4/webm clip out)
 ```
 
 Design rules carried over from the previous provider:
@@ -62,10 +64,14 @@ Design rules carried over from the previous provider:
 ### Option A — hosted Hugging Face Spaces (no GPU, fastest start)
 
 ```env
-VIBEVOICE_SPACE_URL="https://steveeeeeeen-vibevoice-large.hf.space"
+QWEN_TTS_SPACE_URL="https://qwen-qwen3-tts.hf.space"
+QWEN_TTS_SPACE_API="/generate_custom_voice"
 ZIMAGE_SPACE_URL="https://mrfakename-z-image-turbo.hf.space"
 WAN_VIDEO_SPACE_URL="https://kulkas2pintu-wan555.hf.space"
 HF_TOKEN="hf_..."   # free account token; required in practice for voice + video quota
+# Optional overrides if your duplicated Space uses different Gradio fn names:
+# ZIMAGE_SPACE_API="/generate_image"
+# WAN_VIDEO_SPACE_API="/generate_video"
 ```
 
 Notes:
@@ -137,8 +143,8 @@ Wan 2.2 or LTX-2 without touching application code.
 
 - **Phase 0 (done)** — deterministic fallbacks (animated diagrams, browser speech) are the
   permanent safety net; nothing below is load-bearing.
-- **Phase 1 — Voice (this change)**: VibeVoice narration with six curated voices, selectable in
-  the player; browser voices remain the fallback tier.
+- **Phase 1 — Voice (this change)**: Qwen3-TTS studio narration with six curated speakers, selectable in
+  the player; scene `delivery` maps to teaching-style `instruct`; browser voices remain the fallback tier.
 - **Phase 2 — Still art (this change)**: FLUX/SDXL scene art via the SD-WebUI API with the same
   prompt-composition and caching rules as before.
 - **Phase 3 — Motion scenes (this change)**: ComfyUI/LTX clips per scene; player prefers motion,
@@ -155,7 +161,7 @@ configured) — and the player header shows a matching badge:
 
 | What you see | Meaning | Fix |
 |--------------|---------|-----|
-| Badge **"Built-in visuals · device voice"**, voice list shows only Microsoft/Apple/Google system voices | No media backend is configured — this is the expected fallback, not a bug | Set the three `*_SPACE_URL` values (Option A, zero infra) or self-hosted URLs in `apps/api/.env` and restart the API |
+| Badge **"Built-in visuals · device voice"**, voice list shows only Microsoft/Apple/Google system voices | No media backend is configured — this is the expected fallback, not a bug | Set `QWEN_TTS_SPACE_URL`, `ZIMAGE_SPACE_URL`, and `WAN_VIDEO_SPACE_URL` (Option A, zero infra) or self-hosted URLs in `apps/api/.env` and restart the API |
 | Images work but voice/video fail with quota or "GPU duration" errors in API logs | Public ZeroGPU Spaces reject long anonymous jobs | Set `HF_TOKEN`, or duplicate the Space into your own HF account and point `*_SPACE_URL` at it |
 | Amber badge **"Media studio unreachable"** | A URL is configured but the server didn't answer within ~2.5 s | Start the server; verify with `curl -i $VIBEVOICE_BASE_URL/v1/audio/voices`, `curl -i $SD_WEBUI_BASE_URL/sdapi/v1/sd-models`, `curl -i $COMFYUI_BASE_URL/system_stats`; check firewalls/ports |
 | Studio voices listed but narration silent / wrong voice | Browser fallback engaged mid-scene (server error) | Check API logs for `[OpenSourceMediaService]` warnings; the picker keeps working with device voices meanwhile |
@@ -164,8 +170,9 @@ configured) — and the player header shows a matching badge:
 
 Notes:
 - Probes cache for 60 seconds, so a freshly started server appears within a minute (no restart).
-- `media.status` semantics: the API only advertises a tier (and the browser only requests media
-  for it) when the tier is `ready` — a down server costs one probe, not a per-scene timeout.
+- HF Spaces are probed via `GET {space}/gradio_api/info` (more reliable than `GET /`).
+- `media.generated*` flags reflect whether a tier is **configured** (URLs set); `media.status` shows
+  live probe results (`ready` / `unreachable` / `off`) for UI warnings only — generation is still attempted when configured.
 
 ## 7. Risks and mitigations
 
@@ -173,6 +180,6 @@ Notes:
 |------|------------|
 | GPU box offline / slow | Per-capability timeouts → 204 → next tier; the story never stalls on media. |
 | ComfyUI workflow drift across versions | Workflow lives in a replaceable template file; poller accepts any webp/gif/mp4/webm output node. |
-| VibeVoice misuse concerns (voice cloning) | Only ship the six stock demo voices; no learner-supplied reference audio path is exposed. |
+| VibeVoice misuse concerns (voice cloning) | Qwen path uses stock speakers only; no learner-supplied reference audio path is exposed. |
 | Diffusion models render gibberish text | Negative prompts forbid text/logos/UI; all real labels are app-owned overlays on top of the media. |
 | Long video generation time | Clips are short (~4 s), cached 6 h, deduplicated, and loaded lazily scene-by-scene with preload. |

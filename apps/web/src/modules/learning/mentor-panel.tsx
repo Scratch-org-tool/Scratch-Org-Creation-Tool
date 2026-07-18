@@ -260,7 +260,7 @@ export function MentorPanel({
             <div className="relative mt-2 flex flex-wrap justify-center gap-1.5 text-[9px] text-muted-foreground">
               <span className="rounded-full bg-background/50 px-2 py-0.5">Story-first</span>
               <span className="rounded-full bg-background/50 px-2 py-0.5">Motion scenes</span>
-              <span className="rounded-full bg-background/50 px-2 py-0.5">VibeVoice narrators</span>
+              <span className="rounded-full bg-background/50 px-2 py-0.5">Studio narrators</span>
             </div>
           </form>
           <StoryCard

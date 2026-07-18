@@ -234,7 +234,7 @@ describe('learningExplainerRequestSchema', () => {
       lessonId: 'x',
       sceneId: 'scene-1',
     });
-    assert.equal(speech.voice, 'en-Alice_woman');
+    assert.equal(speech.voice, 'Serena');
     assert.equal(
       learningExplainerSpeechRequestSchema.safeParse({
         lessonId: 'x',

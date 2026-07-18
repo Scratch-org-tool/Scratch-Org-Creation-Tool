@@ -105,7 +105,7 @@ function CompactConcepts({
 /**
  * Cinematic visual-story player backed by the self-hosted open-source media
  * stack: generated motion clips → generated still art → animated diagrams,
- * and VibeVoice narration → device voices → timed captions.
+ * and studio narration → device voices → timed captions.
  */
 export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
   const open = request !== null;
@@ -341,14 +341,14 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
     }
 
     const voice = voiceChoice.slice(STUDIO_VOICE_PREFIX.length) as ExplainerStudioVoice;
-    const audioKey = `${scene.id}|${voice}`;
+    const audioKey = `${scene.id}|${voice}|${scene.delivery}`;
     const playGeneratedAudio = async () => {
       setNarrationStatus('preparing');
       try {
         let url = audioUrlsRef.current.get(audioKey);
         if (!url) {
           const blob = await fetchExplainerSpeech(
-            { ...request, sceneId: scene.id, voice },
+            { ...request, sceneId: scene.id, voice, delivery: scene.delivery },
             controller.signal,
           );
           if (blob.size < 64 || !blob.type.startsWith('audio/')) {
@@ -426,7 +426,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
     const labels: Record<string, string> = {
       video: 'motion (ComfyUI)',
       images: 'images (Stable Diffusion)',
-      speech: 'voice (VibeVoice)',
+      speech: 'voice (studio)',
     };
     return Object.entries(board.media.status)
       .filter(([, status]) => status === 'unreachable')
@@ -479,7 +479,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                   {board.media.generatedSpeech && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-px font-medium text-emerald-300">
                       <Mic2 className="size-2.5" />
-                      VibeVoice narration
+                      Qwen studio voice
                     </span>
                   )}
                   {unreachableTiers.length > 0 && (
@@ -494,7 +494,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                   {mediaFullyOff && unreachableTiers.length === 0 && (
                     <span
                       className="rounded-full bg-secondary/70 px-1.5 py-px font-medium text-muted-foreground"
-                      title="No media servers connected — set VIBEVOICE_BASE_URL, SD_WEBUI_BASE_URL, and/or COMFYUI_BASE_URL (docs/academy-open-media-plan.md). Stories keep working with built-in visuals and your device voice."
+                      title="No media servers connected — set QWEN_TTS_SPACE_URL, ZIMAGE_SPACE_URL, and/or WAN_VIDEO_SPACE_URL (docs/academy-open-media-plan.md). Stories keep working with built-in visuals and your device voice."
                     >
                       Built-in visuals · device voice
                     </span>
@@ -728,7 +728,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                     {board.media.generatedSpeech ? (
                       <SelectGroup>
                         <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                          Studio voices (VibeVoice)
+                          Studio voices (Qwen)
                         </SelectLabel>
                         {EXPLAINER_STUDIO_VOICE_OPTIONS.map((voice) => (
                           <SelectItem
@@ -744,8 +744,8 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                       <SelectGroup>
                         <SelectLabel className="max-w-[220px] whitespace-normal text-[10px] font-normal normal-case leading-snug text-amber-300/90">
                           {board.media.status.speech === 'unreachable'
-                            ? 'VibeVoice server is not answering — using your device voices below.'
-                            : 'VibeVoice is not connected — using your device voices below.'}
+                            ? 'Studio voice server is not answering — using your device voices below.'
+                            : 'Studio voice is not connected — using your device voices below.'}
                         </SelectLabel>
                       </SelectGroup>
                     )}

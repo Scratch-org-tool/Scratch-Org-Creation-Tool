@@ -1,4 +1,4 @@
-import { buildApiUrl } from '@/lib/api-base-url';
+import { buildApiUrl, buildDirectApiUrl } from '@/lib/api-base-url';
 
 let getIdToken: ((forceRefresh?: boolean) => Promise<string | null>) | null = null;
 
@@ -95,7 +95,11 @@ export async function api<T>(path: string, options?: RequestInit, retried = fals
   return res.json() as Promise<T>;
 }
 
-export async function apiBlob(path: string, options?: RequestInit, retried = false): Promise<Blob> {
+export async function apiBlob(
+  path: string,
+  options?: RequestInit & { direct?: boolean },
+  retried = false,
+): Promise<Blob> {
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> | undefined),
   };
@@ -103,10 +107,13 @@ export async function apiBlob(path: string, options?: RequestInit, retried = fal
   const token = await resolveToken(false);
   if (token) headers.Authorization = `Bearer ${token}`;
 
+  const { direct, ...fetchOptions } = options ?? {};
+  const url = direct ? buildDirectApiUrl(path) : buildApiUrl(path);
+
   let res: Response;
   try {
-    res = await fetch(buildApiUrl(path), {
-      ...options,
+    res = await fetch(url, {
+      ...fetchOptions,
       headers,
       cache: 'no-store',
     });

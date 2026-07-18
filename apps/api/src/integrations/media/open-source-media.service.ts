@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Injectable, Logger } from '@nestjs/common';
 import type {
+  ExplainerDelivery,
   ExplainerMediaStatus,
   ExplainerMediaTierStatus,
   ExplainerStudioVoice,
@@ -11,8 +12,8 @@ import { GradioSpaceClient, extractFileRef } from './gradio-space.client';
 /**
  * Self-hosted open-source media stack for Academy stories:
  *
- * - Voice   → Microsoft VibeVoice behind any community OpenAI-compatible
- *             server (`POST {VIBEVOICE_BASE_URL}/v1/audio/speech`).
+ * - Voice   → Qwen3-TTS Space (`/generate_custom_voice`) or Microsoft VibeVoice
+ *             behind any community OpenAI-compatible server.
  * - Images  → FLUX.1-schnell / SDXL behind any Stable-Diffusion-WebUI-
  *             compatible server (`POST {SD_WEBUI_BASE_URL}/sdapi/v1/txt2img`).
  * - Video   → LTX-Video / Wan 2.2 via the ComfyUI HTTP API
@@ -45,6 +46,42 @@ export function configuredBaseUrl(value: string | undefined): string {
   const candidate = value?.trim() ?? '';
   if (!candidate || !/^https?:\/\//i.test(candidate)) return '';
   return candidate.replace(/\/+$/, '');
+}
+
+/** Teaching-style instruct strings for Qwen3-TTS from scene delivery. */
+export function qwenInstructForDelivery(delivery?: ExplainerDelivery): string {
+  const map: Record<ExplainerDelivery, string> = {
+    curious:
+      'Teach like a patient mentor discovering the idea with the learner; conversational, not monotone.',
+    clear:
+      'Explain simply to a Salesforce beginner; emphasize cause and effect, not slide labels.',
+    energetic:
+      'Sound engaged and encouraging, like coaching through a breakthrough moment.',
+    reflective:
+      'Slow down and help the learner connect this scene to the bigger picture.',
+  };
+  return delivery ? map[delivery] : map.clear;
+}
+
+/** Map legacy VibeVoice voice ids to Qwen speakers when old clients still send them. */
+export function mapQwenSpeaker(voice: ExplainerStudioVoice | string): string {
+  const legacy: Record<string, ExplainerStudioVoice> = {
+    'en-Alice_woman': 'Serena',
+    'en-Carter_man': 'Ryan',
+    'en-Frank_man': 'Dylan',
+    'en-Maya_woman': 'Vivian',
+    'en-Yasser_man': 'Eric',
+    'in-Samuel_man': 'Aiden',
+  };
+  return legacy[voice] ?? voice;
+}
+
+function isGradioSpaceUrl(base: string): boolean {
+  return /\.hf\.space/i.test(base) || /huggingface\.co\/spaces/i.test(base);
+}
+
+function probeTargetUrl(base: string): string {
+  return isGradioSpaceUrl(base) ? `${base}/gradio_api/info` : base;
 }
 
 function envInt(name: string, fallback: number): number {
@@ -169,8 +206,16 @@ export class OpenSourceMediaService {
    *  2. A self-hosted server (VibeVoice server / SD-WebUI / ComfyUI).
    */
 
-  private speechSpaceUrl(): string {
+  private qwenSpeechSpaceUrl(): string {
+    return configuredBaseUrl(process.env.QWEN_TTS_SPACE_URL);
+  }
+
+  private vibeVoiceSpeechSpaceUrl(): string {
     return configuredBaseUrl(process.env.VIBEVOICE_SPACE_URL);
+  }
+
+  private speechSpaceUrl(): string {
+    return this.qwenSpeechSpaceUrl() || this.vibeVoiceSpeechSpaceUrl();
   }
 
   private imageSpaceUrl(): string {
@@ -187,8 +232,11 @@ export class OpenSourceMediaService {
 
   isSpeechConfigured(): boolean {
     return (
-      Boolean(this.speechSpaceUrl() || configuredBaseUrl(process.env.VIBEVOICE_BASE_URL)) &&
-      process.env.VIBEVOICE_ENABLED !== 'false'
+      Boolean(
+        this.qwenSpeechSpaceUrl() ||
+          this.vibeVoiceSpeechSpaceUrl() ||
+          configuredBaseUrl(process.env.VIBEVOICE_BASE_URL),
+      ) && process.env.VIBEVOICE_ENABLED !== 'false'
     );
   }
 
@@ -225,8 +273,10 @@ export class OpenSourceMediaService {
       ),
       this.tierStatus(
         this.isSpeechConfigured(),
-        this.speechSpaceUrl() || process.env.VIBEVOICE_BASE_URL,
-        'VibeVoice',
+        this.qwenSpeechSpaceUrl() ||
+          this.vibeVoiceSpeechSpaceUrl() ||
+          process.env.VIBEVOICE_BASE_URL,
+        'Speech (Qwen3-TTS/VibeVoice)',
       ),
     ]);
     return { video, images, speech };
@@ -252,7 +302,7 @@ export class OpenSourceMediaService {
     let reachable = false;
     try {
       await this.fetchWithTimeout(
-        base,
+        probeTargetUrl(base),
         { method: 'GET' },
         envInt('MEDIA_PROBE_TIMEOUT_MS', PROBE_TIMEOUT_MS),
         `${label} probe`,
@@ -267,14 +317,20 @@ export class OpenSourceMediaService {
     return reachable;
   }
 
-  /* ------------------------- voice — VibeVoice --------------------------- */
+  /* ------------------------- voice — Qwen3-TTS / VibeVoice ---------------- */
 
   async generateSpeech(
     narration: string,
     voice: ExplainerStudioVoice,
+    delivery?: ExplainerDelivery,
   ): Promise<GeneratedMedia | null> {
     if (!this.isSpeechConfigured()) return null;
-    if (this.speechSpaceUrl()) return this.generateSpeechViaSpace(narration, voice);
+    if (this.qwenSpeechSpaceUrl()) {
+      return this.generateSpeechViaQwenSpace(narration, voice, delivery);
+    }
+    if (this.vibeVoiceSpeechSpaceUrl()) {
+      return this.generateSpeechViaVibeVoiceSpace(narration, voice);
+    }
     const base = configuredBaseUrl(process.env.VIBEVOICE_BASE_URL);
     if (!base) return null;
     try {
@@ -319,12 +375,53 @@ export class OpenSourceMediaService {
     }
   }
 
+  /** Qwen3-TTS via its hosted Gradio Space (`/generate_custom_voice`). */
+  private async generateSpeechViaQwenSpace(
+    narration: string,
+    voice: ExplainerStudioVoice,
+    delivery?: ExplainerDelivery,
+  ): Promise<GeneratedMedia | null> {
+    const base = this.qwenSpeechSpaceUrl();
+    const apiName =
+      process.env.QWEN_TTS_SPACE_API?.trim() || '/generate_custom_voice';
+    const modelSize = process.env.QWEN_TTS_MODEL_SIZE?.trim() || '1.7B';
+    const timeoutMs = envInt('HF_SPEECH_TIMEOUT_MS', SPACE_SPEECH_TIMEOUT_MS);
+    try {
+      const outputs = await this.spaceClient(base).call(
+        apiName,
+        [
+          narration.replace(/\s+/g, ' ').trim(),
+          'English',
+          mapQwenSpeaker(voice),
+          qwenInstructForDelivery(delivery),
+          modelSize,
+        ],
+        timeoutMs,
+      );
+      const statusMsg = typeof outputs[1] === 'string' ? outputs[1] : '';
+      const ref = extractFileRef(outputs[0] ?? outputs);
+      if (!ref) {
+        this.logger.warn(
+          `Qwen TTS Space returned no audio${statusMsg ? ` (${statusMsg})` : ''}: ${JSON.stringify(outputs).slice(0, 300)}`,
+        );
+        return null;
+      }
+      const media = await this.spaceClient(base).download(ref, timeoutMs);
+      return asMedia(media.buffer, media.contentType, MAX_AUDIO_BYTES);
+    } catch (error) {
+      this.logger.warn(
+        `Qwen TTS Space speech failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
   /** VibeVoice via its hosted Gradio Space (`/generate_podcast_wrapper`). */
-  private async generateSpeechViaSpace(
+  private async generateSpeechViaVibeVoiceSpace(
     narration: string,
     voice: ExplainerStudioVoice,
   ): Promise<GeneratedMedia | null> {
-    const base = this.speechSpaceUrl();
+    const base = this.vibeVoiceSpeechSpaceUrl();
     try {
       const script = `Speaker 1: ${narration.replace(/\s+/g, ' ').trim()}`;
       const outputs = await this.spaceClient(base).call(

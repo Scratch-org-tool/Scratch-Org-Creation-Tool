@@ -3,7 +3,9 @@ import {
   OpenSourceMediaService,
   configuredBaseUrl,
   findComfyOutputFile,
+  mapQwenSpeaker,
   pcmToWav,
+  qwenInstructForDelivery,
   substituteWorkflowPlaceholders,
 } from './open-source-media.service';
 
@@ -38,6 +40,14 @@ describe('open-source media helpers', () => {
     expect(parsed.text).toBe('A "cinematic" cloud\nwith depth');
     expect(parsed.again).toBe(parsed.text);
     expect(parsed.fps).toBe(24);
+  });
+
+  it('maps scene delivery to Qwen instruct strings', () => {
+    expect(qwenInstructForDelivery('curious')).toContain('patient mentor');
+    expect(qwenInstructForDelivery('clear')).toContain('Salesforce beginner');
+    expect(qwenInstructForDelivery()).toContain('cause and effect');
+    expect(mapQwenSpeaker('en-Alice_woman')).toBe('Serena');
+    expect(mapQwenSpeaker('Ryan')).toBe('Ryan');
   });
 
   it('finds playable clips in ComfyUI history outputs, preferring motion files', () => {
@@ -77,7 +87,7 @@ describe('OpenSourceMediaService', () => {
     expect(service.isSpeechConfigured()).toBe(false);
     expect(service.isImageConfigured()).toBe(false);
     expect(service.isVideoConfigured()).toBe(false);
-    await expect(service.generateSpeech('Hello learners.', 'en-Alice_woman')).resolves.toBeNull();
+    await expect(service.generateSpeech('Hello learners.', 'Serena')).resolves.toBeNull();
     await expect(service.generateImage('a cloud', 'text')).resolves.toBeNull();
     await expect(service.generateVideo('a cloud', 'text')).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -137,7 +147,7 @@ describe('OpenSourceMediaService', () => {
     );
 
     const service = new OpenSourceMediaService();
-    const media = await service.generateSpeech('Governor limits are a contract.', 'en-Carter_man');
+    const media = await service.generateSpeech('Governor limits are a contract.', 'Ryan');
     expect(media?.contentType).toBe('audio/wav');
     expect(media?.buffer.subarray(0, 4).toString()).toBe('RIFF');
 
@@ -146,7 +156,7 @@ describe('OpenSourceMediaService', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer secret-key');
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body).toMatchObject({
-      voice: 'en-Carter_man',
+      voice: 'Ryan',
       input: 'Governor limits are a contract.',
       response_format: 'wav',
     });
@@ -161,7 +171,7 @@ describe('OpenSourceMediaService', () => {
       }),
     );
     const service = new OpenSourceMediaService();
-    const media = await service.generateSpeech('Hello.', 'en-Alice_woman');
+    const media = await service.generateSpeech('Hello.', 'Serena');
     expect(media?.contentType).toBe('audio/wav');
     expect(media?.buffer.subarray(0, 4).toString()).toBe('RIFF');
     expect(media?.buffer.length).toBe(44 + 2048);
@@ -243,6 +253,48 @@ describe('OpenSourceMediaService', () => {
     expect(media?.buffer).toEqual(clip);
   }, 15_000);
 
+  it('generates speech through the hosted Qwen3-TTS Space with instruct and HF_TOKEN', async () => {
+    vi.stubEnv('QWEN_TTS_SPACE_URL', 'https://qwen.hf.space');
+    vi.stubEnv('HF_TOKEN', 'hf_test_token');
+    const wav = pcmToWav(Buffer.alloc(2048));
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === 'https://qwen.hf.space/gradio_api/call/generate_custom_voice') {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          'Bearer hf_test_token',
+        );
+        const body = JSON.parse(init?.body as string) as { data: unknown[] };
+        expect(body.data[0]).toBe('Meet Priya, a sales ops admin.');
+        expect(body.data[1]).toBe('English');
+        expect(body.data[2]).toBe('Eric');
+        expect(body.data[3]).toContain('breakthrough moment');
+        expect(body.data[4]).toBe('1.7B');
+        return new Response(JSON.stringify({ event_id: 'ev-qwen' }), { status: 200 });
+      }
+      if (url.endsWith('/gradio_api/call/generate_custom_voice/ev-qwen')) {
+        return new Response(
+          'event: complete\ndata: [{"path": "/tmp/gradio/a/audio.wav", "url": "https://qwen.hf.space/gradio_api/file=/tmp/gradio/a/audio.wav", "meta": {"_type": "gradio.FileData"}}, "ok"]\n',
+          { status: 200 },
+        );
+      }
+      if (url.includes('/gradio_api/file=')) {
+        return new Response(new Uint8Array(wav), {
+          status: 200,
+          headers: { 'content-type': 'audio/wav' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new OpenSourceMediaService();
+    const media = await service.generateSpeech(
+      'Meet Priya, a sales ops admin.',
+      'Eric',
+      'energetic',
+    );
+    expect(media?.contentType).toBe('audio/wav');
+    expect(media?.buffer.subarray(0, 4).toString()).toBe('RIFF');
+  });
+
   it('generates speech through the hosted VibeVoice Space with a single-narrator script', async () => {
     vi.stubEnv('VIBEVOICE_SPACE_URL', 'https://vibevoice.hf.space');
     vi.stubEnv('HF_TOKEN', 'hf_test_token');
@@ -255,7 +307,7 @@ describe('OpenSourceMediaService', () => {
         const body = JSON.parse(init?.body as string) as { data: unknown[] };
         expect(body.data[0]).toBe(1);
         expect(body.data[1]).toBe('Speaker 1: Meet Priya, a sales ops admin.');
-        expect(body.data[2]).toBe('en-Yasser_man');
+        expect(body.data[2]).toBe('Eric');
         expect(body.data[6]).toBe(1.3);
         return new Response(JSON.stringify({ event_id: 'ev-1' }), { status: 200 });
       }
@@ -275,7 +327,7 @@ describe('OpenSourceMediaService', () => {
     });
 
     const service = new OpenSourceMediaService();
-    const media = await service.generateSpeech('Meet Priya, a sales ops admin.', 'en-Yasser_man');
+    const media = await service.generateSpeech('Meet Priya, a sales ops admin.', 'Eric');
     expect(media?.contentType).toBe('audio/wav');
     expect(media?.buffer.subarray(0, 4).toString()).toBe('RIFF');
   });

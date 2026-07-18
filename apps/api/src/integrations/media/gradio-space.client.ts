@@ -8,8 +8,7 @@ import { Logger } from '@nestjs/common';
  *   POST {base}/gradio_api/upload               multipart files  → ["/tmp/gradio/…"]
  *   GET  {base}/gradio_api/file={path}          output download
  *
- * Used to run the hosted open-source media Spaces (VibeVoice-Large,
- * Z-Image-Turbo, Wan 2.2 I2V) without any self-managed GPU server.
+ * Used to run the hosted open-source media Spaces (Qwen3-TTS, Z-Image-Turbo, Wan I2V)
  */
 
 export interface GradioFileRef {
@@ -151,7 +150,16 @@ export class GradioSpaceClient {
     const terminal = parseSseTerminalEvent(await streamResponse.text());
     if (!terminal) throw new Error('Space stream ended without a result');
     if (terminal.event === 'error') {
-      throw new Error(`Space reported an error: ${terminal.data.slice(0, 300)}`);
+      let detail = terminal.data.slice(0, 300);
+      try {
+        const parsed = JSON.parse(terminal.data) as unknown;
+        if (typeof parsed === 'string') detail = parsed;
+        else if (Array.isArray(parsed) && typeof parsed[0] === 'string') detail = parsed[0];
+        else detail = JSON.stringify(parsed).slice(0, 300);
+      } catch {
+        // keep raw SSE payload
+      }
+      throw new Error(`Space reported an error: ${detail}`);
     }
     const parsed = JSON.parse(terminal.data) as unknown;
     if (!Array.isArray(parsed)) throw new Error('Space returned a non-array payload');

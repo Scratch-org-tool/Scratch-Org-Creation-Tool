@@ -439,9 +439,9 @@ export class LearningExplainerService {
   private async currentMediaCapabilities(): Promise<ExplainerMediaCapabilities> {
     const status = await this.media.getMediaStatus();
     return {
-      generatedVideo: status.video === 'ready',
-      generatedImages: status.images === 'ready',
-      generatedSpeech: status.speech === 'ready',
+      generatedVideo: this.media.isVideoConfigured(),
+      generatedImages: this.media.isImageConfigured(),
+      generatedSpeech: this.media.isSpeechConfigured(),
       status,
     };
   }
@@ -477,12 +477,17 @@ export class LearningExplainerService {
   async getSceneSpeech(input: LearningExplainerSpeechRequest): Promise<GeneratedMedia | null> {
     if (!this.media.isSpeechConfigured()) return null;
     const scene = await this.resolveScene(input, input.sceneId);
-    const cacheKey = `${this.requestCacheKey(input)}|${scene.id}|speech|${input.voice}`;
+    const cacheKey = `${this.requestCacheKey(input)}|${scene.id}|speech|${input.voice}|${input.delivery ?? scene.delivery}`;
     return this.getCachedMedia(
       cacheKey,
       this.speechCache,
       this.speechInFlight,
-      () => this.media.generateSpeech(scene.narration, input.voice),
+      () =>
+        this.media.generateSpeech(
+          scene.narration,
+          input.voice,
+          input.delivery ?? scene.delivery,
+        ),
     );
   }
 
@@ -598,7 +603,8 @@ export class LearningExplainerService {
         ? '- Use the supplied case study as the storyline: make its problem, turning point, and consequence concrete and personal.'
         : '- Invent a believable, specific storyline that fits the grounding content (real job titles, real business stakes — never "a company" in the abstract).',
       '- narration: 2–4 short conversational sentences, max 480 characters. Write for listening: contractions, natural emphasis, varied rhythm, and a clear causal thread.',
-      '- Never read slide labels, copy a curriculum paragraph, say “as you can see”, or announce “in this scene”. The voice must add meaning the visual alone cannot.',
+      '- Never read bullet points aloud, enumerate lesson headings, or sound like a slide deck.',
+      '- Never read slide labels, copy a curriculum paragraph, say “as you can see”, announce “in this scene”, or say “in this scene we will learn”. The voice must add meaning the visual alone cannot.',
       '- Each scene teaches exactly one insight and flows naturally into the next. Use concrete nouns and active verbs.',
       '- delivery must be one of curious, clear, energetic, reflective and should fit the scene.',
       '- visualDescription: 1–3 detailed sentences directing a memorable cinematic image of THIS story moment (the place, the character, the objects at stake) while embodying the concept. Premium navy/sky/violet visual world; no written text, logos, or fake Salesforce UI.',

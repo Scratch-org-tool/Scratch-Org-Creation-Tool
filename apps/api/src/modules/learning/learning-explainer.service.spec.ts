@@ -147,8 +147,8 @@ describe('LearningExplainerService', () => {
     expect(first.media.generatedSpeech).toBe(false);
     expect(first.media.status.speech).toBe('off');
 
-    // The admin starts the VibeVoice server: the next request must see it
-    // without waiting for the 6-hour storyboard cache to expire.
+    // Speech tier becomes configured: capabilities flip on without busting the story cache.
+    media.isSpeechConfigured.mockReturnValue(true);
     media.getMediaStatus.mockResolvedValue({
       video: 'unreachable',
       images: 'off',
@@ -265,7 +265,7 @@ describe('LearningExplainerService', () => {
     );
   });
 
-  it('generates selected VibeVoice narration and rejects missing scenes', async () => {
+  it('generates selected studio narration and rejects missing scenes', async () => {
     media.isSpeechConfigured.mockReturnValue(true);
     const generated = { buffer: Buffer.from('audio'), contentType: 'audio/wav' };
     media.generateSpeech.mockResolvedValue(generated);
@@ -275,15 +275,19 @@ describe('LearningExplainerService', () => {
       service.getSceneSpeech({
         lessonId: 'foundations-what-is-salesforce',
         sceneId: 'scene-1',
-        voice: 'en-Carter_man',
+        voice: 'Ryan',
       }),
     ).resolves.toBe(generated);
-    expect(media.generateSpeech).toHaveBeenCalledWith(expect.any(String), 'en-Carter_man');
+    expect(media.generateSpeech).toHaveBeenCalledWith(
+      expect.any(String),
+      'Ryan',
+      expect.any(String),
+    );
     await expect(
       service.getSceneSpeech({
         lessonId: 'foundations-what-is-salesforce',
         sceneId: 'scene-8',
-        voice: 'en-Carter_man',
+        voice: 'Ryan',
       }),
     ).rejects.toThrow('Explainer scene not found');
   });

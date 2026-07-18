@@ -25,6 +25,20 @@ export const STREAMING_PATHS = new Set([
   '/api/stream/events',
 ]);
 
+const LONG_RUNNING_MEDIA_PATHS = [
+  /^\/api\/learning\/tutor\/explainer\/(?:speech|image|video)$/,
+];
+
+export function isLongRunningMediaPath(requestUrl) {
+  let pathname;
+  try {
+    pathname = new URL(requestUrl ?? '/', 'http://gateway.invalid').pathname;
+  } catch {
+    return false;
+  }
+  return LONG_RUNNING_MEDIA_PATHS.some((pattern) => pattern.test(pathname));
+}
+
 function parseQuality(raw) {
   if (raw === undefined) return 1;
   const value = Number(raw);

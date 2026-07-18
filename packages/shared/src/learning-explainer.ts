@@ -4,7 +4,7 @@ import { z } from 'zod';
  * Visual explainer ("story mode") contracts for the Salesforce Academy AI
  * mentor. The LLM scripts a storyboard — scenes with narration, cinematic
  * direction, and a diagram spec. The web app layers self-hosted open-source
- * media (motion clips, scene art, VibeVoice narration) over deterministic
+ * media (motion clips, scene art, Qwen studio narration) over deterministic
  * animated-diagram and browser-speech fallbacks.
  *
  * Everything an LLM produces is sanitized through `sanitizeStoryboard` before
@@ -112,33 +112,32 @@ export const EXPLAINER_DELIVERIES = ['curious', 'clear', 'energetic', 'reflectiv
 export type ExplainerDelivery = (typeof EXPLAINER_DELIVERIES)[number];
 
 /**
- * Curated Microsoft VibeVoice narrator presets (the model's stock demo
- * voices, matching both community VibeVoice servers and the hosted
- * VibeVoice Gradio Space). Only stock voices are exposed —
- * learner-supplied reference audio (voice cloning) is intentionally not.
+ * Curated Qwen3-TTS speakers from the hosted Gradio Space (`/generate_custom_voice`).
+ * Only stock speakers are exposed — learner-supplied reference audio (voice cloning)
+ * is intentionally not.
  */
 export const EXPLAINER_STUDIO_VOICES = [
-  'en-Alice_woman',
-  'en-Carter_man',
-  'en-Frank_man',
-  'en-Maya_woman',
-  'en-Yasser_man',
-  'in-Samuel_man',
+  'Serena',
+  'Ryan',
+  'Dylan',
+  'Eric',
+  'Vivian',
+  'Aiden',
 ] as const;
 export type ExplainerStudioVoice = (typeof EXPLAINER_STUDIO_VOICES)[number];
-export const DEFAULT_EXPLAINER_STUDIO_VOICE: ExplainerStudioVoice = 'en-Alice_woman';
+export const DEFAULT_EXPLAINER_STUDIO_VOICE: ExplainerStudioVoice = 'Serena';
 
 export const EXPLAINER_STUDIO_VOICE_OPTIONS: ReadonlyArray<{
   id: ExplainerStudioVoice;
   label: string;
   tone: string;
 }> = [
-  { id: 'en-Alice_woman', label: 'Alice', tone: 'Warm' },
-  { id: 'en-Carter_man', label: 'Carter', tone: 'Confident' },
-  { id: 'en-Frank_man', label: 'Frank', tone: 'Calm' },
-  { id: 'en-Maya_woman', label: 'Maya', tone: 'Bright' },
-  { id: 'en-Yasser_man', label: 'Yasser', tone: 'Storyteller' },
-  { id: 'in-Samuel_man', label: 'Samuel', tone: 'Assured' },
+  { id: 'Serena', label: 'Serena', tone: 'Warm' },
+  { id: 'Ryan', label: 'Ryan', tone: 'Confident' },
+  { id: 'Dylan', label: 'Dylan', tone: 'Calm' },
+  { id: 'Eric', label: 'Eric', tone: 'Bright' },
+  { id: 'Vivian', label: 'Vivian', tone: 'Storyteller' },
+  { id: 'Aiden', label: 'Aiden', tone: 'Energetic' },
 ];
 
 export interface ExplainerVisualItem {
@@ -189,7 +188,7 @@ export interface ExplainerMediaCapabilities {
   generatedVideo: boolean;
   /** Still scene-art generation (Stable Diffusion API) is live; the diagram remains the fallback. */
   generatedImages: boolean;
-  /** VibeVoice narration is live; browser speech remains the fallback. */
+  /** Studio narration (Qwen TTS) is live; browser speech remains the fallback. */
   generatedSpeech: boolean;
   /** Why each tier is or is not active — surfaced in the player so a broken setup is visible, not silent. */
   status: ExplainerMediaStatus;
@@ -228,6 +227,8 @@ export type LearningExplainerVideoRequest = z.infer<typeof learningExplainerVide
 
 export const learningExplainerSpeechRequestSchema = learningExplainerSceneRequestSchema.extend({
   voice: z.enum(EXPLAINER_STUDIO_VOICES).default(DEFAULT_EXPLAINER_STUDIO_VOICE),
+  /** Scene delivery style — forwarded to Qwen `instruct` for teaching tone. */
+  delivery: z.enum(EXPLAINER_DELIVERIES).optional(),
 });
 export type LearningExplainerSpeechRequest = z.infer<typeof learningExplainerSpeechRequestSchema>;
 

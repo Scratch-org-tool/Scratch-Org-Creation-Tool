@@ -19,6 +19,7 @@ import {
   createCompressor,
   createUpstreamHeaders,
   isCompressionCandidate,
+  isLongRunningMediaPath,
   isRetryableMethod,
   isStreamingPath,
   negotiateContentEncoding,
@@ -37,6 +38,7 @@ const HEALTH_CHECK_INTERVAL_MS = Number(process.env.GATEWAY_HEALTH_INTERVAL_MS ?
 const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.GATEWAY_HEALTH_TIMEOUT_MS ?? 3_000);
 const CONNECT_TIMEOUT_MS = Number(process.env.GATEWAY_CONNECT_TIMEOUT_MS ?? 10_000);
 const RESPONSE_TIMEOUT_MS = Number(process.env.GATEWAY_RESPONSE_TIMEOUT_MS ?? 120_000);
+const MEDIA_RESPONSE_TIMEOUT_MS = Number(process.env.GATEWAY_MEDIA_TIMEOUT_MS ?? 600_000);
 const COMPRESSION_ENABLED = !['0', 'false'].includes(
   (process.env.GATEWAY_COMPRESSION_ENABLED ?? '1').trim().toLowerCase(),
 );
@@ -309,6 +311,12 @@ function inspectWebError(req, res, status, headers, proxyRes, onError) {
 function proxyRequest(req, res, upstreams, options = {}) {
   const { replacePlainErrors = false, trackHealth = false } = options;
   const streaming = isStreamingPath(req.url ?? '/');
+  const longRunningMedia = isLongRunningMediaPath(req.url ?? '/');
+  const responseTimeoutMs = streaming
+    ? 0
+    : longRunningMedia
+      ? MEDIA_RESPONSE_TIMEOUT_MS
+      : RESPONSE_TIMEOUT_MS;
   const hasRequestBody =
     Number(req.headers['content-length'] ?? 0) > 0 ||
     Boolean(req.headers['transfer-encoding']);
@@ -377,14 +385,14 @@ function proxyRequest(req, res, upstreams, options = {}) {
     };
 
     const armResponseTimer = () => {
-      if (streaming || RESPONSE_TIMEOUT_MS <= 0) return;
+      if (streaming || responseTimeoutMs <= 0) return;
       clearResponseTimer();
       responseTimer = setTimeout(() => {
         const error = new Error('upstream response timeout');
         if (proxyRes && !proxyRes.destroyed) proxyRes.destroy(error);
         else if (!proxyReq.destroyed) proxyReq.destroy(error);
         if (res.headersSent && !res.destroyed) res.destroy(error);
-      }, RESPONSE_TIMEOUT_MS);
+      }, responseTimeoutMs);
     };
 
     const handleAttemptError = (error) => {

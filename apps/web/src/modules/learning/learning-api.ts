@@ -1,5 +1,6 @@
 import { api, apiBlob } from '@/services/api';
 import type {
+  ExplainerDelivery,
   ExplainerFocus,
   ExplainerStoryboard,
   ExplainerStudioVoice,
@@ -95,6 +96,7 @@ export function fetchExplainerVideo(
     body: JSON.stringify(input),
     headers: { 'Content-Type': 'application/json' },
     signal,
+    direct: true,
   });
 }
 
@@ -112,6 +114,7 @@ export function fetchExplainerImage(
     body: JSON.stringify(input),
     headers: { 'Content-Type': 'application/json' },
     signal,
+    direct: true,
   });
 }
 
@@ -122,6 +125,7 @@ export function fetchExplainerSpeech(
     question?: string;
     sceneId: string;
     voice: ExplainerStudioVoice;
+    delivery?: ExplainerDelivery;
   },
   signal?: AbortSignal,
 ) {
@@ -130,6 +134,7 @@ export function fetchExplainerSpeech(
     body: JSON.stringify(input),
     headers: { 'Content-Type': 'application/json' },
     signal,
+    direct: true,
   });
 }
 

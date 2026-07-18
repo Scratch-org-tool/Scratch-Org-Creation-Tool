@@ -127,7 +127,7 @@ export class LearningController {
     this.sendMedia(response, media, 'academy-scene');
   }
 
-  /** Selectable VibeVoice narration for one scene; 204 means use browser speech. */
+  /** Selectable studio narration for one scene; 204 means use browser speech. */
   @Post('tutor/explainer/speech')
   async getExplainerSpeech(@Body() body: unknown, @Res() response: Response) {
     const parsed = learningExplainerSpeechRequestSchema.safeParse(body);
