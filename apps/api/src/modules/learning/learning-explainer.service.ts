@@ -10,12 +10,13 @@ import {
   type LearningExplainerImageRequest,
   type LearningExplainerRequest,
   type LearningExplainerSpeechRequest,
+  type LearningExplainerVideoRequest,
 } from '@sfcc/shared';
 import { NvidiaService } from '../../integrations/nvidia/nvidia.service';
 import {
-  GoogleGenerativeMediaService,
+  OpenSourceMediaService,
   type GeneratedMedia,
-} from '../../integrations/google/google-generative-media.service';
+} from '../../integrations/media/open-source-media.service';
 import { getLesson, type LessonLocation } from './curriculum';
 
 /** Keep AI attempts short — Next.js proxy times out around 30s; we fall back to static curriculum. */
@@ -314,12 +315,14 @@ export class LearningExplainerService {
   private readonly cache = new Map<string, { board: ExplainerStoryboard; expires: number }>();
   private readonly imageCache = new Map<string, { media: GeneratedMedia; expires: number }>();
   private readonly speechCache = new Map<string, { media: GeneratedMedia; expires: number }>();
+  private readonly videoCache = new Map<string, { media: GeneratedMedia; expires: number }>();
   private readonly imageInFlight = new Map<string, Promise<GeneratedMedia | null>>();
   private readonly speechInFlight = new Map<string, Promise<GeneratedMedia | null>>();
+  private readonly videoInFlight = new Map<string, Promise<GeneratedMedia | null>>();
 
   constructor(
     private readonly nvidia: NvidiaService,
-    private readonly googleMedia: GoogleGenerativeMediaService,
+    private readonly media: OpenSourceMediaService,
   ) {}
 
   async getStoryboard(input: LearningExplainerRequest): Promise<ExplainerStoryboard> {
@@ -345,8 +348,9 @@ export class LearningExplainerService {
       board = buildStaticStoryboard(location, focus, input.question);
     }
     board.media = {
-      generatedImages: this.googleMedia.isImageConfigured(),
-      generatedSpeech: this.googleMedia.isSpeechConfigured(),
+      generatedVideo: this.media.isVideoConfigured(),
+      generatedImages: this.media.isImageConfigured(),
+      generatedSpeech: this.media.isSpeechConfigured(),
     };
 
     if (this.cache.size >= CACHE_MAX_ENTRIES) {
@@ -358,50 +362,77 @@ export class LearningExplainerService {
   }
 
   async getSceneImage(input: LearningExplainerImageRequest): Promise<GeneratedMedia | null> {
-    if (!this.googleMedia.isImageConfigured()) return null;
-    const board = await this.getStoryboard(input);
-    const scene = board.scenes.find((candidate) => candidate.id === input.sceneId);
-    if (!scene) throw new NotFoundException('Explainer scene not found');
-    const location = getLesson(input.lessonId)!;
+    if (!this.media.isImageConfigured()) return null;
+    const scene = await this.resolveScene(input, input.sceneId);
     const cacheKey = `${this.requestCacheKey(input)}|${scene.id}|image`;
-    const labels = scene.visual.items
-      .map((item) => `${item.label}${item.sublabel ? ` (${item.sublabel})` : ''}`)
-      .join(', ');
-    const prompt = [
-      'Create one premium 16:9 cinematic educational illustration for an adult Salesforce learner.',
-      'Art direction: polished editorial 3D illustration, subtle isometric depth, deep navy environment, luminous sky-blue and violet accents, realistic materials, clean composition, sophisticated enterprise learning-film quality.',
-      `Lesson: ${location.lesson.title}. Story: ${board.title}.`,
-      `Scene ${scene.id.replace('scene-', '')} of ${board.scenes.length}: ${scene.title}.`,
-      `Precise visual direction: ${scene.visualDescription}`,
-      `Concept anchors to represent visually: ${labels}.`,
-      `Meaning the narrator must communicate: ${scene.narration}`,
-      input.focus === 'real-world'
-        ? 'Human characters and a recognizable workplace are welcome when they make this case easier to understand.'
-        : 'Prefer a memorable visual metaphor or conceptual world over a generic office meeting.',
-      'Keep the main subject centered with safe space near the bottom for app overlays.',
-      'Do not render words, captions, logos, Salesforce trademarks, fake software screens, watermarks, or decorative gibberish. Do not make factual claims beyond the supplied concept.',
-      'Return only the image.',
-    ].join('\n');
+    const { stillPrompt, negativePrompt } = this.buildScenePrompts(scene, input.focus);
     return this.getCachedMedia(
       cacheKey,
       this.imageCache,
       this.imageInFlight,
-      () => this.googleMedia.generateImage(prompt),
+      () => this.media.generateImage(stillPrompt, negativePrompt),
+    );
+  }
+
+  async getSceneVideo(input: LearningExplainerVideoRequest): Promise<GeneratedMedia | null> {
+    if (!this.media.isVideoConfigured()) return null;
+    const scene = await this.resolveScene(input, input.sceneId);
+    const cacheKey = `${this.requestCacheKey(input)}|${scene.id}|video`;
+    const { motionPrompt, negativePrompt } = this.buildScenePrompts(scene, input.focus);
+    return this.getCachedMedia(
+      cacheKey,
+      this.videoCache,
+      this.videoInFlight,
+      () => this.media.generateVideo(motionPrompt, negativePrompt),
     );
   }
 
   async getSceneSpeech(input: LearningExplainerSpeechRequest): Promise<GeneratedMedia | null> {
-    if (!this.googleMedia.isSpeechConfigured()) return null;
-    const board = await this.getStoryboard(input);
-    const scene = board.scenes.find((candidate) => candidate.id === input.sceneId);
-    if (!scene) throw new NotFoundException('Explainer scene not found');
+    if (!this.media.isSpeechConfigured()) return null;
+    const scene = await this.resolveScene(input, input.sceneId);
     const cacheKey = `${this.requestCacheKey(input)}|${scene.id}|speech|${input.voice}`;
     return this.getCachedMedia(
       cacheKey,
       this.speechCache,
       this.speechInFlight,
-      () => this.googleMedia.generateSpeech(scene.narration, input.voice, scene.delivery),
+      () => this.media.generateSpeech(scene.narration, input.voice),
     );
+  }
+
+  private async resolveScene(
+    input: LearningExplainerRequest,
+    sceneId: string,
+  ): Promise<ExplainerScene> {
+    const board = await this.getStoryboard(input);
+    const scene = board.scenes.find((candidate) => candidate.id === sceneId);
+    if (!scene) throw new NotFoundException('Explainer scene not found');
+    return scene;
+  }
+
+  /**
+   * Diffusion prompts composed server-side from the trusted storyboard —
+   * descriptor-style (best for SD/FLUX/LTX) rather than instruction-style,
+   * with a shared negative prompt that bans text, logos, and fake UI.
+   */
+  private buildScenePrompts(
+    scene: ExplainerScene,
+    focus?: ExplainerFocus,
+  ): { stillPrompt: string; motionPrompt: string; negativePrompt: string } {
+    const style =
+      'premium editorial 3D illustration, cinematic lighting, deep navy environment with luminous sky-blue and violet accents, subtle isometric depth, clean composition, single clear focal point, enterprise learning film still, highly detailed, 16:9';
+    const subject = [
+      scene.visualDescription,
+      focus === 'real-world'
+        ? 'professional people in a believable modern workplace'
+        : 'a memorable conceptual visual metaphor, no generic office meeting',
+    ].join(', ');
+    const negativePrompt =
+      'text, words, letters, captions, subtitles, watermark, logo, signature, user interface, screenshot, charts with labels, low quality, blurry, deformed, extra limbs, gibberish writing';
+    return {
+      stillPrompt: `${subject}, ${style}`,
+      motionPrompt: `${subject}, slow cinematic camera push-in, gentle flowing motion, smooth coherent movement, ${style}`,
+      negativePrompt,
+    };
   }
 
   private requestCacheKey(input: LearningExplainerRequest): string {

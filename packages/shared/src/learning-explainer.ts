@@ -3,8 +3,9 @@ import { z } from 'zod';
 /**
  * Visual explainer ("story mode") contracts for the Salesforce Academy AI
  * mentor. The LLM scripts a storyboard — scenes with narration, cinematic
- * direction, and a diagram spec. The web app can combine Google-generated
- * scene art and narration with deterministic animated-diagram fallbacks.
+ * direction, and a diagram spec. The web app layers self-hosted open-source
+ * media (motion clips, scene art, VibeVoice narration) over deterministic
+ * animated-diagram and browser-speech fallbacks.
  *
  * Everything an LLM produces is sanitized through `sanitizeStoryboard` before
  * it is served: unknown icons/kinds/accents fall back to safe defaults and all
@@ -110,29 +111,34 @@ export const EXPLAINER_VISUAL_DESCRIPTION_MAX = 700;
 export const EXPLAINER_DELIVERIES = ['curious', 'clear', 'energetic', 'reflective'] as const;
 export type ExplainerDelivery = (typeof EXPLAINER_DELIVERIES)[number];
 
-/** Curated Gemini TTS voices whose delivery works well for teaching. */
-export const EXPLAINER_CLOUD_VOICES = [
-  'Sulafat',
-  'Sadaltager',
-  'Charon',
-  'Aoede',
-  'Puck',
-  'Kore',
+/**
+ * Curated Microsoft VibeVoice narrator presets (the model's stock demo
+ * voices, referenced by their canonical names so any community VibeVoice
+ * server resolves them out of the box). Only stock voices are exposed —
+ * learner-supplied reference audio (voice cloning) is intentionally not.
+ */
+export const EXPLAINER_STUDIO_VOICES = [
+  'en-Alice_woman',
+  'en-Carter_man',
+  'en-Frank_man',
+  'en-Maya_woman',
+  'en-Mary_woman_bgm',
+  'in-Samuel_man',
 ] as const;
-export type ExplainerCloudVoice = (typeof EXPLAINER_CLOUD_VOICES)[number];
-export const DEFAULT_EXPLAINER_CLOUD_VOICE: ExplainerCloudVoice = 'Sulafat';
+export type ExplainerStudioVoice = (typeof EXPLAINER_STUDIO_VOICES)[number];
+export const DEFAULT_EXPLAINER_STUDIO_VOICE: ExplainerStudioVoice = 'en-Alice_woman';
 
-export const EXPLAINER_CLOUD_VOICE_OPTIONS: ReadonlyArray<{
-  id: ExplainerCloudVoice;
+export const EXPLAINER_STUDIO_VOICE_OPTIONS: ReadonlyArray<{
+  id: ExplainerStudioVoice;
   label: string;
   tone: string;
 }> = [
-  { id: 'Sulafat', label: 'Sulafat', tone: 'Warm' },
-  { id: 'Sadaltager', label: 'Sadaltager', tone: 'Knowledgeable' },
-  { id: 'Charon', label: 'Charon', tone: 'Informative' },
-  { id: 'Aoede', label: 'Aoede', tone: 'Breezy' },
-  { id: 'Puck', label: 'Puck', tone: 'Upbeat' },
-  { id: 'Kore', label: 'Kore', tone: 'Firm' },
+  { id: 'en-Alice_woman', label: 'Alice', tone: 'Warm' },
+  { id: 'en-Carter_man', label: 'Carter', tone: 'Confident' },
+  { id: 'en-Frank_man', label: 'Frank', tone: 'Calm' },
+  { id: 'en-Maya_woman', label: 'Maya', tone: 'Bright' },
+  { id: 'en-Mary_woman_bgm', label: 'Mary', tone: 'Storyteller' },
+  { id: 'in-Samuel_man', label: 'Samuel', tone: 'Assured' },
 ];
 
 export interface ExplainerVisualItem {
@@ -164,9 +170,11 @@ export interface ExplainerScene {
 }
 
 export interface ExplainerMediaCapabilities {
-  /** Google image generation is configured; the diagram remains the fallback. */
+  /** Motion-clip generation (ComfyUI video) is configured; image/diagram are fallbacks. */
+  generatedVideo: boolean;
+  /** Still scene-art generation (Stable Diffusion API) is configured; the diagram remains the fallback. */
   generatedImages: boolean;
-  /** Google narrated audio is configured; browser speech remains the fallback. */
+  /** VibeVoice narration is configured; browser speech remains the fallback. */
   generatedSpeech: boolean;
 }
 
@@ -198,8 +206,11 @@ const learningExplainerSceneRequestSchema = learningExplainerRequestSchema.exten
 export const learningExplainerImageRequestSchema = learningExplainerSceneRequestSchema;
 export type LearningExplainerImageRequest = z.infer<typeof learningExplainerImageRequestSchema>;
 
+export const learningExplainerVideoRequestSchema = learningExplainerSceneRequestSchema;
+export type LearningExplainerVideoRequest = z.infer<typeof learningExplainerVideoRequestSchema>;
+
 export const learningExplainerSpeechRequestSchema = learningExplainerSceneRequestSchema.extend({
-  voice: z.enum(EXPLAINER_CLOUD_VOICES).default(DEFAULT_EXPLAINER_CLOUD_VOICE),
+  voice: z.enum(EXPLAINER_STUDIO_VOICES).default(DEFAULT_EXPLAINER_STUDIO_VOICE),
 });
 export type LearningExplainerSpeechRequest = z.infer<typeof learningExplainerSpeechRequestSchema>;
 
@@ -345,6 +356,7 @@ export function sanitizeStoryboard(
     title: clampText(obj.title, 90) || 'Visual explainer',
     source,
     media: {
+      generatedVideo: false,
       generatedImages: false,
       generatedSpeech: false,
     },

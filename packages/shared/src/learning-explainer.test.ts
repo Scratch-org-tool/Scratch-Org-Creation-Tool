@@ -7,6 +7,7 @@ import {
   learningExplainerImageRequestSchema,
   learningExplainerRequestSchema,
   learningExplainerSpeechRequestSchema,
+  learningExplainerVideoRequestSchema,
   sanitizeExplainerAccent,
   sanitizeExplainerIcon,
   sanitizeStoryboard,
@@ -52,7 +53,11 @@ describe('sanitizeStoryboard', () => {
     assert.equal(board.scenes[0].visual.items.length, 3);
     assert.equal(board.scenes[0].delivery, 'clear');
     assert.match(board.scenes[0].visualDescription, /Scene 1/);
-    assert.deepEqual(board.media, { generatedImages: false, generatedSpeech: false });
+    assert.deepEqual(board.media, {
+      generatedVideo: false,
+      generatedImages: false,
+      generatedSpeech: false,
+    });
   });
 
   it('rejects boards with fewer than 3 usable scenes', () => {
@@ -216,16 +221,24 @@ describe('learningExplainerRequestSchema', () => {
       }).success,
       false,
     );
+    assert.equal(
+      learningExplainerVideoRequestSchema.safeParse({
+        lessonId: 'x',
+        sceneId: 'scene-3',
+        focus: 'real-world',
+      }).success,
+      true,
+    );
     const speech = learningExplainerSpeechRequestSchema.parse({
       lessonId: 'x',
       sceneId: 'scene-1',
     });
-    assert.equal(speech.voice, 'Sulafat');
+    assert.equal(speech.voice, 'en-Alice_woman');
     assert.equal(
       learningExplainerSpeechRequestSchema.safeParse({
         lessonId: 'x',
         sceneId: 'scene-1',
-        voice: 'Unknown',
+        voice: 'Sulafat',
       }).success,
       false,
     );

@@ -22,17 +22,19 @@ every lesson, an instant quiz after every module, and full progress visibility f
   - **Story mode (generated visuals + directed voice)** — NVIDIA scripts a five-scene,
     concept-first learning film: curiosity hook → mental model → cause/effect → boundary or
     misconception → memorable compression. A learner can play the lesson, apply it to the curated
-    case, or turn any lesson-grounded question into a narrated visual answer. When Google Gemini
-    media is configured, each scene gets premium 16:9 concept art and natural generated narration
-    with six selectable teaching voices. The player adds cinematic motion, concept overlays,
-    optional captions, speed controls, and scene navigation. Generated media falls back
-    independently to animated diagrams and the browser's installed voices, so one provider outage
-    never breaks the story.
+    case, or turn any lesson-grounded question into a narrated visual answer. When the self-hosted
+    **open-source media stack** is configured (see `docs/academy-open-media-plan.md`), each scene
+    gets a generated **motion clip** (ComfyUI + LTX-Video / Wan 2.2), or premium 16:9 still art
+    (FLUX.1-schnell / SDXL), plus natural narration from **Microsoft VibeVoice** with six
+    selectable narrators. The player adds cinematic motion, concept overlays, optional captions,
+    speed controls, and scene navigation. Each media tier falls back independently — motion clip →
+    still art → animated diagrams, and VibeVoice → device voices → timed captions — so one
+    provider outage never breaks the story.
   - **Chat mode** — the classic Q&A tutor with real-world examples and follow-up suggestions;
     every reply has a "Listen" button for voice playback.
-  Story scripts use the same NVIDIA integration as the platform copilot; generated scene media uses
-  a separate server-side Google Gemini API key. Storyboards fall back to a question-aware,
-  lesson-derived script when NVIDIA is unavailable.
+  Story scripts use the same NVIDIA integration as the platform copilot; all generated media comes
+  from self-hosted open-source engines (no per-request vendor cost, nothing leaves your network).
+  Storyboards fall back to a question-aware, lesson-derived script when NVIDIA is unavailable.
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
   (with a 130-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
@@ -83,6 +85,7 @@ All routes require authentication and the `learning` module (admins always have 
 | POST | `/api/learning/quiz/:attemptId/submit` | Score an attempt server-side; returns full review |
 | POST | `/api/learning/tutor` | Ask the AI mentor (lesson-grounded) |
 | POST | `/api/learning/tutor/explainer` | Concept-first storyboard (`{lessonId, focus?, question?}`) + media capabilities |
+| POST | `/api/learning/tutor/explainer/video` | Generate/cache one scene motion clip (`{...storyRequest, sceneId}`); 204 activates still-art fallback |
 | POST | `/api/learning/tutor/explainer/image` | Generate/cache one scene image (`{...storyRequest, sceneId}`); 204 activates diagram fallback |
 | POST | `/api/learning/tutor/explainer/speech` | Generate/cache one scene narration (`{...storyRequest, sceneId, voice}`); 204 activates browser voice |
 | GET | `/api/learning/admin/overview` | Admin: team progress report |
@@ -104,25 +107,22 @@ All routes require authentication and the `learning` module (admins always have 
 
 ## AI configuration
 
-The Academy uses NVIDIA NIM for grounded writing and optionally Google Gemini for generated image
-and speech media. Google credentials stay on the API server. A Firebase web API key is an app
-identifier and **must not** be treated as the Gemini server credential.
+The Academy uses NVIDIA NIM for grounded writing and an optional **self-hosted open-source media
+stack** for generated narration, scene art, and motion clips. Model choices, deployment recipes,
+GPU sizing, and the phased rollout live in `docs/academy-open-media-plan.md`.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LEARNING_QUIZ_AI_TIMEOUT_MS` | `25000` | Budget for AI quiz generation before static fallback |
 | `LEARNING_TUTOR_TIMEOUT_MS` | `30000` | Budget for AI mentor answers |
 | `LEARNING_EXPLAINER_TIMEOUT_MS` | `30000` | Budget for AI storyboard scripting before static fallback |
-| `GOOGLE_GENAI_API_KEY` | — | Server-side Google AI Studio key; `GEMINI_API_KEY` and `GOOGLE_API_KEY` are accepted aliases |
-| `GOOGLE_IMAGE_MODEL` | `gemini-3.1-flash-image` | Gemini model for 16:9 scene art |
-| `GOOGLE_TTS_MODEL` | `gemini-3.1-flash-tts-preview` | Gemini model for selectable studio narration |
-| `GOOGLE_MEDIA_TIMEOUT_MS` | `45000` | Per-scene image/speech generation budget |
-| `GOOGLE_IMAGE_GENERATION_ENABLED` | `true` | Set `false` to force animated-diagram visuals |
-| `GOOGLE_TTS_ENABLED` | `true` | Set `false` to force browser narration |
+| `VIBEVOICE_BASE_URL` | — | Microsoft VibeVoice server (OpenAI-compatible `POST /v1/audio/speech`); `VIBEVOICE_API_KEY`, `VIBEVOICE_MODEL`, `VIBEVOICE_TIMEOUT_MS` (60 s), `VIBEVOICE_ENABLED` |
+| `SD_WEBUI_BASE_URL` | — | Stable-Diffusion-WebUI-compatible image API (`POST /sdapi/v1/txt2img`); `SD_IMAGE_MODEL`, `SD_IMAGE_STEPS` (20; FLUX-schnell: 4), `SD_IMAGE_CFG_SCALE` (7; FLUX: 1), `SD_IMAGE_SAMPLER`, `SD_IMAGE_WIDTH/HEIGHT` (1280×720), `SD_IMAGE_TIMEOUT_MS` (60 s), `SD_IMAGE_ENABLED` |
+| `COMFYUI_BASE_URL` | — | ComfyUI for motion clips; `COMFYUI_VIDEO_WORKFLOW` (template path; built-in LTX-Video default), `COMFYUI_VIDEO_CHECKPOINT`, `COMFYUI_TEXT_ENCODER`, `COMFYUI_VIDEO_WIDTH/HEIGHT/FRAMES/FPS` (768×512, 97 f, 24 fps), `COMFYUI_VIDEO_TIMEOUT_MS` (180 s), `COMFYUI_VIDEO_ENABLED` |
 
 Without a valid NVIDIA key, quizzes serve the curated bank and stories use the deterministic
-lesson-derived script. Without a Google key, stories keep their animated concept diagrams and let
-learners choose among voices installed by their browser/operating system.
+lesson-derived script. Without any media server, stories keep their animated concept diagrams and
+let learners choose among voices installed by their browser/operating system.
 
 ### Visual story pipeline
 
@@ -134,14 +134,17 @@ learners choose among voices installed by their browser/operating system.
    icons, accents, and visual kinds. Thin/malformed output is replaced with a deterministic
    concept arc. A custom question is preserved in this fallback instead of silently replaying the
    generic lesson.
-3. The browser requests only the active scene's image/audio. The API reconstructs the scene prompt
-   from the trusted storyboard, calls Google server-side, validates media types/sizes, and caches
-   successful output for six hours. It preloads the next image after the active one.
-4. Google image failure reveals the animated diagram already under the scene. Google TTS failure
-   switches to the selected local `SpeechSynthesis` voice; if speech is unavailable, captions and
-   reading-time auto-advance remain functional.
-5. The player never asks generated art to reproduce Salesforce UI or render explanatory text.
+3. The browser requests only the active scene's media. The API composes diffusion-style prompts
+   (subject + style + strict negative prompt) from the trusted storyboard, calls the self-hosted
+   engines server-side, validates media types/sizes, and caches successful output for six hours
+   with in-flight deduplication. It preloads the next scene's media after the active one.
+4. Media degrades tier by tier: motion clip → still art → the animated diagram already under the
+   scene. VibeVoice failure switches to the selected local `SpeechSynthesis` voice; if speech is
+   unavailable, captions and reading-time auto-advance remain functional.
+5. The player never asks generated media to reproduce Salesforce UI or render explanatory text.
    Accurate labels stay in application-owned overlays, and the lesson remains the source of truth.
+6. Only VibeVoice's stock demo narrators are exposed; learner-supplied reference audio (voice
+   cloning) is deliberately not part of the API surface.
 
 ## Web routes
 
