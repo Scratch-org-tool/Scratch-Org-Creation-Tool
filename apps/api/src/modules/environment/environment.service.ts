@@ -28,6 +28,7 @@ import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.regist
 import { ScmSourceService } from '../../integrations/foundation/scm-source.service';
 import { IntegrationAdminService } from '../integrations/integration-admin.service';
 import { ExistingScratchOrgService } from './existing-scratch-org.service';
+import { resolveSfProjectRoot } from '../../common/sf-project-root.util';
 
 async function resolveScratchOrgPassword(
   sfCli: ReturnType<typeof createSfCliClient>,
@@ -58,7 +59,7 @@ async function resolveScratchOrgPassword(
 @Injectable()
 export class EnvironmentService {
   private readonly sfCli = createSfCliClient({
-    cwd: process.env.SF_PROJECT_ROOT ?? process.cwd(),
+    cwd: resolveSfProjectRoot(),
   });
 
   constructor(

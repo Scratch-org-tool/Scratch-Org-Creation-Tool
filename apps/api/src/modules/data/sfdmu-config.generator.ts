@@ -8,6 +8,7 @@ import {
   resolveDataWriteOperation,
   type DataWriteOperation,
 } from '@sfcc/shared';
+import { resolveSfProjectRoot } from '../../common/sf-project-root.util';
 
 function resolveSfdmuRunsRoot(): string {
   const configured = process.env.SFDMU_RUNS_DIR?.trim();
@@ -140,7 +141,7 @@ export function writeSfdmuExportFromUpload(input: SfdmuExportWriteInput): SfdmuG
 }
 
 export function loadBundledCustomSettingsExport(): SfdmuExportJson {
-  const projectRoot = process.env.SF_PROJECT_ROOT ?? process.cwd();
+  const projectRoot = resolveSfProjectRoot();
   const path = join(projectRoot, 'config/custom-settings-export.json');
   const raw = JSON.parse(readFileSync(path, 'utf-8')) as SfdmuExportJson;
   return normalizeSfdmuExport(raw);

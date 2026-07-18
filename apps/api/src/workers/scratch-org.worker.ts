@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import type { Job as BullJob } from 'bullmq';
-import { join } from 'path';
 import { createSfCliClient, extractPasswordFromCliResult, type SfCommandResult } from '@sfcc/sf-cli';
 import { prisma, type Prisma } from '@sfcc/db';
 import {
@@ -16,6 +15,7 @@ import { JobCancelledError, ScratchOrgJobService } from '../modules/environment/
 import { encrypt } from '../common/crypto.util';
 import type { PipelineCheckpoint } from '../modules/orchestrator/pipeline-orchestrator.service';
 import { ScratchOrgPreparationService } from '../modules/environment/scratch-org-preparation.service';
+import { resolveSfProjectRoot } from '../common/sf-project-root.util';
 
 const WORKFLOW_STEPS = [
   'Create Scratch Org',
@@ -49,7 +49,7 @@ export class ScratchOrgWorker {
     private readonly processRegistry: JobProcessRegistryService,
     private readonly preparationService: ScratchOrgPreparationService,
   ) {
-    this.projectRoot = process.env.SF_PROJECT_ROOT ?? join(process.cwd(), '../..');
+    this.projectRoot = resolveSfProjectRoot();
     this.sfCli = createSfCliClient({ cwd: this.projectRoot });
   }
 
