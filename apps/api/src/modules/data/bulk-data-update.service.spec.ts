@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import * as XLSX from 'xlsx';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BulkDataUpdateConfig } from '@sfcc/shared';
@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     describeSObject: vi.fn(),
     query: vi.fn(),
     queryAll: vi.fn(),
+    exportBulk: vi.fn(),
     updateBulk: vi.fn(),
   },
   orgConnection: {
@@ -167,6 +168,7 @@ describe('BulkDataUpdateService', () => {
         ].filter((record) => soql.includes(String(record[employeeNumberField]))),
       },
     }));
+    mocks.sfCli.exportBulk.mockResolvedValue({ success: false, error: 'not configured' });
     mocks.sfCli.updateBulk.mockResolvedValue({ success: true });
   });
 
@@ -370,5 +372,148 @@ describe('BulkDataUpdateService', () => {
 
     expect(preview.stats.recordsToUpdate).toBe(1);
     expect(preview.sample[0]?.matchValue).toBe('01003539');
+  });
+
+  it('hash-joins large mapping sets from one guarded Bulk API export', async () => {
+    const rowCount = 2_100;
+    const sourceRows = Array.from({ length: rowCount }, (_, index) => [
+      `E-BULK-${index}`,
+      `Updated Employee ${index}`,
+    ]);
+    mocks.sfCli.query.mockResolvedValue({
+      success: true,
+      data: {
+        result: {
+          records: [],
+          totalSize: rowCount,
+        },
+      },
+    });
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      soql: string,
+      alias: string,
+      outputPath: string,
+    ) => {
+      expect(alias).toBe('target');
+      expect(soql).toContain(`WHERE ${employeeNumberField} != null`);
+      const targetRows = sourceRows.map(([employeeNumber], index) =>
+        `a01${String(index).padStart(15, '0')},${employeeNumber},Original Employee ${index}`);
+      await writeFile(
+        outputPath,
+        `Id,${employeeNumberField},Name\n${targetRows.join('\n')}\n`,
+        'utf8',
+      );
+      return { success: true };
+    });
+
+    const preview = await service().preview(
+      workbook([
+        ['Employee Number', 'Employee Name'],
+        ...sourceRows,
+      ]),
+      'employees.xlsx',
+      {
+        ...config,
+        columnMappings: [{ sourceColumn: 'Employee Name', targetField: 'Name' }],
+      },
+      userId,
+    );
+
+    expect(preview.stats).toEqual(expect.objectContaining({
+      totalRows: rowCount,
+      matchedRows: rowCount,
+      recordsToUpdate: rowCount,
+      unmatchedRows: 0,
+    }));
+    expect(mocks.sfCli.query).toHaveBeenCalledWith(
+      'target',
+      expect.stringContaining('SELECT COUNT()'),
+    );
+    expect(mocks.sfCli.exportBulk).toHaveBeenCalledOnce();
+    expect(mocks.sfCli.queryAll).not.toHaveBeenCalled();
+    expect(acquire).toHaveBeenCalledWith('target', { maxWaitMs: 2_000 });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('preserves case-sensitive external IDs in the bulk match index', async () => {
+    const rowCount = 2_000;
+    const sourceRows = Array.from({ length: rowCount }, (_, index) => [
+      `CASE-${index}`,
+      `Updated Employee ${index}`,
+    ]);
+    mocks.sfCli.describeSObject.mockResolvedValue({
+      success: true,
+      data: {
+        result: {
+          name: objectName,
+          label: 'Employee Master',
+          fields: [
+            {
+              name: 'Id',
+              type: 'id',
+              filterable: true,
+              updateable: false,
+            },
+            {
+              name: employeeNumberField,
+              label: 'Employee Number',
+              type: 'string',
+              externalId: true,
+              caseSensitive: true,
+              filterable: true,
+              updateable: true,
+              length: 40,
+            },
+            {
+              name: 'Name',
+              label: 'Employee Name',
+              type: 'string',
+              filterable: true,
+              updateable: true,
+              length: 80,
+            },
+          ],
+        },
+      },
+    });
+    mocks.sfCli.query.mockResolvedValue({
+      success: true,
+      data: { result: { records: [], totalSize: rowCount } },
+    });
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      _soql: string,
+      _alias: string,
+      outputPath: string,
+    ) => {
+      const targetRows = sourceRows.map(([employeeNumber], index) =>
+        `a01${String(index).padStart(15, '0')},${employeeNumber.toLocaleLowerCase()},Original`);
+      await writeFile(
+        outputPath,
+        `Id,${employeeNumberField},Name\n${targetRows.join('\n')}\n`,
+        'utf8',
+      );
+      return { success: true };
+    });
+
+    const preview = await service().preview(
+      workbook([
+        ['Employee Number', 'Employee Name'],
+        ...sourceRows,
+      ]),
+      'employees.xlsx',
+      {
+        ...config,
+        columnMappings: [{ sourceColumn: 'Employee Name', targetField: 'Name' }],
+      },
+      userId,
+    );
+
+    expect(preview.stats).toEqual(expect.objectContaining({
+      matchedRows: 0,
+      recordsToUpdate: 0,
+      unmatchedRows: rowCount,
+    }));
+    expect(mocks.sfCli.exportBulk).toHaveBeenCalledOnce();
+    expect(mocks.sfCli.queryAll).not.toHaveBeenCalled();
   });
 });

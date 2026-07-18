@@ -161,6 +161,12 @@ export function BulkDataUpdatePanel() {
       .map(([sourceColumn, targetField]) => ({ sourceColumn, targetField })),
     [mappings],
   );
+  const mappedTargetOwners = useMemo(
+    () => new Map(
+      mappedEntries.map(({ sourceColumn, targetField }) => [targetField, sourceColumn]),
+    ),
+    [mappedEntries],
+  );
 
   const invalidatePreview = () => {
     previewGenerationRef.current += 1;
@@ -598,15 +604,8 @@ export function BulkDataUpdatePanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {selectedSheet.headers.map((header) => {
-                    const usedTargets = new Set(
-                      Object.entries(mappings)
-                        .filter(([column]) => column !== header)
-                        .map(([, field]) => field)
-                        .filter(Boolean),
-                    );
-                    return (
-                      <tr key={header} className="border-t border-border/60">
+                  {selectedSheet.headers.map((header) => (
+                    <tr key={header} className="border-t border-border/60">
                         <td className="px-3 py-2.5">
                           <span className="font-medium">{header}</span>
                           {header === matchColumn && (
@@ -635,16 +634,18 @@ export function BulkDataUpdatePanel() {
                                 <option
                                   key={field.name}
                                   value={field.name}
-                                  disabled={usedTargets.has(field.name)}
+                                  disabled={
+                                    mappedTargetOwners.has(field.name)
+                                    && mappedTargetOwners.get(field.name) !== header
+                                  }
                                 >
                                   {field.label} ({field.name})
                                 </option>
                               ))}
                           </Select>
                         </td>
-                      </tr>
-                    );
-                  })}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
