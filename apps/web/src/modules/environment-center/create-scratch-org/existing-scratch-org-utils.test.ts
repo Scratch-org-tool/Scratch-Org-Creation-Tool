@@ -107,6 +107,14 @@ describe('configure-existing scratch org utilities', () => {
     expect(isActiveRecentRun(after[0].latestRun)).toBe(false);
   });
 
+  it('keeps awaiting post-deploy runs marked active for target exclusivity', () => {
+    expect(isActiveRecentRun({
+      id: 'run-awaiting',
+      status: 'awaiting_input',
+      targetOrgConnectionId: 'connection-1',
+    })).toBe(true);
+  });
+
   it('restores the create draft alias instead of reusing the selected existing alias', () => {
     const configure = modeAliasState(
       'create_new',
@@ -199,5 +207,24 @@ describe('configure-existing scratch org utilities', () => {
     expect(getStepStates('Generate Password', options)).toBe('skipped');
     expect(getStepStates('Retrieve Org Details', options)).toBe('skipped');
     expect(getStepStates('Prepare Existing Org', options)).toBe('active');
+  });
+
+  it('shows automatic pipeline steps complete while awaiting manual actions', () => {
+    const options = {
+      run: {
+        id: 'run',
+        status: 'awaiting_input',
+        checkpoint: {
+          completedSteps: ['scratch_org_create', 'git_metadata_deploy', 'load_org_config'],
+          awaitingUserActions: true,
+        },
+      },
+      skippedSteps: new Set<'installPackages' | 'deployMetadata' | 'assignPermissions'>(),
+      sourceControlConnected: true,
+      launchMode: 'create_new' as const,
+    };
+
+    expect(getStepStates('Create Scratch Org', options)).toBe('done');
+    expect(getStepStates('Load Org Config', options)).toBe('done');
   });
 });

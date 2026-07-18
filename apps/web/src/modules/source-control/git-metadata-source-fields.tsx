@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import Link from 'next/link';
 import { Link2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -17,6 +18,9 @@ export function GitMetadataSourceFields({
   disabled?: boolean;
   compact?: boolean;
 }) {
+  const generatedId = useId().replace(/:/g, '');
+  const fieldId = (name: string) => `git-source-${generatedId}-${name}`;
+
   if (source.loading) {
     return <div className="h-36 rounded-lg bg-muted/30 animate-pulse" aria-label="Loading metadata source" />;
   }
@@ -45,9 +49,9 @@ export function GitMetadataSourceFields({
       )}
       <div className={compact ? 'grid sm:grid-cols-2 gap-3' : 'grid sm:grid-cols-2 lg:grid-cols-3 gap-4'}>
         <div>
-          <Label htmlFor="git-source-provider">Provider</Label>
+          <Label htmlFor={fieldId('provider')}>Provider</Label>
           <Select
-            id="git-source-provider"
+            id={fieldId('provider')}
             value={source.source.provider}
             onChange={(event) => source.selectProvider(event.target.value as keyof typeof SCM_PROVIDER_LABELS)}
             disabled={disabled}
@@ -58,9 +62,9 @@ export function GitMetadataSourceFields({
           </Select>
         </div>
         <div>
-          <Label htmlFor="git-source-connection">Account / connection</Label>
+          <Label htmlFor={fieldId('connection')}>Account / connection</Label>
           <Select
-            id="git-source-connection"
+            id={fieldId('connection')}
             value={source.source.connectionId}
             onChange={(event) => source.selectConnection(event.target.value)}
             disabled={disabled}
@@ -72,20 +76,20 @@ export function GitMetadataSourceFields({
             ))}
           </Select>
         </div>
-        <div>
-          <Label htmlFor="git-source-namespace">Workspace / namespace</Label>
+        {source.source.provider !== 'azure_devops' && <div>
+          <Label htmlFor={fieldId('namespace')}>Workspace / namespace</Label>
           <Input
-            id="git-source-namespace"
+            id={fieldId('namespace')}
             value={source.source.namespace}
             onChange={(event) => source.setSource((current) => ({ ...current, namespace: event.target.value }))}
             disabled={disabled}
             placeholder="Organization or workspace"
           />
-        </div>
+        </div>}
         <div>
-          <Label htmlFor="git-source-project">Project (when required)</Label>
+          <Label htmlFor={fieldId('project')}>Project (when required)</Label>
           <Input
-            id="git-source-project"
+            id={fieldId('project')}
             value={source.source.project}
             onChange={(event) => source.setSource((current) => ({ ...current, project: event.target.value }))}
             disabled={disabled}
@@ -94,7 +98,7 @@ export function GitMetadataSourceFields({
         </div>
         <div>
           <div className="flex items-center justify-between gap-2">
-            <Label htmlFor="git-source-repository">Repository</Label>
+            <Label htmlFor={fieldId('repository')}>Repository</Label>
             <Button
               type="button"
               size="sm"
@@ -108,7 +112,7 @@ export function GitMetadataSourceFields({
             </Button>
           </div>
           <Select
-            id="git-source-repository"
+            id={fieldId('repository')}
             value={source.source.repositoryId}
             onChange={(event) => source.selectRepository(event.target.value)}
             disabled={disabled || source.loadingRepositories}
@@ -120,21 +124,56 @@ export function GitMetadataSourceFields({
           </Select>
         </div>
         <div>
-          <Label htmlFor="git-source-branch">Branch</Label>
-          <Select
-            id="git-source-branch"
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor={fieldId('branch')}>Branch</Label>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 px-1.5"
+              onClick={source.reloadBranches}
+              disabled={disabled || source.loadingBranches || !source.source.repo}
+              aria-label="Reload branches"
+            >
+              <RefreshCw className={source.loadingBranches ? 'w-3 h-3 animate-spin' : 'w-3 h-3'} />
+            </Button>
+          </div>
+          <Input
+            id={fieldId('branch')}
+            type="search"
+            list={fieldId('branch-options')}
             value={source.source.branch}
             onChange={(event) => source.setSource((current) => ({ ...current, branch: event.target.value }))}
             disabled={disabled || source.loadingBranches || !source.source.repo}
+            placeholder={source.loadingBranches ? 'Loading branches…' : 'Search branches…'}
+            autoComplete="off"
+            aria-describedby={fieldId('branch-help')}
+            aria-invalid={Boolean(
+              source.source.branch
+              && !source.loadingBranches
+              && !source.branchSelectionValid,
+            )}
+          />
+          <datalist id={fieldId('branch-options')}>
+            {source.branches.map((branch) => <option key={branch} value={branch} />)}
+          </datalist>
+          <p
+            id={fieldId('branch-help')}
+            className={
+              source.source.branch && !source.loadingBranches && !source.branchSelectionValid
+                ? 'text-xs text-destructive mt-1'
+                : 'text-xs text-muted-foreground mt-1'
+            }
           >
-            <option value="">{source.loadingBranches ? 'Loading branches…' : 'Select branch…'}</option>
-            {source.branches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
-          </Select>
+            {source.source.branch && !source.loadingBranches && !source.branchSelectionValid
+              ? 'Choose a branch returned by the connected repository.'
+              : `Type to filter ${source.branches.length || 'available'} branches.`}
+          </p>
         </div>
         <div className={compact ? 'sm:col-span-2' : 'sm:col-span-2 lg:col-span-3'}>
-          <Label htmlFor="git-source-manifest">Manifest path</Label>
+          <Label htmlFor={fieldId('manifest')}>Manifest path</Label>
           <Input
-            id="git-source-manifest"
+            id={fieldId('manifest')}
             value={source.source.manifestPath}
             onChange={(event) => source.setSource((current) => ({ ...current, manifestPath: event.target.value }))}
             disabled={disabled}

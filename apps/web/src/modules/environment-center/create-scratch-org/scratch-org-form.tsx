@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import { SCRATCH_ORG_SKIPPABLE_STEPS, type ScratchPipelineTemplateConfig } from '@sfcc/shared';
 import {
   AlertTriangle,
@@ -137,6 +138,8 @@ export function ScratchOrgForm({
   onCancelConflict,
   stoppingConflict,
 }: ScratchOrgFormProps) {
+  const generatedId = useId().replace(/:/g, '');
+  const fieldId = (name: string) => `scratch-org-${generatedId}-${name}`;
   const usingTemplate = Boolean(form.templateId && templateMeta);
   const selectedExisting = existingCandidates.find(
     (candidate) => candidate.orgConnectionId === existingOrgConnectionId,
@@ -167,7 +170,7 @@ export function ScratchOrgForm({
                 <span className="flex items-center gap-2">
                   <input
                     type="radio"
-                    name="scratch-org-mode"
+                    name={fieldId('mode')}
                     value={value}
                     checked={mode === value}
                     onChange={() => onModeChange(value)}
@@ -190,9 +193,9 @@ export function ScratchOrgForm({
         >
           <div className="space-y-4">
             <Field>
-              <Label htmlFor="existing-scratch-org-target">Target scratch org</Label>
+              <Label htmlFor={fieldId('existing-target')}>Target scratch org</Label>
               <Select
-                id="existing-scratch-org-target"
+                id={fieldId('existing-target')}
                 value={existingOrgConnectionId}
                 onChange={(event) => onExistingOrgChange(event.target.value)}
                 disabled={isRunning}
@@ -336,9 +339,9 @@ export function ScratchOrgForm({
       <FormSection title="Pipeline template" description="Use a saved template or manage templates in the sidebar.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field className="sm:col-span-2">
-            <Label htmlFor="scratch-org-pipeline-template">Scratch pipeline template</Label>
+            <Label htmlFor={fieldId('pipeline-template')}>Scratch pipeline template</Label>
             <Select
-              id="scratch-org-pipeline-template"
+              id={fieldId('pipeline-template')}
               value={form.templateId}
               onChange={(e) => setForm({ ...form, templateId: e.target.value })}
               disabled={isRunning}
@@ -365,9 +368,9 @@ export function ScratchOrgForm({
             </Field>
           )}
           <Field>
-            <Label htmlFor="scratch-org-data-org">Data Deployment Org</Label>
+            <Label htmlFor={fieldId('data-org')}>Data Deployment Org</Label>
             <Select
-              id="scratch-org-data-org"
+              id={fieldId('data-org')}
               value={form.dataDeploymentOrgId || form.sourceOrgId}
               onChange={(e) => setForm({
                 ...form,
@@ -386,9 +389,9 @@ export function ScratchOrgForm({
             <p className="text-xs text-muted-foreground mt-1">Runtime override for queries, data seed, and partner joins.</p>
           </Field>
           <Field>
-            <Label htmlFor="scratch-org-settings-org">Custom Settings Org (optional override)</Label>
+            <Label htmlFor={fieldId('settings-org')}>Custom Settings Org (optional override)</Label>
             <Select
-              id="scratch-org-settings-org"
+              id={fieldId('settings-org')}
               value={form.customSettingsOrgId}
               onChange={(e) => setForm({ ...form, customSettingsOrgId: e.target.value })}
               disabled={isRunning}
@@ -404,9 +407,9 @@ export function ScratchOrgForm({
           </Field>
           {usingTemplate && (templateMeta?.config.userProvisioning?.teams?.length ?? 0) > 0 && (
             <Field className="sm:col-span-2">
-              <Label htmlFor="scratch-org-runtime-email-pool">Replacement team email pool (optional)</Label>
+              <Label htmlFor={fieldId('runtime-email-pool')}>Replacement team email pool (optional)</Label>
               <Textarea
-                id="scratch-org-runtime-email-pool"
+                id={fieldId('runtime-email-pool')}
                 value={form.runtimeEmailPool}
                 onChange={(event) => setForm({ ...form, runtimeEmailPool: event.target.value })}
                 placeholder="person1@example.com&#10;person2@example.com"
@@ -423,9 +426,9 @@ export function ScratchOrgForm({
       {mode === 'create_new' && <FormSection title="Salesforce" description="Scratch org identity and lifetime.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field>
-            <Label htmlFor="scratch-org-dev-hub">Dev Hub Org</Label>
+            <Label htmlFor={fieldId('dev-hub')}>Dev Hub Org</Label>
             <Select
-              id="scratch-org-dev-hub"
+              id={fieldId('dev-hub')}
               value={form.devHubAlias}
               onChange={(e) => setForm({ ...form, devHubAlias: e.target.value })}
               disabled={isRunning}
@@ -438,9 +441,9 @@ export function ScratchOrgForm({
             </Select>
           </Field>
           <Field>
-            <Label htmlFor="scratch-org-alias">Scratch Org Alias</Label>
+            <Label htmlFor={fieldId('alias')}>Scratch Org Alias</Label>
             <Input
-              id="scratch-org-alias"
+              id={fieldId('alias')}
               value={form.alias}
               onChange={(e) => setForm({ ...form, alias: e.target.value })}
               placeholder="Sprint40DevScratch"
@@ -450,9 +453,9 @@ export function ScratchOrgForm({
           {!usingTemplate && mode === 'create_new' && (
             <>
               <Field>
-                <Label htmlFor="scratch-org-duration">Duration (days)</Label>
+                <Label htmlFor={fieldId('duration')}>Duration (days)</Label>
                 <Input
-                  id="scratch-org-duration"
+                  id={fieldId('duration')}
                   type="number"
                   value={form.duration}
                   onChange={(e) => setForm({ ...form, duration: Number(e.target.value) })}
@@ -461,9 +464,9 @@ export function ScratchOrgForm({
                 <p className="text-xs text-muted-foreground mt-1">Min 1 day, max 30 days</p>
               </Field>
               <Field>
-                <Label htmlFor="scratch-org-definition">Scratch Org Template</Label>
+                <Label htmlFor={fieldId('definition')}>Scratch Org Template</Label>
                 <Input
-                  id="scratch-org-definition"
+                  id={fieldId('definition')}
                   value={form.template}
                   onChange={(e) => setForm({ ...form, template: e.target.value })}
                   disabled={isRunning}
@@ -473,15 +476,15 @@ export function ScratchOrgForm({
           )}
           {usingTemplate && (
             <Field>
-              <Label htmlFor="scratch-org-duration">Duration (days)</Label>
-              <Input id="scratch-org-duration" type="number" value={form.duration} disabled className="opacity-70" />
+              <Label htmlFor={fieldId('duration')}>Duration (days)</Label>
+              <Input id={fieldId('duration')} type="number" value={form.duration} disabled className="opacity-70" />
               <p className="text-xs text-muted-foreground mt-1">From template</p>
             </Field>
           )}
           <Field className="sm:col-span-2">
-            <Label htmlFor="scratch-org-description">Description</Label>
+            <Label htmlFor={fieldId('description')}>Description</Label>
             <Textarea
-              id="scratch-org-description"
+              id={fieldId('description')}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value.slice(0, 255) })}
               className="min-h-[72px] resize-none"

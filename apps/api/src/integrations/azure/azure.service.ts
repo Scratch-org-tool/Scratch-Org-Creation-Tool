@@ -8,6 +8,7 @@ import { azureGitBranchesUrl, azureGitReposUrl, DEFAULT_AZURE_MANIFEST_PATH, nor
 import { AzureIntegrationService } from '../../modules/integrations/azure-integration.service';
 import { removeTempDir } from '../../common/temp-cleanup.util';
 import { resolveSfdxWorkspace } from '../../common/sfdx-workspace.util';
+import { IntegrationError, type IntegrationErrorCode } from '../foundation/adapter.errors';
 
 const execFileAsync = promisify(execFile);
 
@@ -90,11 +91,60 @@ export class AzureService {
     }
     if (!proj) return [];
 
-    const url = azureGitBranchesUrl(creds.orgSlug, proj, repo);
-    const res = await fetch(url, { headers: this.authHeader(creds.pat) });
-    if (!res.ok) return [];
-    const data = await res.json() as { value: Array<{ name: string }> };
-    return data.value.map((r) => r.name.replace('refs/heads/', ''));
+    const headers = this.authHeader(creds.pat);
+    const base = azureGitBranchesUrl(
+      creds.orgSlug,
+      proj,
+      repo,
+      'filter=heads/&api-version=7.0&$top=1000',
+    );
+    const branches: string[] = [];
+    const seenTokens = new Set<string>();
+    let url: string | null = base;
+
+    while (url) {
+      const res: Response = await fetch(url, { headers });
+      if (!res.ok) {
+        const code: IntegrationErrorCode =
+          res.status === 401
+            ? 'authentication_failed'
+            : res.status === 403
+              ? 'authorization_failed'
+              : res.status === 404
+                ? 'not_found'
+                : res.status === 429
+                  ? 'rate_limited'
+                  : 'provider_unavailable';
+        throw new IntegrationError(
+          code,
+          `Azure DevOps could not list branches (HTTP ${res.status})`,
+          {
+            provider: 'azure_devops',
+            retryable: res.status === 429 || res.status >= 500,
+            statusCode: res.status,
+          },
+        );
+      }
+      const data = await res.json() as { value?: Array<{ name?: string }> };
+      for (const ref of data.value ?? []) {
+        if (ref.name?.startsWith('refs/heads/')) {
+          branches.push(ref.name.slice('refs/heads/'.length));
+        }
+      }
+      const token = res.headers.get('x-ms-continuationtoken');
+      if (!token) break;
+      if (seenTokens.has(token)) {
+        throw new IntegrationError(
+          'provider_unavailable',
+          'Azure DevOps returned a repeated branch continuation token',
+          { provider: 'azure_devops', retryable: true },
+        );
+      }
+      seenTokens.add(token);
+      url = `${base}&continuationToken=${encodeURIComponent(token)}`;
+    }
+
+    return [...new Set(branches)];
   }
 
   async checkoutRepo(

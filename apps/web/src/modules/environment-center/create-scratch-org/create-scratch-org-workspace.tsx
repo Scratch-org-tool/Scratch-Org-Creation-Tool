@@ -465,6 +465,16 @@ export function CreateScratchOrgWorkspace() {
         )}
         {w.mobileView === 'success' && w.credentials && (
           <GlassCard>
+            {(w.run?.status === 'partial'
+              || Boolean(w.run?.checkpoint?.partialUserActions?.length)) && (
+              <InlineAlert
+                variant="warning"
+                title="Scratch org created with partial results"
+                className="mb-4"
+              >
+                Review the execution logs before using this org.
+              </InlineAlert>
+            )}
             <ScratchOrgSuccessBanner
               variant="full"
               alias={w.credentials.alias}

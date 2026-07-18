@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   gitSourceConnectionId,
   gitSourceFromLegacy,
+  gitSourceNamespace,
   providerFromDeployment,
 } from './provider-config';
 
@@ -53,5 +54,16 @@ describe('source-control provider config', () => {
       provider: 'github',
       source: 'environment',
     })).toBe('github-app');
+  });
+
+  it('does not confuse an Azure organization namespace with its project', () => {
+    expect(gitSourceNamespace({
+      provider: 'azure_devops',
+      namespace: 'acme-organization',
+    })).toBe('');
+    expect(gitSourceNamespace({
+      provider: 'github',
+      namespace: 'acme-team',
+    })).toBe('acme-team');
   });
 });

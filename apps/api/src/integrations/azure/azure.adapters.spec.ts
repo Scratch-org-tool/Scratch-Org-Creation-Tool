@@ -48,10 +48,11 @@ describe('AzureScmAdapter compatibility', () => {
     expect(await adapter.listBranches({
       provider: 'azure_devops',
       project: 'Core',
+      repositoryId: 'r1',
       repo: 'metadata',
       branch: 'main',
     })).toEqual(['main']);
-    expect(azure.listBranches).toHaveBeenCalledWith('Core', 'metadata', undefined);
+    expect(azure.listBranches).toHaveBeenCalledWith('Core', 'r1', undefined);
   });
 });
 

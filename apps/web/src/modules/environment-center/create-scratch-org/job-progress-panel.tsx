@@ -164,6 +164,10 @@ export function JobProgressPanel({
   const terminalAnnouncement =
     run?.status === 'completed'
       ? 'Pipeline completed successfully.'
+      : run?.status === 'partial'
+        ? 'Pipeline completed with partial post-deploy results.'
+      : run?.status === 'awaiting_input'
+        ? 'Automatic pipeline steps completed. Manual post-deploy actions are ready.'
       : run?.status === 'failed'
         ? `Pipeline failed${run.failedStep ? ` at ${formatPipelineStepId(run.failedStep)}` : ''}.`
         : run?.status === 'cancelled'
@@ -277,6 +281,26 @@ export function JobProgressPanel({
           </InlineAlert>
         )}
 
+        {run?.status === 'awaiting_input' && (
+          <InlineAlert
+            variant="info"
+            title="Automatic steps completed"
+            className={compact ? 'px-3 py-2 text-xs' : undefined}
+          >
+            Complete the configured post-deploy actions below to finish this scratch org.
+          </InlineAlert>
+        )}
+
+        {(run?.status === 'partial' || Boolean(run?.checkpoint?.partialUserActions?.length)) && (
+          <InlineAlert
+            variant="warning"
+            title="Scratch org created with partial results"
+            className={compact ? 'px-3 py-2 text-xs' : undefined}
+          >
+            One or more post-deploy actions completed only partially. Review the logs before using the org.
+          </InlineAlert>
+        )}
+
         <JobStepper
           orientation={compact ? 'vertical' : 'horizontal'}
           getState={getState}
@@ -350,7 +374,7 @@ export function JobProgressPanel({
         </button>
       )}
 
-      {run?.status === 'completed' && credentials && (
+      {(run?.status === 'completed' || run?.status === 'partial') && credentials && (
         <div className={cn('shrink-0 space-y-2', compact ? 'mt-2' : 'mt-4')}>
           <ScratchOrgSuccessBanner
             alias={credentials.alias}
