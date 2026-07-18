@@ -57,6 +57,7 @@ describe('sanitizeStoryboard', () => {
       generatedVideo: false,
       generatedImages: false,
       generatedSpeech: false,
+      status: { video: 'off', images: 'off', speech: 'off' },
     });
   });
 

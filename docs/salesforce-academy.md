@@ -84,7 +84,7 @@ All routes require authentication and the `learning` module (admins always have 
 | GET | `/api/learning/modules/:moduleId/attempts` | The user's attempt history for a module |
 | POST | `/api/learning/quiz/:attemptId/submit` | Score an attempt server-side; returns full review |
 | POST | `/api/learning/tutor` | Ask the AI mentor (lesson-grounded) |
-| POST | `/api/learning/tutor/explainer` | Concept-first storyboard (`{lessonId, focus?, question?}`) + media capabilities |
+| POST | `/api/learning/tutor/explainer` | Concept-first storyboard (`{lessonId, focus?, question?}`) + live media capabilities (`media.status` per tier: `ready` / `unreachable` / `off`) |
 | POST | `/api/learning/tutor/explainer/video` | Generate/cache one scene motion clip (`{...storyRequest, sceneId}`); 204 activates still-art fallback |
 | POST | `/api/learning/tutor/explainer/image` | Generate/cache one scene image (`{...storyRequest, sceneId}`); 204 activates diagram fallback |
 | POST | `/api/learning/tutor/explainer/speech` | Generate/cache one scene narration (`{...storyRequest, sceneId, voice}`); 204 activates browser voice |
@@ -116,13 +116,21 @@ GPU sizing, and the phased rollout live in `docs/academy-open-media-plan.md`.
 | `LEARNING_QUIZ_AI_TIMEOUT_MS` | `25000` | Budget for AI quiz generation before static fallback |
 | `LEARNING_TUTOR_TIMEOUT_MS` | `30000` | Budget for AI mentor answers |
 | `LEARNING_EXPLAINER_TIMEOUT_MS` | `30000` | Budget for AI storyboard scripting before static fallback |
-| `VIBEVOICE_BASE_URL` | — | Microsoft VibeVoice server (OpenAI-compatible `POST /v1/audio/speech`); `VIBEVOICE_API_KEY`, `VIBEVOICE_MODEL`, `VIBEVOICE_TIMEOUT_MS` (60 s), `VIBEVOICE_ENABLED` |
-| `SD_WEBUI_BASE_URL` | — | Stable-Diffusion-WebUI-compatible image API (`POST /sdapi/v1/txt2img`); `SD_IMAGE_MODEL`, `SD_IMAGE_STEPS` (20; FLUX-schnell: 4), `SD_IMAGE_CFG_SCALE` (7; FLUX: 1), `SD_IMAGE_SAMPLER`, `SD_IMAGE_WIDTH/HEIGHT` (1280×720), `SD_IMAGE_TIMEOUT_MS` (60 s), `SD_IMAGE_ENABLED` |
-| `COMFYUI_BASE_URL` | — | ComfyUI for motion clips; `COMFYUI_VIDEO_WORKFLOW` (template path; built-in LTX-Video default), `COMFYUI_VIDEO_CHECKPOINT`, `COMFYUI_TEXT_ENCODER`, `COMFYUI_VIDEO_WIDTH/HEIGHT/FRAMES/FPS` (768×512, 97 f, 24 fps), `COMFYUI_VIDEO_TIMEOUT_MS` (180 s), `COMFYUI_VIDEO_ENABLED` |
+| `VIBEVOICE_SPACE_URL` | — | Hosted VibeVoice Gradio Space for narration (preferred when set); `VIBEVOICE_SPACE_API` (`/generate_podcast_wrapper`), `VIBEVOICE_CFG_SCALE` (1.3), `HF_SPEECH_TIMEOUT_MS` (300 s) |
+| `ZIMAGE_SPACE_URL` | — | Hosted Z-Image-Turbo Gradio Space for scene art (preferred when set); `ZIMAGE_SPACE_API` (`/generate_image`), `ZIMAGE_STEPS` (9), `HF_IMAGE_TIMEOUT_MS` (120 s) |
+| `WAN_VIDEO_SPACE_URL` | — | Hosted Wan 2.2 image-to-video Gradio Space (preferred when set; animates the scene still, so the image tier must be on); `WAN_VIDEO_SPACE_API` (`/generate_video`), `WAN_VIDEO_STEPS` (4), `WAN_VIDEO_DURATION_SECONDS` (2.5), `HF_VIDEO_TIMEOUT_MS` (480 s) |
+| `HF_TOKEN` | — | Hugging Face token sent to all Spaces — effectively required for voice/video ZeroGPU quota |
+| `VIBEVOICE_BASE_URL` | — | Self-hosted VibeVoice server (OpenAI-compatible `POST /v1/audio/speech`); `VIBEVOICE_API_KEY`, `VIBEVOICE_MODEL`, `VIBEVOICE_TIMEOUT_MS` (60 s), `VIBEVOICE_ENABLED` |
+| `SD_WEBUI_BASE_URL` | — | Self-hosted Stable-Diffusion-WebUI-compatible image API (`POST /sdapi/v1/txt2img`); `SD_IMAGE_MODEL`, `SD_IMAGE_STEPS` (20; FLUX-schnell: 4), `SD_IMAGE_CFG_SCALE` (7; FLUX: 1), `SD_IMAGE_SAMPLER`, `SD_IMAGE_WIDTH/HEIGHT` (1280×720), `SD_IMAGE_TIMEOUT_MS` (60 s), `SD_IMAGE_ENABLED` |
+| `COMFYUI_BASE_URL` | — | Self-hosted ComfyUI for motion clips; `COMFYUI_VIDEO_WORKFLOW` (template path; built-in LTX-Video default), `COMFYUI_VIDEO_CHECKPOINT`, `COMFYUI_TEXT_ENCODER`, `COMFYUI_VIDEO_WIDTH/HEIGHT/FRAMES/FPS` (768×512, 97 f, 24 fps), `COMFYUI_VIDEO_TIMEOUT_MS` (180 s), `COMFYUI_VIDEO_ENABLED` |
 
 Without a valid NVIDIA key, quizzes serve the curated bank and stories use the deterministic
-lesson-derived script. Without any media server, stories keep their animated concept diagrams and
-let learners choose among voices installed by their browser/operating system.
+lesson-derived script. Without any media server, stories keep their animated concept diagrams
+(icons and colors derived per lesson topic, so different concepts look different) and let learners
+choose among voices installed by their browser/operating system. The API live-probes each
+configured media server (60-second cache) and reports `media.status` per tier; the player surfaces
+"Media studio unreachable" / "Built-in visuals · device voice" so a broken setup is visible instead
+of a silent fallback. See the troubleshooting table in `docs/academy-open-media-plan.md`.
 
 ### Visual story pipeline
 

@@ -58,6 +58,26 @@ describe('buildStaticStoryboard', () => {
     expect(titles).toContain('See what changed');
   });
 
+  it('gives different lessons visibly different fallback visuals', () => {
+    const fingerprint = (lessonId: string) => {
+      const board = buildStaticStoryboard(getLesson(lessonId)!, 'lesson');
+      return board.scenes
+        .map(
+          (scene) =>
+            `${scene.visual.kind}:${scene.visual.items
+              .map((item) => `${item.icon}/${item.accent}`)
+              .join(',')}`,
+        )
+        .join('|');
+    };
+    const prints = [
+      fingerprint('foundations-what-is-salesforce'),
+      fingerprint('dev-governor-limits'),
+      fingerprint('foundations-reports'),
+    ];
+    expect(new Set(prints).size).toBe(prints.length);
+  });
+
   it('keeps a custom visual answer question-aware without forcing a case study', () => {
     const location = getLesson('dev-governor-limits')!;
     const board = buildStaticStoryboard(
@@ -69,6 +89,18 @@ describe('buildStaticStoryboard', () => {
     expect(board.scenes[0]!.narration).toContain('Why do governor limits exist?');
     expect(board.scenes.map((scene) => scene.title)).not.toContain('Meet the challenge');
   });
+
+  it('teaches the concept through the lesson’s real-world story so it lands on one listen', () => {
+    const location = getLesson('foundations-what-is-salesforce')!;
+    const board = buildStaticStoryboard(location, 'lesson');
+    const { realWorld } = location.lesson;
+    expect(board.scenes[0]!.narration).toContain('picture the story');
+    // Scenario, solution, and outcome from the curriculum case all narrate.
+    expect(board.scenes[0]!.narration).toContain(realWorld.scenario.slice(0, 40));
+    const solutionScene = board.scenes.find((scene) => scene.title === 'Watch it work in the story');
+    expect(solutionScene?.narration).toContain(realWorld.solution.slice(0, 40));
+    expect(board.scenes.at(-1)!.narration).toContain('And the payoff?');
+  });
 });
 
 describe('LearningExplainerService', () => {
@@ -77,6 +109,7 @@ describe('LearningExplainerService', () => {
     isVideoConfigured: vi.fn().mockReturnValue(false),
     isImageConfigured: vi.fn().mockReturnValue(false),
     isSpeechConfigured: vi.fn().mockReturnValue(false),
+    getMediaStatus: vi.fn(),
     generateVideo: vi.fn(),
     generateImage: vi.fn(),
     generateSpeech: vi.fn(),
@@ -88,6 +121,7 @@ describe('LearningExplainerService', () => {
     media.isVideoConfigured.mockReturnValue(false);
     media.isImageConfigured.mockReturnValue(false);
     media.isSpeechConfigured.mockReturnValue(false);
+    media.getMediaStatus.mockResolvedValue({ video: 'off', images: 'off', speech: 'off' });
     service = new LearningExplainerService(
       nvidia as unknown as NvidiaService,
       media as unknown as OpenSourceMediaService,
@@ -103,6 +137,31 @@ describe('LearningExplainerService', () => {
       generatedVideo: false,
       generatedImages: false,
       generatedSpeech: false,
+      status: { video: 'off', images: 'off', speech: 'off' },
+    });
+  });
+
+  it('refreshes live media status even on cached storyboards', async () => {
+    nvidia.chat.mockResolvedValue({ content: 'nope', model: 'dev-mock' });
+    const first = await service.getStoryboard({ lessonId: 'foundations-what-is-salesforce' });
+    expect(first.media.generatedSpeech).toBe(false);
+    expect(first.media.status.speech).toBe('off');
+
+    // The admin starts the VibeVoice server: the next request must see it
+    // without waiting for the 6-hour storyboard cache to expire.
+    media.getMediaStatus.mockResolvedValue({
+      video: 'unreachable',
+      images: 'off',
+      speech: 'ready',
+    });
+    const second = await service.getStoryboard({ lessonId: 'foundations-what-is-salesforce' });
+    expect(nvidia.chat).toHaveBeenCalledTimes(1);
+    expect(second.media.generatedSpeech).toBe(true);
+    expect(second.media.generatedVideo).toBe(false);
+    expect(second.media.status).toEqual({
+      video: 'unreachable',
+      images: 'off',
+      speech: 'ready',
     });
   });
 
@@ -182,6 +241,28 @@ describe('LearningExplainerService', () => {
     await expect(service.getSceneVideo(request)).resolves.toBe(generated);
     expect(media.generateVideo).toHaveBeenCalledTimes(1);
     expect(media.generateVideo.mock.calls[0]![0]).toContain('camera push-in');
+    // No image tier → image-to-video backends receive no base frame.
+    expect(media.generateVideo.mock.calls[0]![2]).toBeNull();
+  });
+
+  it('feeds the cached scene image into image-to-video generation', async () => {
+    media.isVideoConfigured.mockReturnValue(true);
+    media.isImageConfigured.mockReturnValue(true);
+    const still = { buffer: Buffer.from('still'), contentType: 'image/png' };
+    const clip = { buffer: Buffer.from('clip'), contentType: 'video/mp4' };
+    media.generateImage.mockResolvedValue(still);
+    media.generateVideo.mockResolvedValue(clip);
+    nvidia.chat.mockResolvedValue({ content: 'nope', model: 'dev-mock' });
+
+    await expect(
+      service.getSceneVideo({ lessonId: 'foundations-what-is-salesforce', sceneId: 'scene-1' }),
+    ).resolves.toBe(clip);
+    expect(media.generateImage).toHaveBeenCalledTimes(1);
+    expect(media.generateVideo).toHaveBeenCalledWith(
+      expect.stringContaining('camera push-in'),
+      expect.any(String),
+      still,
+    );
   });
 
   it('generates selected VibeVoice narration and rejects missing scenes', async () => {

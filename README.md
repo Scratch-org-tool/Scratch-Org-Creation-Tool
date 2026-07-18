@@ -186,9 +186,10 @@ Login and signup are **proxied through the API** (`POST /api/auth/login`, `/api/
 | `NVIDIA_API_KEY` | For Copilot | NVIDIA NIM API key — get one at [build.nvidia.com](https://build.nvidia.com/) |
 | `NVIDIA_COPILOT_MODEL` | Optional | Default `meta/llama-3.2-3b-instruct` (fast, reliable). Avoid `google/gemma-3n-e4b-it` if requests hang. |
 | `NVIDIA_CHAT_TIMEOUT_MS` | Optional | Copilot LLM timeout (default `45000`) |
-| `VIBEVOICE_BASE_URL` | For Academy narration | Self-hosted [Microsoft VibeVoice](https://github.com/microsoft/VibeVoice) server (OpenAI-compatible `/v1/audio/speech`) |
-| `SD_WEBUI_BASE_URL` | For Academy scene art | Self-hosted Stable-Diffusion-WebUI-compatible API (FLUX.1-schnell / SDXL) |
-| `COMFYUI_BASE_URL` | For Academy motion scenes | Self-hosted [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with LTX-Video (or Wan 2.2 via `COMFYUI_VIDEO_WORKFLOW`) |
+| `VIBEVOICE_SPACE_URL` / `ZIMAGE_SPACE_URL` / `WAN_VIDEO_SPACE_URL` | For Academy story media | Hosted Hugging Face Spaces for [VibeVoice](https://github.com/microsoft/VibeVoice) narration, Z-Image scene art, and Wan 2.2 motion scenes — no GPU of your own; add `HF_TOKEN` for ZeroGPU quota |
+| `VIBEVOICE_BASE_URL` | Alternative | Self-hosted VibeVoice server (OpenAI-compatible `/v1/audio/speech`) |
+| `SD_WEBUI_BASE_URL` | Alternative | Self-hosted Stable-Diffusion-WebUI-compatible API (FLUX.1-schnell / SDXL) |
+| `COMFYUI_BASE_URL` | Alternative | Self-hosted [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with LTX-Video (or Wan 2.2 via `COMFYUI_VIDEO_WORKFLOW`) |
 | `SF_CLI_PATH` | Yes | Usually `sf` |
 | `SF_AUTO_INSTALL_PLUGINS` | Optional | Provision missing allowlisted plugins at startup/on use (default `true`) |
 | `SF_ENFORCE_PLUGIN_VERSIONS` | Optional | Keep plugins on tested versions (default `true`) |

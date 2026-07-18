@@ -4,7 +4,10 @@ import {
   EXPLAINER_LABEL_MAX,
   EXPLAINER_NARRATION_MAX,
   sanitizeStoryboard,
+  type ExplainerAccent,
   type ExplainerFocus,
+  type ExplainerIcon,
+  type ExplainerMediaCapabilities,
   type ExplainerScene,
   type ExplainerStoryboard,
   type LearningExplainerImageRequest,
@@ -90,6 +93,50 @@ function conceptArt(description: string): string {
   ].join(' ');
 }
 
+/** Stable, deterministic seed so every lesson's fallback story looks different. */
+export function hashString(value: string): number {
+  let hash = 5381;
+  for (const char of value) {
+    hash = ((hash << 5) + hash + char.codePointAt(0)!) >>> 0;
+  }
+  return hash;
+}
+
+/** Topic keyword → whitelisted icon, so fallback diagrams reflect the concept. */
+const TOPIC_ICONS: Array<[RegExp, ExplainerIcon]> = [
+  [/report|dashboard|analytic|chart|metric/i, 'bar-chart'],
+  [/deploy|release|devops|ci\/cd|change set|version control/i, 'rocket'],
+  [/securit|profile|permission|owd|role hierarch|access control/i, 'shield'],
+  [/sharing/i, 'share-2'],
+  [/flow|automat|process builder|approval/i, 'workflow'],
+  [/apex|trigger|lwc|lightning web|code|develop|javascript|method/i, 'code'],
+  [/soql|sosl|query|search index/i, 'search'],
+  [/api|integration|middleware|webhook|rest|soap|event-driven/i, 'link'],
+  [/identity|login|sso|oauth|authenticat/i, 'key'],
+  [/governor|limit|bulkif|async|batch|queueable|performance|large data|scale/i, 'zap'],
+  [/sandbox|scratch org|environment|org strateg/i, 'boxes'],
+  [/architect|design pattern|layer|framework/i, 'layers'],
+  [/data model|object|field|record|schema|database|import|export|loader/i, 'database'],
+  [/multi-tenant|tenant|cloud|platform/i, 'cloud'],
+  [/email|notification|alert/i, 'mail'],
+  [/mobile/i, 'smartphone'],
+  [/lead|opportunit|forecast|quote|sales process/i, 'target'],
+  [/case|service|support|escalat/i, 'life-buoy'],
+  [/test|assert|coverage|quality/i, 'check-circle'],
+  [/user|team|collaborat|chatter|adoption/i, 'users'],
+  [/price|billing|invoice|revenue|quote/i, 'dollar-sign'],
+  [/account|customer|crm|contact|company/i, 'briefcase'],
+  [/calendar|schedule|event/i, 'calendar'],
+  [/report type|dashboard/i, 'pie-chart'],
+];
+
+export function iconForTopic(text: string, fallback: ExplainerIcon): ExplainerIcon {
+  for (const [pattern, icon] of TOPIC_ICONS) {
+    if (pattern.test(text)) return icon;
+  }
+  return fallback;
+}
+
 /**
  * Deterministic storyboard derived from curriculum content. Always available
  * (no AI dependency) and used both as the fallback and in tests as the
@@ -103,6 +150,14 @@ export function buildStaticStoryboard(
   const { lesson } = location;
   const scenes: Array<Omit<ExplainerScene, 'id'>> = [];
 
+  // Per-lesson deterministic variety: without AI or media servers, stories for
+  // different concepts must still LOOK different (icons from the topic,
+  // rotated accent palette), not like one shared template.
+  const palette: ExplainerAccent[] = ['sky', 'violet', 'emerald', 'amber'];
+  const seed = hashString(lesson.id);
+  const accentAt = (index: number): ExplainerAccent => palette[(seed + index) % palette.length]!;
+  const topicIcon = iconForTopic(`${lesson.title} ${lesson.summary}`, 'lightbulb');
+
   if (focus === 'real-world') {
     scenes.push({
       title: 'Meet the challenge',
@@ -115,7 +170,11 @@ export function buildStaticStoryboard(
         kind: 'callout',
         caption: 'The challenge begins',
         items: [
-          { label: clamp(lesson.realWorld.title, EXPLAINER_LABEL_MAX), icon: 'briefcase', accent: 'sky' },
+          {
+            label: clamp(lesson.realWorld.title, EXPLAINER_LABEL_MAX),
+            icon: iconForTopic(lesson.realWorld.title, 'briefcase'),
+            accent: accentAt(0),
+          },
         ],
       },
     });
@@ -150,7 +209,7 @@ export function buildStaticStoryboard(
         caption: 'The idea changes the flow',
         items: [
           { label: 'Friction', sublabel: 'See the constraint', icon: 'search', accent: 'amber' },
-          { label: 'Concept', sublabel: lesson.title, icon: 'lightbulb', accent: 'violet' },
+          { label: 'Concept', sublabel: lesson.title, icon: topicIcon, accent: accentAt(1) },
           { label: 'New flow', sublabel: 'Apply with intent', icon: 'workflow', accent: 'emerald' },
         ],
       },
@@ -176,23 +235,27 @@ export function buildStaticStoryboard(
     const supporting =
       lesson.sections.find((section) => section.heading !== relevant.heading) ?? relevant;
     const questionLead = question
-      ? `You asked, "${question}" Here is the idea to catch: ${lesson.summary}`
-      : `Start with one idea: ${lesson.summary}`;
+      ? `You asked, "${question}" Here is the answer in one line: ${lesson.summary}`
+      : `Here is the idea in one line: ${lesson.summary}`;
 
+    // Teach through the lesson's own real-world case, so a learner can catch
+    // the concept just by listening — even without any AI configured.
     scenes.push({
-      title: question ? 'Catch the answer' : 'Open the idea',
+      title: question ? 'Catch the answer' : 'Step into the story',
       narration: clamp(
-        `${questionLead} Do not memorize the words yet; first, build the picture in your mind.`,
+        `${questionLead} Now picture the story behind it: ${lesson.realWorld.scenario}`,
         EXPLAINER_NARRATION_MAX,
       ),
       delivery: 'curious',
       visualDescription: conceptArt(
-        `An intriguing opening visual metaphor for this Salesforce concept: ${lesson.summary}`,
+        `A cinematic establishing moment inside this real workplace story: ${clamp(lesson.realWorld.scenario, 220)}`,
       ),
       visual: {
         kind: 'callout',
-        caption: question ? 'The answer in one picture' : 'The central idea',
-        items: [{ label: clamp(lesson.title, EXPLAINER_LABEL_MAX), icon: 'graduation-cap', accent: 'sky' }],
+        caption: question ? 'The answer in one picture' : 'A real story to hold on to',
+        items: [
+          { label: clamp(lesson.title, EXPLAINER_LABEL_MAX), icon: topicIcon, accent: accentAt(0) },
+        ],
       },
     });
 
@@ -200,7 +263,7 @@ export function buildStaticStoryboard(
     scenes.push({
       title: 'Build the mental model',
       narration: clamp(
-        `${firstParagraph(relevant.body)} Focus on the relationship between the parts; that relationship is what makes the concept useful.`,
+        `Inside that story, here is the idea at work. ${firstParagraph(relevant.body)} Focus on how the parts relate; that relationship is the concept.`,
         EXPLAINER_NARRATION_MAX,
       ),
       delivery: 'clear',
@@ -214,36 +277,45 @@ export function buildStaticStoryboard(
           relevantBullets.length >= 2
             ? relevantBullets.slice(0, 5).map((bullet, index) => ({
                 label: clamp(bullet, EXPLAINER_LABEL_MAX),
-                icon: index === 0 ? ('lightbulb' as const) : ('workflow' as const),
-                accent: index === 0 ? ('violet' as const) : ('sky' as const),
+                icon: iconForTopic(bullet, index === 0 ? 'lightbulb' : 'workflow'),
+                accent: accentAt(index),
               }))
             : [
-                { label: clamp(relevant.heading, EXPLAINER_LABEL_MAX), icon: 'layers', accent: 'violet' },
+                {
+                  label: clamp(relevant.heading, EXPLAINER_LABEL_MAX),
+                  icon: iconForTopic(relevant.heading, 'layers'),
+                  accent: accentAt(1),
+                },
                 {
                   label: clamp(lesson.keyTakeaways[0] ?? lesson.summary, EXPLAINER_LABEL_MAX),
-                  icon: 'link',
-                  accent: 'sky',
+                  icon: iconForTopic(lesson.keyTakeaways[0] ?? lesson.summary, 'link'),
+                  accent: accentAt(2),
                 },
               ],
       },
     });
 
     scenes.push({
-      title: 'Watch cause become effect',
+      title: 'Watch it work in the story',
       narration: clamp(
-        `${firstParagraph(supporting.body)} Ask yourself what changes downstream when this part changes. That cause-and-effect chain is the practical logic to remember.`,
+        `Back in the story, watch the idea earn its keep: ${lesson.realWorld.solution} That is ${lesson.title} working — the same cause-and-effect you will reuse everywhere.`,
         EXPLAINER_NARRATION_MAX,
       ),
       delivery: 'energetic',
       visualDescription: conceptArt(
-        `A left-to-right cause-and-effect transformation for ${supporting.heading}: ${firstParagraph(supporting.body)}`,
+        `The turning point of the story, where the concept visibly fixes the problem: ${clamp(lesson.realWorld.solution, 220)}`,
       ),
       visual: {
         kind: 'flow',
         caption: 'Cause → platform behavior → effect',
         items: [
-          { label: 'Input', sublabel: 'What starts it', icon: 'zap', accent: 'amber' },
-          { label: clamp(lesson.title, EXPLAINER_LABEL_MAX), sublabel: 'What Salesforce does', icon: 'cloud', accent: 'violet' },
+          { label: 'Input', sublabel: 'What starts it', icon: 'zap', accent: accentAt(3) },
+          {
+            label: clamp(lesson.title, EXPLAINER_LABEL_MAX),
+            sublabel: 'What Salesforce does',
+            icon: iconForTopic(supporting.heading, topicIcon),
+            accent: accentAt(1),
+          },
           { label: 'Effect', sublabel: 'What the user sees', icon: 'eye', accent: 'emerald' },
         ],
       },
@@ -273,7 +345,9 @@ export function buildStaticStoryboard(
   scenes.push({
     title: 'Lock it in',
     narration: clamp(
-      `Now compress the story into one thought: ${lesson.keyTakeaways[0] ?? lesson.summary} If you can picture the journey you just saw, you already have the concept.`,
+      focus === 'real-world'
+        ? `Now compress the story into one thought: ${lesson.keyTakeaways[0] ?? lesson.summary} If you can picture the journey you just saw, you already have the concept.`
+        : `And the payoff? ${lesson.realWorld.outcome} Now compress it all into one thought: ${lesson.keyTakeaways[0] ?? lesson.summary}`,
       EXPLAINER_NARRATION_MAX,
     ),
     delivery: 'clear',
@@ -283,10 +357,10 @@ export function buildStaticStoryboard(
     visual: {
       kind: 'timeline',
       caption: 'The memory path',
-      items: lesson.keyTakeaways.slice(0, 4).map((takeaway) => ({
+      items: lesson.keyTakeaways.slice(0, 4).map((takeaway, index) => ({
         label: clamp(takeaway, EXPLAINER_LABEL_MAX),
-        icon: 'check-circle' as const,
-        accent: 'emerald' as const,
+        icon: index === 0 ? topicIcon : iconForTopic(takeaway, 'check-circle'),
+        accent: accentAt(index),
       })),
     },
   });
@@ -333,6 +407,10 @@ export class LearningExplainerService {
 
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expires > Date.now()) {
+      // Media health must reflect NOW, not the moment the story was cached —
+      // otherwise starting/stopping a media server appears to do nothing for
+      // six hours.
+      cached.board.media = await this.currentMediaCapabilities();
       return cached.board;
     }
 
@@ -347,11 +425,7 @@ export class LearningExplainerService {
     if (!board) {
       board = buildStaticStoryboard(location, focus, input.question);
     }
-    board.media = {
-      generatedVideo: this.media.isVideoConfigured(),
-      generatedImages: this.media.isImageConfigured(),
-      generatedSpeech: this.media.isSpeechConfigured(),
-    };
+    board.media = await this.currentMediaCapabilities();
 
     if (this.cache.size >= CACHE_MAX_ENTRIES) {
       const oldest = this.cache.keys().next().value;
@@ -359,6 +433,17 @@ export class LearningExplainerService {
     }
     this.cache.set(cacheKey, { board, expires: Date.now() + CACHE_TTL_MS });
     return board;
+  }
+
+  /** Capabilities from live (60s-cached) provider probes, plus the reason per tier. */
+  private async currentMediaCapabilities(): Promise<ExplainerMediaCapabilities> {
+    const status = await this.media.getMediaStatus();
+    return {
+      generatedVideo: status.video === 'ready',
+      generatedImages: status.images === 'ready',
+      generatedSpeech: status.speech === 'ready',
+      status,
+    };
   }
 
   async getSceneImage(input: LearningExplainerImageRequest): Promise<GeneratedMedia | null> {
@@ -379,12 +464,14 @@ export class LearningExplainerService {
     const scene = await this.resolveScene(input, input.sceneId);
     const cacheKey = `${this.requestCacheKey(input)}|${scene.id}|video`;
     const { motionPrompt, negativePrompt } = this.buildScenePrompts(scene, input.focus);
-    return this.getCachedMedia(
-      cacheKey,
-      this.videoCache,
-      this.videoInFlight,
-      () => this.media.generateVideo(motionPrompt, negativePrompt),
-    );
+    return this.getCachedMedia(cacheKey, this.videoCache, this.videoInFlight, async () => {
+      // Image-to-video backends (Wan 2.2) animate the scene still, which also
+      // keeps the clip visually consistent with the image fallback tier.
+      const baseImage = this.media.isImageConfigured()
+        ? await this.getSceneImage(input)
+        : null;
+      return this.media.generateVideo(motionPrompt, negativePrompt, baseImage);
+    });
   }
 
   async getSceneSpeech(input: LearningExplainerSpeechRequest): Promise<GeneratedMedia | null> {
@@ -501,18 +588,20 @@ export class LearningExplainerService {
       '{"title":"...","scenes":[{"title":"...","narration":"...","delivery":"curious","visualDescription":"...","visual":{"kind":"flow","caption":"...","items":[{"label":"...","sublabel":"...","icon":"cloud","accent":"sky","side":"left"}]}}]}',
       '',
       'Story rules:',
-      '- Write 5 coherent scenes: curiosity hook → mental model → cause and effect → important boundary or misconception → memorable compression.',
+      '- Write 5 coherent scenes: story hook → the idea inside the story → the idea working (cause and effect) → the boundary or misconception → payoff and one-thought recap.',
+      '- Anchor the WHOLE film in ONE vivid real-world storyline: in scene 1, name a person, their role, and their company (e.g. "Priya, sales ops at a solar installer"), and stay inside that same storyline in every scene.',
+      '- Teach the concept THROUGH the story, not next to it: each scene shows what the character faces, what the platform does about it, and why it matters. A listener must genuinely understand the topic after ONE listen, with their eyes closed.',
       question
-        ? '- Answer the learner’s actual question in the FIRST spoken sentence, then make the reasoning intuitive.'
-        : '- Reveal the concept instead of listing the lesson sections.',
+        ? '- Answer the learner’s actual question in the FIRST spoken sentence, then continue the storyline to make the reasoning stick.'
+        : '- Reveal the concept through the storyline instead of listing the lesson sections.',
       focus === 'real-world'
-        ? '- This is explicitly a case story: make the supplied problem, turning point, and consequence concrete.'
-        : '- This is a concept story. Do NOT force a generic company or workplace example. Use an analogy only when it sharpens the mental model.',
+        ? '- Use the supplied case study as the storyline: make its problem, turning point, and consequence concrete and personal.'
+        : '- Invent a believable, specific storyline that fits the grounding content (real job titles, real business stakes — never "a company" in the abstract).',
       '- narration: 2–4 short conversational sentences, max 480 characters. Write for listening: contractions, natural emphasis, varied rhythm, and a clear causal thread.',
       '- Never read slide labels, copy a curriculum paragraph, say “as you can see”, or announce “in this scene”. The voice must add meaning the visual alone cannot.',
       '- Each scene teaches exactly one insight and flows naturally into the next. Use concrete nouns and active verbs.',
       '- delivery must be one of curious, clear, energetic, reflective and should fit the scene.',
-      '- visualDescription: 1–3 detailed sentences directing a memorable cinematic image. It must embody the idea, maintain a premium navy/sky/violet visual world, and contain no written text, logos, or fake Salesforce UI.',
+      '- visualDescription: 1–3 detailed sentences directing a memorable cinematic image of THIS story moment (the place, the character, the objects at stake) while embodying the concept. Premium navy/sky/violet visual world; no written text, logos, or fake Salesforce UI.',
       '- visual.kind must be one of: flow (process arrows), compare (two sides; give each item "side":"left"|"right"), stack (layers), timeline (ordered steps), callout (single big idea), grid (related concepts).',
       '- 1-6 items per visual. label max 40 chars, sublabel max 60 chars.',
       `- icon must be one of: ${EXPLAINER_ICONS.join(', ')}.`,

@@ -15,11 +15,18 @@ so stories feel like short learning films instead of slideshows.
 
 ## 2. Chosen engines and why
 
-| Capability | Engine | License | Why this one |
-|-----------|--------|---------|--------------|
-| Voice narration | **Microsoft VibeVoice** (`microsoft/VibeVoice-1.5B`), served by a community OpenAI-compatible server | MIT (code + weights) | The user-requested engine. Frontier long-form expressive TTS; runs on an 8–12 GB GPU; the community standard serving contract is OpenAI's `POST /v1/audio/speech`, which many maintained servers implement (`vibevoice-community/VibeVoice-API`, `ncoder-ai/VibeVoice-FastAPI`, `marhensa/vibevoice-realtime-openai-api` for the 0.5B realtime model on ~2 GB VRAM). Microsoft disabled TTS inference in the primary repo, so a community server is the supported self-host path. |
-| Scene images | **FLUX.1 [schnell]** (or SDXL on smaller GPUs) behind a **Stable Diffusion WebUI-compatible REST API** (`POST /sdapi/v1/txt2img`) | FLUX.1-schnell: Apache-2.0 | FLUX.1-schnell is the strongest permissively-licensed open image model and generates in 1–4 steps. The SD-WebUI API is the de-facto open-source image-serving standard — AUTOMATIC1111, Forge, SD.Next, and ComfyUI API wrappers all expose the same endpoint, so the platform is not married to one UI project. |
-| Motion scenes (video) | **LTX-Video / LTX-2** running in **ComfyUI** (native support); **Wan 2.2** as the low-VRAM alternative | LTX: Apache-2.0 (incl. licensed training data); Wan 2.2: Apache-2.0 | LTX is the fastest high-quality open video family and is built into ComfyUI core; distilled/quantized variants run on 8–16 GB consumer GPUs. ComfyUI's HTTP API (`POST /prompt` → poll `GET /history/{id}` → `GET /view`) is workflow-based, so the exact model (LTX 2B distilled, LTX-2, Wan 2.2 1.3B/14B) is swappable per deployment via a workflow template file — no code change needed. |
+Every tier supports **two open-source backends** and automatically uses whichever is configured —
+a hosted **Hugging Face Space** (zero infrastructure; the default) or a **self-hosted server**:
+
+| Capability | Hosted Space (default) | Self-hosted alternative | License | Why |
+|-----------|------------------------|------------------------|---------|-----|
+| Voice narration | **VibeVoice-Large Space** (`VIBEVOICE_SPACE_URL`, Gradio `/generate_podcast_wrapper`) | Community OpenAI-compatible VibeVoice server (`VIBEVOICE_BASE_URL`, `POST /v1/audio/speech`) | MIT | The user-requested engine — Microsoft's frontier long-form expressive TTS with ten stock narrators. Microsoft disabled TTS inference in the primary repo, so the Space / community servers are the supported paths. |
+| Scene images | **Z-Image-Turbo Space** (`ZIMAGE_SPACE_URL`, Gradio `/generate_image`) | FLUX.1-schnell / SDXL behind an SD-WebUI-compatible API (`SD_WEBUI_BASE_URL`, `POST /sdapi/v1/txt2img`) | Z-Image: Apache-2.0; FLUX.1-schnell: Apache-2.0 | Z-Image-Turbo (Tongyi) generates strong 1280×720 scene art in ~9 steps / ~10 s on the free Space. Self-host path keeps the de-facto SD-WebUI REST standard. |
+| Motion scenes (video) | **Wan 2.2 I2V Space** (`WAN_VIDEO_SPACE_URL`, Gradio `/generate_video`) — animates the generated scene still (image-to-video + Lightning LoRA, 4–8 steps) | LTX-Video / Wan 2.2 in ComfyUI (`COMFYUI_BASE_URL`, workflow template) | Wan 2.2: Apache-2.0; LTX: Apache-2.0 | Image-to-video keeps every clip visually consistent with the still-art tier and needs no text-to-video prompt fidelity. ComfyUI remains the fully-controlled option. |
+
+Set `HF_TOKEN` (a free Hugging Face account token) when using Spaces: public **ZeroGPU** Spaces
+strictly limit anonymous GPU time, and long jobs (voice, video) are typically rejected without a
+token. Duplicating a Space into your own account is the reliable production option.
 
 Video really is the stability/attractiveness win: a 3–4 second generated motion clip per scene
 (slow camera push, flowing data, characters reacting) reads as a produced learning film, and
@@ -50,7 +57,25 @@ Design rules carried over from the previous provider:
 - A missing/failed provider returns **HTTP 204**, which the player treats as "use the next tier".
 - Generated visuals carry a "conceptual aid" disclaimer; exact labels stay in app-owned overlays.
 
-## 4. Deployment recipes (self-hosted, all open source)
+## 4. Deployment recipes
+
+### Option A — hosted Hugging Face Spaces (no GPU, fastest start)
+
+```env
+VIBEVOICE_SPACE_URL="https://steveeeeeeen-vibevoice-large.hf.space"
+ZIMAGE_SPACE_URL="https://mrfakename-z-image-turbo.hf.space"
+WAN_VIDEO_SPACE_URL="https://kulkas2pintu-wan555.hf.space"
+HF_TOKEN="hf_..."   # free account token; required in practice for voice + video quota
+```
+
+Notes:
+- Image generation works instantly (~10 s per scene) even anonymously.
+- Voice and video run on ZeroGPU queues: expect 30 s–3 min per scene, and add `HF_TOKEN`
+  (anonymous callers get "GPU duration larger than the maximum allowed" style rejections).
+- For dependable capacity, duplicate each Space into your own HF account (free or upgraded
+  hardware) and point the URL at your copy — the API contract stays identical.
+
+### Option B — self-hosted (full control)
 
 Voice — VibeVoice (pick one server):
 
@@ -122,7 +147,27 @@ Wan 2.2 or LTX-2 without touching application code.
   pre-warming the first scene of assigned lessons overnight, per-org generation quotas, and an
   admin toggle in the UI (env flags exist today).
 
-## 6. Risks and mitigations
+## 6. Troubleshooting — "voice/images/video are not working"
+
+The player now diagnoses itself: every storyboard response carries `media.status` with one value
+per tier — `ready`, `unreachable` (configured but not answering a live probe), or `off` (not
+configured) — and the player header shows a matching badge:
+
+| What you see | Meaning | Fix |
+|--------------|---------|-----|
+| Badge **"Built-in visuals · device voice"**, voice list shows only Microsoft/Apple/Google system voices | No media backend is configured — this is the expected fallback, not a bug | Set the three `*_SPACE_URL` values (Option A, zero infra) or self-hosted URLs in `apps/api/.env` and restart the API |
+| Images work but voice/video fail with quota or "GPU duration" errors in API logs | Public ZeroGPU Spaces reject long anonymous jobs | Set `HF_TOKEN`, or duplicate the Space into your own HF account and point `*_SPACE_URL` at it |
+| Amber badge **"Media studio unreachable"** | A URL is configured but the server didn't answer within ~2.5 s | Start the server; verify with `curl -i $VIBEVOICE_BASE_URL/v1/audio/voices`, `curl -i $SD_WEBUI_BASE_URL/sdapi/v1/sd-models`, `curl -i $COMFYUI_BASE_URL/system_stats`; check firewalls/ports |
+| Studio voices listed but narration silent / wrong voice | Browser fallback engaged mid-scene (server error) | Check API logs for `[OpenSourceMediaService]` warnings; the picker keeps working with device voices meanwhile |
+| Every concept shows identical diagrams | You are on the built-in fallback AND (pre-fix) it used one fixed template | Fixed: fallback visuals now derive icons/colors from each lesson's topic. For unique cinematic scenes per concept, connect the image/video servers |
+| Stories read exactly like the lesson text | `NVIDIA_API_KEY` missing/invalid, so the deterministic script is used | Configure NVIDIA NIM (used by the platform copilot) to get AI-directed scripts |
+
+Notes:
+- Probes cache for 60 seconds, so a freshly started server appears within a minute (no restart).
+- `media.status` semantics: the API only advertises a tier (and the browser only requests media
+  for it) when the tier is `ready` — a down server costs one probe, not a per-scene timeout.
+
+## 7. Risks and mitigations
 
 | Risk | Mitigation |
 |------|------------|
