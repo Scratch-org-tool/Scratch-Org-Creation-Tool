@@ -42,7 +42,10 @@ describe('Data Center async and recovery controls', () => {
     expect(hook).toContain("'account-partners'");
     expect(partners).toContain('/data/account-partners/mapping/preview');
     expect(partners).toContain('/data/account-partners/mapping/run');
-    expect(partners).toContain('Migrate Account Partners');
+    expect(partners).toContain('Create / update Account Partners');
+    expect(partners).toContain('row.employeeName');
+    expect(partners).toContain('Written to Account Partner Name');
+    expect(partners).not.toContain('{row.targetEmployeeId}');
   });
 
   it('offers server-authorized movement controls and explicit inserted-record deletion', () => {

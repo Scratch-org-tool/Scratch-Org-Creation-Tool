@@ -78,12 +78,13 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       _alias: string,
       objectName: string,
     ) => {
-      const writable = (name: string, externalId = false) => ({
+      const writable = (name: string, externalId = false, length?: number) => ({
         name,
         externalId,
         createable: true,
         updateable: true,
-        length: externalId ? 255 : undefined,
+        length: length ?? (externalId ? 255 : undefined),
+        type: 'string',
       });
       const fields = objectName === 'cfs_ob__AccountPartner__c'
         ? [
@@ -92,10 +93,11 @@ describe('AccountPartnerImportService SOQL mapping', () => {
             writable('cfs_ob__Bottler__c'),
             writable('cfs_ob__Account__c'),
             writable('cfs_ob__EmployeeMaster__c'),
+            writable('Name', false, 80),
           ]
         : objectName === 'Account'
-          ? [writable('cfs_ob__u_CustomerNumber__c', true)]
-          : [writable('cfs_ob__EmployeeNo__c', true)];
+          ? [writable('cfs_ob__u_CustomerNumber__c', true), writable('Name')]
+          : [writable('cfs_ob__EmployeeNo__c', true), writable('Name')];
       return { success: true, data: { result: { fields } } };
     });
     mocks.sfCli.exportBulk.mockImplementation(async (
@@ -108,13 +110,21 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       } else if (soql.includes('FROM Account ')) {
         await writeFile(
           file,
-          'Id,cfs_ob__u_CustomerNumber__c\n001ACCOUNT00000001,000123\n',
+          'Id,Name,cfs_ob__u_CustomerNumber__c\n'
+          + '001ACCOUNT00000001,North Market,000123\n',
+          'utf8',
+        );
+      } else if (soql.includes('FROM cfs_ob__AccountPartner__c ')) {
+        await writeFile(
+          file,
+          'cfs_ob__AccountPartnerExternalId__c\nAP-1\n',
           'utf8',
         );
       } else {
         await writeFile(
           file,
-          'Id,cfs_ob__EmployeeNo__c\n001EMPLOYEE0000001,E-1\n',
+          'Id,Name,cfs_ob__EmployeeNo__c\n'
+          + '001EMPLOYEE0000001,Alex Employee,E-1\n',
           'utf8',
         );
       }
@@ -135,12 +145,21 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       ready: 1,
       skippedTargetAccount: 1,
       skippedTargetEmployee: 0,
+      toCreate: 0,
+      toUpdate: 1,
     }));
+    expect(preview.nameField).toEqual({
+      fieldName: 'Name',
+      mode: 'employee-master-name',
+    });
     expect(preview.sample).toEqual([
       expect.objectContaining({
         externalId: 'AP-1',
-        accountKey: '123',
+        accountKey: '000123',
+        accountName: 'North Market',
         employeeKey: 'E-1',
+        employeeName: 'Alex Employee',
+        partnerName: 'Alex Employee',
         targetAccountId: '001ACCOUNT00000001',
         targetEmployeeId: '001EMPLOYEE0000001',
       }),
@@ -176,6 +195,8 @@ describe('AccountPartnerImportService SOQL mapping', () => {
     expect(csv).toContain('AP-1');
     expect(csv).toContain('cfs_ob__Account__c');
     expect(csv).toContain('001ACCOUNT00000001');
+    expect(csv).toContain('Name');
+    expect(csv).toContain('Alex Employee');
     expect(mocks.sfCli.upsertBulk).toHaveBeenCalledWith(
       'cfs_ob__AccountPartner__c',
       expect.stringContaining('account-partners.csv'),
@@ -184,7 +205,54 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       15,
       expect.any(Object),
     );
+    expect(logs).toContain(
+      '0 Account Partners will be created; 1 existing Account Partners will be updated.',
+    );
+    expect(logs).toContain(
+      'Account Partner Name will be set from the matched target Employee Master name.',
+    );
     expect(logs.at(-1)).toBe('Account Partner migration completed');
+  });
+
+  it('leaves an auto-number Account Partner Name to Salesforce', async () => {
+    mocks.sfCli.describeSObject.mockImplementation(async (
+      _alias: string,
+      objectName: string,
+    ) => {
+      const writable = (name: string, externalId = false) => ({
+        name,
+        externalId,
+        createable: true,
+        updateable: true,
+        type: 'string',
+        length: 255,
+      });
+      const fields = objectName === 'cfs_ob__AccountPartner__c'
+        ? [
+            writable('cfs_ob__AccountPartnerExternalId__c', true),
+            writable('cfs_ob__PartnerRole__c'),
+            writable('cfs_ob__Bottler__c'),
+            writable('cfs_ob__Account__c'),
+            writable('cfs_ob__EmployeeMaster__c'),
+            {
+              name: 'Name',
+              createable: false,
+              updateable: false,
+              type: 'autonumber',
+              length: 80,
+            },
+          ]
+        : objectName === 'Account'
+          ? [writable('cfs_ob__u_CustomerNumber__c'), writable('Name')]
+          : [writable('cfs_ob__EmployeeNo__c'), writable('Name')];
+      return { success: true, data: { result: { fields } } };
+    });
+    const service = new AccountPartnerImportService();
+
+    const preview = await service.previewSoqlMapping(input);
+
+    expect(preview.nameField.mode).toBe('salesforce-managed');
+    expect(preview.sample[0]?.employeeName).toBe('Alex Employee');
   });
 
   it('falls back to REST query when Bulk Query rejects compound fields', async () => {
@@ -206,13 +274,21 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       if (soql.includes('FROM Account ')) {
         await writeFile(
           file,
-          'Id,cfs_ob__u_CustomerNumber__c\n001ACCOUNT00000001,000123\n',
+          'Id,Name,cfs_ob__u_CustomerNumber__c\n'
+          + '001ACCOUNT00000001,North Market,000123\n',
+          'utf8',
+        );
+      } else if (soql.includes('FROM cfs_ob__AccountPartner__c ')) {
+        await writeFile(
+          file,
+          'cfs_ob__AccountPartnerExternalId__c\nAP-1\n',
           'utf8',
         );
       } else {
         await writeFile(
           file,
-          'Id,cfs_ob__EmployeeNo__c\n001EMPLOYEE0000001,E-1\n',
+          'Id,Name,cfs_ob__EmployeeNo__c\n'
+          + '001EMPLOYEE0000001,Alex Employee,E-1\n',
           'utf8',
         );
       }
@@ -238,7 +314,7 @@ describe('AccountPartnerImportService SOQL mapping', () => {
     expect(mocks.sfCli.queryAll).toHaveBeenCalledTimes(1);
     expect(preview.sample[0]).toEqual(expect.objectContaining({
       externalId: 'AP-1',
-      accountKey: '123',
+      accountKey: '000123',
       employeeKey: 'E-1',
     }));
   });
