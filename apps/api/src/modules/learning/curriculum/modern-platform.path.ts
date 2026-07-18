@@ -13,6 +13,7 @@ export const modernPlatformPath: CurriculumPath = {
   description:
     "Build a current, product-spanning view of Salesforce. Learn to select and connect Sales, Service, and Experience Cloud; deliver scalable journeys with OmniStudio; turn source data into governed Data Cloud activation; modernize automation with Flow; and design Agentforce solutions whose actions, handoffs, security, and telemetry are production-ready.",
   level: "intermediate",
+  category: "salesforce",
   badge: "Modern Platform Practitioner",
   estimatedHours: 9,
   skills: [
