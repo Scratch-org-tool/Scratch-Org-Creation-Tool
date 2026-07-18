@@ -757,6 +757,24 @@ model NotificationSetting {
   updatedAt  DateTime @updatedAt
 }
 
+/// Global, admin-owned AI Copilot voice ("voiceover") controls. A single
+/// "global" row decides whether the voice assistant is available at all, its
+/// wake phrases, and how spoken replies behave. Absent row => voice is off.
+model CopilotVoiceSetting {
+  id               String   @id @default("global")
+  enabled          Boolean  @default(false)
+  speakResponses   Boolean  @default(true)
+  autoListen       Boolean  @default(false)
+  wakeWords        String[] @default(["hey copilot", "hey assistant"])
+  greetingTemplate String   @default("Hi {name}, how can I help you today?")
+  listenSilenceMs  Int      @default(2500)
+  speechRate       Float    @default(1)
+  voiceLang        String   @default("en-US")
+  updatedBy        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
 /// Security audit trail. Metadata must never contain credentials, bearer
 /// tokens, passwords, raw IP addresses, or raw user-agent values.
 model AuthAuditEvent {

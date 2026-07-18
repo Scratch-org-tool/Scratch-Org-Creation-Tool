@@ -1,9 +1,20 @@
-import { Body, Controller, Post, Req, Res, UseGuards, BadRequestException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+  BadRequestException,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { CopilotService } from './copilot.service';
 import {
   copilotMessageSchema,
+  copilotVoiceSettingsUpdateSchema,
   toAppUserId,
   KNOWLEDGE_TIERS,
   type CopilotStreamEvent,
@@ -71,6 +82,24 @@ export class CopilotController {
     );
 
     res.end();
+  }
+
+  @Get('voice-settings')
+  getVoiceSettings() {
+    return this.copilotService.getVoiceSettings();
+  }
+
+  @Patch('voice-settings')
+  @RequireRole('admin')
+  updateVoiceSettings(@Req() req: AuthenticatedRequest, @Body() body: unknown) {
+    const parsed = copilotVoiceSettingsUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues[0]?.message ?? 'Invalid Copilot voice settings',
+      );
+    }
+    const adminUserId = req.user ? toAppUserId(req.user.uid) : 'system';
+    return this.copilotService.updateVoiceSettings(parsed.data, adminUserId);
   }
 
   @Post('ingest')

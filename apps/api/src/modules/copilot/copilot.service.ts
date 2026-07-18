@@ -1,13 +1,19 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { prisma, type Prisma } from '@sfcc/db';
 import { saveAgentSession, getAgentSession } from '@sfcc/firebase';
 import type {
   AgentSession,
   CopilotMessage,
   CopilotStreamEvent,
+  CopilotVoiceSettings,
+  CopilotVoiceSettingsUpdateInput,
   KnowledgeTier,
 } from '@sfcc/shared';
 import {
+  DEFAULT_COPILOT_VOICE_SETTINGS,
+  applyCopilotVoiceSettingsUpdate,
   getEffectiveModules,
+  normalizeCopilotVoiceSettings,
   resolveCopilotTiers,
   type UserAccessProfile,
   type AppModule,
@@ -55,6 +61,8 @@ function trimHistory(
 }
 
 export type CopilotStreamWriter = (event: CopilotStreamEvent) => void;
+
+const GLOBAL_VOICE_SETTINGS_ID = 'global';
 
 @Injectable()
 export class CopilotService {
@@ -237,6 +245,68 @@ export class CopilotService {
     tier: KnowledgeTier = 'internal',
   ) {
     return this.knowledgeService.ingest(source, sourceType, content, tier);
+  }
+
+  /**
+   * Current global Copilot voice settings, falling back to the (disabled)
+   * defaults when no admin has configured them yet. Safe to expose to any
+   * Copilot user — it contains only feature flags, wake words and a greeting
+   * template (no secrets).
+   */
+  async getVoiceSettings(): Promise<CopilotVoiceSettings> {
+    const row = await prisma.copilotVoiceSetting
+      .findUnique({ where: { id: GLOBAL_VOICE_SETTINGS_ID } })
+      .catch(() => null);
+    if (!row) return { ...DEFAULT_COPILOT_VOICE_SETTINGS };
+    return normalizeCopilotVoiceSettings({
+      enabled: row.enabled,
+      speakResponses: row.speakResponses,
+      autoListen: row.autoListen,
+      wakeWords: row.wakeWords,
+      greetingTemplate: row.greetingTemplate,
+      listenSilenceMs: row.listenSilenceMs,
+      speechRate: row.speechRate,
+      voiceLang: row.voiceLang,
+      updatedAt: row.updatedAt.toISOString(),
+      updatedBy: row.updatedBy,
+    });
+  }
+
+  /** Admin-only: persist a partial voice-settings update on top of current state. */
+  async updateVoiceSettings(
+    update: CopilotVoiceSettingsUpdateInput,
+    adminUserId: string,
+  ): Promise<CopilotVoiceSettings> {
+    const current = await this.getVoiceSettings();
+    const next = applyCopilotVoiceSettingsUpdate(current, update);
+    const data = {
+      enabled: next.enabled,
+      speakResponses: next.speakResponses,
+      autoListen: next.autoListen,
+      wakeWords: next.wakeWords,
+      greetingTemplate: next.greetingTemplate,
+      listenSilenceMs: next.listenSilenceMs,
+      speechRate: next.speechRate,
+      voiceLang: next.voiceLang,
+      updatedBy: adminUserId,
+    } satisfies Prisma.CopilotVoiceSettingUncheckedCreateInput;
+    const saved = await prisma.copilotVoiceSetting.upsert({
+      where: { id: GLOBAL_VOICE_SETTINGS_ID },
+      create: { id: GLOBAL_VOICE_SETTINGS_ID, ...data },
+      update: data,
+    });
+    return normalizeCopilotVoiceSettings({
+      enabled: saved.enabled,
+      speakResponses: saved.speakResponses,
+      autoListen: saved.autoListen,
+      wakeWords: saved.wakeWords,
+      greetingTemplate: saved.greetingTemplate,
+      listenSilenceMs: saved.listenSilenceMs,
+      speechRate: saved.speechRate,
+      voiceLang: saved.voiceLang,
+      updatedAt: saved.updatedAt.toISOString(),
+      updatedBy: saved.updatedBy,
+    });
   }
 
   /** Replace the curated app corpus (idempotent — clears previous corpus chunks first). */
