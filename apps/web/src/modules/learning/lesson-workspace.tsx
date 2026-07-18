@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   Clapperboard,
   Clock,
+  Copy,
   ExternalLink,
   FileQuestion,
   Lightbulb,
@@ -39,6 +40,31 @@ type LessonMode = 'read' | 'video';
 
 function SectionBlock({ section }: { section: LearningLessonSection }) {
   const blocks = parseBody(section.body);
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+    },
+    [],
+  );
+
+  const copyCode = async () => {
+    if (!section.code || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(section.code.snippet);
+      setCopied(true);
+      if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+      resetTimer.current = window.setTimeout(() => {
+        resetTimer.current = null;
+        setCopied(false);
+      }, 1800);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
     <section>
       <h3 className="text-base font-semibold">{section.heading}</h3>
@@ -65,6 +91,15 @@ function SectionBlock({ section }: { section: LearningLessonSection }) {
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 {section.code.language}
               </span>
+              <button
+                type="button"
+                onClick={() => void copyCode()}
+                className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                aria-label={`Copy ${section.code.language} code sample`}
+              >
+                {copied ? <CheckCircle2 className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
             </div>
             <pre className="overflow-x-auto p-3 text-xs leading-relaxed">
               <code>{section.code.snippet}</code>
@@ -285,10 +320,7 @@ export function LessonWorkspace() {
               </div>
 
               {mode === 'video' ? (
-                <VideoSessionBlock
-                  lessonId={view.lesson.id}
-                  onPlayAnimated={() => playStory('lesson')}
-                />
+                <VideoSessionBlock lessonId={view.lesson.id} />
               ) : (
                 <>
                   <div className="rounded-xl border border-border/60 bg-card/60 p-4">

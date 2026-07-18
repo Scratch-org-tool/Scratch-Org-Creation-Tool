@@ -47,6 +47,9 @@ coverage/
 # Local dev stack
 .dev/
 
+# Runtime media uploads (persist externally in production)
+apps/api/uploads/
+
 # Salesforce
 .sfdx/
 .sf/

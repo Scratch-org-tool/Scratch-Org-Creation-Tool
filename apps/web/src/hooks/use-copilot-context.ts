@@ -38,7 +38,7 @@ export function useCopilotContext(): CopilotClientContext {
   return useMemo(() => {
     const grantedModules = profile
       ? getEffectiveModules(profile)
-      : (['dashboard', 'environment', 'data'] as AppModule[]);
+      : ([] as AppModule[]);
 
     const connectedOrgs = orgs.map((o) => ({
       alias: o.alias,

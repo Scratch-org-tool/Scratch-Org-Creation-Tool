@@ -1,7 +1,7 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * Path 2 — Admin & Configuration Mastery (Intermediate).
+ * Path 3 — Admin & Configuration Mastery (Intermediate).
  * The security model, declarative automation, and data operations that make
  * someone genuinely dangerous (in a good way) in a real org.
  */

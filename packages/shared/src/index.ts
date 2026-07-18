@@ -39,4 +39,3 @@ export * from './calendar.js';
 export * from './deployment-risk.js';
 export * from './learning.js';
 export * from './learning-explainer.js';
-export * from './learning-video.js';

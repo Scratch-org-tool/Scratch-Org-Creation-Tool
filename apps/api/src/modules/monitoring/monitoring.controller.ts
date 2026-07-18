@@ -10,7 +10,7 @@ export class MonitoringController {
   constructor(private readonly monitoringService: MonitoringService) {}
 
   @Get('dashboard')
-  @RequireModule('dashboard')
+  @RequireModule('monitoring')
   getDashboard(@Query('days') days?: string, @CurrentUser() userId?: string) {
     const parsed = parseInt(days ?? '7', 10);
     const allowed = [7, 14, 30].includes(parsed) ? parsed : 7;

@@ -6,7 +6,7 @@ import {
   signupSchema,
   updateMeSchema,
 } from './schemas/auth.js';
-import { moduleForPath, ROUTE_MODULE_MAP } from './auth.js';
+import { isRegisteredAppPath, moduleForPath, ROUTE_MODULE_MAP } from './auth.js';
 
 describe('self-service account contracts', () => {
   it('sanitizes a display name and rejects privilege or identity fields', () => {
@@ -81,5 +81,12 @@ describe('self-service account contracts', () => {
     assert.equal(Object.hasOwn(ROUTE_MODULE_MAP, '/account'), true);
     assert.equal(ROUTE_MODULE_MAP['/account'], null);
     assert.equal(moduleForPath('/account'), null);
+  });
+
+  it('distinguishes registered role-only routes from unknown product routes', () => {
+    assert.equal(ROUTE_MODULE_MAP['/admin'], null);
+    assert.equal(isRegisteredAppPath('/admin/users'), true);
+    assert.equal(isRegisteredAppPath('/account'), true);
+    assert.equal(isRegisteredAppPath('/unregistered-feature'), false);
   });
 });

@@ -4,7 +4,7 @@ import type {
   ExplainerFocus,
   ExplainerStoryboard,
   ExplainerStudioVoice,
-  LessonVideoScript,
+  LearningLessonVideoView,
 } from '@sfcc/shared';
 import type {
   LearningAdminOverview,
@@ -30,10 +30,31 @@ export function fetchLesson(lessonId: string) {
   return api<LearningLessonResponse>(`/learning/lessons/${encodeURIComponent(lessonId)}`);
 }
 
-export function fetchVideoScript(lessonId: string) {
-  return api<LessonVideoScript>(
-    `/learning/lessons/${encodeURIComponent(lessonId)}/video-script`,
+export function fetchLessonVideos(lessonId: string) {
+  return api<LearningLessonVideoView[]>(
+    `/learning/lessons/${encodeURIComponent(lessonId)}/videos`,
   );
+}
+
+/** Authenticated download of an uploaded lesson video for in-page playback. */
+export function fetchLessonVideoBlob(videoId: string) {
+  return apiBlob(`/learning/videos/${encodeURIComponent(videoId)}/stream`);
+}
+
+export function uploadLessonVideo(lessonId: string, file: File, title: string) {
+  const form = new FormData();
+  form.append('file', file);
+  if (title.trim()) form.append('title', title.trim());
+  return api<LearningLessonVideoView>(
+    `/learning/admin/lessons/${encodeURIComponent(lessonId)}/videos`,
+    { method: 'POST', body: form },
+  );
+}
+
+export function deleteLessonVideo(videoId: string) {
+  return api<{ deleted: true }>(`/learning/admin/videos/${encodeURIComponent(videoId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export function completeLesson(lessonId: string) {

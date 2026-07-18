@@ -1,87 +1,78 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ArrowRight,
-  Briefcase,
-  Check,
   Clapperboard,
-  Copy,
-  Download,
-  FileText,
-  Lightbulb,
-  ListChecks,
-  MousePointerClick,
+  Clock,
+  Loader2,
   PlayCircle,
-  Sparkles,
-  Volume2,
-  VolumeX,
+  Trash2,
+  Upload,
+  User,
+  Video,
 } from 'lucide-react';
-import {
-  VIDEO_SEGMENT_KIND_LABELS,
-  formatTimecode,
-  videoScriptToMarkdown,
-  videoScriptToNarration,
-  type LessonVideoScript,
-  type VideoSegmentKind,
-} from '@sfcc/shared';
+import { formatVideoSize, type LearningLessonVideoView } from '@sfcc/shared';
+import { useAuth } from '@/contexts/auth-context';
 import { InlineAlert } from '@/components/studio';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { cn } from '@/utils/cn';
-import { fetchVideoScript } from './learning-api';
-import { useSpeech } from './use-speech';
-
-const KIND_STYLES: Record<VideoSegmentKind, { badge: string; icon: typeof Clapperboard }> = {
-  intro: { badge: 'bg-violet-500/15 text-violet-300', icon: Clapperboard },
-  concept: { badge: 'bg-sky-500/15 text-sky-300', icon: Lightbulb },
-  demo: { badge: 'bg-emerald-500/15 text-emerald-300', icon: MousePointerClick },
-  story: { badge: 'bg-amber-500/15 text-amber-300', icon: Briefcase },
-  recap: { badge: 'bg-sky-500/15 text-sky-300', icon: ListChecks },
-  cta: { badge: 'bg-secondary/70 text-muted-foreground', icon: ArrowRight },
-};
-
-function downloadText(filename: string, text: string, mime = 'text/plain') {
-  const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
+import {
+  deleteLessonVideo,
+  fetchLessonVideoBlob,
+  fetchLessonVideos,
+  uploadLessonVideo,
+} from './learning-api';
+import { formatDate } from './learning-ui';
 
 /**
- * Video session: the complete, production-ready script of this lesson —
- * timecoded segments with word-for-word narration, on-screen direction, and
- * numbered demo click-paths — playable in-app and exportable to external
- * AI video tools (HeyGen, Synthesia, InVideo, CapCut…).
+ * Video sessions: real videos uploaded by an administrator for this lesson.
+ * Learners watch them inline; admins get an upload panel and per-video delete.
  */
-export function VideoSessionBlock({
-  lessonId,
-  onPlayAnimated,
-}: {
-  lessonId: string;
-  onPlayAnimated: () => void;
-}) {
-  const [script, setScript] = useState<LessonVideoScript | null>(null);
+export function VideoSessionBlock({ lessonId }: { lessonId: string }) {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
+
+  const [videos, setVideos] = useState<LearningLessonVideoView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [readingSegment, setReadingSegment] = useState<string | null>(null);
-  const speech = useSpeech();
+
+  // Playback: one active video at a time, streamed with auth then played
+  // from an object URL (so the <video> tag needs no credentials).
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const [playingUrl, setPlayingUrl] = useState<string | null>(null);
+  const [preparingId, setPreparingId] = useState<string | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+
+  // Admin upload state.
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const releasePlayback = useCallback(() => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+    setPlayingId(null);
+    setPlayingUrl(null);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setScript(null);
-    setError(null);
     setLoading(true);
-    fetchVideoScript(lessonId)
-      .then((result) => {
-        if (!cancelled) setScript(result);
+    setError(null);
+    releasePlayback();
+    fetchLessonVideos(lessonId)
+      .then((list) => {
+        if (!cancelled) setVideos(list);
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load the video session');
+          setError(err instanceof Error ? err.message : 'Failed to load video sessions');
         }
       })
       .finally(() => {
@@ -89,211 +80,215 @@ export function VideoSessionBlock({
       });
     return () => {
       cancelled = true;
-      speech.cancel();
+      releasePlayback();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lessonId]);
+  }, [lessonId, releasePlayback]);
 
-  useEffect(() => {
-    if (!speech.speaking) setReadingSegment(null);
-  }, [speech.speaking]);
-
-  const copyScript = useCallback(async () => {
-    if (!script) return;
-    try {
-      await navigator.clipboard.writeText(videoScriptToMarkdown(script));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setError('Clipboard unavailable — use the download buttons instead.');
-    }
-  }, [script]);
-
-  const toggleListen = useCallback(
-    (segmentId: string, narration: string) => {
-      if (readingSegment === segmentId) {
-        speech.cancel();
-        setReadingSegment(null);
-        return;
+  const play = useCallback(
+    async (video: LearningLessonVideoView) => {
+      if (playingId === video.id || preparingId) return;
+      setPreparingId(video.id);
+      setError(null);
+      try {
+        const blob = await fetchLessonVideoBlob(video.id);
+        releasePlayback();
+        const url = URL.createObjectURL(blob);
+        objectUrlRef.current = url;
+        setPlayingId(video.id);
+        setPlayingUrl(url);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load this video');
+      } finally {
+        setPreparingId(null);
       }
-      setReadingSegment(segmentId);
-      speech.speak(narration, { onEnd: () => setReadingSegment(null) });
     },
-    [readingSegment, speech],
+    [playingId, preparingId, releasePlayback],
+  );
+
+  const submitUpload = useCallback(async () => {
+    if (!file || uploading) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const created = await uploadLessonVideo(lessonId, file, title);
+      setVideos((current) => [...current, created]);
+      setFile(null);
+      setTitle('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }, [file, lessonId, title, uploading]);
+
+  const remove = useCallback(
+    async (videoId: string) => {
+      if (deletingId) return;
+      setDeletingId(videoId);
+      setError(null);
+      try {
+        await deleteLessonVideo(videoId);
+        setVideos((current) => current.filter((video) => video.id !== videoId));
+        if (playingId === videoId) releasePlayback();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to delete this video');
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [deletingId, playingId, releasePlayback],
   );
 
   if (loading) {
     return (
       <div className="space-y-4">
-        <Skeleton className="h-28 w-full rounded-xl" />
-        <Skeleton className="h-48 w-full rounded-xl" />
+        <Skeleton className="h-24 w-full rounded-xl" />
         <Skeleton className="h-48 w-full rounded-xl" />
       </div>
     );
   }
 
-  if (error && !script) {
-    return <InlineAlert variant="error">{error}</InlineAlert>;
-  }
-  if (!script) return null;
-
-  let elapsed = 0;
-  const timecodes = script.segments.map((segment) => {
-    const start = elapsed;
-    elapsed += segment.durationSeconds;
-    return start;
-  });
-
   return (
     <div className="space-y-4">
-      {/* Session header */}
-      <div className="overflow-hidden rounded-xl border border-violet-400/25">
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-violet-500/10 px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-violet-500/20">
-              <Clapperboard className="size-4 text-violet-300" />
-            </span>
-            <div>
-              <p className="text-sm font-semibold">Video session script</p>
-              <p className="text-[11px] text-muted-foreground">
-                ~{Math.max(1, Math.round(script.totalDurationSeconds / 60))} min ·{' '}
-                {script.segments.length} segments · {script.audience}
-                <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 py-px text-[10px] font-medium text-violet-300">
-                  <Sparkles className="size-2.5" />
-                  {script.source === 'ai' ? 'AI-scripted' : 'Curriculum script'}
-                </span>
-              </p>
-            </div>
+      {error && <InlineAlert variant="error">{error}</InlineAlert>}
+
+      {isAdmin && (
+        <div className="rounded-xl border border-violet-400/25 bg-violet-500/5 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold">
+            <Upload className="size-4 text-violet-300" />
+            Upload a video session
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            MP4, WebM, OGG, MOV, MKV, or AVI. Learners on this lesson see it immediately.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/mp4,video/webm,video/ogg,video/quicktime,video/x-matroska,video/x-msvideo"
+              aria-label="Choose a video file"
+              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              className="text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-secondary/70 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-foreground hover:file:bg-secondary"
+            />
+            <Input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Title (optional — defaults to the file name)"
+              maxLength={120}
+              className="h-8 text-xs sm:max-w-xs"
+            />
+            <Button
+              size="sm"
+              className="h-8 gap-1.5"
+              disabled={!file || uploading}
+              loading={uploading}
+              onClick={() => void submitUpload()}
+            >
+              <Upload className="size-3.5" />
+              Upload
+            </Button>
           </div>
-          <Button size="sm" className="gap-1.5" onClick={onPlayAnimated}>
-            <PlayCircle className="size-4" />
-            Play animated session
-          </Button>
+          {file && !uploading && (
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Ready: {file.name} · {formatVideoSize(file.size)}
+            </p>
+          )}
+          {uploadError && (
+            <p role="alert" className="mt-2 text-[11px] text-destructive">
+              {uploadError}
+            </p>
+          )}
         </div>
-        <div className="flex flex-wrap items-center gap-2 border-t border-border/50 bg-card/60 px-4 py-2.5">
-          <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => void copyScript()}>
-            {copied ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
-            {copied ? 'Copied' : 'Copy full script'}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 text-xs"
-            onClick={() =>
-              downloadText(`${script.lessonId}-video-script.md`, videoScriptToMarkdown(script), 'text/markdown')
-            }
-          >
-            <Download className="size-3.5" />
-            Production script (.md)
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 text-xs"
-            onClick={() =>
-              downloadText(`${script.lessonId}-narration.txt`, videoScriptToNarration(script))
-            }
-          >
-            <FileText className="size-3.5" />
-            Narration only (.txt)
-          </Button>
-          <p className="text-[10px] text-muted-foreground">
-            Paste the narration into HeyGen / Synthesia / any avatar tool; the .md carries the
-            visual directions and demo click-paths.
+      )}
+
+      {videos.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border/70 px-6 py-10 text-center">
+          <Video className="size-8 text-muted-foreground/50" />
+          <p className="text-sm font-medium">No video sessions yet</p>
+          <p className="max-w-sm text-xs text-muted-foreground">
+            {isAdmin
+              ? 'Upload the first video for this lesson above — it appears here for every learner.'
+              : 'Your administrator has not uploaded videos for this lesson yet. Switch to “Read the lesson” in the meantime.'}
           </p>
         </div>
-      </div>
-
-      {error && <InlineAlert variant="warning">{error}</InlineAlert>}
-
-      {/* Timecoded segments */}
-      <ol className="space-y-3">
-        {script.segments.map((segment, index) => {
-          const style = KIND_STYLES[segment.kind];
-          const Icon = style.icon;
-          return (
-            <li key={segment.id} className="rounded-xl border border-border/60 bg-card/60 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
+      ) : (
+        <ul className="space-y-3">
+          {videos.map((video) => (
+            <li key={video.id} className="overflow-hidden rounded-xl border border-border/60 bg-card/60">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
                 <div className="flex min-w-0 items-center gap-2.5">
-                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                    {formatTimecode(timecodes[index]!)}
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/15">
+                    <Clapperboard className="size-4 text-violet-300" />
                   </span>
-                  <span
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
-                      style.badge,
-                    )}
-                  >
-                    <Icon className="size-3" />
-                    {VIDEO_SEGMENT_KIND_LABELS[segment.kind]}
-                  </span>
-                  <p className="truncate text-sm font-semibold">{segment.title}</p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{video.title}</p>
+                    <p className="flex flex-wrap items-center gap-x-2.5 text-[11px] text-muted-foreground">
+                      <span>{formatVideoSize(video.sizeBytes)}</span>
+                      <span className="inline-flex items-center gap-1">
+                        <User className="size-3" />
+                        {video.uploadedByName}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="size-3" />
+                        {formatDate(video.createdAt)}
+                      </span>
+                    </p>
+                  </div>
                 </div>
-                {speech.supported && (
-                  <button
-                    type="button"
-                    onClick={() => toggleListen(segment.id, segment.narration)}
-                    aria-label={
-                      readingSegment === segment.id ? 'Stop narration' : 'Listen to this narration'
-                    }
-                    className={cn(
-                      'flex items-center gap-1 text-[11px] transition-colors',
-                      readingSegment === segment.id
-                        ? 'text-violet-300'
-                        : 'text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    {readingSegment === segment.id ? (
-                      <>
-                        <VolumeX className="size-3.5" /> Stop
-                      </>
-                    ) : (
-                      <>
-                        <Volume2 className="size-3.5" /> Listen
-                      </>
-                    )}
-                  </button>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {playingId !== video.id && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs"
+                      disabled={preparingId !== null}
+                      onClick={() => void play(video)}
+                    >
+                      {preparingId === video.id ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <PlayCircle className="size-3.5" />
+                      )}
+                      Watch
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 border-destructive/40 text-xs text-destructive hover:bg-destructive/10"
+                      disabled={deletingId !== null}
+                      aria-label={`Delete ${video.title}`}
+                      onClick={() => void remove(video.id)}
+                    >
+                      {deletingId === video.id ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-3.5" />
+                      )}
+                    </Button>
+                  )}
+                </div>
               </div>
 
-              <p className="mt-2.5 text-sm leading-relaxed text-foreground/90">{segment.narration}</p>
-
-              <div className="mt-3 rounded-lg border border-border/50 bg-secondary/20 px-3 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  On screen
-                </p>
-                <p className="mt-0.5 text-xs italic text-foreground/75">{segment.onScreen}</p>
-              </div>
-
-              {segment.demoSteps && segment.demoSteps.length > 0 && (
-                <div className="mt-3 rounded-lg border border-emerald-400/25 bg-emerald-500/5 px-3 py-2">
-                  <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300/90">
-                    <MousePointerClick className="size-3" />
-                    Screen-capture steps
-                  </p>
-                  <ol className="mt-1.5 space-y-1 pl-1">
-                    {segment.demoSteps.map((step, stepIndex) => (
-                      <li key={stepIndex} className="flex gap-2 text-xs text-foreground/85">
-                        <span className="shrink-0 font-mono text-[10px] tabular-nums text-emerald-300/80">
-                          {stepIndex + 1}.
-                        </span>
-                        {step}
-                      </li>
-                    ))}
-                  </ol>
+              {playingId === video.id && playingUrl && (
+                <div className="border-t border-border/60 bg-[hsl(222,47%,6%)]">
+                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                  <video
+                    src={playingUrl}
+                    controls
+                    autoPlay
+                    playsInline
+                    className="aspect-video w-full"
+                    aria-label={`Video session: ${video.title}`}
+                  />
                 </div>
-              )}
-
-              {segment.lowerThird && (
-                <p className="mt-2.5 inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-slate-950/40 px-2 py-1 text-[10px] text-muted-foreground">
-                  <span className="font-semibold uppercase tracking-wider">Lower third</span>
-                  {segment.lowerThird}
-                </p>
               )}
             </li>
-          );
-        })}
-      </ol>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

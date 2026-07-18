@@ -16,7 +16,7 @@ export class OrchestratorController {
   ) {
     const run = await this.orchestratorService.getRun(id);
     const isAdmin = req.userProfile?.role === 'admin';
-    if (!run || (!isAdmin && run.createdBy !== 'system' && run.createdBy !== userId)) {
+    if (!run || (!isAdmin && run.createdBy !== userId)) {
       throw new NotFoundException('Run not found');
     }
     return run;

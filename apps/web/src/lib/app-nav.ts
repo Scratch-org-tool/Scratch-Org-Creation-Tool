@@ -90,7 +90,7 @@ export const APP_NAV: NavItem[] = [
     activePrefixes: DEPLOYMENT_ACTIVE_PREFIXES,
   },
   { href: '/drift', label: 'Drift Monitoring', icon: GitCompare, module: 'deployment' },
-  { href: '/calendar', label: 'Calendar', icon: CalendarDays, module: 'dashboard' },
+  { href: '/calendar', label: 'Calendar', icon: CalendarDays, module: 'calendar' },
   { href: '/monitoring', label: 'Monitoring', icon: Activity, module: 'monitoring' },
   { href: '/defects-command-centre', label: 'Developer Board', icon: Bug, module: 'defects' },
   { href: '/learning', label: 'Salesforce Academy', icon: GraduationCap, module: 'learning' },

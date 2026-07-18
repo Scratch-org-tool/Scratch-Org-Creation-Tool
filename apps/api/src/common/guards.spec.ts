@@ -3,6 +3,7 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import {
+  APP_MODULES,
   resolveCopilotTiers,
   resolveRole,
   canAccessModule,
@@ -211,12 +212,20 @@ describe('module resolution', () => {
     expect(canAccessModule(profile({ grantedModules: ['deployment'] }), 'deployment')).toBe(true);
   });
 
-  it('default modules are always available to registered users', () => {
+  it('keeps only the dashboard as standard-user default access', () => {
     const modules = getEffectiveModules(profile());
-    expect(modules).toContain('dashboard');
-    expect(modules).toContain('environment');
-    expect(modules).toContain('data');
-    expect(modules).not.toContain('copilot');
+    expect(modules).toEqual(['dashboard']);
+    for (const module of APP_MODULES.filter((candidate) => candidate !== 'dashboard')) {
+      expect(canAccessModule(profile(), module)).toBe(false);
+    }
+  });
+
+  it('requires explicit grants for calendar, environment, data, defects, and learning', () => {
+    const granted = ['calendar', 'environment', 'data', 'defects', 'learning'] as const;
+    for (const module of granted) {
+      expect(canAccessModule(profile(), module)).toBe(false);
+      expect(canAccessModule(profile({ grantedModules: [module] }), module)).toBe(true);
+    }
   });
 });
 

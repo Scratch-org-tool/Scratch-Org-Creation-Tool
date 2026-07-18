@@ -127,7 +127,11 @@ export class AgentRouterService {
     result = await this.nvidiaService.chatCopilotResilient(messages, onDelta);
 
     const grantedModules = (context?.grantedModules as AppModule[] | undefined) ?? [];
-    const navAction = matchNavigationAction(query, grantedModules);
+    const navAction = matchNavigationAction(
+      query,
+      grantedModules,
+      context?.role === 'admin' ? 'admin' : 'user',
+    );
 
     return {
       content: result.content,

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,6 +30,13 @@ interface AssignDrawerProps {
   onSubmit: () => void;
 }
 
+function localDateInputValue(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function AssignDrawer({
   open,
   onOpenChange,
@@ -53,6 +61,7 @@ export function AssignDrawer({
   }, [learners, search]);
 
   const toggleUser = (userId: string) => {
+    if (!learners.find((learner) => learner.userId === userId)?.hasLearningAccess) return;
     onDraftChange({
       ...draft,
       userIds: draft.userIds.includes(userId)
@@ -77,7 +86,7 @@ export function AssignDrawer({
           <SheetHeader className="pr-8">
             <SheetTitle>Assign training</SheetTitle>
             <SheetDescription>
-              Assigned learners are notified and automatically granted Academy access.
+              Training can be assigned only after Academy is enabled in User Access.
             </SheetDescription>
           </SheetHeader>
         </div>
@@ -86,6 +95,16 @@ export function AssignDrawer({
           {error && (
             <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
               {error}
+            </p>
+          )}
+
+          {learners.some((learner) => !learner.hasLearningAccess) && (
+            <p className="rounded-md border border-amber-400/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-100">
+              Learners marked “No Academy access” cannot be selected.{' '}
+              <Link href="/admin/users" className="font-medium underline underline-offset-2">
+                Grant access in Admin → User Access
+              </Link>{' '}
+              first.
             </p>
           )}
 
@@ -146,16 +165,25 @@ export function AssignDrawer({
               {filteredLearners.map((learner) => (
                 <label
                   key={learner.userId}
-                  className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-sm hover:bg-secondary/30"
+                  className={cn(
+                    'flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-sm',
+                    learner.hasLearningAccess
+                      ? 'cursor-pointer hover:bg-secondary/30'
+                      : 'cursor-not-allowed opacity-60',
+                  )}
                 >
                   <div className="min-w-0">
                     <p className="truncate font-medium">{learner.displayName}</p>
                     <p className="truncate text-[11px] text-muted-foreground">{learner.email}</p>
+                    {!learner.hasLearningAccess && (
+                      <p className="text-[10px] font-medium text-amber-300">No Academy access</p>
+                    )}
                   </div>
                   <input
                     type="checkbox"
                     className="size-4 shrink-0"
                     checked={draft.userIds.includes(learner.userId)}
+                    disabled={!learner.hasLearningAccess}
                     onChange={() => toggleUser(learner.userId)}
                   />
                 </label>
@@ -173,7 +201,7 @@ export function AssignDrawer({
             <Input
               type="date"
               value={draft.dueAt}
-              min={new Date().toISOString().slice(0, 10)}
+              min={localDateInputValue()}
               onChange={(event) => onDraftChange({ ...draft, dueAt: event.target.value })}
               className="h-9 text-sm"
             />
