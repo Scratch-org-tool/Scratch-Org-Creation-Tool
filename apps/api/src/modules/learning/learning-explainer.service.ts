@@ -12,8 +12,9 @@ import {
 import { NvidiaService } from '../../integrations/nvidia/nvidia.service';
 import { getLesson, type LessonLocation } from './curriculum';
 
+/** Keep AI attempts short — Next.js proxy times out around 30s; we fall back to static curriculum. */
 const EXPLAINER_TIMEOUT_MS =
-  parseInt(process.env.LEARNING_EXPLAINER_TIMEOUT_MS ?? '30000', 10) || 30_000;
+  parseInt(process.env.LEARNING_EXPLAINER_TIMEOUT_MS ?? '8000', 10) || 8_000;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 200;
 
@@ -265,6 +266,7 @@ export class LearningExplainerService {
       maxTokens: 2200,
       temperature: 0.5,
       timeoutMs: EXPLAINER_TIMEOUT_MS,
+      skipModelFallback: true,
     });
 
     if (result.model === 'dev-mock' || result.model === 'error') return null;

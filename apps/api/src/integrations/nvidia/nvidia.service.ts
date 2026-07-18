@@ -15,6 +15,8 @@ export interface ChatOptions {
   timeoutMs?: number;
   /** Use NVIDIA_FALLBACK_API_KEY (falls back to NVIDIA_API_KEY). */
   useFallbackKey?: boolean;
+  /** When true, do not retry with the fallback model after the primary fails. */
+  skipModelFallback?: boolean;
 }
 
 export interface ChatResult {
@@ -261,6 +263,12 @@ export class NvidiaService {
       const sameModel = options.model === this.fallbackModel || this.copilotModel === this.fallbackModel;
       if (sameModel) {
         console.warn('[NVIDIA] Copilot model failed:', error);
+        return this.devChat(
+          options.messages,
+          error instanceof Error ? error.message : 'AI request failed',
+        );
+      }
+      if (options.skipModelFallback) {
         return this.devChat(
           options.messages,
           error instanceof Error ? error.message : 'AI request failed',
