@@ -6,6 +6,7 @@ import {
   buildListSoql,
   DATA_PREVIEW_MAX_ROWS,
   defaultDisplayFields,
+  ensureIdInSoqlSelect,
   fieldsForPreviewQuery,
   isDeployableObjectName,
   isFieldRequiredForDeploy,
@@ -27,6 +28,25 @@ import {
 } from '@sfcc/shared';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import { assertOrgOwned } from '../../common/user-tenancy.util';
+import { TtlCache } from '../../common/ttl-cache';
+
+/**
+ * Schema lookups (sobject list + describe) each spawn a Salesforce CLI
+ * process that takes seconds. The deploy wizard requests the same metadata
+ * repeatedly (object meta on focus, again per filter preview, again per
+ * object on the review step), so a short TTL cache removes most of that
+ * latency. Org schemas change rarely; a five-minute staleness window is a
+ * safe trade for interactive speed.
+ */
+const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
+const OBJECT_LIST_CACHE = new TtlCache<OrgToOrgObjectInfo[]>(SCHEMA_CACHE_TTL_MS, 50);
+const OBJECT_META_CACHE = new TtlCache<OrgToOrgObjectMeta>(SCHEMA_CACHE_TTL_MS, 500);
+
+/** Test hook: reset module-level schema caches between cases. */
+export function clearOrgToOrgSchemaCache(): void {
+  OBJECT_LIST_CACHE.clear();
+  OBJECT_META_CACHE.clear();
+}
 
 const FILTERABLE_TYPES = new Set([
   'string',
@@ -55,18 +75,19 @@ export class OrgToOrgBrowseService {
     const org = await assertOrgOwned(orgId, userId, prisma);
     const alias = org.username ?? org.alias;
 
-    const result = await this.sfCli.listSObjects(alias);
-    const normalized = normalizeSObjectList(result.data?.result ?? []);
-
-    let objects: OrgToOrgObjectInfo[] = normalized
-      .filter((o) => o.queryable !== false && isDeployableObjectName(o.name))
-      .map((o) => ({
-        apiName: o.name,
-        label: o.label ?? o.name,
-        queryable: o.queryable !== false,
-        custom: Boolean(o.custom ?? o.name.endsWith('__c')),
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+    let objects = await OBJECT_LIST_CACHE.getOrCompute(`objects:${alias}`, async () => {
+      const result = await this.sfCli.listSObjects(alias);
+      const normalized = normalizeSObjectList(result.data?.result ?? []);
+      return normalized
+        .filter((o) => o.queryable !== false && isDeployableObjectName(o.name))
+        .map((o) => ({
+          apiName: o.name,
+          label: o.label ?? o.name,
+          queryable: o.queryable !== false,
+          custom: Boolean(o.custom ?? o.name.endsWith('__c')),
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    });
 
     if (search?.trim()) {
       const q = search.trim().toLowerCase();
@@ -86,6 +107,14 @@ export class OrgToOrgBrowseService {
     const org = await assertOrgOwned(orgId, userId, prisma);
     const alias = org.username ?? org.alias;
 
+    return OBJECT_META_CACHE.getOrCompute(`meta:${alias}:${objectName}`, () =>
+      this.describeObjectMeta(alias, objectName));
+  }
+
+  private async describeObjectMeta(
+    alias: string,
+    objectName: string,
+  ): Promise<OrgToOrgObjectMeta> {
     const result = await this.sfCli.describeSObject(alias, objectName);
     const describe = result.data?.result;
     if (!describe) {
@@ -191,8 +220,10 @@ export class OrgToOrgBrowseService {
       }
       const parsed = parseOrgToOrgSoql(input.soql);
       countBaseSoql = stripLimitOffset(input.soql.trim());
+      // Force Id into the SELECT list: preview rows without an Id cannot be
+      // checked individually or via select-all.
       soql = resolveOrgToOrgPreviewSoql({
-        soql: input.soql,
+        soql: ensureIdInSoqlSelect(input.soql),
         page: input.page,
         pageSize: previewRowLimit,
       });

@@ -246,6 +246,47 @@ export function fieldsForPreviewQuery(fieldNames: string[]): string[] {
   return fields;
 }
 
+/**
+ * Extract the record Id from a raw SOQL result row, tolerating any SELECT
+ * casing (`Id`, `id`, `ID`) and falling back to the REST `attributes.url`
+ * (`.../sobjects/Account/001…`) when Id was not part of the SELECT list.
+ * Record selection (checkboxes, select-all) depends on every row resolving
+ * to a non-empty Id.
+ */
+export function extractRecordId(record: unknown): string {
+  if (!record || typeof record !== 'object') return '';
+  const row = record as Record<string, unknown>;
+  for (const key of ['Id', 'id', 'ID', 'iD']) {
+    const value = row[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  const attributes = row.attributes;
+  if (attributes && typeof attributes === 'object') {
+    const url = (attributes as Record<string, unknown>).url;
+    if (typeof url === 'string') {
+      const lastSegment = url.replace(/\/+$/, '').split('/').pop() ?? '';
+      if (/^[a-zA-Z0-9]{15,18}$/.test(lastSegment)) return lastSegment;
+    }
+  }
+  return '';
+}
+
+/**
+ * Guarantee the top-level SELECT list of a query contains `Id` so preview
+ * rows stay selectable even when a custom SOQL omits it.
+ */
+export function ensureIdInSoqlSelect(soql: string): string {
+  const trimmed = soql.trim().replace(/;+\s*$/, '');
+  const selectMatch = trimmed.match(/^\s*SELECT\s+/i);
+  if (!selectMatch) return trimmed;
+  const fromIndex = findTopLevelKeyword(trimmed, 'FROM', selectMatch[0].length);
+  if (fromIndex === -1) return trimmed;
+  const fields = splitTopLevelFields(trimmed.slice(selectMatch[0].length, fromIndex));
+  const hasId = fields.some((field) => field.trim().toLowerCase() === 'id');
+  if (hasId) return trimmed;
+  return `${trimmed.slice(0, selectMatch[0].length)}Id, ${trimmed.slice(selectMatch[0].length)}`;
+}
+
 function uniqueFields(fields: string[]): string[] {
   return [...new Set(fields.filter(Boolean))];
 }

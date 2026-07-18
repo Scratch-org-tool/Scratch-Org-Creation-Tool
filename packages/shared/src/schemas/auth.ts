@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { APP_MODULES } from '../auth.js';
 import { isDisplayNameValid, sanitizeDisplayName } from '../sanitize.js';
 import {
   AUTH_PASSWORD_TOO_WEAK,
@@ -51,17 +52,8 @@ const displayNameSchema = z
   });
 
 const adminBootstrapTokenSchema = z.string().max(128).optional();
-const appModuleSchema = z.enum([
-  'dashboard',
-  'environment',
-  'data',
-  'deployment',
-  'org-setup',
-  'provisioning',
-  'monitoring',
-  'copilot',
-  'defects',
-]);
+/** Derived from APP_MODULES so newly added modules are grantable automatically. */
+const appModuleSchema = z.enum(APP_MODULES);
 
 export const loginSchema = z.object({
   email: emailSchema,

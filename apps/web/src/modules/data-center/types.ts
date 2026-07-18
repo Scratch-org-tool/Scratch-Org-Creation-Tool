@@ -85,6 +85,8 @@ export interface OrgToOrgObjectDeployConfig {
   displayFields?: string[];
   /** SOQL used by the latest preview — reused for target comparison. */
   previewSoql?: string;
+  /** Fingerprint of the config that produced the stored preview. */
+  previewKey?: string;
   dependsOn?: string[];
   order?: number;
 }

@@ -30,6 +30,8 @@ import {
   moveByIndex,
   orderDeploymentObjects,
   preflightKey,
+  previewStateKey,
+  toggleAllSelection,
 } from './data-center-contracts';
 
 const DEFAULT_FORM: OrgToOrgFormState = {
@@ -95,6 +97,9 @@ export function useOrgToOrgDeploy() {
   const objectsRequestRef = useRef(0);
   const metaRequestRef = useRef(new Map<string, number>());
   const previewRequestRef = useRef(new Map<string, number>());
+  // Previews can run in parallel (one per object); the loading flag must stay
+  // on until the last one settles.
+  const previewsInFlightRef = useRef(0);
   const jobPollGenerationRef = useRef(0);
   const preflightRequestRef = useRef(0);
   const deployRequestRef = useRef(0);
@@ -266,6 +271,8 @@ export function useOrgToOrgDeploy() {
       const generation = orgGenerationRef.current;
       const request = (previewRequestRef.current.get(objectName) ?? 0) + 1;
       previewRequestRef.current.set(objectName, request);
+      const previewKey = previewStateKey(config);
+      previewsInFlightRef.current += 1;
       setLoadingPreview(true);
       try {
         const result = await api<OrgToOrgFilterPreviewResult>('/data/org-to-org/preview-filter', {
@@ -285,6 +292,7 @@ export function useOrgToOrgDeploy() {
             previewRecords: result.records,
             displayFields: result.displayFields,
             previewSoql: result.soql,
+            previewKey,
           });
           return next;
         });
@@ -297,10 +305,8 @@ export function useOrgToOrgDeploy() {
         setError(err instanceof Error ? err.message : 'Filter preview failed');
         return null;
       } finally {
-        if (
-          orgGenerationRef.current === generation
-          && previewRequestRef.current.get(objectName) === request
-        ) setLoadingPreview(false);
+        previewsInFlightRef.current = Math.max(0, previewsInFlightRef.current - 1);
+        if (previewsInFlightRef.current === 0) setLoadingPreview(false);
       }
     },
     [form.sourceOrgId],
@@ -595,6 +601,7 @@ export function useOrgToOrgDeploy() {
   );
 
   const toggleRecord = useCallback((objectName: string, recordId: string) => {
+    if (!recordId) return;
     setSelectedRecordIds((prev) => {
       const next = new Map(prev);
       const set = new Set(next.get(objectName) ?? []);
@@ -607,16 +614,22 @@ export function useOrgToOrgDeploy() {
 
   const toggleAllRecordsForObject = useCallback((objectName: string, recordIds: string[]) => {
     setSelectedRecordIds((prev) => {
+      const ids = recordIds.filter(Boolean);
+      // Without resolvable ids, `[].every()` used to report "all selected"
+      // and the select-all checkbox silently did nothing.
+      if (ids.length === 0) return prev;
       const next = new Map(prev);
-      const current = next.get(objectName) ?? new Set();
-      const allSelected = recordIds.every((id) => current.has(id));
-      const set = new Set(current);
-      if (allSelected) {
-        for (const id of recordIds) set.delete(id);
-      } else {
-        for (const id of recordIds) set.add(id);
-      }
-      next.set(objectName, set);
+      next.set(objectName, toggleAllSelection(next.get(objectName) ?? new Set(), ids));
+      return next;
+    });
+  }, []);
+
+  /** Drop the explicit record selection so the deploy covers every match. */
+  const clearRecordSelection = useCallback((objectName: string) => {
+    setSelectedRecordIds((prev) => {
+      if (!prev.has(objectName)) return prev;
+      const next = new Map(prev);
+      next.delete(objectName);
       return next;
     });
   }, []);
@@ -674,23 +687,41 @@ export function useOrgToOrgDeploy() {
     if (!canGoNext || loadingReview) return;
     setWizardStep('preview');
     setError(null);
+    // A debounced preview from the configure step may still be pending; every
+    // object is resolved right now instead.
+    if (previewTimer.current) clearTimeout(previewTimer.current);
     setLoadingReview(true);
     try {
-      const compareEntries: Array<{ objectName: string; soql: string; matchField: string }> = [];
+      const targets: Array<{ apiName: string; config: OrgToOrgObjectDeployConfig }> = [];
       for (const apiName of checkedObjects) {
         const config = objectConfigs.get(apiName);
-        if (!config) continue;
-        const result = await runPreviewForObject(apiName, config);
-        if (result?.soql) {
-          compareEntries.push({
-            objectName: apiName,
-            soql: result.soql,
-            matchField:
-              config.matchField
-              || objectMetaCache.get(apiName)?.matchField
-              || 'Name',
-          });
-        }
+        if (config) targets.push({ apiName, config });
+      }
+      // Objects whose configuration has not changed since their last preview
+      // reuse it; the rest re-fetch in parallel instead of one at a time.
+      const resolved = await Promise.all(
+        targets.map(async ({ apiName, config }) => {
+          const fresh =
+            config.previewSoql
+            && config.previewRecords
+            && config.previewKey === previewStateKey(config);
+          const soql = fresh
+            ? config.previewSoql
+            : (await runPreviewForObject(apiName, config))?.soql;
+          return { apiName, config, soql };
+        }),
+      );
+      const compareEntries: Array<{ objectName: string; soql: string; matchField: string }> = [];
+      for (const entry of resolved) {
+        if (!entry.soql) continue;
+        compareEntries.push({
+          objectName: entry.apiName,
+          soql: entry.soql,
+          matchField:
+            entry.config.matchField
+            || objectMetaCache.get(entry.apiName)?.matchField
+            || 'Name',
+        });
       }
       void runTargetCompare(compareEntries);
     } finally {
@@ -906,6 +937,7 @@ export function useOrgToOrgDeploy() {
     clearCustomSoql,
     toggleRecord,
     toggleAllRecordsForObject,
+    clearRecordSelection,
     checkedObjectList,
     objectOrder,
     moveObject,

@@ -427,10 +427,13 @@ If you open the web app directly on port **3000** from another device, set `NEXT
 | Apex Quality | `/quality` | Run Apex tests, inspect failures, track org-wide coverage trends |
 | Drift Monitoring | `/drift` | Scheduled org drift checks with one-click remediation deploys |
 | Calendar | `/calendar` | Scheduled deploys, drift checks, releases, sandbox refreshes, and freeze windows |
+| Scratch Org Automation | `/environment-center/automation` | Auto-renew scratch orgs N days before expiry by replaying their creation pipeline (metadata, credentials, data, users) with a fresh alias |
 | Sandbox Refresh | `/sandbox-refresh` | Track/trigger sandbox refreshes with cadence reminders and post-refresh seed automation |
 | Org & Users | `/org-setup` | Tabbed: baseline setup, load org config, CONA users, CSV provisioning |
 | Monitoring | `/monitoring` | Job stats, filterable jobs table, status detail on row select |
 | AI Copilot | Sidebar button | Streaming NVIDIA-powered assistant (see [AI Copilot](#ai-copilot)) |
+| Salesforce Academy | `/learning` | Admin-assignable Salesforce training: 4 paths (beginner→architect), AI mentor per lesson, instant AI quizzes, progress tracking (see `docs/salesforce-academy.md`) |
+| Academy Progress | `/learning/team` | Admin: assign training paths, track per-learner lessons/quiz scores/completions |
 | User Access | `/admin/users` | Admin user and permission management |
 | Notifications | `/admin/notifications` | Master switch, categories, email channel, Slack/Teams webhooks |
 | Audit Report | `/admin/audit` | Unified auth + deployment + workbench audit feed with CSV export |

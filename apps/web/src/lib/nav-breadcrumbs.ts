@@ -29,6 +29,8 @@ const ROUTE_LABELS: Record<string, string> = {
   '/user-provisioning': 'User Provisioning',
   '/monitoring': 'Monitoring',
   '/admin/users': 'User Access',
+  '/learning': 'Salesforce Academy',
+  '/learning/team': 'Team Progress',
 };
 
 const SKIP_ROOTS = new Set(['/dashboard', '/deployment-center', '/environment-center', '/monitoring', '/metadata-deployment']);
