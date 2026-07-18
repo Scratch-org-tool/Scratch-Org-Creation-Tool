@@ -12,7 +12,7 @@ import {
 } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
-import { FormSection, GlassCard, InlineAlert } from '@/components/studio';
+import { FormSection, GlassCard, InlineAlert, StatusBadge } from '@/components/studio';
 import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
 
@@ -28,6 +28,32 @@ interface DiscoverResponse {
   profiles: Array<{ Id: string; Name: string }>;
   missingFields: string[];
 }
+
+interface JobData {
+  id: string;
+  status: string;
+  error?: string | null;
+  logs?: Array<{ line: string; stream: string }>;
+}
+
+interface BatchData {
+  id: string;
+  status: string;
+  totalRows: number;
+  successCount: number;
+  failCount: number;
+  users: Array<{
+    id: string;
+    username: string;
+    role?: string | null;
+    email: string;
+    status: string;
+    error?: string | null;
+    sfUserId?: string | null;
+  }>;
+}
+
+const TERMINAL_JOB_STATUSES = ['completed', 'partial', 'failed', 'cancelled'];
 
 const BOTTLER_FIELD = 'cfs_ob__Bottler__c';
 const ROLE_FIELD = 'cfs_ob__Onboarding_Role__c';
@@ -95,6 +121,9 @@ export function LifecycleUserGeneratorForm({ embedded }: { embedded?: boolean } 
   const [loadingDiscover, setLoadingDiscover] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; variant: 'success' | 'error' } | null>(null);
+  const [tracking, setTracking] = useState<{ batchId: string; jobId: string } | null>(null);
+  const [job, setJob] = useState<JobData | null>(null);
+  const [batch, setBatch] = useState<BatchData | null>(null);
 
   const discover = useCallback(async () => {
     if (!orgId) return;
@@ -151,6 +180,33 @@ export function LifecycleUserGeneratorForm({ embedded }: { embedded?: boolean } 
       current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]);
   };
 
+  // Follow the queued batch until the worker reaches a terminal state, so
+  // per-user results and failures are visible without leaving the form.
+  useEffect(() => {
+    if (!tracking) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const [jobData, batchData] = await Promise.all([
+          api<JobData>(`/jobs/${tracking.jobId}`),
+          api<BatchData>(`/provisioning/batches/${tracking.batchId}`),
+        ]);
+        if (stopped) return;
+        setJob(jobData);
+        setBatch(batchData);
+        if (TERMINAL_JOB_STATUSES.includes(jobData.status)) clearInterval(interval);
+      } catch {
+        /* transient polling errors — keep trying until terminal */
+      }
+    };
+    const interval = setInterval(() => void tick(), 2500);
+    void tick();
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [tracking]);
+
   const emails = useMemo(() => parseEmails(emailsText), [emailsText]);
   const hasUniqueToken = /\{unique\}/i.test(usernamePattern);
 
@@ -203,6 +259,9 @@ export function LifecycleUserGeneratorForm({ embedded }: { embedded?: boolean } 
         text: `Queued ${res.totalUsers} lifecycle user(s) — batch ${res.batchId}, job ${res.jobId}`,
         variant: 'success',
       });
+      setJob(null);
+      setBatch(null);
+      setTracking({ batchId: res.batchId, jobId: res.jobId });
     } catch (err) {
       setMessage({
         text: err instanceof Error ? err.message : 'Provisioning failed',
@@ -385,6 +444,60 @@ export function LifecycleUserGeneratorForm({ embedded }: { embedded?: boolean } 
         <InlineAlert variant={message.variant} className="mt-4">
           {message.text}
         </InlineAlert>
+      )}
+
+      {tracking && (
+        <FormSection title="Provisioning progress" className="mt-6">
+          <div className="flex items-center gap-3">
+            <StatusBadge status={job?.status ?? 'queued'} />
+            <span className="text-xs text-muted-foreground">
+              {batch
+                ? `${batch.successCount}/${batch.totalRows} completed${batch.failCount ? `, ${batch.failCount} failed` : ''}`
+                : 'Waiting for the worker to pick up the job…'}
+            </span>
+          </div>
+          {job?.status === 'failed' && job.error && (
+            <InlineAlert variant="error">{job.error}</InlineAlert>
+          )}
+          {batch && batch.users.length > 0 && (
+            <div className="rounded-lg border border-border overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border/60 bg-secondary/30">
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground">User</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground">Role</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground">Status</th>
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batch.users.map((row) => (
+                    <tr key={row.id} className="border-b border-border/40 last:border-0 align-top">
+                      <td className="px-3 py-2 font-mono whitespace-nowrap">{row.username}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{row.role}</td>
+                      <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
+                      <td className="px-3 py-2 text-muted-foreground break-all">
+                        {row.error ?? (row.sfUserId ? `Salesforce Id ${row.sfUserId}` : '—')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {(job?.logs?.length ?? 0) > 0 && (
+            <div>
+              <p className="text-sm font-medium leading-none mb-1">Worker log</p>
+              <div className="rounded-lg border border-border bg-background/60 font-mono text-xs p-3 max-h-56 overflow-y-auto space-y-0.5">
+                {job!.logs!.map((log, index) => (
+                  <div key={index} className={log.stream === 'stderr' ? 'text-red-300' : ''}>
+                    {log.line}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </FormSection>
       )}
     </>
   );
