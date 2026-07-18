@@ -23,6 +23,8 @@ import type { ExplainerFocus } from '@sfcc/shared';
 import { InlineAlert } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAuth } from '@/contexts/auth-context';
+import { canAccessModule } from '@/lib/auth-utils';
 import { cn } from '@/utils/cn';
 import { completeLesson, fetchLesson } from './learning-api';
 import {
@@ -84,9 +86,11 @@ function SectionBlock({ section }: { section: LearningLessonSection }) {
 function RealWorldPanel({
   data,
   onWatch,
+  showWatch,
 }: {
   data: LearningLessonResponse['lesson']['realWorld'];
   onWatch: () => void;
+  showWatch: boolean;
 }) {
   return (
     <div className="overflow-hidden rounded-xl border border-amber-400/25">
@@ -95,15 +99,17 @@ function RealWorldPanel({
           <Briefcase className="size-4 text-amber-300" />
           Real-world example: {data.title}
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 gap-1.5 border-amber-400/40 text-xs text-amber-200 hover:bg-amber-500/10"
-          onClick={onWatch}
-        >
-          <PlayCircle className="size-3.5" />
-          Watch animated
-        </Button>
+        {showWatch ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 border-amber-400/40 text-xs text-amber-200 hover:bg-amber-500/10"
+            onClick={onWatch}
+          >
+            <PlayCircle className="size-3.5" />
+            Watch animated
+          </Button>
+        ) : null}
       </div>
       <div className="space-y-3 p-4 text-sm leading-relaxed">
         <div>
@@ -127,6 +133,10 @@ export function LessonWorkspace() {
   const params = useParams<{ lessonId: string }>();
   const lessonId = params?.lessonId;
   const router = useRouter();
+  const { profile } = useAuth();
+  const canUseMentor = canAccessModule(profile, 'learning-tutor');
+  const canUseExplainer = canAccessModule(profile, 'learning-explainer');
+  const canUseVideo = canAccessModule(profile, 'learning-video');
 
   const [view, setView] = useState<LearningLessonResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -247,42 +257,44 @@ export function LessonWorkspace() {
               </header>
 
               {/* Read | Video session switch */}
-              <div
-                role="tablist"
-                aria-label="Lesson format"
-                className="inline-flex rounded-lg border border-border/60 bg-secondary/20 p-1"
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'read'}
-                  onClick={() => setMode('read')}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                    mode === 'read'
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
+              {canUseVideo ? (
+                <div
+                  role="tablist"
+                  aria-label="Lesson format"
+                  className="inline-flex rounded-lg border border-border/60 bg-secondary/20 p-1"
                 >
-                  <BookOpen className="size-3.5" />
-                  Read the lesson
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'video'}
-                  onClick={() => setMode('video')}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                    mode === 'video'
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <Clapperboard className="size-3.5" />
-                  Video session
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === 'read'}
+                    onClick={() => setMode('read')}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                      mode === 'read'
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <BookOpen className="size-3.5" />
+                    Read the lesson
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === 'video'}
+                    onClick={() => setMode('video')}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                      mode === 'video'
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <Clapperboard className="size-3.5" />
+                    Video session
+                  </button>
+                </div>
+              ) : null}
 
               {mode === 'video' ? (
                 <VideoSessionBlock
@@ -314,8 +326,15 @@ export function LessonWorkspace() {
 
                   <RealWorldPanel
                     data={view.lesson.realWorld}
-                    onWatch={() => playStory('real-world')}
+                    onWatch={() => canUseExplainer && playStory('real-world')}
+                    showWatch={canUseExplainer}
                   />
+                  {!canUseExplainer && (
+                    <InlineAlert variant="warning">
+                      Animated explainers are disabled for your account. Ask an administrator to grant
+                      Academy Animated Explainers.
+                    </InlineAlert>
+                  )}
 
                   <div className="rounded-xl border border-border/60 bg-card/60 p-4">
                     <p className="flex items-center gap-2 text-sm font-semibold">
@@ -416,15 +435,17 @@ export function LessonWorkspace() {
               </footer>
             </article>
 
-            <aside className="lg:sticky lg:top-6 h-fit">
-              <MentorPanel
-                lessonId={view.lesson.id}
-                contextKey={view.lesson.id}
-                realWorldTitle={view.lesson.realWorld.title}
-                onPlayStory={playStory}
-                className="lg:max-h-[calc(100vh-6rem)] min-h-[420px]"
-              />
-            </aside>
+            {canUseMentor ? (
+              <aside className="lg:sticky lg:top-6 h-fit">
+                <MentorPanel
+                  lessonId={view.lesson.id}
+                  contextKey={view.lesson.id}
+                  realWorldTitle={view.lesson.realWorld.title}
+                  onPlayStory={canUseExplainer ? playStory : undefined}
+                  className="lg:max-h-[calc(100vh-6rem)] min-h-[420px]"
+                />
+              </aside>
+            ) : null}
           </div>
 
           <ExplainerDialog request={explainerRequest} onClose={() => setExplainerRequest(null)} />

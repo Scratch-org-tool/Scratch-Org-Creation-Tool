@@ -62,7 +62,7 @@ function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
             Master Salesforce, from first login to architect
           </h2>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-            Four guided paths with real-world examples, curated Trailhead resources, an AI mentor
+            Five guided paths with real-world examples, curated Trailhead resources, an AI mentor
             for every lesson, and instant quizzes after each module. Every completion and score is
             captured on your profile.
           </p>

@@ -3,13 +3,16 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Post,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import {
+  canAccessModule,
   learningAssignmentCreateSchema,
   learningExplainerImageRequestSchema,
   learningExplainerRequestSchema,
@@ -19,6 +22,7 @@ import {
   learningTutorAskSchema,
 } from '@sfcc/shared';
 import type { Response } from 'express';
+import type { AuthenticatedRequest } from '../../common/auth.guard';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
@@ -67,7 +71,11 @@ export class LearningController {
 
   /** Complete end-to-end video session script for one lesson (AI-first, curriculum fallback). */
   @Get('lessons/:lessonId/video-script')
-  getVideoScript(@Param('lessonId') lessonId: string) {
+  getVideoScript(
+    @Req() req: AuthenticatedRequest,
+    @Param('lessonId') lessonId: string,
+  ) {
+    this.assertFeatureAccess(req, 'learning-video', 'Video sessions');
     return this.videoScriptService.getScript(lessonId);
   }
 
@@ -95,7 +103,8 @@ export class LearningController {
   }
 
   @Post('tutor')
-  askTutor(@Body() body: unknown) {
+  askTutor(@Req() req: AuthenticatedRequest, @Body() body: unknown) {
+    this.assertFeatureAccess(req, 'learning-tutor', 'AI mentor');
     const parsed = learningTutorAskSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
@@ -105,7 +114,8 @@ export class LearningController {
 
   /** AI-scripted animated storyboard (voice + graphics) for a lesson. */
   @Post('tutor/explainer')
-  getExplainer(@Body() body: unknown) {
+  getExplainer(@Req() req: AuthenticatedRequest, @Body() body: unknown) {
+    this.assertFeatureAccess(req, 'learning-explainer', 'Animated explainers');
     const parsed = learningExplainerRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
@@ -115,7 +125,12 @@ export class LearningController {
 
   /** Generated motion clip (ComfyUI/LTX) for one scene; 204 means fall back to still art. */
   @Post('tutor/explainer/video')
-  async getExplainerVideo(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerVideo(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
+    this.assertFeatureAccess(req, 'learning-explainer', 'Animated explainers');
     const parsed = learningExplainerVideoRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
@@ -126,7 +141,12 @@ export class LearningController {
 
   /** Generated still art (Stable Diffusion/FLUX) for one scene; 204 means use the diagram fallback. */
   @Post('tutor/explainer/image')
-  async getExplainerImage(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerImage(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
+    this.assertFeatureAccess(req, 'learning-explainer', 'Animated explainers');
     const parsed = learningExplainerImageRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
@@ -137,7 +157,12 @@ export class LearningController {
 
   /** Selectable studio narration for one scene; 204 means use browser speech. */
   @Post('tutor/explainer/speech')
-  async getExplainerSpeech(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerSpeech(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
+    this.assertFeatureAccess(req, 'learning-explainer', 'Animated explainers');
     const parsed = learningExplainerSpeechRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
@@ -159,6 +184,18 @@ export class LearningController {
     response.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     response.setHeader('Cache-Control', 'private, max-age=21600');
     response.send(media.buffer);
+  }
+
+  private assertFeatureAccess(
+    req: AuthenticatedRequest,
+    module: 'learning-video' | 'learning-tutor' | 'learning-explainer',
+    featureLabel: string,
+  ) {
+    if (!req.userProfile || !canAccessModule(req.userProfile, module)) {
+      throw new ForbiddenException(
+        `${featureLabel} is disabled for your account. Ask an administrator to grant ${module}.`,
+      );
+    }
   }
 
   /* -------------------------- admin endpoints -------------------------- */

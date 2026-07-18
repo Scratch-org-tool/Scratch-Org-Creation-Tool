@@ -6,7 +6,7 @@ every lesson, an instant quiz after every module, and full progress visibility f
 
 ## What learners get
 
-- **Four learning paths, beginner → expert** (13 modules, 42 lessons, ~42 hours of curriculum):
+- **Five learning paths, beginner → expert** (14 modules, 46 lessons, ~47 hours of curriculum):
   1. **Salesforce Foundations** (Beginner) — CRM concepts, the platform, navigation, data model,
      reports, collaboration. Designed so a new joiner needs zero prior knowledge.
   2. **Admin & Configuration Mastery** (Intermediate) — the security model (profiles, permission
@@ -15,6 +15,9 @@ every lesson, an instant quiz after every module, and full progress visibility f
      async Apex, Lightning Web Components, APIs and integration patterns.
   4. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
      and identity architecture, Salesforce DX, scratch orgs, packaging, CI/CD, and governance.
+  5. **Cross-Skill Career Accelerator** (Intermediate) — blank Salesforce training setup, JavaScript
+     training for LWC, Java-to-Apex transition fundamentals, and practical release-management
+     operations.
 - **Every lesson** includes learning objectives, structured explanations, a **real-world
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
@@ -53,8 +56,12 @@ every lesson, an instant quiz after every module, and full progress visibility f
 
 ## What admins get
 
-- **Module gating** — `learning` is a locked module: standard users see the Academy only when an
-  administrator grants it (Admin → User Access), exactly like other locked modules.
+- **Module gating** — admin controls now include a **learning feature bundle**:
+  - `learning` (Academy access),
+  - `learning-tutor` (AI mentor chat),
+  - `learning-video` (video session scripts),
+  - `learning-explainer` (animated explainers).
+  Standard users only see enabled capabilities.
 - **Assignments** — from **Academy Progress** (`/learning/team`), admins assign one or more paths
   to one or more users with an optional note and due date. Assigning **automatically grants** the
   learning module to that user and sends them an in-app notification (email follows the platform's

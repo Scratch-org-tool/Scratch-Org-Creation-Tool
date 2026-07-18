@@ -327,7 +327,7 @@ cmd /c "npm run start --workspace=@sfcc/web"
 | **Admin** | All modules + **User Access** (`/admin/users`) |
 | **User** | Dashboard, Environment Center, Data Center |
 
-Admins can grant additional modules per user: Deployment, Org Setup, Provisioning, Monitoring, Copilot.
+Admins can grant additional modules per user: Deployment, Org Setup, Provisioning, Monitoring, Copilot, Salesforce Academy, and Academy feature flags (AI Mentor, Video Sessions, Animated Explainers).
 
 ### User Access (`/admin/users`)
 

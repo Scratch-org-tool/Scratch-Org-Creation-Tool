@@ -9,6 +9,7 @@ import { foundationsPath } from './foundations.path';
 import { adminPath } from './admin.path';
 import { developerPath } from './developer.path';
 import { architectPath } from './architect.path';
+import { crossSkillPath } from './cross-skill.path';
 
 export type {
   CurriculumLesson,
@@ -21,6 +22,7 @@ export type {
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
   adminPath,
+  crossSkillPath,
   developerPath,
   architectPath,
 ].sort((a, b) => LEARNING_LEVEL_RANK[a.level] - LEARNING_LEVEL_RANK[b.level]);

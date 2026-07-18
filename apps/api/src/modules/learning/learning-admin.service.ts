@@ -9,6 +9,7 @@ import {
   averagePercent,
   canAccessModule,
   isModuleCompleted,
+  LEARNING_FEATURE_MODULES,
   moduleProgressPercent,
   pathProgressPercent,
   type AppModule,
@@ -166,16 +167,19 @@ export class LearningAdminService {
     grantedModules: string[],
   ): Promise<void> {
     if (role === 'admin') return;
+    const current = new Set(grantedModules as AppModule[]);
+    const missing = LEARNING_FEATURE_MODULES.filter((module) => !current.has(module));
+    if (missing.length === 0) return;
     const profile = { role, grantedModules: grantedModules as AppModule[] };
-    if (canAccessModule(profile, 'learning')) return;
+    if (!canAccessModule(profile, 'learning')) missing.unshift('learning');
     try {
       await prisma.appUser.update({
         where: { id: userId },
-        data: { grantedModules: [...grantedModules, 'learning'] },
+        data: { grantedModules: [...new Set([...grantedModules, ...missing])] },
       });
     } catch (error) {
       this.logger.warn(
-        `failed to auto-grant learning module to ${userId}: ${error instanceof Error ? error.message : String(error)}`,
+        `failed to auto-grant learning modules to ${userId}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
