@@ -96,6 +96,7 @@ interface DescribedField {
 interface WorkbookRow {
   rowNumber: number;
   values: Record<string, string>;
+  errorColumns: Set<string>;
 }
 
 interface ParsedSheet {
@@ -263,7 +264,14 @@ export class BulkDataUpdateService {
     config: BulkDataUpdateConfig,
     userId: string,
   ) {
-    const plan = await this.buildPlan(buffer, fileName, config, userId);
+    const plan = await this.buildPlan(
+      buffer,
+      fileName,
+      config,
+      userId,
+      undefined,
+      TARGET_BULK_SLOT_WAIT_MS,
+    );
     return this.toPublicPlan(plan, config);
   }
 
@@ -447,10 +455,13 @@ export class BulkDataUpdateService {
     for (const rowIndex of dataRowIndexes) {
       const row = denseRows[rowIndex] ?? [];
       const values: Record<string, string> = {};
+      const errorColumns = new Set<string>();
       for (const [column, header] of rowColumns) {
-        values[header] = this.worksheetCellValue(row[column]);
+        const cell = row[column];
+        values[header] = this.worksheetCellValue(cell);
+        if (cell?.t === 'e') errorColumns.add(header);
       }
-      rows.push({ rowNumber: rowIndex + 1, values });
+      rows.push({ rowNumber: rowIndex + 1, values, errorColumns });
     }
     if (!allowEmpty && rowCount === 0) {
       throw new BadRequestException(`Workbook sheet "${sheetName}" does not contain data rows`);
@@ -617,6 +628,7 @@ export class BulkDataUpdateService {
     config: BulkDataUpdateConfig,
     userId: string,
     onLog?: LogCallback,
+    bulkSlotWaitMs?: number,
   ): Promise<BulkDataUpdatePlan> {
     const context = await this.prepareContext(buffer, fileName, config, userId);
     await onLog?.(
@@ -641,6 +653,10 @@ export class BulkDataUpdateService {
     const candidatesByKey = new Map<string, MatchCandidate | null>();
     let uniqueCandidateCount = 0;
     for (const row of context.sheet.rows) {
+      if (row.errorColumns.size > 0) {
+        stats.invalidRows += 1;
+        continue;
+      }
       const match = this.resolveRowMatch(context, row.values);
       if (!match) {
         const primary = row.values[context.matchColumn]?.trim() ?? '';
@@ -705,6 +721,7 @@ export class BulkDataUpdateService {
           secondary: candidate.secondaryValue,
         })),
       onLog,
+      bulkSlotWaitMs,
     );
     const targetsByKey = new Map<string, Record<string, unknown>>();
     const ambiguousKeys = new Set<string>();
@@ -802,6 +819,7 @@ export class BulkDataUpdateService {
     context: PreparedContext,
     matchValues: Array<{ primary: string; secondary?: string }>,
     onLog?: LogCallback,
+    bulkSlotWaitMs?: number,
   ): Promise<Array<Record<string, unknown>>> {
     const selectedFields = [...new Set([
       'Id',
@@ -814,6 +832,7 @@ export class BulkDataUpdateService {
       matchValues,
       selectedFields,
       onLog,
+      bulkSlotWaitMs,
     );
     if (bulkRecords !== undefined) return bulkRecords;
 
@@ -861,12 +880,21 @@ export class BulkDataUpdateService {
     matchValues: Array<{ primary: string; secondary?: string }>,
     selectedFields: string[],
     onLog?: LogCallback,
+    bulkSlotWaitMs?: number,
   ): Promise<Array<Record<string, unknown>> | undefined> {
     if (matchValues.length < TARGET_BULK_INDEX_MIN_KEYS) return undefined;
     if (
       context.matchField.name !== 'Id'
       && !context.matchField.externalId
       && !context.matchField.idLookup
+    ) {
+      return undefined;
+    }
+    if (
+      context.secondaryMatchField
+      && context.secondaryMatchField.name !== 'Id'
+      && !context.secondaryMatchField.externalId
+      && !context.secondaryMatchField.idLookup
     ) {
       return undefined;
     }
@@ -907,10 +935,9 @@ export class BulkDataUpdateService {
     const csvPath = join(workDir, 'target-records.csv');
     let slot: Awaited<ReturnType<BulkThrottleService['acquire']>> | undefined;
     try {
-      slot = await this.bulkThrottle.acquire(
-        context.alias,
-        { maxWaitMs: TARGET_BULK_SLOT_WAIT_MS },
-      );
+      slot = bulkSlotWaitMs === undefined
+        ? await this.bulkThrottle.acquire(context.alias)
+        : await this.bulkThrottle.acquire(context.alias, { maxWaitMs: bulkSlotWaitMs });
       const result = await this.sfCli.exportBulk(
         `SELECT ${selectedFields.join(', ')} FROM ${context.objectName} WHERE ${predicate}`,
         context.alias,

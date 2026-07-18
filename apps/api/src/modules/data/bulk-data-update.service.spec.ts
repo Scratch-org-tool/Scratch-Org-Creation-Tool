@@ -58,6 +58,17 @@ function workbook(rows: unknown[][]): Buffer {
   return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
 
+function workbookWithMappedError(): Buffer {
+  const book = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['Employee Number', 'Employee Name'],
+    ['E-1', 'placeholder'],
+  ]);
+  sheet.B2 = { t: 'e', v: 0x07 };
+  XLSX.utils.book_append_sheet(book, sheet, 'Employees');
+  return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+}
+
 function employeeWorkbook() {
   return workbook([
     ['Employee Number', 'Employee Name', 'Bottler'],
@@ -286,6 +297,25 @@ describe('BulkDataUpdateService', () => {
     expect(preview.sample[0]?.changes).toEqual([
       expect.objectContaining({ field: bottlerField, newValue: '5000' }),
     ]);
+  });
+
+  it('classifies mapped Excel formula errors as invalid instead of update values', async () => {
+    const preview = await service().preview(
+      workbookWithMappedError(),
+      'employees.xlsx',
+      {
+        ...config,
+        columnMappings: [{ sourceColumn: 'Employee Name', targetField: 'Name' }],
+      },
+      userId,
+    );
+
+    expect(preview.stats).toEqual(expect.objectContaining({
+      totalRows: 1,
+      recordsToUpdate: 0,
+      invalidRows: 1,
+    }));
+    expect(mocks.sfCli.queryAll).not.toHaveBeenCalled();
   });
 
   it('recommends Employee Number as the Employee Master matching key', async () => {
