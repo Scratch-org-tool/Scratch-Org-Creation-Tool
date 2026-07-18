@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { suggestTargetField } from './bulk-data-update-mapping';
+import { buildSuggestedMappings, suggestMatchColumn, suggestTargetField } from './bulk-data-update-mapping';
 
 const fields = [
   {
@@ -36,5 +36,33 @@ describe('bulk data update mapping suggestions', () => {
 
   it('leaves unknown columns unmapped', () => {
     expect(suggestTargetField('Do Not Import', fields)).toBe('');
+  });
+
+  it('maps each Salesforce field at most once', () => {
+    expect(buildSuggestedMappings(
+      ['Employee Name', 'Full Name', 'Name', 'Bottler Number', 'cfs_ob__FullName__c'],
+      [
+        ...fields,
+        { name: 'cfs_ob__FullName__c', label: 'Full Name' },
+      ],
+      ['cfs_ob__EmployeeNo__c'],
+    )).toEqual({
+      'Employee Name': 'Name',
+      'Full Name': 'cfs_ob__FullName__c',
+      Name: '',
+      'Bottler Number': 'cfs_ob__Bottler__c',
+      'cfs_ob__FullName__c': '',
+    });
+  });
+
+  it('prefers exact API-name headers for match columns', () => {
+    expect(suggestMatchColumn(
+      ['_', 'cfs_ob__EmployeeNo__c', 'cfs_ob__u_Sales_Office__c'],
+      { name: 'cfs_ob__EmployeeNo__c', label: 'Employee No' },
+    )).toBe('cfs_ob__EmployeeNo__c');
+    expect(suggestMatchColumn(
+      ['_', 'cfs_ob__EmployeeNo__c', 'cfs_ob__u_Sales_Office__c'],
+      { name: 'cfs_ob__u_Sales_Office__c', label: 'Sales Office' },
+    )).toBe('cfs_ob__u_Sales_Office__c');
   });
 });

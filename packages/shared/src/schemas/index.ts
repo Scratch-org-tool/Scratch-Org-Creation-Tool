@@ -170,9 +170,30 @@ export const bulkDataUpdateConfigSchema = z.object({
   sheetName: z.string().trim().min(1).max(255).optional(),
   matchColumn: z.string().trim().min(1).max(255),
   matchField: salesforceIdentifierSchema,
+  secondaryMatchColumn: z.string().trim().min(1).max(255).optional(),
+  secondaryMatchField: salesforceIdentifierSchema.optional(),
   columnMappings: z.array(bulkDataUpdateMappingSchema).min(1).max(50),
   onlyEmptyFields: z.boolean().default(false),
 }).superRefine((value, context) => {
+  const hasSecondaryColumn = Boolean(value.secondaryMatchColumn?.trim());
+  const hasSecondaryField = Boolean(value.secondaryMatchField?.trim());
+  if (hasSecondaryColumn !== hasSecondaryField) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['secondaryMatchColumn'],
+      message: 'Secondary spreadsheet column and Salesforce field must both be set',
+    });
+  }
+  if (
+    value.secondaryMatchField
+    && value.secondaryMatchField.toLocaleLowerCase() === value.matchField.toLocaleLowerCase()
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['secondaryMatchField'],
+      message: 'Secondary matching field must be different from the primary matching field',
+    });
+  }
   const sourceColumns = new Set<string>();
   const targetFields = new Set<string>();
   value.columnMappings.forEach((mapping, index) => {
@@ -197,6 +218,16 @@ export const bulkDataUpdateConfigSchema = z.object({
         code: z.ZodIssueCode.custom,
         path: ['columnMappings', index, 'targetField'],
         message: 'The matching field cannot also be updated',
+      });
+    }
+    if (
+      value.secondaryMatchField
+      && targetKey === value.secondaryMatchField.toLocaleLowerCase()
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['columnMappings', index, 'targetField'],
+        message: 'A secondary matching field cannot also be updated',
       });
     }
     sourceColumns.add(sourceKey);

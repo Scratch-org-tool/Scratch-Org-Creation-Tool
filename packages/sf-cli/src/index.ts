@@ -427,7 +427,9 @@ export class SfCliClient extends EventEmitter {
 
   constructor(options: SfCliOptions = {}) {
     super();
-    this.cliPath = options.cliPath ?? process.env.SF_CLI_PATH ?? 'sf';
+    this.cliPath = options.cliPath?.trim()
+      || process.env.SF_CLI_PATH?.trim()
+      || 'sf';
     this.cwd = options.cwd ?? process.cwd();
     this.env = { ...process.env, ...options.env };
   }

@@ -58,7 +58,11 @@ export async function buildAuthHeaders(
   return headers;
 }
 
-export async function api<T>(path: string, options?: RequestInit, retried = false): Promise<T> {
+export async function api<T>(
+  path: string,
+  options?: RequestInit & { direct?: boolean },
+  retried = false,
+): Promise<T> {
   const headers: Record<string, string> = {
     ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options?.headers as Record<string, string> | undefined),
@@ -67,10 +71,13 @@ export async function api<T>(path: string, options?: RequestInit, retried = fals
   const token = await resolveToken(false);
   if (token) headers.Authorization = `Bearer ${token}`;
 
+  const { direct, ...fetchOptions } = options ?? {};
+  const url = direct ? buildDirectApiUrl(path) : buildApiUrl(path);
+
   let res: Response;
   try {
-    res = await fetch(buildApiUrl(path), {
-      ...options,
+    res = await fetch(url, {
+      ...fetchOptions,
       headers,
       cache: 'no-store',
     });

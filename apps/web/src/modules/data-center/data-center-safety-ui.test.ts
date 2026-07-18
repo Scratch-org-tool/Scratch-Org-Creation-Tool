@@ -57,6 +57,7 @@ describe('Data Center async and recovery controls', () => {
     expect(bulkUpdate).toContain('/data/bulk-update/inspect');
     expect(bulkUpdate).toContain('/data/bulk-update/preview');
     expect(bulkUpdate).toContain('/data/bulk-update/run');
+    expect(bulkUpdate).toContain('direct: true');
     expect(bulkUpdate).toContain('Update existing records only');
     expect(bulkUpdate).toContain('0 records will be created');
     expect(bulkUpdate).toContain('reviewed');

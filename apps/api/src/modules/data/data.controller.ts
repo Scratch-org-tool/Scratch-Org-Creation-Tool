@@ -34,6 +34,7 @@ import { assertOrgOwned } from '../../common/user-tenancy.util';
 import {
   accountSeedPreviewSchema,
   accountPartnerMigrationSchema,
+  BULK_DATA_UPDATE_MAX_FILE_BYTES,
   conaSeedRunSchema,
   partnerImportLoadSchema,
   partnerImportProcessSchema,
@@ -44,7 +45,7 @@ import {
 
 const BULK_DATA_UPDATE_UPLOAD_OPTIONS = {
   storage: memoryStorage(),
-  limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+  limits: { files: 1, fileSize: BULK_DATA_UPDATE_MAX_FILE_BYTES },
 };
 
 @Controller('data')

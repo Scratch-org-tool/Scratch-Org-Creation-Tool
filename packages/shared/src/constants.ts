@@ -63,6 +63,14 @@ export const CONA_ADMIN_EXTENSION_PERMSET = SCRATCH_PERMISSION_SET;
 export const CONA_SUPER_USER_PERMSET = 'Lifecycle_Super_User';
 export const ERROR_LOGGER_PACKAGE_ID = '04t4x000000IcRT';
 
+/** Max workbook upload size for Bulk Data Update (inspect, preview, run). */
+export const BULK_DATA_UPDATE_MAX_FILE_BYTES = 25 * 1024 * 1024;
+export const BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS = 100_000;
+
+export function bulkDataUpdateMaxFileSizeLabel(): string {
+  return `${Math.round(BULK_DATA_UPDATE_MAX_FILE_BYTES / (1024 * 1024))} MB`;
+}
+
 export const DEFAULT_AZURE_MANIFEST_PATH = 'CoreFlex Onboarding/manifest/package.xml';
 
 export const PIPELINE_STEPS = [

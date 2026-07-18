@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   sfCli: {
     describeSObject: vi.fn(),
     query: vi.fn(),
+    queryAll: vi.fn(),
     updateBulk: vi.fn(),
   },
   orgConnection: {
@@ -34,6 +35,7 @@ const userId = 'user-1';
 const targetOrgId = '11111111-1111-4111-8111-111111111111';
 const objectName = 'cfs_ob__EmployeeMaster__c';
 const employeeNumberField = 'cfs_ob__EmployeeNo__c';
+const salesOfficeField = 'cfs_ob__u_Sales_Office__c';
 const bottlerField = 'cfs_ob__Bottler__c';
 
 const config: BulkDataUpdateConfig = {
@@ -146,6 +148,25 @@ describe('BulkDataUpdateService', () => {
         },
       },
     });
+    mocks.sfCli.queryAll.mockImplementation(async (_alias, soql) => ({
+      success: true,
+      data: {
+        records: [
+          {
+            Id: 'a01000000000001AAA',
+            [employeeNumberField]: 'E-1',
+            Name: 'a01000000000001',
+            [bottlerField]: '',
+          },
+          {
+            Id: 'a01000000000002AAA',
+            [employeeNumberField]: 'E-2',
+            Name: 'Bob Employee',
+            [bottlerField]: '5000',
+          },
+        ].filter((record) => soql.includes(String(record[employeeNumberField]))),
+      },
+    }));
     mocks.sfCli.updateBulk.mockResolvedValue({ success: true });
   });
 
@@ -207,7 +228,7 @@ describe('BulkDataUpdateService', () => {
         },
       ],
     }]);
-    expect(mocks.sfCli.query).toHaveBeenCalledWith(
+    expect(mocks.sfCli.queryAll).toHaveBeenCalledWith(
       'target',
       expect.stringContaining(`WHERE ${employeeNumberField} IN (`),
     );
@@ -274,5 +295,80 @@ describe('BulkDataUpdateService', () => {
       'Name',
       bottlerField,
     ]);
+  });
+
+  it('matches employee numbers even when Salesforce stores them without leading zeros', async () => {
+    mocks.sfCli.describeSObject.mockResolvedValue({
+      success: true,
+      data: {
+        result: {
+          name: objectName,
+          label: 'Employee Master',
+          fields: [
+            {
+              name: 'Id',
+              label: 'Record ID',
+              type: 'id',
+              filterable: true,
+              updateable: false,
+            },
+            {
+              name: employeeNumberField,
+              label: 'Employee Number',
+              type: 'string',
+              externalId: true,
+              filterable: true,
+              updateable: true,
+              length: 40,
+            },
+            {
+              name: salesOfficeField,
+              label: 'Sales Office',
+              type: 'string',
+              filterable: true,
+              updateable: true,
+              length: 20,
+            },
+            {
+              name: 'Name',
+              label: 'Employee Name',
+              type: 'string',
+              filterable: true,
+              updateable: true,
+              length: 80,
+            },
+          ],
+        },
+      },
+    });
+    mocks.sfCli.queryAll.mockResolvedValue({
+      success: true,
+      data: {
+        records: [{
+          Id: 'a01000000000001AAA',
+          [employeeNumberField]: '1003539',
+          [salesOfficeField]: 'S003',
+          Name: 'Tina Pacheco',
+        }],
+      },
+    });
+
+    const preview = await service().preview(
+      workbook([
+        ['cfs_ob__EmployeeNo__c', 'Name'],
+        ['01003539', 'Tina Pacheco Updated'],
+      ]),
+      'employees.xlsx',
+      {
+        ...config,
+        matchColumn: 'cfs_ob__EmployeeNo__c',
+        matchField: employeeNumberField,
+        columnMappings: [{ sourceColumn: 'Name', targetField: 'Name' }],
+      },
+      userId,
+    );
+
+    expect(preview.stats.recordsToUpdate).toBe(1);
+    expect(preview.sample[0]?.matchValue).toBe('01003539');
   });
 });

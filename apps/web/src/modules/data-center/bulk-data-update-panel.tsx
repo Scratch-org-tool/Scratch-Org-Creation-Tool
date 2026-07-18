@@ -23,9 +23,13 @@ import { FileDropzone } from '@/modules/scratch-templates/components/file-dropzo
 import { useOrgs } from '@/hooks/use-orgs';
 import { api } from '@/services/api';
 import {
-  equivalentBulkUpdateHeading,
-  fieldAliases,
-  suggestTargetField,
+  BULK_DATA_UPDATE_MAX_FILE_BYTES,
+  BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS,
+  bulkDataUpdateMaxFileSizeLabel,
+} from '@sfcc/shared';
+import {
+  buildSuggestedMappings,
+  suggestMatchColumn,
 } from './bulk-data-update-mapping';
 
 const DEFAULT_OBJECT = 'cfs_ob__EmployeeMaster__c';
@@ -219,18 +223,13 @@ export function BulkDataUpdatePanel() {
     const recommendedFieldMeta = objectMeta.matchFields.find(
       (field) => field.name === recommendedField,
     );
-    const suggestedMatchColumn = recommendedFieldMeta
-      ? selectedSheet.headers.find((header) =>
-          fieldAliases(recommendedFieldMeta)
-            .some((alias) => equivalentBulkUpdateHeading(alias, header))) ?? ''
-      : '';
+    const suggestedMatchColumn = suggestMatchColumn(selectedSheet.headers, recommendedFieldMeta);
     setMatchField(recommendedField);
     setMatchColumn(suggestedMatchColumn);
-    setMappings(Object.fromEntries(
-      selectedSheet.headers.map((header) => {
-        const target = suggestTargetField(header, objectMeta.fields);
-        return [header, target === recommendedField ? '' : target];
-      }),
+    setMappings(buildSuggestedMappings(
+      selectedSheet.headers,
+      objectMeta.fields,
+      [recommendedField],
     ));
     invalidatePreview();
   // Suggestions intentionally reset only when the parsed sheet or described object changes.
@@ -286,8 +285,8 @@ export function BulkDataUpdatePanel() {
       setFile(null);
       return;
     }
-    if (nextFile.size > 10 * 1024 * 1024) {
-      setError('Workbook exceeds the 10 MB upload limit');
+    if (nextFile.size > BULK_DATA_UPDATE_MAX_FILE_BYTES) {
+      setError(`Workbook exceeds the ${bulkDataUpdateMaxFileSizeLabel()} upload limit`);
       setFile(null);
       return;
     }
@@ -299,6 +298,7 @@ export function BulkDataUpdatePanel() {
       const result = await api<WorkbookInspection>('/data/bulk-update/inspect', {
         method: 'POST',
         body: form,
+        direct: true,
       });
       if (generation !== inspectionGenerationRef.current) return;
       setInspection(result);
@@ -349,6 +349,7 @@ export function BulkDataUpdatePanel() {
       const result = await api<BulkUpdatePreview>('/data/bulk-update/preview', {
         method: 'POST',
         body: buildForm(),
+        direct: true,
       });
       if (generation === previewGenerationRef.current) setPreview(result);
     } catch (cause) {
@@ -374,6 +375,7 @@ export function BulkDataUpdatePanel() {
       const result = await api<{ jobId: string }>('/data/bulk-update/run', {
         method: 'POST',
         body: buildForm(),
+        direct: true,
       });
       setSubmittedPreview(preview);
       setJobId(result.jobId);
@@ -497,7 +499,7 @@ export function BulkDataUpdatePanel() {
           file={file}
           disabled={configurationLocked}
           label="Drop an Excel or CSV file here"
-          hint="Up to 10 MB and 50,000 rows per sheet"
+          hint={`Up to ${bulkDataUpdateMaxFileSizeLabel()} and ${BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS.toLocaleString()} rows per sheet`}
           onFileChange={(nextFile) => void inspectFile(nextFile)}
         />
         {inspection && (
@@ -534,11 +536,11 @@ export function BulkDataUpdatePanel() {
         <>
           <FormSection
             title="Record matching"
-            description="Each unique spreadsheet key must resolve to exactly one existing Salesforce record."
+            description="Employee Master updates match on Employee Number, which is unique per employee."
           >
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <Label htmlFor="bulk-update-match-column">Spreadsheet key column</Label>
+                <Label htmlFor="bulk-update-match-column">Primary spreadsheet column</Label>
                 <Select
                   id="bulk-update-match-column"
                   value={matchColumn}
@@ -555,7 +557,7 @@ export function BulkDataUpdatePanel() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="bulk-update-match-field">Salesforce matching field</Label>
+                <Label htmlFor="bulk-update-match-field">Primary Salesforce field</Label>
                 <Select
                   id="bulk-update-match-field"
                   value={matchField}
@@ -585,7 +587,7 @@ export function BulkDataUpdatePanel() {
 
           <FormSection
             title="Column mapping"
-            description="Only mapped, non-empty cells are considered. The matching field cannot be changed."
+            description="Only mapped, non-empty cells are considered. Matching fields cannot also be updated."
           >
             <div className="overflow-hidden rounded-lg border border-border/60">
               <table className="w-full text-left text-xs">
@@ -700,8 +702,8 @@ export function BulkDataUpdatePanel() {
           <div>
             <p className="text-sm font-semibold">Update plan</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Matched by {preview.matchColumn} → {preview.matchField}. Salesforce record IDs are
-              resolved internally and are never used as Name values.
+              Matched by {preview.matchColumn} → {preview.matchField}.{' '}
+              Salesforce record IDs are resolved internally and are never used as Name values.
             </p>
           </div>
           <InlineAlert

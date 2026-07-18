@@ -22,6 +22,8 @@ const nextConfig = {
   // Opt-in standalone output for containerized production builds
   // (apps/web/Dockerfile sets NEXT_OUTPUT_STANDALONE=1).
   ...(process.env.NEXT_OUTPUT_STANDALONE === '1' ? { output: 'standalone' } : {}),
+  // Bulk Data Update workbooks can exceed the default 10 MB proxy buffer.
+  middlewareClientMaxBodySize: '25mb',
   poweredByHeader: false,
   devIndicators: false,
   // The edge gateway owns compression when explicitly wired by stack.sh.

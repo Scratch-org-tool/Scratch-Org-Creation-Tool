@@ -7,6 +7,9 @@ import { prisma } from '@sfcc/db';
 import { createSfCliClient } from '@sfcc/sf-cli';
 import {
   bulkDataUpdateConfigSchema,
+  BULK_DATA_UPDATE_MAX_FILE_BYTES,
+  BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS,
+  bulkDataUpdateMaxFileSizeLabel,
   escapeSoqlLiteral,
   serializeBulkCsv,
   type BulkDataUpdateConfig,
@@ -15,10 +18,12 @@ import { assertOrgOwned } from '../../common/user-tenancy.util';
 import { removeTempDir } from '../../common/temp-cleanup.util';
 import { BulkThrottleService } from './bulk-throttle.service';
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_WORKBOOK_ROWS = 50_000;
+const MAX_FILE_BYTES = BULK_DATA_UPDATE_MAX_FILE_BYTES;
+const MAX_WORKBOOK_ROWS = BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS;
 const MAX_WORKBOOK_COLUMNS = 200;
 const TARGET_QUERY_CHUNK_SIZE = 200;
+const TARGET_QUERY_CHUNK_SIZE_WINDOWS = 40;
+const MAX_SOQL_COMMAND_CHARS = process.platform === 'win32' ? 6_000 : 12_000;
 const TARGET_QUERY_CONCURRENCY = 4;
 const PREVIEW_RECORD_LIMIT = 50;
 const EMPLOYEE_MASTER_OBJECT = 'cfs_ob__EmployeeMaster__c';
@@ -102,6 +107,8 @@ interface PreparedContext {
   sheet: ParsedSheet;
   matchColumn: string;
   matchField: DescribedField;
+  secondaryMatchColumn?: string;
+  secondaryMatchField?: DescribedField;
   mappings: ResolvedMapping[];
 }
 
@@ -170,6 +177,12 @@ export class BulkDataUpdateService {
         : undefined,
       matchColumn: body.matchColumn,
       matchField: body.matchField,
+      secondaryMatchColumn: typeof body.secondaryMatchColumn === 'string' && body.secondaryMatchColumn.trim()
+        ? body.secondaryMatchColumn
+        : undefined,
+      secondaryMatchField: typeof body.secondaryMatchField === 'string' && body.secondaryMatchField.trim()
+        ? body.secondaryMatchField
+        : undefined,
       columnMappings,
       onlyEmptyFields:
         body.onlyEmptyFields === true
@@ -286,7 +299,7 @@ export class BulkDataUpdateService {
   private readWorkbook(buffer: Buffer, fileName?: string): XLSX.WorkBook {
     if (!buffer.length) throw new BadRequestException('Upload a non-empty workbook');
     if (buffer.length > MAX_FILE_BYTES) {
-      throw new BadRequestException('Workbook exceeds the 10 MB upload limit');
+      throw new BadRequestException(`Workbook exceeds the ${bulkDataUpdateMaxFileSizeLabel()} upload limit`);
     }
     if (fileName && !/\.(xlsx|xls|csv)$/i.test(fileName)) {
       throw new BadRequestException('Upload an .xlsx, .xls, or .csv file');
@@ -422,6 +435,23 @@ export class BulkDataUpdateService {
       );
     }
 
+    let secondaryMatchColumn: string | undefined;
+    let secondaryMatchField: DescribedField | undefined;
+    if (config.secondaryMatchField) {
+      secondaryMatchColumn = headerMap.get(config.secondaryMatchColumn!.toLocaleLowerCase());
+      if (!secondaryMatchColumn) {
+        throw new BadRequestException(
+          `Secondary matching column is not present in the workbook: ${config.secondaryMatchColumn}`,
+        );
+      }
+      secondaryMatchField = fieldMap.get(config.secondaryMatchField.toLocaleLowerCase());
+      if (!secondaryMatchField || !this.isMatchableField(secondaryMatchField)) {
+        throw new BadRequestException(
+          `Salesforce field cannot be used for secondary matching: ${config.secondaryMatchField}`,
+        );
+      }
+    }
+
     const mappings = config.columnMappings.map((mapping) => {
       const sourceColumn = headerMap.get(mapping.sourceColumn.toLocaleLowerCase());
       if (!sourceColumn) {
@@ -438,6 +468,12 @@ export class BulkDataUpdateService {
       if (targetField.name.toLocaleLowerCase() === matchField.name.toLocaleLowerCase()) {
         throw new BadRequestException('The matching field cannot also be updated');
       }
+      if (
+        secondaryMatchField
+        && targetField.name.toLocaleLowerCase() === secondaryMatchField.name.toLocaleLowerCase()
+      ) {
+        throw new BadRequestException('A secondary matching field cannot also be updated');
+      }
       return { sourceColumn, targetField };
     });
 
@@ -448,6 +484,8 @@ export class BulkDataUpdateService {
       sheet,
       matchColumn,
       matchField,
+      secondaryMatchColumn,
+      secondaryMatchField,
       mappings,
     };
   }
@@ -536,19 +574,25 @@ export class BulkDataUpdateService {
     const candidatesByKey = new Map<string, Array<{
       row: WorkbookRow;
       matchValue: string;
+      primaryValue: string;
+      secondaryValue?: string;
       proposedValues: Map<string, string>;
     }>>();
     for (const row of context.sheet.rows) {
-      const matchValue = row.values[context.matchColumn]?.trim() ?? '';
-      if (!matchValue) {
-        stats.missingMatchRows += 1;
+      const match = this.resolveRowMatch(context, row.values);
+      if (!match) {
+        const primary = row.values[context.matchColumn]?.trim() ?? '';
+        const secondary = context.secondaryMatchColumn
+          ? row.values[context.secondaryMatchColumn]?.trim() ?? ''
+          : '';
+        if (!primary || (context.secondaryMatchColumn && !secondary)) {
+          stats.missingMatchRows += 1;
+        } else {
+          stats.invalidRows += 1;
+        }
         continue;
       }
-      const key = this.normalizeMatchKey(matchValue, context.matchField);
-      if (!key) {
-        stats.invalidRows += 1;
-        continue;
-      }
+      const { key, display: matchValue, primary, secondary } = match;
 
       const proposedValues = new Map<string, string>();
       let invalid = false;
@@ -567,13 +611,21 @@ export class BulkDataUpdateService {
         continue;
       }
       const candidates = candidatesByKey.get(key) ?? [];
-      candidates.push({ row, matchValue, proposedValues });
+      candidates.push({
+        row,
+        matchValue,
+        primaryValue: primary,
+        secondaryValue: secondary,
+        proposedValues,
+      });
       candidatesByKey.set(key, candidates);
     }
 
     const candidates = new Map<string, {
       row: WorkbookRow;
       matchValue: string;
+      primaryValue: string;
+      secondaryValue?: string;
       proposedValues: Map<string, string>;
     }>();
     for (const [key, rows] of candidatesByKey) {
@@ -590,13 +642,15 @@ export class BulkDataUpdateService {
     );
     const targetRecords = await this.queryTargetRecords(
       context,
-      [...candidates.values()].map((candidate) => candidate.matchValue),
+      [...candidates.values()].map((candidate) => ({
+        primary: candidate.primaryValue,
+        secondary: candidate.secondaryValue,
+      })),
     );
     const targetsByKey = new Map<string, Record<string, unknown>>();
     const ambiguousKeys = new Set<string>();
     for (const record of targetRecords) {
-      const rawKey = this.salesforceValue(record[context.matchField.name]);
-      const key = this.normalizeMatchKey(rawKey, context.matchField);
+      const key = this.recordMatchKey(context, record);
       if (!key || ambiguousKeys.has(key)) continue;
       if (targetsByKey.has(key)) {
         targetsByKey.delete(key);
@@ -686,55 +740,140 @@ export class BulkDataUpdateService {
 
   private async queryTargetRecords(
     context: PreparedContext,
-    matchValues: string[],
+    matchValues: Array<{ primary: string; secondary?: string }>,
   ): Promise<Array<Record<string, unknown>>> {
-    const uniqueValues = [...new Set(matchValues.filter(Boolean))];
-    const chunks: string[][] = [];
-    for (let offset = 0; offset < uniqueValues.length; offset += TARGET_QUERY_CHUNK_SIZE) {
-      chunks.push(uniqueValues.slice(offset, offset + TARGET_QUERY_CHUNK_SIZE));
-    }
-    if (chunks.length === 0) return [];
-
     const selectedFields = [
       'Id',
       context.matchField.name,
+      ...(context.secondaryMatchField ? [context.secondaryMatchField.name] : []),
       ...context.mappings.map((mapping) => mapping.targetField.name),
     ].filter((field, index, all) => all.indexOf(field) === index);
-    const recordsByChunk: Array<Array<Record<string, unknown>>> = new Array(chunks.length);
+    const queryChunks = this.buildMatchQueryChunks(context, matchValues, selectedFields);
+    if (queryChunks.length === 0) return [];
+
+    const recordsByChunk: Array<Array<Record<string, unknown>>> = new Array(queryChunks.length);
     let nextChunk = 0;
     const worker = async () => {
-      while (nextChunk < chunks.length) {
+      while (nextChunk < queryChunks.length) {
         const chunkIndex = nextChunk;
         nextChunk += 1;
-        const literals = chunks[chunkIndex]!
-          .map((value) => this.soqlLiteral(value, context.matchField))
-          .join(', ');
-        const soql = `SELECT ${selectedFields.join(', ')} FROM ${context.objectName} `
-          + `WHERE ${context.matchField.name} IN (${literals})`;
-        const result = await this.sfCli.query(context.alias, soql);
+        const result = await this.sfCli.queryAll(context.alias, queryChunks[chunkIndex]!);
         if (!result.success) {
           throw new BadRequestException(
             result.error
             ?? `Could not match target records by ${context.matchField.name}`,
           );
         }
-        recordsByChunk[chunkIndex] = (result.data?.result?.records ?? []) as Array<
-          Record<string, unknown>
-        >;
+        recordsByChunk[chunkIndex] = result.data?.records ?? [];
       }
     };
     await Promise.all(
       Array.from(
-        { length: Math.min(TARGET_QUERY_CONCURRENCY, chunks.length) },
+        { length: Math.min(TARGET_QUERY_CONCURRENCY, queryChunks.length) },
         () => worker(),
       ),
     );
     return recordsByChunk.flat();
   }
 
+  private buildMatchQueryChunks(
+    context: PreparedContext,
+    matchValues: Array<{ primary: string; secondary?: string }>,
+    selectedFields: string[],
+  ): string[] {
+    const secondariesByPrimary = new Map<string, Set<string>>();
+    for (const value of matchValues) {
+      if (!value.primary) continue;
+      if (!value.secondary) {
+        secondariesByPrimary.set(value.primary, secondariesByPrimary.get(value.primary) ?? new Set());
+        continue;
+      }
+      const secondaries = secondariesByPrimary.get(value.primary) ?? new Set<string>();
+      secondaries.add(value.secondary);
+      secondariesByPrimary.set(value.primary, secondaries);
+    }
+
+    const uniquePrimaries = [...new Set(matchValues.map((value) => value.primary).filter(Boolean))];
+    const baseChunkSize = process.platform === 'win32'
+      ? TARGET_QUERY_CHUNK_SIZE_WINDOWS
+      : TARGET_QUERY_CHUNK_SIZE;
+    const queries: string[] = [];
+
+    let index = 0;
+    while (index < uniquePrimaries.length) {
+      let chunkSize = Math.min(baseChunkSize, uniquePrimaries.length - index);
+      let soql = '';
+
+      while (chunkSize > 0) {
+        const chunkPrimaries = uniquePrimaries.slice(index, index + chunkSize);
+        const primaryLiterals = this.expandMatchValuesForQuery(chunkPrimaries, context.matchField)
+          .map((value) => this.soqlLiteral(value, context.matchField));
+        const chunkSecondaries = [...new Set(
+          chunkPrimaries.flatMap((primary) => [...(secondariesByPrimary.get(primary) ?? [])]),
+        )];
+        const secondaryLiterals = context.secondaryMatchField
+          ? this.expandMatchValuesForQuery(chunkSecondaries, context.secondaryMatchField)
+              .map((value) => this.soqlLiteral(value, context.secondaryMatchField!))
+          : [];
+
+        soql = `SELECT ${selectedFields.join(', ')} FROM ${context.objectName} `
+          + `WHERE ${context.matchField.name} IN (${primaryLiterals.join(', ')})`;
+        if (context.secondaryMatchField && secondaryLiterals.length > 0) {
+          soql += ` AND ${context.secondaryMatchField.name} IN (${secondaryLiterals.join(', ')})`;
+        }
+
+        if (soql.length <= MAX_SOQL_COMMAND_CHARS || chunkSize === 1) break;
+        chunkSize = Math.max(1, Math.floor(chunkSize / 2));
+      }
+
+      queries.push(soql);
+      index += chunkSize;
+    }
+
+    return queries;
+  }
+
+  private resolveRowMatch(
+    context: PreparedContext,
+    values: Record<string, string>,
+  ): { key: string; display: string; primary: string; secondary?: string } | null {
+    const primaryRaw = values[context.matchColumn]?.trim() ?? '';
+    if (!primaryRaw || this.isExportMetadataValue(primaryRaw)) return null;
+    const primaryKey = this.normalizeMatchKey(primaryRaw, context.matchField);
+    if (!primaryKey) return null;
+    if (!context.secondaryMatchField || !context.secondaryMatchColumn) {
+      return { key: primaryKey, display: primaryRaw, primary: primaryRaw };
+    }
+    const secondaryRaw = values[context.secondaryMatchColumn]?.trim() ?? '';
+    if (!secondaryRaw || this.isExportMetadataValue(secondaryRaw)) return null;
+    const secondaryKey = this.normalizeMatchKey(secondaryRaw, context.secondaryMatchField);
+    if (!secondaryKey) return null;
+    return {
+      key: `${primaryKey}\u0000${secondaryKey}`,
+      display: `${primaryRaw} / ${secondaryRaw}`,
+      primary: primaryRaw,
+      secondary: secondaryRaw,
+    };
+  }
+
+  private recordMatchKey(context: PreparedContext, record: Record<string, unknown>): string {
+    const primaryKey = this.normalizeMatchKey(
+      this.salesforceValue(record[context.matchField.name]),
+      context.matchField,
+    );
+    if (!primaryKey) return '';
+    if (!context.secondaryMatchField) return primaryKey;
+    const secondaryKey = this.normalizeMatchKey(
+      this.salesforceValue(record[context.secondaryMatchField.name]),
+      context.secondaryMatchField,
+    );
+    if (!secondaryKey) return '';
+    return `${primaryKey}\u0000${secondaryKey}`;
+  }
+
   private normalizeMatchKey(value: string, field: DescribedField): string {
     const trimmed = value.trim();
-    if (!trimmed) return '';
+    if (!trimmed || this.isExportMetadataValue(trimmed)) return '';
     const type = field.type?.toLocaleLowerCase();
     if (type === 'boolean') {
       const normalized = this.normalizeBoolean(trimmed);
@@ -745,7 +884,30 @@ export class BulkDataUpdateService {
         ? String(Number(trimmed))
         : '';
     }
+    if (/^\d+$/.test(trimmed)) {
+      return trimmed.replace(/^0+/, '') || '0';
+    }
     return trimmed.toLocaleLowerCase();
+  }
+
+  private isExportMetadataValue(value: string): boolean {
+    return /^\[[A-Za-z0-9_.]+\]$/.test(value.trim());
+  }
+
+  private expandMatchValuesForQuery(values: string[], field: DescribedField): string[] {
+    const expanded = new Set<string>();
+    for (const value of values) {
+      const trimmed = value.trim();
+      if (!trimmed || this.isExportMetadataValue(trimmed)) continue;
+      expanded.add(trimmed);
+      if (/^\d+$/.test(trimmed)) {
+        const unpadded = trimmed.replace(/^0+/, '') || '0';
+        expanded.add(unpadded);
+        if (unpadded.length < 8) expanded.add(unpadded.padStart(8, '0'));
+        if (trimmed.length < 8) expanded.add(trimmed.padStart(8, '0'));
+      }
+    }
+    return [...expanded];
   }
 
   private soqlLiteral(value: string, field: DescribedField): string {
@@ -810,6 +972,8 @@ export class BulkDataUpdateService {
       sheetName: plan.context.sheet.name,
       matchColumn: plan.context.matchColumn,
       matchField: plan.context.matchField.name,
+      secondaryMatchColumn: plan.context.secondaryMatchColumn,
+      secondaryMatchField: plan.context.secondaryMatchField?.name,
       onlyEmptyFields: config.onlyEmptyFields,
       mappedFields: plan.context.mappings.map((mapping) => ({
         sourceColumn: mapping.sourceColumn,
