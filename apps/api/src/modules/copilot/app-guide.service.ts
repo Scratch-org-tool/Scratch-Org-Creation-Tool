@@ -14,14 +14,15 @@ export class AppGuideService {
     return formatGuideForPrompt(query, client);
   }
 
-  matchWorkflows(query: string) {
-    return matchGuideWorkflows(query);
+  matchWorkflows(query: string, context?: Partial<CopilotClientContext>) {
+    return matchGuideWorkflows(query, 3, context);
   }
 
   detectNavigationAction(
     query: string,
     grantedModules: AppModule[],
+    role: CopilotClientContext['role'],
   ) {
-    return matchNavigationAction(query, grantedModules);
+    return matchNavigationAction(query, grantedModules, role);
   }
 }

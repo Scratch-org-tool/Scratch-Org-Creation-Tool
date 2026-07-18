@@ -15,8 +15,14 @@ import type { DashboardDays } from '@/modules/dashboard/types';
 
 export default function DashboardPage() {
   const [days, setDays] = useState<DashboardDays>(7);
-  const { data, loading, refreshing, error, refetch } = useDashboard(days);
   const { profile, user } = useAuth();
+  const canViewMonitoring = canAccessModule(profile, 'monitoring');
+  const canViewEnvironment = canAccessModule(profile, 'environment');
+  const canViewDeployment = canAccessModule(profile, 'deployment');
+  const { data, loading, refreshing, error, refetch } = useDashboard(
+    days,
+    canViewMonitoring,
+  );
 
   const displayName =
     profile?.displayName ?? user?.displayName ?? user?.email?.split('@')[0];
@@ -33,32 +39,56 @@ export default function DashboardPage() {
         onDaysChange={setDays}
         onRefresh={() => void refetch()}
         refreshing={refreshing}
-        canCreatePipeline={canAccessModule(profile, 'environment')}
+        canCreatePipeline={canViewEnvironment}
+        showMonitoringControls={canViewMonitoring}
       />
 
-      {error && <InlineAlert variant="error">{error}</InlineAlert>}
+      {canViewMonitoring && error && <InlineAlert variant="error">{error}</InlineAlert>}
 
-      <DashboardStatCards data={data} loading={loading} />
+      {canViewMonitoring && (
+        <>
+          <DashboardStatCards
+            data={data}
+            loading={loading}
+            showEnvironment={canViewEnvironment}
+            showDeployment={canViewDeployment}
+          />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <DashboardRecentDeployments
-          deployments={data?.recentDeployments ?? []}
-          loading={loading}
-        />
-        <DashboardPlatformHealth
-          health={data?.health ?? null}
-          durationSeries={data?.durationSeries ?? []}
-          loading={loading}
-        />
-      </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {canViewDeployment && (
+              <DashboardRecentDeployments
+                deployments={data?.recentDeployments ?? []}
+                loading={loading}
+              />
+            )}
+            <DashboardPlatformHealth
+              health={data?.health ?? null}
+              durationSeries={data?.durationSeries ?? []}
+              loading={loading}
+              showEnvironment={canViewEnvironment}
+            />
+          </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <DashboardSummaryDonut
-          distribution={data?.statusDistribution ?? null}
-          loading={loading}
-        />
-        {quickActions.length > 0 && <QuickActionGrid actions={quickActions} />}
-      </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <DashboardSummaryDonut
+              distribution={data?.statusDistribution ?? null}
+              loading={loading}
+            />
+          </div>
+        </>
+      )}
+
+      {quickActions.length > 0 && (
+        <div className="grid grid-cols-1 gap-5">
+          <QuickActionGrid actions={quickActions} />
+        </div>
+      )}
+
+      {!canViewMonitoring && quickActions.length === 0 && (
+        <InlineAlert title="Dashboard access is active">
+          Additional tools appear here only after an administrator enables them in User Access.
+        </InlineAlert>
+      )}
     </div>
   );
 }

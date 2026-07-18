@@ -16,9 +16,16 @@ import type { DashboardData } from './types';
 interface DashboardStatCardsProps {
   data: DashboardData | null;
   loading?: boolean;
+  showEnvironment?: boolean;
+  showDeployment?: boolean;
 }
 
-export function DashboardStatCards({ data, loading }: DashboardStatCardsProps) {
+export function DashboardStatCards({
+  data,
+  loading,
+  showEnvironment = false,
+  showDeployment = false,
+}: DashboardStatCardsProps) {
   const total = data?.jobStats.total ?? 0;
   const sparkData = data?.sparklines.map((p) => p.count) ?? [];
 
@@ -53,28 +60,33 @@ export function DashboardStatCards({ data, loading }: DashboardStatCardsProps) {
   ];
 
   const simpleCards = [
-    {
+    showEnvironment
+      ? {
       label: 'Orgs',
       value: data?.orgCount ?? 0,
       trend: null as number | null,
       icon: Cloud,
       iconClass: 'text-cyan-400',
       accentColor: '#22d3ee',
-    },
-    {
+        }
+      : null,
+    showDeployment
+      ? {
       label: 'Deployments',
       value: data?.deploymentCount ?? 0,
       trend: data?.trends.deployments ?? null,
       icon: Rocket,
       iconClass: 'text-purple-400',
       accentColor: '#a78bfa',
-    },
-  ];
+        }
+      : null,
+  ].filter((card): card is NonNullable<typeof card> => card !== null);
 
   if (loading) {
+    const cardCount = 4 + Number(showEnvironment) + Number(showDeployment);
     return (
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-        {Array.from({ length: 6 }).map((_, i) => (
+        {Array.from({ length: cardCount }).map((_, i) => (
           <Skeleton key={i} className="h-[118px] rounded-lg" />
         ))}
       </div>

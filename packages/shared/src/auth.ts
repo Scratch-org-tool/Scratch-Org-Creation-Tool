@@ -173,17 +173,23 @@ export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
   '/monitoring': 'monitoring',
   '/defects-command-centre': 'defects',
   '/learning': 'learning',
-  '/admin': 'dashboard',
+  // Admin routes are authorized by role, not by the default dashboard grant.
+  '/admin': null,
 };
 
-export function moduleForPath(pathname: string): AppModule | null {
+function routePrefixForPath(pathname: string): string | undefined {
   const sorted = Object.keys(ROUTE_MODULE_MAP).sort((a, b) => b.length - a.length);
-  for (const prefix of sorted) {
-    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
-      return ROUTE_MODULE_MAP[prefix] ?? null;
-    }
-  }
-  return null;
+  return sorted.find((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+export function moduleForPath(pathname: string): AppModule | null {
+  const prefix = routePrefixForPath(pathname);
+  return prefix ? (ROUTE_MODULE_MAP[prefix] ?? null) : null;
+}
+
+/** True only for explicitly registered authenticated application routes. */
+export function isRegisteredAppPath(pathname: string): boolean {
+  return routePrefixForPath(pathname) !== undefined;
 }
 
 /** Mockup-style role label derived from admin/user + granted modules. */

@@ -27,7 +27,7 @@ export function DashboardSummaryDonut({ distribution, loading }: DashboardSummar
   if (loading) {
     return (
       <GlassCard
-        title="Deployment Summary"
+        title="Job Summary"
         description="Job status distribution for selected period"
         className="h-full"
       >
@@ -40,7 +40,7 @@ export function DashboardSummaryDonut({ distribution, loading }: DashboardSummar
 
   return (
     <GlassCard
-      title="Deployment Summary"
+      title="Job Summary"
       description="Job status distribution for selected period"
       className="h-full"
     >

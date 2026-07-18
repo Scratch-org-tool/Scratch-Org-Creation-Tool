@@ -14,6 +14,7 @@ interface DashboardPlatformHealthProps {
   health: DashboardHealth | null;
   durationSeries: DurationPoint[];
   loading?: boolean;
+  showEnvironment?: boolean;
 }
 
 interface HealthStatusTileProps {
@@ -88,6 +89,7 @@ export function DashboardPlatformHealth({
   health,
   durationSeries,
   loading,
+  showEnvironment = false,
 }: DashboardPlatformHealthProps) {
   const chartData = durationSeries.map((p) => ({
     label: p.date.slice(5),
@@ -164,13 +166,15 @@ export function DashboardPlatformHealth({
         <div className="border-t border-border/40 pt-4 grid grid-cols-2 gap-x-6 gap-y-4">
           <MiniBar label="Success rate" value={health?.successRate ?? 0} color="#22c55e" />
           <MiniBar label="Failure rate" value={health?.failureRate ?? 0} color="#ef4444" />
-          <MiniBar
-            label="Active orgs"
-            value={health?.activeOrgs ?? 0}
-            max={Math.max(health?.activeOrgs ?? 1, 10)}
-            color="#06b6d4"
-            showPercent={false}
-          />
+          {showEnvironment && (
+            <MiniBar
+              label="Active orgs"
+              value={health?.activeOrgs ?? 0}
+              max={Math.max(health?.activeOrgs ?? 1, 10)}
+              color="#06b6d4"
+              showPercent={false}
+            />
+          )}
           <MiniBar
             label="Queue depth"
             value={health?.queueDepth ?? 0}

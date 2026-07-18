@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/auth-context';
-import { canAccessModule, moduleForPath } from '@/lib/auth-utils';
+import { canAccessModule, isRegisteredAppPath, moduleForPath } from '@/lib/auth-utils';
 import { PageLoader } from '@/components/ui/page-loader';
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -53,7 +53,8 @@ export function ModuleRouteGuard({ children }: { children: React.ReactNode }) {
       ? canAccessModule(profile, 'org-setup') || canAccessModule(profile, 'provisioning')
       : customSettingsPath
         ? canAccessModule(profile, 'data')
-        : !module || canAccessModule(profile, module);
+        : isRegisteredAppPath(pathname) &&
+          (module === null || canAccessModule(profile, module));
 
   useEffect(() => {
     if (loading || !user || !profile || authorized) return;

@@ -16,6 +16,7 @@ interface DashboardPageHeaderProps {
   onRefresh: () => void;
   refreshing?: boolean;
   canCreatePipeline?: boolean;
+  showMonitoringControls?: boolean;
 }
 
 export function DashboardPageHeader({
@@ -26,6 +27,7 @@ export function DashboardPageHeader({
   onRefresh,
   refreshing,
   canCreatePipeline = false,
+  showMonitoringControls = false,
 }: DashboardPageHeaderProps) {
   const welcome = displayName ? `Welcome back, ${displayName}` : 'Welcome back';
   const roleLabel = role ? role.replace(/_/g, ' ') : null;
@@ -41,19 +43,23 @@ export function DashboardPageHeader({
       accentClass="to-blue-500/10"
       actions={
         <>
-          <Select
-            value={String(days)}
-            onChange={(e) => onDaysChange(Number(e.target.value) as DashboardDays)}
-            className="h-9 text-sm w-[140px]"
-          >
-            <option value="7">Last 7 days</option>
-            <option value="14">Last 14 days</option>
-            <option value="30">Last 30 days</option>
-          </Select>
-          <Button variant="outline" size="sm" onClick={onRefresh} loading={refreshing}>
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Refresh
-          </Button>
+          {showMonitoringControls && (
+            <>
+              <Select
+                value={String(days)}
+                onChange={(e) => onDaysChange(Number(e.target.value) as DashboardDays)}
+                className="h-9 text-sm w-[140px]"
+              >
+                <option value="7">Last 7 days</option>
+                <option value="14">Last 14 days</option>
+                <option value="30">Last 30 days</option>
+              </Select>
+              <Button variant="outline" size="sm" onClick={onRefresh} loading={refreshing}>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Refresh
+              </Button>
+            </>
+          )}
           {canCreatePipeline && (
             <Link
               href="/environment-center/create-scratch-org"
