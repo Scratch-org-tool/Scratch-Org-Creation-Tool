@@ -157,10 +157,10 @@ describe('ProvisioningService lifecycle users', () => {
       username: 'masterdata.reyes@lifecycle.scratch',
       profile: 'System Administrator',
       role: 'Master Data',
-      permissionSets: ['Onboarding_Admin_Extension', 'Lifecycle_Super_User'],
+      permissionSets: ['System_Admin_Extension', 'Lifecycle_Super_User'],
       status: 'queued',
     });
-    expect(rows[0].permissionSets).toEqual(['Onboarding_Admin_Extension']);
+    expect(rows[0].permissionSets).toEqual(['System_Admin_Extension']);
 
     expect(enqueueJob).toHaveBeenCalledWith(
       QUEUE_NAMES.USER_PROVISION,

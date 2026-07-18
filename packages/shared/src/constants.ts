@@ -57,7 +57,8 @@ export const SCRATCH_ORG_SKIPPABLE_STEPS = [
 ] as const;
 
 export const SCRATCH_PERMISSION_SET = 'System_Admin_Extension';
-export const CONA_ADMIN_EXTENSION_PERMSET = 'Onboarding_Admin_Extension';
+/** API name in deployed orgs (label is "Onboarding Admin Extension"). */
+export const CONA_ADMIN_EXTENSION_PERMSET = SCRATCH_PERMISSION_SET;
 export const CONA_SUPER_USER_PERMSET = 'Lifecycle_Super_User';
 export const ERROR_LOGGER_PACKAGE_ID = '04t4x000000IcRT';
 

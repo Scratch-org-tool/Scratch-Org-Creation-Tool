@@ -15,7 +15,7 @@ export function PermissionSetsEditor({ value, onChange }: PermissionSetsEditorPr
         id="template-permission-sets"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="System_Admin_Extension, Onboarding_Admin_Extension"
+        placeholder="System_Admin_Extension, Lifecycle_Super_User"
       />
       <p className="text-xs text-muted-foreground">Comma-separated API names assigned after metadata deploy</p>
     </div>
