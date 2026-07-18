@@ -1,8 +1,8 @@
 import { api, apiBlob } from '@/services/api';
 import type {
-  ExplainerCloudVoice,
   ExplainerFocus,
   ExplainerStoryboard,
+  ExplainerStudioVoice,
 } from '@sfcc/shared';
 import type {
   LearningAdminOverview,
@@ -81,6 +81,23 @@ export function fetchExplainer(input: {
   });
 }
 
+export function fetchExplainerVideo(
+  input: {
+    lessonId: string;
+    focus?: ExplainerFocus;
+    question?: string;
+    sceneId: string;
+  },
+  signal?: AbortSignal,
+) {
+  return apiBlob('/learning/tutor/explainer/video', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+  });
+}
+
 export function fetchExplainerImage(
   input: {
     lessonId: string;
@@ -104,7 +121,7 @@ export function fetchExplainerSpeech(
     focus?: ExplainerFocus;
     question?: string;
     sceneId: string;
-    voice: ExplainerCloudVoice;
+    voice: ExplainerStudioVoice;
   },
   signal?: AbortSignal,
 ) {

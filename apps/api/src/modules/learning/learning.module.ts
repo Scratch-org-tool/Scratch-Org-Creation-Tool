@@ -6,7 +6,7 @@ import { LearningQuizService } from './learning-quiz.service';
 import { LearningTutorService } from './learning-tutor.service';
 import { LearningExplainerService } from './learning-explainer.service';
 import { LearningAdminService } from './learning-admin.service';
-import { GoogleGenerativeMediaService } from '../../integrations/google/google-generative-media.service';
+import { OpenSourceMediaService } from '../../integrations/media/open-source-media.service';
 
 @Module({
   imports: [AgentsModule],
@@ -15,7 +15,7 @@ import { GoogleGenerativeMediaService } from '../../integrations/google/google-g
     LearningService,
     LearningQuizService,
     LearningTutorService,
-    GoogleGenerativeMediaService,
+    OpenSourceMediaService,
     LearningExplainerService,
     LearningAdminService,
   ],

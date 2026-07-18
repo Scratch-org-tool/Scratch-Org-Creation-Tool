@@ -186,8 +186,9 @@ Login and signup are **proxied through the API** (`POST /api/auth/login`, `/api/
 | `NVIDIA_API_KEY` | For Copilot | NVIDIA NIM API key — get one at [build.nvidia.com](https://build.nvidia.com/) |
 | `NVIDIA_COPILOT_MODEL` | Optional | Default `meta/llama-3.2-3b-instruct` (fast, reliable). Avoid `google/gemma-3n-e4b-it` if requests hang. |
 | `NVIDIA_CHAT_TIMEOUT_MS` | Optional | Copilot LLM timeout (default `45000`) |
-| `GOOGLE_GENAI_API_KEY` | For premium Academy media | Server-side Google AI Studio key for generated scene art and selectable studio narration; never expose as `NEXT_PUBLIC_*` |
-| `GOOGLE_IMAGE_MODEL` / `GOOGLE_TTS_MODEL` | Optional | Defaults: `gemini-3.1-flash-image` / `gemini-3.1-flash-tts-preview` |
+| `VIBEVOICE_BASE_URL` | For Academy narration | Self-hosted [Microsoft VibeVoice](https://github.com/microsoft/VibeVoice) server (OpenAI-compatible `/v1/audio/speech`) |
+| `SD_WEBUI_BASE_URL` | For Academy scene art | Self-hosted Stable-Diffusion-WebUI-compatible API (FLUX.1-schnell / SDXL) |
+| `COMFYUI_BASE_URL` | For Academy motion scenes | Self-hosted [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with LTX-Video (or Wan 2.2 via `COMFYUI_VIDEO_WORKFLOW`) |
 | `SF_CLI_PATH` | Yes | Usually `sf` |
 | `SF_AUTO_INSTALL_PLUGINS` | Optional | Provision missing allowlisted plugins at startup/on use (default `true`) |
 | `SF_ENFORCE_PLUGIN_VERSIONS` | Optional | Keep plugins on tested versions (default `true`) |

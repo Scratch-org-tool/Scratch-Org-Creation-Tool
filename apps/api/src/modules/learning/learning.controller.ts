@@ -14,6 +14,7 @@ import {
   learningExplainerImageRequestSchema,
   learningExplainerRequestSchema,
   learningExplainerSpeechRequestSchema,
+  learningExplainerVideoRequestSchema,
   learningQuizSubmitSchema,
   learningTutorAskSchema,
 } from '@sfcc/shared';
@@ -104,7 +105,18 @@ export class LearningController {
     return this.explainerService.getStoryboard(parsed.data);
   }
 
-  /** Google-generated 16:9 art for one storyboard scene; 204 means use the diagram fallback. */
+  /** Generated motion clip (ComfyUI/LTX) for one scene; 204 means fall back to still art. */
+  @Post('tutor/explainer/video')
+  async getExplainerVideo(@Body() body: unknown, @Res() response: Response) {
+    const parsed = learningExplainerVideoRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.flatten().fieldErrors);
+    }
+    const media = await this.explainerService.getSceneVideo(parsed.data);
+    this.sendMedia(response, media, 'academy-scene-motion');
+  }
+
+  /** Generated still art (Stable Diffusion/FLUX) for one scene; 204 means use the diagram fallback. */
   @Post('tutor/explainer/image')
   async getExplainerImage(@Body() body: unknown, @Res() response: Response) {
     const parsed = learningExplainerImageRequestSchema.safeParse(body);
@@ -112,17 +124,10 @@ export class LearningController {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
     const media = await this.explainerService.getSceneImage(parsed.data);
-    if (!media) {
-      response.status(204).end();
-      return;
-    }
-    response.setHeader('Content-Type', media.contentType);
-    response.setHeader('Content-Disposition', 'inline; filename="academy-scene"');
-    response.setHeader('Cache-Control', 'private, max-age=21600');
-    response.send(media.buffer);
+    this.sendMedia(response, media, 'academy-scene');
   }
 
-  /** Selectable Gemini TTS narration for one scene; 204 means use browser speech. */
+  /** Selectable VibeVoice narration for one scene; 204 means use browser speech. */
   @Post('tutor/explainer/speech')
   async getExplainerSpeech(@Body() body: unknown, @Res() response: Response) {
     const parsed = learningExplainerSpeechRequestSchema.safeParse(body);
@@ -130,12 +135,20 @@ export class LearningController {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
     const media = await this.explainerService.getSceneSpeech(parsed.data);
+    this.sendMedia(response, media, 'academy-narration');
+  }
+
+  private sendMedia(
+    response: Response,
+    media: { buffer: Buffer; contentType: string } | null,
+    filename: string,
+  ) {
     if (!media) {
       response.status(204).end();
       return;
     }
     response.setHeader('Content-Type', media.contentType);
-    response.setHeader('Content-Disposition', 'inline; filename="academy-narration.wav"');
+    response.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     response.setHeader('Cache-Control', 'private, max-age=21600');
     response.send(media.buffer);
   }

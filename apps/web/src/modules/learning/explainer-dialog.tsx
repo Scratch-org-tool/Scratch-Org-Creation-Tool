@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clapperboard,
+  Film,
   Gauge,
   Image as ImageIcon,
   Loader2,
@@ -18,12 +19,12 @@ import {
   VolumeX,
 } from 'lucide-react';
 import {
-  DEFAULT_EXPLAINER_CLOUD_VOICE,
-  EXPLAINER_CLOUD_VOICE_OPTIONS,
+  DEFAULT_EXPLAINER_STUDIO_VOICE,
+  EXPLAINER_STUDIO_VOICE_OPTIONS,
   estimateNarrationMs,
-  type ExplainerCloudVoice,
   type ExplainerFocus,
   type ExplainerStoryboard,
+  type ExplainerStudioVoice,
 } from '@sfcc/shared';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -42,18 +43,21 @@ import {
   fetchExplainer,
   fetchExplainerImage,
   fetchExplainerSpeech,
+  fetchExplainerVideo,
 } from './learning-api';
 import { SceneVisual } from './explainer-visuals';
 import { useSpeech } from './use-speech';
 
 const RATES = [1, 1.15, 0.85];
-const CLOUD_VOICE_PREFIX = 'cloud:';
+const STUDIO_VOICE_PREFIX = 'studio:';
 const BROWSER_VOICE_PREFIX = 'browser:';
 
-type ImageStatus = 'loading' | 'ready' | 'fallback';
-interface SceneImageState {
-  status: ImageStatus;
+type MediaStatus = 'loading' | 'ready' | 'fallback';
+interface SceneMediaState {
+  status: MediaStatus;
   url?: string;
+  /** MIME type of the generated media ('video/webm', 'image/webp', 'image/png'…). */
+  mime?: string;
 }
 
 type NarrationStatus = 'idle' | 'preparing' | 'speaking';
@@ -67,6 +71,12 @@ export interface ExplainerRequestState {
 interface ExplainerDialogProps {
   request: ExplainerRequestState | null;
   onClose: () => void;
+}
+
+function isMotionMime(mime: string | undefined): boolean {
+  return Boolean(
+    mime && (mime.startsWith('video/') || mime === 'image/webp' || mime === 'image/gif'),
+  );
 }
 
 function CompactConcepts({
@@ -91,7 +101,11 @@ function CompactConcepts({
   );
 }
 
-/** Cinematic visual-story player with generated media and deterministic fallbacks. */
+/**
+ * Cinematic visual-story player backed by the self-hosted open-source media
+ * stack: generated motion clips → generated still art → animated diagrams,
+ * and VibeVoice narration → device voices → timed captions.
+ */
 export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
   const open = request !== null;
   const [board, setBoard] = useState<ExplainerStoryboard | null>(null);
@@ -103,15 +117,15 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
   const [captionsOn, setCaptionsOn] = useState(true);
   const [rateIndex, setRateIndex] = useState(0);
   const [voiceChoice, setVoiceChoice] = useState(
-    `${CLOUD_VOICE_PREFIX}${DEFAULT_EXPLAINER_CLOUD_VOICE}`,
+    `${STUDIO_VOICE_PREFIX}${DEFAULT_EXPLAINER_STUDIO_VOICE}`,
   );
-  const [imageStates, setImageStates] = useState<Record<string, SceneImageState>>({});
+  const [mediaStates, setMediaStates] = useState<Record<string, SceneMediaState>>({});
   const [narrationStatus, setNarrationStatus] = useState<NarrationStatus>('idle');
   const speech = useSpeech();
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const imageStatesRef = useRef(new Map<string, SceneImageState>());
+  const mediaStatesRef = useRef(new Map<string, SceneMediaState>());
   const audioUrlsRef = useRef(new Map<string, string>());
   const playbackTokenRef = useRef(0);
   const stateRef = useRef({ playing, sceneIndex, total: 0 });
@@ -138,11 +152,11 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
   }, [clearTimer, speech.cancel]);
 
   const releaseGeneratedMedia = useCallback(() => {
-    for (const state of imageStatesRef.current.values()) {
+    for (const state of mediaStatesRef.current.values()) {
       if (state.url) URL.revokeObjectURL(state.url);
     }
     for (const url of audioUrlsRef.current.values()) URL.revokeObjectURL(url);
-    imageStatesRef.current.clear();
+    mediaStatesRef.current.clear();
     audioUrlsRef.current.clear();
   }, []);
 
@@ -159,7 +173,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
     let cancelled = false;
     stopNarration();
     releaseGeneratedMedia();
-    setImageStates({});
+    setMediaStates({});
     setBoard(null);
     setError(null);
     setLoading(true);
@@ -173,7 +187,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
         setBoard(storyboard);
         setVoiceChoice(
           storyboard.media.generatedSpeech
-            ? `${CLOUD_VOICE_PREFIX}${DEFAULT_EXPLAINER_CLOUD_VOICE}`
+            ? `${STUDIO_VOICE_PREFIX}${DEFAULT_EXPLAINER_STUDIO_VOICE}`
             : `${BROWSER_VOICE_PREFIX}default`,
         );
       })
@@ -202,54 +216,67 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
     }
   }, []);
 
-  const loadSceneImage = useCallback(
+  // Best media wins: motion clip → still art → animated diagram fallback.
+  const loadSceneMedia = useCallback(
     async (sceneId: string, signal: AbortSignal) => {
-      if (!request || !board?.media.generatedImages) return;
-      const existing = imageStatesRef.current.get(sceneId);
+      if (!request || !board) return;
+      const wantsVideo = board.media.generatedVideo;
+      const wantsImage = board.media.generatedImages;
+      if (!wantsVideo && !wantsImage) return;
+      const existing = mediaStatesRef.current.get(sceneId);
       if (existing?.status === 'ready' || existing?.status === 'loading') return;
 
-      const loadingState: SceneImageState = { status: 'loading' };
-      imageStatesRef.current.set(sceneId, loadingState);
-      setImageStates((current) => ({ ...current, [sceneId]: loadingState }));
-      try {
-        const blob = await fetchExplainerImage({ ...request, sceneId }, signal);
-        if (signal.aborted) return;
-        if (blob.size < 64 || !blob.type.startsWith('image/')) {
-          throw new Error('No generated image');
+      const setState = (state: SceneMediaState) => {
+        mediaStatesRef.current.set(sceneId, state);
+        setMediaStates((current) => ({ ...current, [sceneId]: state }));
+      };
+      setState({ status: 'loading' });
+
+      const attempt = async (
+        kind: 'video' | 'image',
+      ): Promise<SceneMediaState | null> => {
+        try {
+          const blob =
+            kind === 'video'
+              ? await fetchExplainerVideo({ ...request, sceneId }, signal)
+              : await fetchExplainerImage({ ...request, sceneId }, signal);
+          if (blob.size < 64) return null;
+          const expected =
+            kind === 'video' ? isMotionMime(blob.type) : blob.type.startsWith('image/');
+          if (!expected) return null;
+          return { status: 'ready', url: URL.createObjectURL(blob), mime: blob.type };
+        } catch {
+          return null;
         }
-        const readyState: SceneImageState = {
-          status: 'ready',
-          url: URL.createObjectURL(blob),
-        };
-        imageStatesRef.current.set(sceneId, readyState);
-        setImageStates((current) => ({ ...current, [sceneId]: readyState }));
-      } catch (err) {
-        if (signal.aborted) {
-          imageStatesRef.current.delete(sceneId);
-          return;
-        }
-        const fallbackState: SceneImageState = { status: 'fallback' };
-        imageStatesRef.current.set(sceneId, fallbackState);
-        setImageStates((current) => ({ ...current, [sceneId]: fallbackState }));
+      };
+
+      let ready: SceneMediaState | null = null;
+      if (wantsVideo) ready = await attempt('video');
+      if (!ready && !signal.aborted && wantsImage) ready = await attempt('image');
+
+      if (signal.aborted) {
+        mediaStatesRef.current.delete(sceneId);
+        return;
       }
+      setState(ready ?? { status: 'fallback' });
     },
-    [board?.media.generatedImages, request],
+    [board, request],
   );
 
-  // Generate the active image first, then quietly prepare the next scene.
+  // Generate the active scene's media first, then quietly prepare the next scene.
   useEffect(() => {
-    if (!board?.media.generatedImages) return;
+    if (!board || (!board.media.generatedVideo && !board.media.generatedImages)) return;
     const active = board.scenes[sceneIndex];
     if (!active) return;
     const controller = new AbortController();
-    void loadSceneImage(active.id, controller.signal).then(() => {
+    void loadSceneMedia(active.id, controller.signal).then(() => {
       const next = board.scenes[sceneIndex + 1];
       if (next && !controller.signal.aborted) {
-        void loadSceneImage(next.id, controller.signal);
+        void loadSceneMedia(next.id, controller.signal);
       }
     });
     return () => controller.abort();
-  }, [board, loadSceneImage, sceneIndex]);
+  }, [board, loadSceneMedia, sceneIndex]);
 
   const scheduleAdvance = useCallback(
     (token: number, delay = 650) => {
@@ -300,11 +327,11 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
       }
     };
 
-    const useCloudVoice =
+    const useStudioVoice =
       voiceOn &&
       board.media.generatedSpeech &&
-      voiceChoice.startsWith(CLOUD_VOICE_PREFIX);
-    if (!useCloudVoice) {
+      voiceChoice.startsWith(STUDIO_VOICE_PREFIX);
+    if (!useStudioVoice) {
       browserFallback();
       return () => {
         controller.abort();
@@ -312,7 +339,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
       };
     }
 
-    const voice = voiceChoice.slice(CLOUD_VOICE_PREFIX.length) as ExplainerCloudVoice;
+    const voice = voiceChoice.slice(STUDIO_VOICE_PREFIX.length) as ExplainerStudioVoice;
     const audioKey = `${scene.id}|${voice}`;
     const playGeneratedAudio = async () => {
       setNarrationStatus('preparing');
@@ -384,10 +411,11 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
   );
 
   const scene = board?.scenes[sceneIndex] ?? null;
-  const sceneImage = scene ? imageStates[scene.id] : undefined;
-  const hasGeneratedImage = sceneImage?.status === 'ready' && Boolean(sceneImage.url);
+  const sceneMedia = scene ? mediaStates[scene.id] : undefined;
+  const hasGeneratedMedia = sceneMedia?.status === 'ready' && Boolean(sceneMedia.url);
+  const isMotionScene = hasGeneratedMedia && isMotionMime(sceneMedia?.mime);
   const activeVoiceValue = useMemo(() => {
-    if (voiceChoice.startsWith(CLOUD_VOICE_PREFIX) && !board?.media.generatedSpeech) {
+    if (voiceChoice.startsWith(STUDIO_VOICE_PREFIX) && !board?.media.generatedSpeech) {
       return `${BROWSER_VOICE_PREFIX}default`;
     }
     return voiceChoice;
@@ -417,18 +445,24 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
               {board && (
                 <>
                   <span className="rounded-full bg-violet-500/15 px-1.5 py-px font-medium text-violet-300">
-                    {board.source === 'ai' ? 'NVIDIA-directed' : 'Lesson-grounded'}
+                    {board.source === 'ai' ? 'AI-directed' : 'Lesson-grounded'}
                   </span>
-                  {board.media.generatedImages && (
+                  {board.media.generatedVideo && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-px font-medium text-sky-300">
+                      <Film className="size-2.5" />
+                      Motion scenes
+                    </span>
+                  )}
+                  {!board.media.generatedVideo && board.media.generatedImages && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-px font-medium text-sky-300">
                       <ImageIcon className="size-2.5" />
-                      Google scene art
+                      Scene art
                     </span>
                   )}
                   {board.media.generatedSpeech && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-px font-medium text-emerald-300">
                       <Mic2 className="size-2.5" />
-                      Studio narration
+                      VibeVoice narration
                     </span>
                   )}
                 </>
@@ -495,16 +529,39 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                   transition={{ duration: 0.4, ease: 'easeOut' }}
                   className="absolute inset-0"
                 >
-                  {hasGeneratedImage ? (
+                  {hasGeneratedMedia ? (
                     <>
-                      <motion.img
-                        src={sceneImage.url}
-                        alt={`Generated concept art for ${scene.title}`}
-                        className="size-full object-cover"
-                        initial={{ scale: 1.06, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ scale: { duration: 10, ease: 'linear' }, opacity: { duration: 0.6 } }}
-                      />
+                      {sceneMedia?.mime?.startsWith('video/') ? (
+                        <motion.video
+                          src={sceneMedia.url}
+                          aria-label={`Generated motion scene for ${scene.title}`}
+                          className="size-full object-cover"
+                          autoPlay
+                          loop
+                          muted
+                          playsInline
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ duration: 0.6 }}
+                        />
+                      ) : (
+                        <motion.img
+                          src={sceneMedia?.url}
+                          alt={`Generated scene for ${scene.title}`}
+                          className="size-full object-cover"
+                          initial={
+                            isMotionScene
+                              ? { opacity: 0 }
+                              : { scale: 1.06, opacity: 0 }
+                          }
+                          animate={isMotionScene ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+                          transition={
+                            isMotionScene
+                              ? { duration: 0.6 }
+                              : { scale: { duration: 10, ease: 'linear' }, opacity: { duration: 0.6 } }
+                          }
+                        />
+                      )}
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/5 to-slate-950/35" />
                       <div className="absolute inset-x-4 bottom-4">
                         <CompactConcepts scene={scene} />
@@ -523,15 +580,15 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                     <p className="mt-0.5 text-sm font-bold text-white">{scene.title}</p>
                   </div>
 
-                  {sceneImage?.status === 'loading' && (
+                  {sceneMedia?.status === 'loading' && (
                     <span className="absolute right-4 top-4 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-slate-950/60 px-2.5 py-1 text-[10px] text-white/75 backdrop-blur-md">
                       <Loader2 className="size-3 animate-spin" />
-                      Creating scene art
+                      {board.media.generatedVideo ? 'Creating scene motion' : 'Creating scene art'}
                     </span>
                   )}
-                  {hasGeneratedImage && (
+                  {hasGeneratedMedia && (
                     <span className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-950/60 px-2.5 py-1 text-[9px] text-white/65 backdrop-blur-md">
-                      AI-generated concept art
+                      {isMotionScene ? 'AI-generated motion scene' : 'AI-generated concept art'}
                     </span>
                   )}
                 </motion.div>
@@ -637,12 +694,12 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                     {board.media.generatedSpeech && (
                       <SelectGroup>
                         <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                          Studio voices
+                          Studio voices (VibeVoice)
                         </SelectLabel>
-                        {EXPLAINER_CLOUD_VOICE_OPTIONS.map((voice) => (
+                        {EXPLAINER_STUDIO_VOICE_OPTIONS.map((voice) => (
                           <SelectItem
                             key={voice.id}
-                            value={`${CLOUD_VOICE_PREFIX}${voice.id}`}
+                            value={`${STUDIO_VOICE_PREFIX}${voice.id}`}
                             className="text-xs"
                           >
                             {voice.label} · {voice.tone}
@@ -706,7 +763,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
             </div>
 
             <p className="-mt-1 px-5 pb-4 text-center text-[9px] text-muted-foreground">
-              Generated images are conceptual aids; lesson content remains the source of truth.
+              Generated scenes are conceptual aids; lesson content remains the source of truth.
             </p>
           </>
         )}
