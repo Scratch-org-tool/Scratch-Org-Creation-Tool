@@ -5,6 +5,7 @@ import { LearningService } from './learning.service';
 import { LearningQuizService } from './learning-quiz.service';
 import { LearningTutorService } from './learning-tutor.service';
 import { LearningExplainerService } from './learning-explainer.service';
+import { LearningVideoScriptService } from './learning-video-script.service';
 import { LearningAdminService } from './learning-admin.service';
 import { OpenSourceMediaService } from '../../integrations/media/open-source-media.service';
 
@@ -17,6 +18,7 @@ import { OpenSourceMediaService } from '../../integrations/media/open-source-med
     LearningTutorService,
     OpenSourceMediaService,
     LearningExplainerService,
+    LearningVideoScriptService,
     LearningAdminService,
   ],
 })

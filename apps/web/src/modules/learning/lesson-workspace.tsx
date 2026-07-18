@@ -6,9 +6,11 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   ArrowRight,
+  BookOpen,
   Briefcase,
   CheckCircle2,
   ChevronLeft,
+  Clapperboard,
   Clock,
   ExternalLink,
   FileQuestion,
@@ -30,7 +32,10 @@ import {
 } from './learning-ui';
 import { ExplainerDialog, type ExplainerRequestState } from './explainer-dialog';
 import { MentorPanel } from './mentor-panel';
+import { VideoSessionBlock } from './video-session-block';
 import type { LearningLessonResponse, LearningLessonSection } from './types';
+
+type LessonMode = 'read' | 'video';
 
 function SectionBlock({ section }: { section: LearningLessonSection }) {
   const blocks = parseBody(section.body);
@@ -129,6 +134,7 @@ export function LessonWorkspace() {
   const [completing, setCompleting] = useState(false);
   const [justCompletedPath, setJustCompletedPath] = useState(false);
   const [explainerRequest, setExplainerRequest] = useState<ExplainerRequestState | null>(null);
+  const [mode, setMode] = useState<LessonMode>('read');
 
   const playStory = useCallback(
     (focus: ExplainerFocus, question?: string) => {
@@ -144,6 +150,7 @@ export function LessonWorkspace() {
     try {
       setError(null);
       setJustCompletedPath(false);
+      setMode('read');
       setView(await fetchLesson(lessonId));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load this lesson');
@@ -235,89 +242,136 @@ export function LessonWorkspace() {
                 <p className="mt-1.5 text-sm text-muted-foreground">{view.lesson.summary}</p>
                 <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Clock className="size-3.5" />
-                  {view.lesson.durationMinutes} min read
+                  {view.lesson.durationMinutes} min
                 </p>
               </header>
 
-              <div className="rounded-xl border border-border/60 bg-card/60 p-4">
-                <p className="flex items-center gap-2 text-sm font-semibold">
-                  <Target className="size-4 text-sky-300" />
-                  What you&apos;ll learn
-                </p>
-                <ul className="mt-2 space-y-1.5">
-                  {view.lesson.objectives.map((objective) => (
-                    <li key={objective} className="flex gap-2 text-sm text-foreground/85">
-                      <span className="mt-[7px] size-1.5 shrink-0 rounded-full bg-sky-400/70" />
-                      {objective}
-                    </li>
-                  ))}
-                </ul>
+              {/* Read | Video session switch */}
+              <div
+                role="tablist"
+                aria-label="Lesson format"
+                className="inline-flex rounded-lg border border-border/60 bg-secondary/20 p-1"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'read'}
+                  onClick={() => setMode('read')}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                    mode === 'read'
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <BookOpen className="size-3.5" />
+                  Read the lesson
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'video'}
+                  onClick={() => setMode('video')}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                    mode === 'video'
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Clapperboard className="size-3.5" />
+                  Video session
+                </button>
               </div>
 
-              <div className="space-y-6">
-                {view.lesson.sections.map((section) => (
-                  <SectionBlock key={section.heading} section={section} />
-                ))}
-              </div>
+              {mode === 'video' ? (
+                <VideoSessionBlock
+                  lessonId={view.lesson.id}
+                  onPlayAnimated={() => playStory('lesson')}
+                />
+              ) : (
+                <>
+                  <div className="rounded-xl border border-border/60 bg-card/60 p-4">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      <Target className="size-4 text-sky-300" />
+                      What you&apos;ll learn
+                    </p>
+                    <ul className="mt-2 space-y-1.5">
+                      {view.lesson.objectives.map((objective) => (
+                        <li key={objective} className="flex gap-2 text-sm text-foreground/85">
+                          <span className="mt-[7px] size-1.5 shrink-0 rounded-full bg-sky-400/70" />
+                          {objective}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
 
-              <RealWorldPanel
-                data={view.lesson.realWorld}
-                onWatch={() => playStory('real-world')}
-              />
+                  <div className="space-y-6">
+                    {view.lesson.sections.map((section) => (
+                      <SectionBlock key={section.heading} section={section} />
+                    ))}
+                  </div>
 
-              <div className="rounded-xl border border-border/60 bg-card/60 p-4">
-                <p className="flex items-center gap-2 text-sm font-semibold">
-                  <ListChecks className="size-4 text-emerald-300" />
-                  Key takeaways
-                </p>
-                <ul className="mt-2 space-y-1.5">
-                  {view.lesson.keyTakeaways.map((takeaway) => (
-                    <li key={takeaway} className="flex gap-2 text-sm text-foreground/85">
-                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-400/70" />
-                      {takeaway}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+                  <RealWorldPanel
+                    data={view.lesson.realWorld}
+                    onWatch={() => playStory('real-world')}
+                  />
 
-              <div className="rounded-xl border border-border/60 bg-card/60 p-4">
-                <p className="flex items-center gap-2 text-sm font-semibold">
-                  <Lightbulb className="size-4 text-amber-300" />
-                  Official resources
-                </p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  Deepen this lesson with the official Salesforce material.
-                </p>
-                <div className="mt-3 space-y-2">
-                  {view.lesson.resources.map((resource) => (
-                    <a
-                      key={resource.url}
-                      href={resource.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-secondary/20 px-3 py-2.5 transition-colors hover:border-primary/40"
-                    >
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <span
-                          className={cn(
-                            'rounded-md px-2 py-0.5 text-[10px] font-medium shrink-0',
-                            RESOURCE_SOURCE_BADGES[resource.source],
-                          )}
+                  <div className="rounded-xl border border-border/60 bg-card/60 p-4">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      <ListChecks className="size-4 text-emerald-300" />
+                      Key takeaways
+                    </p>
+                    <ul className="mt-2 space-y-1.5">
+                      {view.lesson.keyTakeaways.map((takeaway) => (
+                        <li key={takeaway} className="flex gap-2 text-sm text-foreground/85">
+                          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-400/70" />
+                          {takeaway}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="rounded-xl border border-border/60 bg-card/60 p-4">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      <Lightbulb className="size-4 text-amber-300" />
+                      Official resources
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Deepen this lesson with the official Salesforce material.
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {view.lesson.resources.map((resource) => (
+                        <a
+                          key={resource.url}
+                          href={resource.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-secondary/20 px-3 py-2.5 transition-colors hover:border-primary/40"
                         >
-                          {resourceSourceLabel(resource.source)}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm">{resource.title}</p>
-                          {resource.note && (
-                            <p className="truncate text-[11px] text-muted-foreground">{resource.note}</p>
-                          )}
-                        </div>
-                      </div>
-                      <ExternalLink className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
-                    </a>
-                  ))}
-                </div>
-              </div>
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <span
+                              className={cn(
+                                'rounded-md px-2 py-0.5 text-[10px] font-medium shrink-0',
+                                RESOURCE_SOURCE_BADGES[resource.source],
+                              )}
+                            >
+                              {resourceSourceLabel(resource.source)}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm">{resource.title}</p>
+                              {resource.note && (
+                                <p className="truncate text-[11px] text-muted-foreground">{resource.note}</p>
+                              )}
+                            </div>
+                          </div>
+                          <ExternalLink className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
 
               <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
                 {view.previousLessonId ? (

@@ -4,6 +4,7 @@ import type {
   ExplainerFocus,
   ExplainerStoryboard,
   ExplainerStudioVoice,
+  LessonVideoScript,
 } from '@sfcc/shared';
 import type {
   LearningAdminOverview,
@@ -27,6 +28,12 @@ export function fetchPath(pathId: string) {
 
 export function fetchLesson(lessonId: string) {
   return api<LearningLessonResponse>(`/learning/lessons/${encodeURIComponent(lessonId)}`);
+}
+
+export function fetchVideoScript(lessonId: string) {
+  return api<LessonVideoScript>(
+    `/learning/lessons/${encodeURIComponent(lessonId)}/video-script`,
+  );
 }
 
 export function completeLesson(lessonId: string) {
