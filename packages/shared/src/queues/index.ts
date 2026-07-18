@@ -126,6 +126,13 @@ export const QUEUE_CONFIG = {
     lockDuration: DATA_DEPLOY_LOCK_DURATION_MS,
     stalledInterval: 60_000,
   },
+  [QUEUE_NAMES.BULK_DATA_UPDATE]: {
+    concurrency: 1,
+    attempts: 1,
+    backoff: 5000,
+    lockDuration: DATA_DEPLOY_LOCK_DURATION_MS,
+    stalledInterval: 60_000,
+  },
   [QUEUE_NAMES.USER_PROVISION]: { concurrency: 1, attempts: 1, backoff: 2000 },
   [QUEUE_NAMES.ORG_SETUP]: { concurrency: 3, attempts: 3, backoff: 3000 },
   [QUEUE_NAMES.AI_ANALYSIS]: { concurrency: 5, attempts: 2, backoff: 2000 },

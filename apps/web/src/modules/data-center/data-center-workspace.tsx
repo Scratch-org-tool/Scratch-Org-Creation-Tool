@@ -2,7 +2,7 @@
 
 import { Suspense } from 'react';
 import dynamic from 'next/dynamic';
-import { FileCode, RefreshCw, Sprout, UsersRound } from 'lucide-react';
+import { FileCode, FileSpreadsheet, RefreshCw, Sprout, UsersRound } from 'lucide-react';
 import {
   LazyTabPanel,
   PageSkeleton,
@@ -15,8 +15,12 @@ import { useDataCenterWorkspace } from './use-data-center-workspace';
 import type { DataCenterTab } from './types';
 
 // Non-default tabs are code-split and mounted on first visit only. Mounting
-// all four panels eagerly made every visit pay for four panels' worth of
-// JavaScript, effects, and org fetches.
+// all panels eagerly made every visit pay for every panel's JavaScript,
+// effects, and org fetches.
+const BulkDataUpdatePanel = dynamic(
+  () => import('./bulk-data-update-panel').then((m) => m.BulkDataUpdatePanel),
+  { ssr: false, loading: () => <PageSkeleton /> },
+);
 const AccountPartnersPanel = dynamic(
   () => import('./account-partners-panel').then((m) => m.AccountPartnersPanel),
   { ssr: false, loading: () => <PageSkeleton /> },
@@ -41,6 +45,14 @@ const TABS: WorkspaceTab[] = [
     title: 'CONA Data Seed',
     description:
       'Validate, export, and import onboarding data with guided Account filters or manual SOQL.',
+  },
+  {
+    id: 'bulk-update',
+    label: 'Bulk Data Updating',
+    icon: FileSpreadsheet,
+    title: 'Bulk Data Updating',
+    description:
+      'Match spreadsheet rows to existing org records and update only reviewed field differences.',
   },
   {
     id: 'account-partners',
@@ -78,6 +90,9 @@ function DataCenterWorkspaceInner() {
     >
       <LazyTabPanel active={w.activeTab === 'cona'}>
         <ConaSeedDeploymentForm embedded />
+      </LazyTabPanel>
+      <LazyTabPanel active={w.activeTab === 'bulk-update'}>
+        <BulkDataUpdatePanel />
       </LazyTabPanel>
       <LazyTabPanel active={w.activeTab === 'account-partners'}>
         <AccountPartnersPanel />

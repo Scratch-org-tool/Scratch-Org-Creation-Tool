@@ -129,7 +129,8 @@ export const DEPLOYMENT_SECTIONS: DeploymentSection[] = [
       },
       {
         label: 'Data Operations',
-        description: 'CONA seed, Account Partner mapping, replication, and query templates.',
+        description:
+          'Bulk spreadsheet updates, CONA seed, Account Partner mapping, replication, and templates.',
         href: '/data-center',
         icon: Database,
         iconBg: 'bg-green-500/10 text-green-400',

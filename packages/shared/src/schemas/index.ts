@@ -154,6 +154,56 @@ export const dataReplicationSchema = z.object({
   }
 });
 
+const salesforceIdentifierSchema = z.string().trim().min(1).max(255).regex(
+  /^[A-Za-z_][A-Za-z0-9_]*$/,
+  'Enter a valid Salesforce API name',
+);
+
+export const bulkDataUpdateMappingSchema = z.object({
+  sourceColumn: z.string().trim().min(1).max(255),
+  targetField: salesforceIdentifierSchema,
+});
+
+export const bulkDataUpdateConfigSchema = z.object({
+  targetOrgId: z.string().uuid(),
+  objectName: salesforceIdentifierSchema,
+  sheetName: z.string().trim().min(1).max(255).optional(),
+  matchColumn: z.string().trim().min(1).max(255),
+  matchField: salesforceIdentifierSchema,
+  columnMappings: z.array(bulkDataUpdateMappingSchema).min(1).max(50),
+  onlyEmptyFields: z.boolean().default(false),
+}).superRefine((value, context) => {
+  const sourceColumns = new Set<string>();
+  const targetFields = new Set<string>();
+  value.columnMappings.forEach((mapping, index) => {
+    const sourceKey = mapping.sourceColumn.toLocaleLowerCase();
+    const targetKey = mapping.targetField.toLocaleLowerCase();
+    if (sourceColumns.has(sourceKey)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['columnMappings', index, 'sourceColumn'],
+        message: `Spreadsheet column is mapped more than once: ${mapping.sourceColumn}`,
+      });
+    }
+    if (targetFields.has(targetKey)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['columnMappings', index, 'targetField'],
+        message: `Salesforce field is mapped more than once: ${mapping.targetField}`,
+      });
+    }
+    if (targetKey === value.matchField.toLocaleLowerCase()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['columnMappings', index, 'targetField'],
+        message: 'The matching field cannot also be updated',
+      });
+    }
+    sourceColumns.add(sourceKey);
+    targetFields.add(targetKey);
+  });
+});
+
 export const querySetCompileSchema = z.object({
   enabledTemplateIds: z.array(z.string()).min(1),
   bottler: z.string().min(1),
@@ -614,6 +664,8 @@ export type ScratchOrgWizardInput = ScratchOrgCreateInput;
 export type DataDeployInput = z.infer<typeof dataDeploySchema>;
 export type DataDeployPreflightInput = z.infer<typeof dataDeployPreflightSchema>;
 export type DataReplicationInput = z.infer<typeof dataReplicationSchema>;
+export type BulkDataUpdateConfig = z.infer<typeof bulkDataUpdateConfigSchema>;
+export type BulkDataUpdateMapping = z.infer<typeof bulkDataUpdateMappingSchema>;
 export type QuerySetCompileInput = z.infer<typeof querySetCompileSchema>;
 export type ScratchOrgPipelineInput = z.infer<typeof scratchOrgPipelineSchema>;
 export type ScratchOrgPipelineLaunchInput = z.infer<typeof scratchOrgPipelineLaunchSchema>;

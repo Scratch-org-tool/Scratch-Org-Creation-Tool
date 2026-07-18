@@ -48,6 +48,21 @@ describe('Data Center async and recovery controls', () => {
     expect(partners).not.toContain('{row.targetEmployeeId}');
   });
 
+  it('exposes update-only workbook imports with preview and explicit confirmation', () => {
+    const workspace = source('./data-center-workspace.tsx');
+    const hook = source('./use-data-center-workspace.ts');
+    const bulkUpdate = source('./bulk-data-update-panel.tsx');
+    expect(workspace).toContain('BulkDataUpdatePanel');
+    expect(hook).toContain("'bulk-update'");
+    expect(bulkUpdate).toContain('/data/bulk-update/inspect');
+    expect(bulkUpdate).toContain('/data/bulk-update/preview');
+    expect(bulkUpdate).toContain('/data/bulk-update/run');
+    expect(bulkUpdate).toContain('Update existing records only');
+    expect(bulkUpdate).toContain('0 records will be created');
+    expect(bulkUpdate).toContain('reviewed');
+    expect(bulkUpdate).not.toContain('upsert');
+  });
+
   it('offers server-authorized movement controls and explicit inserted-record deletion', () => {
     const controls = source('./data-movement-controls.tsx');
     const batch = source('./data-deploy-batch-progress.tsx');

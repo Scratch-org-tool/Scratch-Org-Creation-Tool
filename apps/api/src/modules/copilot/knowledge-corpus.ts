@@ -116,7 +116,7 @@ Turborepo monorepo:
 - packages/sf-cli — typed wrapper around the Salesforce CLI (sf) with streaming, timeouts, and cancellable deploys.
 - scripts/gateway.mjs — reverse proxy with round-robin API pool, health checks, WebSocket upgrades.
 
-Background work runs on BullMQ (Redis). Queues: scratch-org-create, metadata-deploy, sfdmu-run, data-deploy, cona-seed, account-partner-import, user-provision, org-setup, ai-analysis. Deploy-type queues use attempts:1 (no blind retries) and multi-hour lock durations. DB Job ids double as Bull job ids so cancellation can target the queue entry; JobProcessRegistryService broadcasts kill signals across API instances over Redis pub/sub.`,
+Background work runs on BullMQ (Redis). Queues: scratch-org-create, metadata-deploy, sfdmu-run, data-deploy, cona-seed, account-partner-import, bulk-data-update, user-provision, org-setup, ai-analysis. Deploy-type queues use attempts:1 (no blind retries) and multi-hour lock durations. DB Job ids double as Bull job ids so cancellation can target the queue entry; JobProcessRegistryService broadcasts kill signals across API instances over Redis pub/sub.`,
   },
   {
     source: 'internal/data-deploy-internals',
