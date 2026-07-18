@@ -1,14 +1,27 @@
-import { Body, Controller, Post, Req, Res, UseGuards, BadRequestException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+  BadRequestException,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { CopilotService } from './copilot.service';
+import { CopilotSettingsService } from './copilot-settings.service';
 import {
   copilotMessageSchema,
+  copilotSettingsUpdateSchema,
   toAppUserId,
   KNOWLEDGE_TIERS,
   type CopilotStreamEvent,
 } from '@sfcc/shared';
 import { AuthGuard, type AuthenticatedRequest } from '../../common/auth.guard';
+import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { RoleGuard, RequireRole } from '../../common/role.guard';
 
@@ -23,7 +36,29 @@ const ingestSchema = z.object({
 @UseGuards(AuthGuard, ModuleGuard, RoleGuard)
 @RequireModule('copilot')
 export class CopilotController {
-  constructor(private readonly copilotService: CopilotService) {}
+  constructor(
+    private readonly copilotService: CopilotService,
+    private readonly settingsService: CopilotSettingsService,
+  ) {}
+
+  /** Current copilot settings — any copilot user may read them (the panel
+   *  needs to know whether the admin has enabled the voice assistant). */
+  @Get('settings')
+  getSettings() {
+    return this.settingsService.getSettings();
+  }
+
+  @Patch('settings')
+  @RequireRole('admin')
+  updateSettings(@CurrentUser() userId: string, @Body() body: unknown) {
+    const parsed = copilotSettingsUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues[0]?.message ?? 'Invalid copilot settings',
+      );
+    }
+    return this.settingsService.updateSettings(parsed.data, userId);
+  }
 
   @Post('chat')
   chat(@Req() req: AuthenticatedRequest, @Body() body: unknown) {
