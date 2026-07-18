@@ -56,13 +56,29 @@ export function suggestTargetField(
   header: string,
   fields: BulkUpdateMappableField[],
 ): string {
-  const exact = fields.find(
-    (field) => field.name.toLocaleLowerCase() === header.toLocaleLowerCase()
-      || field.label.toLocaleLowerCase() === header.toLocaleLowerCase(),
-  );
-  if (exact) return exact.name;
-  return fields.find((field) =>
-    fieldAliases(field).some((alias) => equivalentBulkUpdateHeading(alias, header)))?.name ?? '';
+  const indexes = targetFieldIndexes(fields);
+  return indexes.exact.get(header.trim().toLocaleLowerCase())
+    ?? indexes.normalized.get(normalizedName(header))
+    ?? '';
+}
+
+function targetFieldIndexes(fields: BulkUpdateMappableField[]): {
+  exact: Map<string, string>;
+  normalized: Map<string, string>;
+} {
+  const exact = new Map<string, string>();
+  const normalized = new Map<string, string>();
+  for (const field of fields) {
+    for (const value of [field.name, field.label]) {
+      const key = value.trim().toLocaleLowerCase();
+      if (!exact.has(key)) exact.set(key, field.name);
+    }
+    for (const alias of fieldAliases(field)) {
+      const key = normalizedName(alias);
+      if (key && !normalized.has(key)) normalized.set(key, field.name);
+    }
+  }
+  return { exact, normalized };
 }
 
 /** Suggest mappings without assigning the same Salesforce field to multiple columns. */
@@ -72,9 +88,12 @@ export function buildSuggestedMappings(
   excludedTargetFields: string[],
 ): Record<string, string> {
   const usedTargets = new Set(excludedTargetFields.filter(Boolean));
+  const indexes = targetFieldIndexes(fields);
   const mappings: Record<string, string> = {};
   for (const header of headers) {
-    const target = suggestTargetField(header, fields);
+    const target = indexes.exact.get(header.trim().toLocaleLowerCase())
+      ?? indexes.normalized.get(normalizedName(header))
+      ?? '';
     if (!target || usedTargets.has(target)) {
       mappings[header] = '';
       continue;

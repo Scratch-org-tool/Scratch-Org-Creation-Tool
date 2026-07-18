@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as XLSX from 'xlsx';
@@ -11,6 +11,7 @@ import {
   BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS,
   bulkDataUpdateMaxFileSizeLabel,
   escapeSoqlLiteral,
+  parseBulkCsv,
   serializeBulkCsv,
   type BulkDataUpdateConfig,
 } from '@sfcc/shared';
@@ -21,10 +22,16 @@ import { BulkThrottleService } from './bulk-throttle.service';
 const MAX_FILE_BYTES = BULK_DATA_UPDATE_MAX_FILE_BYTES;
 const MAX_WORKBOOK_ROWS = BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS;
 const MAX_WORKBOOK_COLUMNS = 200;
-const TARGET_QUERY_CHUNK_SIZE = 200;
+const TARGET_QUERY_CHUNK_SIZE = 500;
 const TARGET_QUERY_CHUNK_SIZE_WINDOWS = 40;
 const MAX_SOQL_COMMAND_CHARS = process.platform === 'win32' ? 6_000 : 12_000;
 const TARGET_QUERY_CONCURRENCY = 4;
+const TARGET_BULK_INDEX_MIN_KEYS = 2_000;
+const TARGET_BULK_INDEX_MIN_ROW_BUDGET = 10_000;
+const TARGET_BULK_INDEX_MAX_ROW_RATIO = 4;
+const TARGET_BULK_INDEX_MAX_ROWS = 250_000;
+const TARGET_BULK_INDEX_MAX_CELLS = 5_000_000;
+const TARGET_BULK_QUERY_WAIT_MINUTES = 15;
 const PREVIEW_RECORD_LIMIT = 50;
 const EMPLOYEE_MASTER_OBJECT = 'cfs_ob__EmployeeMaster__c';
 const EMPLOYEE_NUMBER_FIELD = 'cfs_ob__EmployeeNo__c';
@@ -95,6 +102,12 @@ interface ParsedSheet {
   rows: WorkbookRow[];
 }
 
+interface ParseSheetOptions {
+  allowEmpty?: boolean;
+  includeRows?: boolean;
+  selectedColumns?: string[];
+}
+
 interface ResolvedMapping {
   sourceColumn: string;
   targetField: DescribedField;
@@ -125,6 +138,14 @@ interface PlannedRecord {
   targetId: string;
   values: Record<string, string>;
   changes: PlannedChange[];
+}
+
+interface MatchCandidate {
+  rowNumber: number;
+  matchValue: string;
+  primaryValue: string;
+  secondaryValue?: string;
+  proposedValues: Map<string, string>;
 }
 
 export interface BulkDataUpdateStats {
@@ -201,7 +222,7 @@ export class BulkDataUpdateService {
   inspectWorkbook(buffer: Buffer, fileName?: string) {
     const workbook = this.readWorkbook(buffer, fileName);
     const sheets = workbook.SheetNames.map((name) =>
-      this.parseSheet(workbook, name, true));
+      this.parseSheet(workbook, name, { allowEmpty: true, includeRows: false }));
     return {
       fileName: fileName ?? 'workbook',
       defaultSheet: workbook.SheetNames[0] ?? '',
@@ -230,7 +251,7 @@ export class BulkDataUpdateService {
     config: BulkDataUpdateConfig,
     userId: string,
   ): Promise<void> {
-    await this.prepareContext(buffer, fileName, config, userId);
+    await this.prepareContext(buffer, fileName, config, userId, false);
   }
 
   async preview(
@@ -322,7 +343,13 @@ export class BulkDataUpdateService {
     }
   }
 
-  private parseSheet(workbook: XLSX.WorkBook, sheetName: string, allowEmpty = false): ParsedSheet {
+  private parseSheet(
+    workbook: XLSX.WorkBook,
+    sheetName: string,
+    options: ParseSheetOptions = {},
+  ): ParsedSheet {
+    const allowEmpty = options.allowEmpty ?? false;
+    const includeRows = options.includeRows ?? true;
     const worksheet = workbook.Sheets[sheetName];
     if (!worksheet) throw new BadRequestException(`Workbook sheet was not found: ${sheetName}`);
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
@@ -344,12 +371,23 @@ export class BulkDataUpdateService {
     }
 
     let lastUsedColumn = -1;
-    for (const row of matrix) {
-      for (let index = row.length - 1; index >= 0; index -= 1) {
-        if (this.cellValue(row[index]) !== '') {
-          lastUsedColumn = Math.max(lastUsedColumn, index);
-          break;
+    let rowCount = 0;
+    const dataColumns = new Set<number>();
+    const dataRowIndexes: number[] = [];
+    for (let rowIndex = 0; rowIndex < matrix.length; rowIndex += 1) {
+      const row = matrix[rowIndex] ?? [];
+      let rowHasData = false;
+      for (let columnIndex = 0; columnIndex < row.length; columnIndex += 1) {
+        if (this.cellValue(row[columnIndex]) === '') continue;
+        lastUsedColumn = Math.max(lastUsedColumn, columnIndex);
+        if (rowIndex > headerIndex) {
+          rowHasData = true;
+          dataColumns.add(columnIndex);
         }
+      }
+      if (rowIndex > headerIndex && rowHasData) {
+        rowCount += 1;
+        if (includeRows) dataRowIndexes.push(rowIndex);
       }
     }
     if (lastUsedColumn + 1 > MAX_WORKBOOK_COLUMNS) {
@@ -364,11 +402,8 @@ export class BulkDataUpdateService {
     const seenHeaders = new Set<string>();
     for (let index = 0; index <= lastUsedColumn; index += 1) {
       const header = this.cellValue(headerRow[index]);
-      const columnHasData = matrix
-        .slice(headerIndex + 1)
-        .some((row) => this.cellValue(row[index]) !== '');
       if (!header) {
-        if (columnHasData) {
+        if (dataColumns.has(index)) {
           throw new BadRequestException(
             `Workbook sheet "${sheetName}" has data in column ${index + 1} but no header`,
           );
@@ -388,20 +423,31 @@ export class BulkDataUpdateService {
       throw new BadRequestException(`Workbook sheet "${sheetName}" does not contain headers`);
     }
 
+    if (!includeRows) {
+      if (!allowEmpty && rowCount === 0) {
+        throw new BadRequestException(`Workbook sheet "${sheetName}" does not contain data rows`);
+      }
+      return { name: sheetName, headers, rowCount, rows: [] };
+    }
+
+    const selectedColumns = options.selectedColumns
+      ? new Set(options.selectedColumns.map((column) => column.toLocaleLowerCase()))
+      : undefined;
+    const rowColumns = [...headerByColumn].filter(([, header]) =>
+      !selectedColumns || selectedColumns.has(header.toLocaleLowerCase()));
     const rows: WorkbookRow[] = [];
-    matrix.slice(headerIndex + 1).forEach((row, index) => {
+    for (const rowIndex of dataRowIndexes) {
+      const row = matrix[rowIndex] ?? [];
       const values: Record<string, string> = {};
-      for (const [column, header] of headerByColumn) {
+      for (const [column, header] of rowColumns) {
         values[header] = this.cellValue(row[column]);
       }
-      if (Object.values(values).some((value) => value !== '')) {
-        rows.push({ rowNumber: headerIndex + index + 2, values });
-      }
-    });
-    if (!allowEmpty && rows.length === 0) {
+      rows.push({ rowNumber: rowIndex + 1, values });
+    }
+    if (!allowEmpty && rowCount === 0) {
       throw new BadRequestException(`Workbook sheet "${sheetName}" does not contain data rows`);
     }
-    return { name: sheetName, headers, rowCount: rows.length, rows };
+    return { name: sheetName, headers, rowCount, rows };
   }
 
   private cellValue(value: unknown): string {
@@ -414,10 +460,16 @@ export class BulkDataUpdateService {
     fileName: string | undefined,
     config: BulkDataUpdateConfig,
     userId: string,
+    includeRows = true,
   ): Promise<PreparedContext> {
     const workbook = this.readWorkbook(buffer, fileName);
     const sheetName = config.sheetName ?? workbook.SheetNames[0]!;
-    const sheet = this.parseSheet(workbook, sheetName);
+    const selectedColumns = [
+      config.matchColumn,
+      ...(config.secondaryMatchColumn ? [config.secondaryMatchColumn] : []),
+      ...config.columnMappings.map((mapping) => mapping.sourceColumn),
+    ];
+    const sheet = this.parseSheet(workbook, sheetName, { includeRows, selectedColumns });
     const org = await assertOrgOwned(config.targetOrgId, userId, prisma);
     const alias = org.username ?? org.alias;
     const schema = await this.describeObject(alias, config.objectName);
@@ -571,13 +623,10 @@ export class BulkDataUpdateService {
       invalidRows: 0,
     };
 
-    const candidatesByKey = new Map<string, Array<{
-      row: WorkbookRow;
-      matchValue: string;
-      primaryValue: string;
-      secondaryValue?: string;
-      proposedValues: Map<string, string>;
-    }>>();
+    // A tombstone marks a duplicated key. This keeps duplicate detection O(1)
+    // without allocating one array for every unique workbook row.
+    const candidatesByKey = new Map<string, MatchCandidate | null>();
+    let uniqueCandidateCount = 0;
     for (const row of context.sheet.rows) {
       const match = this.resolveRowMatch(context, row.values);
       if (!match) {
@@ -610,42 +659,39 @@ export class BulkDataUpdateService {
         stats.invalidRows += 1;
         continue;
       }
-      const candidates = candidatesByKey.get(key) ?? [];
-      candidates.push({
-        row,
+      const candidate: MatchCandidate = {
+        rowNumber: row.rowNumber,
         matchValue,
         primaryValue: primary,
         secondaryValue: secondary,
         proposedValues,
-      });
-      candidatesByKey.set(key, candidates);
-    }
-
-    const candidates = new Map<string, {
-      row: WorkbookRow;
-      matchValue: string;
-      primaryValue: string;
-      secondaryValue?: string;
-      proposedValues: Map<string, string>;
-    }>();
-    for (const [key, rows] of candidatesByKey) {
-      if (rows.length > 1) {
-        stats.duplicateSourceRows += rows.length;
+      };
+      const existing = candidatesByKey.get(key);
+      if (existing === undefined) {
+        candidatesByKey.set(key, candidate);
+        uniqueCandidateCount += 1;
+      } else if (existing === null) {
+        stats.duplicateSourceRows += 1;
       } else {
-        candidates.set(key, rows[0]!);
+        candidatesByKey.set(key, null);
+        uniqueCandidateCount -= 1;
+        stats.duplicateSourceRows += 2;
       }
     }
 
     await onLog?.(
-      `Matching ${candidates.size.toLocaleString()} unique spreadsheet keys to existing `
+      `Matching ${uniqueCandidateCount.toLocaleString()} unique spreadsheet keys to existing `
       + `${context.objectLabel} records...`,
     );
     const targetRecords = await this.queryTargetRecords(
       context,
-      [...candidates.values()].map((candidate) => ({
-        primary: candidate.primaryValue,
-        secondary: candidate.secondaryValue,
-      })),
+      [...candidatesByKey.values()]
+        .filter((candidate): candidate is MatchCandidate => candidate !== null)
+        .map((candidate) => ({
+          primary: candidate.primaryValue,
+          secondary: candidate.secondaryValue,
+        })),
+      onLog,
     );
     const targetsByKey = new Map<string, Record<string, unknown>>();
     const ambiguousKeys = new Set<string>();
@@ -661,7 +707,8 @@ export class BulkDataUpdateService {
     }
 
     const plannedRecords: PlannedRecord[] = [];
-    for (const [key, candidate] of candidates) {
+    for (const [key, candidate] of candidatesByKey) {
+      if (!candidate) continue;
       if (ambiguousKeys.has(key)) {
         stats.ambiguousTargetRows += 1;
         continue;
@@ -701,7 +748,7 @@ export class BulkDataUpdateService {
         continue;
       }
       plannedRecords.push({
-        rowNumber: candidate.row.rowNumber,
+        rowNumber: candidate.rowNumber,
         matchValue: candidate.matchValue,
         targetId,
         values,
@@ -741,15 +788,29 @@ export class BulkDataUpdateService {
   private async queryTargetRecords(
     context: PreparedContext,
     matchValues: Array<{ primary: string; secondary?: string }>,
+    onLog?: LogCallback,
   ): Promise<Array<Record<string, unknown>>> {
-    const selectedFields = [
+    const selectedFields = [...new Set([
       'Id',
       context.matchField.name,
       ...(context.secondaryMatchField ? [context.secondaryMatchField.name] : []),
       ...context.mappings.map((mapping) => mapping.targetField.name),
-    ].filter((field, index, all) => all.indexOf(field) === index);
+    ])];
+    const bulkRecords = await this.queryTargetRecordsFromBulkIndex(
+      context,
+      matchValues,
+      selectedFields,
+      onLog,
+    );
+    if (bulkRecords !== undefined) return bulkRecords;
+
     const queryChunks = this.buildMatchQueryChunks(context, matchValues, selectedFields);
     if (queryChunks.length === 0) return [];
+    if (queryChunks.length > 1) {
+      await onLog?.(
+        `Looking up matching records in ${queryChunks.length.toLocaleString()} selective query batches...`,
+      );
+    }
 
     const recordsByChunk: Array<Array<Record<string, unknown>>> = new Array(queryChunks.length);
     let nextChunk = 0;
@@ -774,6 +835,109 @@ export class BulkDataUpdateService {
       ),
     );
     return recordsByChunk.flat();
+  }
+
+  /**
+   * Large key lists are much faster as one Bulk API export followed by a hash
+   * join than as hundreds of separate `sf data query` process launches. The
+   * count guard prevents a small workbook from scanning a disproportionately
+   * large Salesforce object; unsupported Bulk Query fields fall back safely.
+   */
+  private async queryTargetRecordsFromBulkIndex(
+    context: PreparedContext,
+    matchValues: Array<{ primary: string; secondary?: string }>,
+    selectedFields: string[],
+    onLog?: LogCallback,
+  ): Promise<Array<Record<string, unknown>> | undefined> {
+    if (matchValues.length < TARGET_BULK_INDEX_MIN_KEYS) return undefined;
+
+    const predicate = this.targetMatchPredicate(context);
+    const countResult = await this.sfCli.query(
+      context.alias,
+      `SELECT COUNT() FROM ${context.objectName} WHERE ${predicate}`,
+    );
+    const targetCount = this.queryCount(countResult.data?.result);
+    if (!countResult.success || targetCount === undefined) return undefined;
+    if (targetCount === 0) return [];
+
+    const rowBudget = Math.min(
+      TARGET_BULK_INDEX_MAX_ROWS,
+      Math.max(
+        TARGET_BULK_INDEX_MIN_ROW_BUDGET,
+        matchValues.length * TARGET_BULK_INDEX_MAX_ROW_RATIO,
+      ),
+    );
+    if (
+      targetCount > rowBudget
+      || targetCount * selectedFields.length > TARGET_BULK_INDEX_MAX_CELLS
+    ) {
+      return undefined;
+    }
+
+    await onLog?.(
+      `Building an in-memory match index from ${targetCount.toLocaleString()} `
+      + `${context.objectLabel} records in one Bulk API batch...`,
+    );
+    const expectedKeys = new Set(
+      matchValues
+        .map((value) => this.inputMatchKey(context, value))
+        .filter(Boolean),
+    );
+    const workDir = await mkdtemp(join(tmpdir(), 'bulk-data-match-index-'));
+    const csvPath = join(workDir, 'target-records.csv');
+    let slot: Awaited<ReturnType<BulkThrottleService['acquire']>> | undefined;
+    try {
+      slot = await this.bulkThrottle.acquire(context.alias);
+      const result = await this.sfCli.exportBulk(
+        `SELECT ${selectedFields.join(', ')} FROM ${context.objectName} WHERE ${predicate}`,
+        context.alias,
+        csvPath,
+        TARGET_BULK_QUERY_WAIT_MINUTES,
+        { cwd: workDir },
+      );
+      if (!result.success) {
+        await onLog?.('Bulk match indexing was unavailable; using selective query batches instead.');
+        return undefined;
+      }
+      return parseBulkCsv(await readFile(csvPath, 'utf8'))
+        .filter((record) => expectedKeys.has(this.recordMatchKey(context, record)));
+    } catch {
+      await onLog?.('Bulk match indexing was unavailable; using selective query batches instead.');
+      return undefined;
+    } finally {
+      await slot?.release();
+      await removeTempDir(workDir);
+    }
+  }
+
+  private targetMatchPredicate(context: PreparedContext): string {
+    return [
+      `${context.matchField.name} != null`,
+      ...(context.secondaryMatchField ? [`${context.secondaryMatchField.name} != null`] : []),
+    ].join(' AND ');
+  }
+
+  private queryCount(
+    result: { records?: unknown[]; totalSize?: number } | undefined,
+  ): number | undefined {
+    const first = result?.records?.[0];
+    if (first && typeof first === 'object') {
+      const aggregate = Number((first as Record<string, unknown>).expr0);
+      if (Number.isSafeInteger(aggregate) && aggregate >= 0) return aggregate;
+    }
+    const totalSize = Number(result?.totalSize);
+    return Number.isSafeInteger(totalSize) && totalSize >= 0 ? totalSize : undefined;
+  }
+
+  private inputMatchKey(
+    context: PreparedContext,
+    value: { primary: string; secondary?: string },
+  ): string {
+    const primary = this.normalizeMatchKey(value.primary, context.matchField);
+    if (!primary) return '';
+    if (!context.secondaryMatchField) return primary;
+    const secondary = this.normalizeMatchKey(value.secondary ?? '', context.secondaryMatchField);
+    return secondary ? `${primary}\u0000${secondary}` : '';
   }
 
   private buildMatchQueryChunks(
