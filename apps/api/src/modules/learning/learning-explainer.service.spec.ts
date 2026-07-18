@@ -58,6 +58,26 @@ describe('buildStaticStoryboard', () => {
     expect(titles).toContain('See what changed');
   });
 
+  it('gives different lessons visibly different fallback visuals', () => {
+    const fingerprint = (lessonId: string) => {
+      const board = buildStaticStoryboard(getLesson(lessonId)!, 'lesson');
+      return board.scenes
+        .map(
+          (scene) =>
+            `${scene.visual.kind}:${scene.visual.items
+              .map((item) => `${item.icon}/${item.accent}`)
+              .join(',')}`,
+        )
+        .join('|');
+    };
+    const prints = [
+      fingerprint('foundations-what-is-salesforce'),
+      fingerprint('dev-governor-limits'),
+      fingerprint('foundations-reports'),
+    ];
+    expect(new Set(prints).size).toBe(prints.length);
+  });
+
   it('keeps a custom visual answer question-aware without forcing a case study', () => {
     const location = getLesson('dev-governor-limits')!;
     const board = buildStaticStoryboard(
@@ -77,6 +97,7 @@ describe('LearningExplainerService', () => {
     isVideoConfigured: vi.fn().mockReturnValue(false),
     isImageConfigured: vi.fn().mockReturnValue(false),
     isSpeechConfigured: vi.fn().mockReturnValue(false),
+    getMediaStatus: vi.fn(),
     generateVideo: vi.fn(),
     generateImage: vi.fn(),
     generateSpeech: vi.fn(),
@@ -88,6 +109,7 @@ describe('LearningExplainerService', () => {
     media.isVideoConfigured.mockReturnValue(false);
     media.isImageConfigured.mockReturnValue(false);
     media.isSpeechConfigured.mockReturnValue(false);
+    media.getMediaStatus.mockResolvedValue({ video: 'off', images: 'off', speech: 'off' });
     service = new LearningExplainerService(
       nvidia as unknown as NvidiaService,
       media as unknown as OpenSourceMediaService,
@@ -103,6 +125,31 @@ describe('LearningExplainerService', () => {
       generatedVideo: false,
       generatedImages: false,
       generatedSpeech: false,
+      status: { video: 'off', images: 'off', speech: 'off' },
+    });
+  });
+
+  it('refreshes live media status even on cached storyboards', async () => {
+    nvidia.chat.mockResolvedValue({ content: 'nope', model: 'dev-mock' });
+    const first = await service.getStoryboard({ lessonId: 'foundations-what-is-salesforce' });
+    expect(first.media.generatedSpeech).toBe(false);
+    expect(first.media.status.speech).toBe('off');
+
+    // The admin starts the VibeVoice server: the next request must see it
+    // without waiting for the 6-hour storyboard cache to expire.
+    media.getMediaStatus.mockResolvedValue({
+      video: 'unreachable',
+      images: 'off',
+      speech: 'ready',
+    });
+    const second = await service.getStoryboard({ lessonId: 'foundations-what-is-salesforce' });
+    expect(nvidia.chat).toHaveBeenCalledTimes(1);
+    expect(second.media.generatedSpeech).toBe(true);
+    expect(second.media.generatedVideo).toBe(false);
+    expect(second.media.status).toEqual({
+      video: 'unreachable',
+      images: 'off',
+      speech: 'ready',
     });
   });
 

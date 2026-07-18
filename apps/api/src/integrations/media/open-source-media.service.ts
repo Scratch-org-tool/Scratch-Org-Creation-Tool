@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Injectable, Logger } from '@nestjs/common';
-import type { ExplainerStudioVoice } from '@sfcc/shared';
+import type {
+  ExplainerMediaStatus,
+  ExplainerMediaTierStatus,
+  ExplainerStudioVoice,
+} from '@sfcc/shared';
 
 /**
  * Self-hosted open-source media stack for Academy stories:
@@ -22,6 +26,8 @@ const SPEECH_TIMEOUT_MS = 60_000;
 const IMAGE_TIMEOUT_MS = 60_000;
 const VIDEO_TIMEOUT_MS = 180_000;
 const VIDEO_POLL_INTERVAL_MS = 1_500;
+const PROBE_TIMEOUT_MS = 2_500;
+const PROBE_CACHE_TTL_MS = 60_000;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 40 * 1024 * 1024;
@@ -150,6 +156,7 @@ function asMedia(
 @Injectable()
 export class OpenSourceMediaService {
   private readonly logger = new Logger(OpenSourceMediaService.name);
+  private readonly probeCache = new Map<string, { reachable: boolean; expires: number }>();
 
   /* ----------------------------- capabilities ----------------------------- */
 
@@ -172,6 +179,55 @@ export class OpenSourceMediaService {
       Boolean(configuredBaseUrl(process.env.COMFYUI_BASE_URL)) &&
       process.env.COMFYUI_VIDEO_ENABLED !== 'false'
     );
+  }
+
+  /**
+   * Live per-tier health, surfaced to the player so a missing or crashed
+   * media server is an explicit "unreachable"/"off" instead of a silent
+   * fallback. Probes are cached for one minute.
+   */
+  async getMediaStatus(): Promise<ExplainerMediaStatus> {
+    const [video, images, speech] = await Promise.all([
+      this.tierStatus(this.isVideoConfigured(), process.env.COMFYUI_BASE_URL, 'ComfyUI'),
+      this.tierStatus(this.isImageConfigured(), process.env.SD_WEBUI_BASE_URL, 'Stable Diffusion API'),
+      this.tierStatus(this.isSpeechConfigured(), process.env.VIBEVOICE_BASE_URL, 'VibeVoice'),
+    ]);
+    return { video, images, speech };
+  }
+
+  private async tierStatus(
+    configured: boolean,
+    rawBase: string | undefined,
+    label: string,
+  ): Promise<ExplainerMediaTierStatus> {
+    if (!configured) return 'off';
+    const base = configuredBaseUrl(rawBase);
+    if (!base) return 'off';
+    const reachable = await this.probeBase(base, label);
+    return reachable ? 'ready' : 'unreachable';
+  }
+
+  /** Any HTTP answer (even 404) counts as reachable; only network failures do not. */
+  private async probeBase(base: string, label: string): Promise<boolean> {
+    const cached = this.probeCache.get(base);
+    if (cached && cached.expires > Date.now()) return cached.reachable;
+
+    let reachable = false;
+    try {
+      await this.fetchWithTimeout(
+        base,
+        { method: 'GET' },
+        envInt('MEDIA_PROBE_TIMEOUT_MS', PROBE_TIMEOUT_MS),
+        `${label} probe`,
+      );
+      reachable = true;
+    } catch (error) {
+      this.logger.warn(
+        `${label} at ${base} is unreachable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    this.probeCache.set(base, { reachable, expires: Date.now() + PROBE_CACHE_TTL_MS });
+    return reachable;
   }
 
   /* ------------------------- voice — VibeVoice --------------------------- */

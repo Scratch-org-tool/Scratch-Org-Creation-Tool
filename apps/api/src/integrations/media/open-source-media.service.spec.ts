@@ -83,6 +83,35 @@ describe('OpenSourceMediaService', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('reports live tier status: ready on any HTTP answer, unreachable on network failure', async () => {
+    vi.stubEnv('VIBEVOICE_BASE_URL', 'http://tts.local:8000');
+    vi.stubEnv('SD_WEBUI_BASE_URL', '');
+    vi.stubEnv('COMFYUI_BASE_URL', 'http://comfy.local:8188');
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('http://tts.local')) {
+        // A 404 still proves the server is up — reachability, not endpoint shape.
+        return new Response('not found', { status: 404 });
+      }
+      throw new Error('connect ECONNREFUSED');
+    });
+
+    const service = new OpenSourceMediaService();
+    await expect(service.getMediaStatus()).resolves.toEqual({
+      video: 'unreachable',
+      images: 'off',
+      speech: 'ready',
+    });
+
+    // Probes are cached: a second status check makes no new network calls.
+    fetchMock.mockClear();
+    await expect(service.getMediaStatus()).resolves.toEqual({
+      video: 'unreachable',
+      images: 'off',
+      speech: 'ready',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('honors per-capability kill switches', () => {
     vi.stubEnv('VIBEVOICE_BASE_URL', 'http://localhost:8000');
     vi.stubEnv('VIBEVOICE_ENABLED', 'false');

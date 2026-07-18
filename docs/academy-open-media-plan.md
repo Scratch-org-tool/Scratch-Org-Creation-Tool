@@ -122,7 +122,26 @@ Wan 2.2 or LTX-2 without touching application code.
   pre-warming the first scene of assigned lessons overnight, per-org generation quotas, and an
   admin toggle in the UI (env flags exist today).
 
-## 6. Risks and mitigations
+## 6. Troubleshooting — "voice/images/video are not working"
+
+The player now diagnoses itself: every storyboard response carries `media.status` with one value
+per tier — `ready`, `unreachable` (configured but not answering a live probe), or `off` (not
+configured) — and the player header shows a matching badge:
+
+| What you see | Meaning | Fix |
+|--------------|---------|-----|
+| Badge **"Built-in visuals · device voice"**, voice list shows only Microsoft/Apple/Google system voices | No media server is configured — this is the expected fallback, not a bug | Set `VIBEVOICE_BASE_URL` / `SD_WEBUI_BASE_URL` / `COMFYUI_BASE_URL` in `apps/api/.env` and restart the API (recipes in §4) |
+| Amber badge **"Media studio unreachable"** | A URL is configured but the server didn't answer within ~2.5 s | Start the server; verify with `curl -i $VIBEVOICE_BASE_URL/v1/audio/voices`, `curl -i $SD_WEBUI_BASE_URL/sdapi/v1/sd-models`, `curl -i $COMFYUI_BASE_URL/system_stats`; check firewalls/ports |
+| Studio voices listed but narration silent / wrong voice | Browser fallback engaged mid-scene (server error) | Check API logs for `[OpenSourceMediaService]` warnings; the picker keeps working with device voices meanwhile |
+| Every concept shows identical diagrams | You are on the built-in fallback AND (pre-fix) it used one fixed template | Fixed: fallback visuals now derive icons/colors from each lesson's topic. For unique cinematic scenes per concept, connect the image/video servers |
+| Stories read exactly like the lesson text | `NVIDIA_API_KEY` missing/invalid, so the deterministic script is used | Configure NVIDIA NIM (used by the platform copilot) to get AI-directed scripts |
+
+Notes:
+- Probes cache for 60 seconds, so a freshly started server appears within a minute (no restart).
+- `media.status` semantics: the API only advertises a tier (and the browser only requests media
+  for it) when the tier is `ready` — a down server costs one probe, not a per-scene timeout.
+
+## 7. Risks and mitigations
 
 | Risk | Mitigation |
 |------|------------|

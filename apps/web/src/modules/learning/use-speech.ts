@@ -27,13 +27,19 @@ export interface SpeechController {
 }
 
 const VOICE_STORAGE_KEY = 'sfcc-academy-narrator-voice';
+/** Chrome drops utterances spoken synchronously after cancel(); defer one beat. */
+const SPEAK_DEFER_MS = 60;
+/** Chrome silently pauses long / remote-voice utterances (~15 s) without resume(). */
+const CHROME_KEEPALIVE_MS = 10_000;
 
-function voiceId(voice: SpeechSynthesisVoice): string {
+export function voiceKey(voice: SpeechSynthesisVoice): string {
   return voice.voiceURI || `${voice.name}|${voice.lang}`;
 }
 
 /** Prefer a natural English voice; fall back to the engine default. */
-function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+export function pickPreferredVoice(
+  voices: SpeechSynthesisVoice[],
+): SpeechSynthesisVoice | null {
   if (voices.length === 0) return null;
   const preferred = [
     'Google US English',
@@ -52,15 +58,28 @@ function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null 
   );
 }
 
-function listUsefulVoices(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
+export function listUsefulVoices(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
   const unique = new Map<string, SpeechSynthesisVoice>();
-  for (const voice of voices) unique.set(voiceId(voice), voice);
+  for (const voice of voices) unique.set(voiceKey(voice), voice);
   const all = [...unique.values()];
   const english = all.filter((voice) => voice.lang.toLowerCase().startsWith('en'));
   return (english.length > 0 ? english : all).sort((left, right) => {
     if (left.default !== right.default) return left.default ? -1 : 1;
     return left.name.localeCompare(right.name);
   });
+}
+
+/** The voice a new utterance must use: the explicit request wins, then the sticky selection. */
+export function resolveUtteranceVoice(
+  available: SpeechSynthesisVoice[],
+  requestedId: string | undefined,
+  fallback: SpeechSynthesisVoice | null,
+): SpeechSynthesisVoice | null {
+  if (requestedId) {
+    const requested = available.find((voice) => voiceKey(voice) === requestedId);
+    if (requested) return requested;
+  }
+  return fallback;
 }
 
 /**
@@ -79,6 +98,19 @@ export function useSpeech(): SpeechController {
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const availableVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  const speakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keepaliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearTimers = useCallback(() => {
+    if (speakTimerRef.current) {
+      clearTimeout(speakTimerRef.current);
+      speakTimerRef.current = null;
+    }
+    if (keepaliveRef.current) {
+      clearInterval(keepaliveRef.current);
+      keepaliveRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!supported) return;
@@ -87,7 +119,7 @@ export function useSpeech(): SpeechController {
       availableVoicesRef.current = available;
       setVoices(
         available.map((voice) => ({
-          id: voiceId(voice),
+          id: voiceKey(voice),
           name: voice.name,
           language: voice.lang,
           local: voice.localService,
@@ -100,22 +132,23 @@ export function useSpeech(): SpeechController {
         /* storage can be disabled */
       }
       const selected =
-        available.find((voice) => voiceId(voice) === saved) ??
+        available.find((voice) => voiceKey(voice) === saved) ??
         voiceRef.current ??
-        pickVoice(available);
+        pickPreferredVoice(available);
       voiceRef.current = selected;
-      setSelectedVoiceId(selected ? voiceId(selected) : null);
+      setSelectedVoiceId(selected ? voiceKey(selected) : null);
     };
     loadVoices();
     window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
     return () => {
       window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+      clearTimers();
       window.speechSynthesis.cancel();
     };
-  }, [supported]);
+  }, [clearTimers, supported]);
 
   const selectVoice = useCallback((id: string) => {
-    const selected = availableVoicesRef.current.find((voice) => voiceId(voice) === id);
+    const selected = availableVoicesRef.current.find((voice) => voiceKey(voice) === id);
     if (!selected) return;
     voiceRef.current = selected;
     setSelectedVoiceId(id);
@@ -128,6 +161,7 @@ export function useSpeech(): SpeechController {
 
   const cancel = useCallback(() => {
     if (!supported) return;
+    clearTimers();
     if (utteranceRef.current) {
       // Detach handlers first: cancel() fires 'end'/'error' and must not
       // trigger autoplay-advance callbacks.
@@ -137,7 +171,7 @@ export function useSpeech(): SpeechController {
     }
     window.speechSynthesis.cancel();
     setSpeaking(false);
-  }, [supported]);
+  }, [clearTimers, supported]);
 
   const speak = useCallback(
     (text: string, options?: SpeakOptions) => {
@@ -147,13 +181,23 @@ export function useSpeech(): SpeechController {
       }
       cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      const selected =
-        availableVoicesRef.current.find((voice) => voiceId(voice) === options?.voiceId) ??
-        voiceRef.current;
-      if (selected) utterance.voice = selected;
+      const selected = resolveUtteranceVoice(
+        availableVoicesRef.current,
+        options?.voiceId,
+        voiceRef.current,
+      );
+      if (selected) {
+        utterance.voice = selected;
+        // Engines (Chrome and Edge especially) ignore `voice` and fall back to
+        // the OS default when `lang` disagrees with the chosen voice.
+        utterance.lang = selected.lang;
+      } else {
+        utterance.lang = 'en-US';
+      }
       utterance.rate = options?.rate ?? 1;
       utterance.pitch = 1;
       const finish = () => {
+        clearTimers();
         if (utteranceRef.current === utterance) {
           utteranceRef.current = null;
           setSpeaking(false);
@@ -164,9 +208,17 @@ export function useSpeech(): SpeechController {
       utterance.onerror = finish;
       utteranceRef.current = utterance;
       setSpeaking(true);
-      window.speechSynthesis.speak(utterance);
+      speakTimerRef.current = setTimeout(() => {
+        speakTimerRef.current = null;
+        window.speechSynthesis.speak(utterance);
+        keepaliveRef.current = setInterval(() => {
+          if (window.speechSynthesis.speaking) {
+            window.speechSynthesis.resume();
+          }
+        }, CHROME_KEEPALIVE_MS);
+      }, SPEAK_DEFER_MS);
     },
-    [cancel, supported],
+    [cancel, clearTimers, supported],
   );
 
   return {

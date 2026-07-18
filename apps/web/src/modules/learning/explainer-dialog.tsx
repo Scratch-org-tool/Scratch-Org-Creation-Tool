@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  AlertTriangle,
   Captions,
   ChevronLeft,
   ChevronRight,
@@ -420,6 +421,22 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
     }
     return voiceChoice;
   }, [board?.media.generatedSpeech, voiceChoice]);
+  const unreachableTiers = useMemo(() => {
+    if (!board) return [] as string[];
+    const labels: Record<string, string> = {
+      video: 'motion (ComfyUI)',
+      images: 'images (Stable Diffusion)',
+      speech: 'voice (VibeVoice)',
+    };
+    return Object.entries(board.media.status)
+      .filter(([, status]) => status === 'unreachable')
+      .map(([tier]) => labels[tier] ?? tier);
+  }, [board]);
+  const mediaFullyOff =
+    Boolean(board) &&
+    !board!.media.generatedVideo &&
+    !board!.media.generatedImages &&
+    !board!.media.generatedSpeech;
 
   return (
     <Dialog
@@ -463,6 +480,23 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-px font-medium text-emerald-300">
                       <Mic2 className="size-2.5" />
                       VibeVoice narration
+                    </span>
+                  )}
+                  {unreachableTiers.length > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-px font-medium text-amber-300"
+                      title={`Configured but not answering: ${unreachableTiers.join(', ')}. Check the server URLs in apps/api/.env and see docs/academy-open-media-plan.md.`}
+                    >
+                      <AlertTriangle className="size-2.5" />
+                      Media studio unreachable
+                    </span>
+                  )}
+                  {mediaFullyOff && unreachableTiers.length === 0 && (
+                    <span
+                      className="rounded-full bg-secondary/70 px-1.5 py-px font-medium text-muted-foreground"
+                      title="No media servers connected — set VIBEVOICE_BASE_URL, SD_WEBUI_BASE_URL, and/or COMFYUI_BASE_URL (docs/academy-open-media-plan.md). Stories keep working with built-in visuals and your device voice."
+                    >
+                      Built-in visuals · device voice
                     </span>
                   )}
                 </>
@@ -691,7 +725,7 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                     <SelectValue placeholder="Narrator voice" />
                   </SelectTrigger>
                   <SelectContent>
-                    {board.media.generatedSpeech && (
+                    {board.media.generatedSpeech ? (
                       <SelectGroup>
                         <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
                           Studio voices (VibeVoice)
@@ -705,6 +739,14 @@ export function ExplainerDialog({ request, onClose }: ExplainerDialogProps) {
                             {voice.label} · {voice.tone}
                           </SelectItem>
                         ))}
+                      </SelectGroup>
+                    ) : (
+                      <SelectGroup>
+                        <SelectLabel className="max-w-[220px] whitespace-normal text-[10px] font-normal normal-case leading-snug text-amber-300/90">
+                          {board.media.status.speech === 'unreachable'
+                            ? 'VibeVoice server is not answering — using your device voices below.'
+                            : 'VibeVoice is not connected — using your device voices below.'}
+                        </SelectLabel>
                       </SelectGroup>
                     )}
                     <SelectGroup>

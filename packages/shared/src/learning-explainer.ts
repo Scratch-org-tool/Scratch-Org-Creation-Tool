@@ -169,13 +169,30 @@ export interface ExplainerScene {
   visual: ExplainerVisual;
 }
 
+/**
+ * Live health of one media tier:
+ * - 'ready'        — configured and the server answered a probe just now
+ * - 'unreachable'  — configured but the server did not answer (down, wrong URL, firewall)
+ * - 'off'          — not configured at all
+ */
+export const EXPLAINER_MEDIA_TIER_STATUSES = ['ready', 'unreachable', 'off'] as const;
+export type ExplainerMediaTierStatus = (typeof EXPLAINER_MEDIA_TIER_STATUSES)[number];
+
+export interface ExplainerMediaStatus {
+  video: ExplainerMediaTierStatus;
+  images: ExplainerMediaTierStatus;
+  speech: ExplainerMediaTierStatus;
+}
+
 export interface ExplainerMediaCapabilities {
-  /** Motion-clip generation (ComfyUI video) is configured; image/diagram are fallbacks. */
+  /** Motion-clip generation (ComfyUI video) is live; image/diagram are fallbacks. */
   generatedVideo: boolean;
-  /** Still scene-art generation (Stable Diffusion API) is configured; the diagram remains the fallback. */
+  /** Still scene-art generation (Stable Diffusion API) is live; the diagram remains the fallback. */
   generatedImages: boolean;
-  /** VibeVoice narration is configured; browser speech remains the fallback. */
+  /** VibeVoice narration is live; browser speech remains the fallback. */
   generatedSpeech: boolean;
+  /** Why each tier is or is not active — surfaced in the player so a broken setup is visible, not silent. */
+  status: ExplainerMediaStatus;
 }
 
 export interface ExplainerStoryboard {
@@ -359,6 +376,7 @@ export function sanitizeStoryboard(
       generatedVideo: false,
       generatedImages: false,
       generatedSpeech: false,
+      status: { video: 'off', images: 'off', speech: 'off' },
     },
     scenes,
   };

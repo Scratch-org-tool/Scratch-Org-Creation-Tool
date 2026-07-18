@@ -4,7 +4,10 @@ import {
   EXPLAINER_LABEL_MAX,
   EXPLAINER_NARRATION_MAX,
   sanitizeStoryboard,
+  type ExplainerAccent,
   type ExplainerFocus,
+  type ExplainerIcon,
+  type ExplainerMediaCapabilities,
   type ExplainerScene,
   type ExplainerStoryboard,
   type LearningExplainerImageRequest,
@@ -90,6 +93,50 @@ function conceptArt(description: string): string {
   ].join(' ');
 }
 
+/** Stable, deterministic seed so every lesson's fallback story looks different. */
+export function hashString(value: string): number {
+  let hash = 5381;
+  for (const char of value) {
+    hash = ((hash << 5) + hash + char.codePointAt(0)!) >>> 0;
+  }
+  return hash;
+}
+
+/** Topic keyword → whitelisted icon, so fallback diagrams reflect the concept. */
+const TOPIC_ICONS: Array<[RegExp, ExplainerIcon]> = [
+  [/report|dashboard|analytic|chart|metric/i, 'bar-chart'],
+  [/deploy|release|devops|ci\/cd|change set|version control/i, 'rocket'],
+  [/securit|profile|permission|owd|role hierarch|access control/i, 'shield'],
+  [/sharing/i, 'share-2'],
+  [/flow|automat|process builder|approval/i, 'workflow'],
+  [/apex|trigger|lwc|lightning web|code|develop|javascript|method/i, 'code'],
+  [/soql|sosl|query|search index/i, 'search'],
+  [/api|integration|middleware|webhook|rest|soap|event-driven/i, 'link'],
+  [/identity|login|sso|oauth|authenticat/i, 'key'],
+  [/governor|limit|bulkif|async|batch|queueable|performance|large data|scale/i, 'zap'],
+  [/sandbox|scratch org|environment|org strateg/i, 'boxes'],
+  [/architect|design pattern|layer|framework/i, 'layers'],
+  [/data model|object|field|record|schema|database|import|export|loader/i, 'database'],
+  [/multi-tenant|tenant|cloud|platform/i, 'cloud'],
+  [/email|notification|alert/i, 'mail'],
+  [/mobile/i, 'smartphone'],
+  [/lead|opportunit|forecast|quote|sales process/i, 'target'],
+  [/case|service|support|escalat/i, 'life-buoy'],
+  [/test|assert|coverage|quality/i, 'check-circle'],
+  [/user|team|collaborat|chatter|adoption/i, 'users'],
+  [/price|billing|invoice|revenue|quote/i, 'dollar-sign'],
+  [/account|customer|crm|contact|company/i, 'briefcase'],
+  [/calendar|schedule|event/i, 'calendar'],
+  [/report type|dashboard/i, 'pie-chart'],
+];
+
+export function iconForTopic(text: string, fallback: ExplainerIcon): ExplainerIcon {
+  for (const [pattern, icon] of TOPIC_ICONS) {
+    if (pattern.test(text)) return icon;
+  }
+  return fallback;
+}
+
 /**
  * Deterministic storyboard derived from curriculum content. Always available
  * (no AI dependency) and used both as the fallback and in tests as the
@@ -103,6 +150,14 @@ export function buildStaticStoryboard(
   const { lesson } = location;
   const scenes: Array<Omit<ExplainerScene, 'id'>> = [];
 
+  // Per-lesson deterministic variety: without AI or media servers, stories for
+  // different concepts must still LOOK different (icons from the topic,
+  // rotated accent palette), not like one shared template.
+  const palette: ExplainerAccent[] = ['sky', 'violet', 'emerald', 'amber'];
+  const seed = hashString(lesson.id);
+  const accentAt = (index: number): ExplainerAccent => palette[(seed + index) % palette.length]!;
+  const topicIcon = iconForTopic(`${lesson.title} ${lesson.summary}`, 'lightbulb');
+
   if (focus === 'real-world') {
     scenes.push({
       title: 'Meet the challenge',
@@ -115,7 +170,11 @@ export function buildStaticStoryboard(
         kind: 'callout',
         caption: 'The challenge begins',
         items: [
-          { label: clamp(lesson.realWorld.title, EXPLAINER_LABEL_MAX), icon: 'briefcase', accent: 'sky' },
+          {
+            label: clamp(lesson.realWorld.title, EXPLAINER_LABEL_MAX),
+            icon: iconForTopic(lesson.realWorld.title, 'briefcase'),
+            accent: accentAt(0),
+          },
         ],
       },
     });
@@ -150,7 +209,7 @@ export function buildStaticStoryboard(
         caption: 'The idea changes the flow',
         items: [
           { label: 'Friction', sublabel: 'See the constraint', icon: 'search', accent: 'amber' },
-          { label: 'Concept', sublabel: lesson.title, icon: 'lightbulb', accent: 'violet' },
+          { label: 'Concept', sublabel: lesson.title, icon: topicIcon, accent: accentAt(1) },
           { label: 'New flow', sublabel: 'Apply with intent', icon: 'workflow', accent: 'emerald' },
         ],
       },
@@ -192,7 +251,9 @@ export function buildStaticStoryboard(
       visual: {
         kind: 'callout',
         caption: question ? 'The answer in one picture' : 'The central idea',
-        items: [{ label: clamp(lesson.title, EXPLAINER_LABEL_MAX), icon: 'graduation-cap', accent: 'sky' }],
+        items: [
+          { label: clamp(lesson.title, EXPLAINER_LABEL_MAX), icon: topicIcon, accent: accentAt(0) },
+        ],
       },
     });
 
@@ -214,15 +275,19 @@ export function buildStaticStoryboard(
           relevantBullets.length >= 2
             ? relevantBullets.slice(0, 5).map((bullet, index) => ({
                 label: clamp(bullet, EXPLAINER_LABEL_MAX),
-                icon: index === 0 ? ('lightbulb' as const) : ('workflow' as const),
-                accent: index === 0 ? ('violet' as const) : ('sky' as const),
+                icon: iconForTopic(bullet, index === 0 ? 'lightbulb' : 'workflow'),
+                accent: accentAt(index),
               }))
             : [
-                { label: clamp(relevant.heading, EXPLAINER_LABEL_MAX), icon: 'layers', accent: 'violet' },
+                {
+                  label: clamp(relevant.heading, EXPLAINER_LABEL_MAX),
+                  icon: iconForTopic(relevant.heading, 'layers'),
+                  accent: accentAt(1),
+                },
                 {
                   label: clamp(lesson.keyTakeaways[0] ?? lesson.summary, EXPLAINER_LABEL_MAX),
-                  icon: 'link',
-                  accent: 'sky',
+                  icon: iconForTopic(lesson.keyTakeaways[0] ?? lesson.summary, 'link'),
+                  accent: accentAt(2),
                 },
               ],
       },
@@ -242,8 +307,13 @@ export function buildStaticStoryboard(
         kind: 'flow',
         caption: 'Cause → platform behavior → effect',
         items: [
-          { label: 'Input', sublabel: 'What starts it', icon: 'zap', accent: 'amber' },
-          { label: clamp(lesson.title, EXPLAINER_LABEL_MAX), sublabel: 'What Salesforce does', icon: 'cloud', accent: 'violet' },
+          { label: 'Input', sublabel: 'What starts it', icon: 'zap', accent: accentAt(3) },
+          {
+            label: clamp(lesson.title, EXPLAINER_LABEL_MAX),
+            sublabel: 'What Salesforce does',
+            icon: iconForTopic(supporting.heading, topicIcon),
+            accent: accentAt(1),
+          },
           { label: 'Effect', sublabel: 'What the user sees', icon: 'eye', accent: 'emerald' },
         ],
       },
@@ -283,10 +353,10 @@ export function buildStaticStoryboard(
     visual: {
       kind: 'timeline',
       caption: 'The memory path',
-      items: lesson.keyTakeaways.slice(0, 4).map((takeaway) => ({
+      items: lesson.keyTakeaways.slice(0, 4).map((takeaway, index) => ({
         label: clamp(takeaway, EXPLAINER_LABEL_MAX),
-        icon: 'check-circle' as const,
-        accent: 'emerald' as const,
+        icon: index === 0 ? topicIcon : iconForTopic(takeaway, 'check-circle'),
+        accent: accentAt(index),
       })),
     },
   });
@@ -333,6 +403,10 @@ export class LearningExplainerService {
 
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expires > Date.now()) {
+      // Media health must reflect NOW, not the moment the story was cached —
+      // otherwise starting/stopping a media server appears to do nothing for
+      // six hours.
+      cached.board.media = await this.currentMediaCapabilities();
       return cached.board;
     }
 
@@ -347,11 +421,7 @@ export class LearningExplainerService {
     if (!board) {
       board = buildStaticStoryboard(location, focus, input.question);
     }
-    board.media = {
-      generatedVideo: this.media.isVideoConfigured(),
-      generatedImages: this.media.isImageConfigured(),
-      generatedSpeech: this.media.isSpeechConfigured(),
-    };
+    board.media = await this.currentMediaCapabilities();
 
     if (this.cache.size >= CACHE_MAX_ENTRIES) {
       const oldest = this.cache.keys().next().value;
@@ -359,6 +429,17 @@ export class LearningExplainerService {
     }
     this.cache.set(cacheKey, { board, expires: Date.now() + CACHE_TTL_MS });
     return board;
+  }
+
+  /** Capabilities from live (60s-cached) provider probes, plus the reason per tier. */
+  private async currentMediaCapabilities(): Promise<ExplainerMediaCapabilities> {
+    const status = await this.media.getMediaStatus();
+    return {
+      generatedVideo: status.video === 'ready',
+      generatedImages: status.images === 'ready',
+      generatedSpeech: status.speech === 'ready',
+      status,
+    };
   }
 
   async getSceneImage(input: LearningExplainerImageRequest): Promise<GeneratedMedia | null> {
