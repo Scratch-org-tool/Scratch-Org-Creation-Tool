@@ -121,16 +121,30 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       current.map((n) => (n.id === id ? { ...n, read: true } : n)),
     );
     setUnreadCount((count) => Math.max(0, count - 1));
-    void api(`/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }).catch(
-      () => undefined,
-    );
+    void api(`/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }).catch(() => {
+      // Roll the optimistic update back so the unread state stays truthful.
+      setNotifications((current) =>
+        current.map((n) => (n.id === id ? { ...n, read: false } : n)),
+      );
+      setUnreadCount((count) => count + 1);
+      setError('Could not mark the notification as read. Check your connection and try again.');
+    });
   }, []);
 
   const markAllRead = useCallback(() => {
-    if (notificationsRef.current.every((n) => n.read)) return;
+    const previouslyUnread = notificationsRef.current.filter((n) => !n.read);
+    if (previouslyUnread.length === 0) return;
+    const unreadIds = new Set(previouslyUnread.map((n) => n.id));
+    const previousCount = previouslyUnread.length;
     setNotifications((current) => current.map((n) => (n.read ? n : { ...n, read: true })));
     setUnreadCount(0);
-    void api('/notifications/read-all', { method: 'POST' }).catch(() => undefined);
+    void api('/notifications/read-all', { method: 'POST' }).catch(() => {
+      setNotifications((current) =>
+        current.map((n) => (unreadIds.has(n.id) ? { ...n, read: false } : n)),
+      );
+      setUnreadCount(previousCount);
+      setError('Could not mark all notifications as read. Check your connection and try again.');
+    });
   }, []);
 
   // Load history + open a live SSE stream whenever the signed-in user changes.

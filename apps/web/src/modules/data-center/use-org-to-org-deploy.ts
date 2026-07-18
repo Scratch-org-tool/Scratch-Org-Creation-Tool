@@ -76,6 +76,7 @@ export function useOrgToOrgDeploy() {
   const [selectedRecordIds, setSelectedRecordIds] = useState<Map<string, Set<string>>>(new Map());
   const [targetCompare, setTargetCompare] = useState<Map<string, OrgToOrgObjectCompareState>>(new Map());
   const [loadingCompare, setLoadingCompare] = useState(false);
+  const [loadingReview, setLoadingReview] = useState(false);
   const [resetRevision, setResetRevision] = useState(0);
   const [wizardStep, setWizardStep] = useState<OrgToOrgWizardStep>('configure');
   const [loadingObjects, setLoadingObjects] = useState(false);
@@ -246,6 +247,7 @@ export function useOrgToOrgDeploy() {
     setSelectedRecordIds(new Map());
     setTargetCompare(new Map());
     setLoadingCompare(false);
+    setLoadingReview(false);
     setWizardStep('configure');
     setPreflightResult(null);
     setPreflightPayloadKey(null);
@@ -682,45 +684,58 @@ export function useOrgToOrgDeploy() {
   const canDeploy = wizardStep === 'preview' && checkedObjects.size > 0 && !selectedDependencyError;
 
   const goToPreview = useCallback(async () => {
-    if (!canGoNext) return;
+    if (!canGoNext || loadingReview) return;
     setWizardStep('preview');
     setError(null);
     // A debounced preview from the configure step may still be pending; every
     // object is resolved right now instead.
     if (previewTimer.current) clearTimeout(previewTimer.current);
-    const targets: Array<{ apiName: string; config: OrgToOrgObjectDeployConfig }> = [];
-    for (const apiName of checkedObjects) {
-      const config = objectConfigs.get(apiName);
-      if (config) targets.push({ apiName, config });
+    setLoadingReview(true);
+    try {
+      const targets: Array<{ apiName: string; config: OrgToOrgObjectDeployConfig }> = [];
+      for (const apiName of checkedObjects) {
+        const config = objectConfigs.get(apiName);
+        if (config) targets.push({ apiName, config });
+      }
+      // Objects whose configuration has not changed since their last preview
+      // reuse it; the rest re-fetch in parallel instead of one at a time.
+      const resolved = await Promise.all(
+        targets.map(async ({ apiName, config }) => {
+          const fresh =
+            config.previewSoql
+            && config.previewRecords
+            && config.previewKey === previewStateKey(config);
+          const soql = fresh
+            ? config.previewSoql
+            : (await runPreviewForObject(apiName, config))?.soql;
+          return { apiName, config, soql };
+        }),
+      );
+      const compareEntries: Array<{ objectName: string; soql: string; matchField: string }> = [];
+      for (const entry of resolved) {
+        if (!entry.soql) continue;
+        compareEntries.push({
+          objectName: entry.apiName,
+          soql: entry.soql,
+          matchField:
+            entry.config.matchField
+            || objectMetaCache.get(entry.apiName)?.matchField
+            || 'Name',
+        });
+      }
+      void runTargetCompare(compareEntries);
+    } finally {
+      setLoadingReview(false);
     }
-    // Objects whose configuration has not changed since their last preview
-    // reuse it; the rest re-fetch in parallel instead of one at a time.
-    const resolved = await Promise.all(
-      targets.map(async ({ apiName, config }) => {
-        const fresh =
-          config.previewSoql
-          && config.previewRecords
-          && config.previewKey === previewStateKey(config);
-        const soql = fresh
-          ? config.previewSoql
-          : (await runPreviewForObject(apiName, config))?.soql;
-        return { apiName, config, soql };
-      }),
-    );
-    const compareEntries: Array<{ objectName: string; soql: string; matchField: string }> = [];
-    for (const entry of resolved) {
-      if (!entry.soql) continue;
-      compareEntries.push({
-        objectName: entry.apiName,
-        soql: entry.soql,
-        matchField:
-          entry.config.matchField
-          || objectMetaCache.get(entry.apiName)?.matchField
-          || 'Name',
-      });
-    }
-    void runTargetCompare(compareEntries);
-  }, [canGoNext, checkedObjects, objectConfigs, objectMetaCache, runPreviewForObject, runTargetCompare]);
+  }, [
+    canGoNext,
+    checkedObjects,
+    loadingReview,
+    objectConfigs,
+    objectMetaCache,
+    runPreviewForObject,
+    runTargetCompare,
+  ]);
 
   const buildDeployPayload = useCallback((dryRun: boolean) => {
     const configured = objectOrder.map((objectName, order) => {
@@ -908,6 +923,7 @@ export function useOrgToOrgDeploy() {
     loadingObjects,
     loadingMeta,
     loadingPreview,
+    loadingReview,
     loadingDeploy,
     error,
     setError,

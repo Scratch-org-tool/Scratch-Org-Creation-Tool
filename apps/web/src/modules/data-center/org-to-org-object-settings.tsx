@@ -1,6 +1,8 @@
 'use client';
 
 import { Input, Label, Select } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
+import { BusyRow } from '@/components/studio';
 import { ORG_TO_ORG_RECORD_LIMIT_MAX, DATA_DEPLOY_CHUNK_SIZE, shouldChunkDeploy, chunkCountForLimit } from '@sfcc/shared';
 import { OrgToOrgDeployFieldsPicker } from './org-to-org-deploy-fields-picker';
 import { OrgToOrgFilterBuilder } from './org-to-org-filter-builder';
@@ -189,10 +191,15 @@ export function OrgToOrgObjectSettings({
       <div>
         <div className="flex items-center justify-between mb-2">
           <p className="text-sm font-medium leading-none">Matching records (sample)</p>
-          <span className="text-xs text-muted-foreground">
-            {loadingPreview
-              ? 'Loading…'
-              : `${config.matchCount?.toLocaleString() ?? '—'} match deploy limit (${config.recordLimit.toLocaleString()})`}
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            {loadingPreview ? (
+              <>
+                <Spinner size="sm" className="w-3 h-3" />
+                Loading…
+              </>
+            ) : (
+              `${config.matchCount?.toLocaleString() ?? '—'} match deploy limit (${config.recordLimit.toLocaleString()})`
+            )}
           </span>
         </div>
         {config.recordLimit > 2_000 && (
@@ -203,7 +210,7 @@ export function OrgToOrgObjectSettings({
         )}
         <div className="min-w-0 overflow-x-auto overflow-y-auto border border-border/60 rounded-lg max-h-48">
           {loadingPreview ? (
-            <p className="p-4 text-xs text-muted-foreground">Loading records…</p>
+            <BusyRow label="Loading records…" className="text-xs" />
           ) : previewRecords.length === 0 ? (
             <p className="p-4 text-xs text-muted-foreground">
               No records match — adjust filters, fields, limit, or SOQL query.

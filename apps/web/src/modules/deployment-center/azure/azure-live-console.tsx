@@ -278,7 +278,10 @@ export function AzureLiveConsole({
             className="studio-console h-full overflow-y-auto overflow-x-hidden scrollbar-thin p-2 text-[10px] leading-relaxed font-mono border-0 rounded-none"
           >
             {loadingLogs ? (
-              <span className="text-muted-foreground">Loading logs…</span>
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Loading logs…
+              </span>
             ) : !hasActiveJob && !logs.length ? (
               <span className="text-muted-foreground">Start a deployment to see live logs…</span>
             ) : filtered.length ? (

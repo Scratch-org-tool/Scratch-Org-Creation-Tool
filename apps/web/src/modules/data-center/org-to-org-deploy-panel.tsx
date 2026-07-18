@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import { ArrowLeftRight, ArrowRight, LoaderCircle, MoveRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label, Select } from '@/components/ui/input';
-import { ConfirmDialog, InlineAlert, StatusBadge, WizardSteps } from '@/components/studio';
+import { BusyRow, ConfirmDialog, InlineAlert, StatusBadge, WizardSteps } from '@/components/studio';
 import { OrgToOrgObjectSettings } from './org-to-org-object-settings';
 import { OrgToOrgObjectSidebar } from './org-to-org-object-sidebar';
 import { OrgToOrgPreviewStep } from './org-to-org-preview-step';
@@ -171,9 +171,13 @@ export function OrgToOrgDeployPanel() {
                   />
                 ) : (
                   <div className="flex items-center justify-center h-full p-8 text-sm text-muted-foreground">
-                    {w.loadingObjects
-                      ? 'Loading objects…'
-                      : 'Select an object from the list to configure deployment settings.'}
+                    {w.loadingObjects || (w.activeObject && w.loadingMeta) ? (
+                      <BusyRow
+                        label={w.loadingObjects ? 'Loading objects…' : 'Loading object metadata…'}
+                      />
+                    ) : (
+                      'Select an object from the list to configure deployment settings.'
+                    )}
                   </div>
                 )}
               </div>
@@ -200,6 +204,7 @@ export function OrgToOrgDeployPanel() {
                 checkedObjects={w.checkedObjectList}
                 objectConfigs={w.objectConfigs}
                 selectedRecordIds={w.selectedRecordIds}
+                loading={w.loadingReview || w.loadingPreview}
                 onToggleRecord={w.toggleRecord}
                 onToggleAll={w.toggleAllRecordsForObject}
                 onClearSelection={w.clearRecordSelection}
@@ -302,16 +307,21 @@ export function OrgToOrgDeployPanel() {
                   </Button>
                 )}
                 {w.wizardStep === 'configure' && (
-                  <Button onClick={() => void w.goToPreview()} disabled={!w.canGoNext}>
+                  <Button
+                    onClick={() => void w.goToPreview()}
+                    loading={w.loadingReview}
+                    disabled={!w.canGoNext}
+                  >
                     Review &amp; compare
-                    <ArrowRight />
+                    {!w.loadingReview && <ArrowRight />}
                   </Button>
                 )}
                 {w.wizardStep === 'preview' && (
                   <Button
                     onClick={() => void w.prepareDeploy()}
                     loading={w.loadingDeploy}
-                    disabled={!w.canDeploy}
+                    disabled={!w.canDeploy || w.loadingReview}
+                    title={w.loadingReview ? 'Wait for record previews to finish loading' : undefined}
                   >
                     Preflight &amp; deploy
                   </Button>

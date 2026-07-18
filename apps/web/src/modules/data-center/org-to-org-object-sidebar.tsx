@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
+import { BusyRow } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import type { OrgToOrgObjectInfo } from './types';
 
@@ -45,9 +46,11 @@ export function OrgToOrgObjectSidebar({
       </div>
       <div className="flex-1 overflow-y-auto max-h-[32rem]">
         {filtered.length === 0 ? (
-          <p className="p-3 text-xs text-muted-foreground">
-            {loading ? 'Loading objects…' : 'No objects found.'}
-          </p>
+          loading ? (
+            <BusyRow label="Loading objects…" className="text-xs" />
+          ) : (
+            <p className="p-3 text-xs text-muted-foreground">No objects found.</p>
+          )
         ) : (
           <ul>
             {filtered.map((obj) => {

@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Label, Select } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import {
   DeploymentPageHeader,
   GlassCard,
@@ -78,7 +79,8 @@ export function QualityWorkspace() {
   const [runs, setRuns] = useState<ApexRun[]>([]);
   const [coverage, setCoverage] = useState<CoverageResponse | null>(null);
   const [selectedRun, setSelectedRun] = useState<ApexRunDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [openingRunId, setOpeningRunId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -151,10 +153,13 @@ export function QualityWorkspace() {
   };
 
   const openRun = async (id: string) => {
+    setOpeningRunId(id);
     try {
       setSelectedRun(await api<ApexRunDetail>(`/quality/apex/runs/${id}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load run detail');
+    } finally {
+      setOpeningRunId(null);
     }
   };
 
@@ -182,8 +187,8 @@ export function QualityWorkspace() {
         accentClass="to-emerald-500/10"
         showBreadcrumbs
         actions={(
-          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={loading ? 'animate-spin' : ''} aria-hidden />
+          <Button variant="outline" size="sm" onClick={() => void load()} loading={loading}>
+            {!loading && <RefreshCw aria-hidden />}
             Refresh
           </Button>
         )}
@@ -299,7 +304,9 @@ export function QualityWorkspace() {
                   <button
                     type="button"
                     onClick={() => void openRun(run.id)}
-                    className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${
+                    disabled={Boolean(openingRunId)}
+                    aria-busy={openingRunId === run.id || undefined}
+                    className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-wait ${
                       selectedRun?.id === run.id
                         ? 'border-primary/50 bg-primary/10'
                         : 'border-border/60 hover:border-primary/30 hover:bg-secondary/40'
@@ -314,7 +321,11 @@ export function QualityWorkspace() {
                         {run.testRunCoverage !== null ? ` · ${run.testRunCoverage}% run coverage` : ''}
                       </p>
                     </div>
-                    <StatusBadge status={run.status} />
+                    {openingRunId === run.id ? (
+                      <Spinner size="sm" className="shrink-0" />
+                    ) : (
+                      <StatusBadge status={run.status} />
+                    )}
                   </button>
                 </li>
               ))}
@@ -328,7 +339,12 @@ export function QualityWorkspace() {
             ? `${selectedRun.outcome ?? selectedRun.status} · ${selectedRun.testsRan ?? 0} tests`
             : 'Select a run on the left.'}
         >
-          {!selectedRun ? (
+          {openingRunId ? (
+            <div className="space-y-2" aria-busy role="status" aria-label="Loading run detail">
+              <Skeleton className="h-12 rounded-lg" />
+              <Skeleton className="h-24 rounded-lg" />
+            </div>
+          ) : !selectedRun ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               Failures and slowest tests appear here.
             </p>

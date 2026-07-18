@@ -92,8 +92,8 @@ export function MetadataDeploymentHistory({ w }: MetadataDeploymentHistoryProps)
         title="Deployment history"
         description="Past org-to-org metadata deployments. Select a row to view logs and status details."
         headerAction={
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing}>
-            <RefreshCw className={cn('w-3.5 h-3.5 mr-1.5', refreshing && 'animate-spin')} />
+          <Button variant="outline" size="sm" onClick={() => void refresh()} loading={refreshing}>
+            {!refreshing && <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
             Refresh
           </Button>
         }

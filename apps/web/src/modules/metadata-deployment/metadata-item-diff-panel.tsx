@@ -10,7 +10,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { GlassCard, InlineAlert } from '@/components/studio';
+import { BusyRow, GlassCard, InlineAlert } from '@/components/studio';
 import {
   buildDiffHunks,
   extractHunkContent,
@@ -98,7 +98,9 @@ export function MetadataXmlDiffViewer({
   if (loading) {
     return (
       <GlassCard title="Source vs target diff">
-        <p className="text-xs text-muted-foreground text-center py-8">Loading XML diff…</p>
+        <div className="flex items-center justify-center py-8">
+          <BusyRow label="Loading XML diff…" className="text-xs" />
+        </div>
       </GlassCard>
     );
   }

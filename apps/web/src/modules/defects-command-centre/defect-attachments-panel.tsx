@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { InlineAlert } from '@/components/studio';
+import { ConfirmDialog, InlineAlert } from '@/components/studio';
 import { apiBlob } from '@/services/api';
 import type { WorkItemAttachment } from './types';
 import { DefectAttachmentPreview } from './defect-attachment-preview';
@@ -64,6 +64,8 @@ export function DefectAttachmentsPanel({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingDeletes, setPendingDeletes] = useState<Record<string, string>>({});
+  const [downloadingIds, setDownloadingIds] = useState<Record<string, boolean>>({});
+  const [confirmDelete, setConfirmDelete] = useState<WorkItemAttachment | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   if (loading) {
@@ -88,7 +90,9 @@ export function DefectAttachmentsPanel({
   };
 
   const download = async (attachment: WorkItemAttachment) => {
+    if (downloadingIds[attachment.id]) return;
     setActionError(null);
+    setDownloadingIds((current) => ({ ...current, [attachment.id]: true }));
     try {
       const blob = await apiBlob(contentPath(attachment.id));
       const url = URL.createObjectURL(blob);
@@ -99,12 +103,18 @@ export function DefectAttachmentsPanel({
       URL.revokeObjectURL(url);
     } catch (downloadError) {
       setActionError(downloadError instanceof Error ? downloadError.message : 'Attachment download failed');
+    } finally {
+      setDownloadingIds((current) => {
+        const next = { ...current };
+        delete next[attachment.id];
+        return next;
+      });
     }
   };
 
   const remove = async (attachment: WorkItemAttachment) => {
     if (deleteBusy) return;
-    if (!window.confirm(`Delete attachment "${attachment.name}"?`)) return;
+    setConfirmDelete(null);
     setActionError(null);
     setPendingDeletes((current) => ({ ...current, [attachment.id]: attachment.name }));
     try {
@@ -187,6 +197,7 @@ export function DefectAttachmentsPanel({
                       variant="outline"
                       size="icon"
                       className="h-8 w-8"
+                      loading={Boolean(downloadingIds[file.id])}
                       onClick={() => void download(file)}
                       aria-label={`Download ${file.name}`}
                     >
@@ -199,7 +210,7 @@ export function DefectAttachmentsPanel({
                         className="h-8 w-8"
                         loading={Boolean(deletingIds[file.id])}
                         disabled={deleteBusy}
-                        onClick={() => void remove(file)}
+                        onClick={() => setConfirmDelete(file)}
                         aria-label={`Delete ${file.name}`}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -219,6 +230,19 @@ export function DefectAttachmentsPanel({
         onOpenChange={(open) => {
           setPreviewOpen(open);
           if (!open) setPreview(null);
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        title="Delete attachment?"
+        message={`"${confirmDelete?.name ?? ''}" will be permanently removed from this work item.`}
+        confirmLabel="Delete attachment"
+        loading={deleteBusy}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+        onConfirm={() => {
+          if (confirmDelete) void remove(confirmDelete);
         }}
       />
     </>

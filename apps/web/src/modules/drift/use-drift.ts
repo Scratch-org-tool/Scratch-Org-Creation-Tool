@@ -23,6 +23,9 @@ export function useDriftMonitors() {
   const [monitors, setMonitors] = useState<DriftMonitorRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,18 +53,47 @@ export function useDriftMonitors() {
   }, []);
 
   const runNow = useCallback(async (id: string) => {
-    await api(`/drift/monitors/${id}/check`, { method: 'POST' });
-    setMonitors((current) =>
-      current.map((monitor) => (monitor.id === id ? { ...monitor, lastStatus: 'checking' } : monitor)),
-    );
+    setActionError(null);
+    setCheckingId(id);
+    try {
+      await api(`/drift/monitors/${id}/check`, { method: 'POST' });
+      setMonitors((current) =>
+        current.map((monitor) => (monitor.id === id ? { ...monitor, lastStatus: 'checking' } : monitor)),
+      );
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to start the drift check');
+    } finally {
+      setCheckingId(null);
+    }
   }, []);
 
   const remove = useCallback(async (id: string) => {
-    await api(`/drift/monitors/${id}`, { method: 'DELETE' });
-    setMonitors((current) => current.filter((monitor) => monitor.id !== id));
+    setActionError(null);
+    setRemovingId(id);
+    try {
+      await api(`/drift/monitors/${id}`, { method: 'DELETE' });
+      setMonitors((current) => current.filter((monitor) => monitor.id !== id));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to delete the drift monitor');
+      throw err;
+    } finally {
+      setRemovingId(null);
+    }
   }, []);
 
-  return { monitors, loading, error, refresh: load, create, runNow, remove };
+  return {
+    monitors,
+    loading,
+    error,
+    actionError,
+    clearActionError: () => setActionError(null),
+    checkingId,
+    removingId,
+    refresh: load,
+    create,
+    runNow,
+    remove,
+  };
 }
 
 export function useDriftMonitor(id: string) {

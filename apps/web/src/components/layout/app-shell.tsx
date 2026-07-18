@@ -1,9 +1,10 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Menu } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { AppSidebar, SidebarBrandCompact } from '@/components/layout/app-sidebar';
 import { SidebarPreferencesSync } from '@/components/layout/sidebar-preferences-sync';
 import { SidebarWidthSync } from '@/components/layout/sidebar-width-sync';
@@ -60,6 +61,17 @@ function AppShellContent({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const { profile, user, signOut, loading, profileError, refreshProfile } = useAuth();
   const canUseCopilot = canAccessModule(profile, 'copilot');
+  const [retryingProfile, setRetryingProfile] = useState(false);
+
+  const retryProfile = async () => {
+    if (retryingProfile) return;
+    setRetryingProfile(true);
+    try {
+      await refreshProfile();
+    } finally {
+      setRetryingProfile(false);
+    }
+  };
 
   useEffect(() => {
     if (searchParams.get('copilot') !== 'open' || !canUseCopilot) return;
@@ -92,10 +104,13 @@ function AppShellContent({ children }: { children: React.ReactNode }) {
               </span>
               <button
                 type="button"
-                onClick={() => refreshProfile()}
-                className="shrink-0 px-3 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 self-start sm:self-auto"
+                onClick={() => void retryProfile()}
+                disabled={retryingProfile}
+                aria-busy={retryingProfile || undefined}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 self-start sm:self-auto disabled:opacity-60 disabled:cursor-wait"
               >
-                Retry
+                {retryingProfile && <Spinner size="sm" className="w-3.5 h-3.5" />}
+                {retryingProfile ? 'Retrying…' : 'Retry'}
               </button>
             </div>
           )}

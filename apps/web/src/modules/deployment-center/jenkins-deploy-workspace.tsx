@@ -100,6 +100,7 @@ export function JenkinsDeployWorkspace() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
   const [triggering, setTriggering] = useState(false);
+  const [stoppingBuild, setStoppingBuild] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
 
   const [logBuild, setLogBuild] = useState<number | null>(null);
@@ -259,7 +260,8 @@ export function JenkinsDeployWorkspace() {
   };
 
   const stopBuild = async (buildNumber: number) => {
-    if (!selectedPath) return;
+    if (!selectedPath || stoppingBuild !== null) return;
+    setStoppingBuild(buildNumber);
     try {
       await api(`/jenkins/build/${buildNumber}/stop?path=${encodeURIComponent(selectedPath)}`, {
         method: 'POST',
@@ -268,6 +270,8 @@ export function JenkinsDeployWorkspace() {
       setTimeout(() => void loadDetail(selectedPath), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to stop build');
+    } finally {
+      setStoppingBuild(null);
     }
   };
 
@@ -288,8 +292,8 @@ export function JenkinsDeployWorkspace() {
         accentClass="to-orange-500/10"
         showBreadcrumbs
         actions={(
-          <Button variant="outline" size="sm" onClick={() => void loadOverview()} disabled={loading}>
-            <RefreshCw className={loading ? 'animate-spin' : ''} aria-hidden />
+          <Button variant="outline" size="sm" onClick={() => void loadOverview()} loading={loading}>
+            {!loading && <RefreshCw aria-hidden />}
             Refresh
           </Button>
         )}
@@ -505,8 +509,10 @@ export function JenkinsDeployWorkspace() {
                                   size="sm"
                                   variant="outline"
                                   onClick={() => void stopBuild(build.number)}
+                                  loading={stoppingBuild === build.number}
+                                  disabled={stoppingBuild !== null}
                                 >
-                                  <CircleStop aria-hidden />
+                                  {stoppingBuild !== build.number && <CircleStop aria-hidden />}
                                   Stop
                                 </Button>
                               )}

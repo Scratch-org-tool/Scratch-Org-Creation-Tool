@@ -14,6 +14,7 @@ import { Input, Label, Select } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
+  ConfirmDialog,
   GlassCard,
   InlineAlert,
   PageHeader,
@@ -69,7 +70,8 @@ export function SandboxRefreshWorkspace() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ id: string; action: 'complete' | 'delete' } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<SandboxRefreshRecord | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,7 +127,7 @@ export function SandboxRefreshWorkspace() {
   };
 
   const complete = async (record: SandboxRefreshRecord) => {
-    setBusyId(record.id);
+    setBusy({ id: record.id, action: 'complete' });
     setError(null);
     try {
       await api(`/sandbox-refresh/${record.id}/complete`, { method: 'POST' });
@@ -134,19 +136,21 @@ export function SandboxRefreshWorkspace() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to complete refresh');
     } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   };
 
   const remove = async (record: SandboxRefreshRecord) => {
-    setBusyId(record.id);
+    setBusy({ id: record.id, action: 'delete' });
     try {
       await api(`/sandbox-refresh/${record.id}`, { method: 'DELETE' });
       setRecords((current) => current.filter((row) => row.id !== record.id));
+      setConfirmDelete(null);
     } catch (err) {
+      setConfirmDelete(null);
       setError(err instanceof Error ? err.message : 'Failed to delete record');
     } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   };
 
@@ -160,8 +164,8 @@ export function SandboxRefreshWorkspace() {
         showBreadcrumbs={false}
         actions={(
           <>
-            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-              <RefreshCw className={loading ? 'animate-spin' : ''} aria-hidden />
+            <Button variant="outline" size="sm" onClick={() => void load()} loading={loading}>
+              {!loading && <RefreshCw aria-hidden />}
               Refresh
             </Button>
             <Button size="sm" onClick={() => setShowForm((current) => !current)}>
@@ -358,9 +362,12 @@ export function SandboxRefreshWorkspace() {
                     <Button
                       size="sm"
                       onClick={() => void complete(record)}
-                      loading={busyId === record.id}
+                      loading={busy?.id === record.id && busy.action === 'complete'}
+                      disabled={busy?.id === record.id}
                     >
-                      <CheckCircle2 aria-hidden />
+                      {!(busy?.id === record.id && busy.action === 'complete') && (
+                        <CheckCircle2 aria-hidden />
+                      )}
                       Mark complete
                     </Button>
                   )}
@@ -386,11 +393,12 @@ export function SandboxRefreshWorkspace() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => void remove(record)}
-                    disabled={busyId === record.id}
+                    onClick={() => setConfirmDelete(record)}
+                    loading={busy?.id === record.id && busy.action === 'delete'}
+                    disabled={busy?.id === record.id}
                     aria-label={`Delete ${record.sandboxName} record`}
                   >
-                    <Trash2 aria-hidden />
+                    {!(busy?.id === record.id && busy.action === 'delete') && <Trash2 aria-hidden />}
                   </Button>
                 </div>
               </li>
@@ -398,6 +406,20 @@ export function SandboxRefreshWorkspace() {
           </ul>
         )}
       </GlassCard>
+
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        title="Delete refresh record?"
+        message={`The tracking record for "${confirmDelete?.sandboxName ?? ''}" will be removed. This does not affect the sandbox itself.`}
+        confirmLabel="Delete record"
+        loading={busy?.action === 'delete'}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+        onConfirm={() => {
+          if (confirmDelete) void remove(confirmDelete);
+        }}
+      />
     </div>
   );
 }

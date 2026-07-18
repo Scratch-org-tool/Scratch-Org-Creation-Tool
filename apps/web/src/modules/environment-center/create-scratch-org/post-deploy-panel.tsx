@@ -191,7 +191,13 @@ export function PostDeployPanel({ run, automationRunId, sourceOrgId: sourceOrgId
         )}
         <div className="flex gap-2">
           {partnerMode === 'excel' && (
-            <Button size="sm" variant="outline" onClick={() => void handlePartnerPreview()} disabled={!excelFile}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handlePartnerPreview()}
+              loading={running === 'preview'}
+              disabled={!excelFile}
+            >
               Preview
             </Button>
           )}

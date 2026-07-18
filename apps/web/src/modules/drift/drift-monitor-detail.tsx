@@ -244,10 +244,11 @@ export function DriftMonitorDetail({ monitorId }: { monitorId: string }) {
                 size="sm"
                 variant="outline"
                 onClick={() => void openRemediation()}
+                loading={remediationLoading}
                 disabled={checking || (monitor.lastStatus !== 'drifted' && !remediationOpen)}
                 title={monitor.lastStatus !== 'drifted' ? 'Available when drift is detected' : undefined}
               >
-                <Wand2 className="mr-1.5 size-4" />
+                {!remediationLoading && <Wand2 className="mr-1.5 size-4" />}
                 Remediate
               </Button>
               <Button size="sm" onClick={() => void runNow()} loading={checking} disabled={checking}>

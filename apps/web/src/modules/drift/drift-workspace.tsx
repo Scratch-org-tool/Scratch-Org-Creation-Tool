@@ -8,7 +8,7 @@ import {
   describeSchedule,
   type DeploymentSchedule,
 } from '@sfcc/shared';
-import { GlassCard, InlineAlert, PageHeader, StatusBadge, relativeTime } from '@/components/studio';
+import { ConfirmDialog, GlassCard, InlineAlert, PageHeader, StatusBadge, relativeTime } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -53,12 +53,35 @@ const EMPTY_FORM: CreateFormState = {
 };
 
 export function DriftWorkspace() {
-  const { monitors, loading, error, refresh, create, runNow, remove } = useDriftMonitors();
+  const {
+    monitors,
+    loading,
+    error,
+    actionError,
+    clearActionError,
+    checkingId,
+    removingId,
+    refresh,
+    create,
+    runNow,
+    remove,
+  } = useDriftMonitors();
   const { orgs } = useOrgs();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<CreateFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    try {
+      await remove(pendingDelete.id);
+      setPendingDelete(null);
+    } catch {
+      // The hook surfaces the error; keep the dialog open so the user can retry.
+    }
+  };
 
   const orgAlias = useMemo(() => {
     const map = new Map<string, string>();
@@ -127,6 +150,11 @@ export function DriftWorkspace() {
       />
 
       {error && <InlineAlert variant="error">{error}</InlineAlert>}
+      {actionError && (
+        <InlineAlert variant="error" onDismiss={clearActionError}>
+          {actionError}
+        </InlineAlert>
+      )}
 
       {showForm && (
         <GlassCard title="New drift monitor" description="Compare two orgs on a schedule you control.">
@@ -342,7 +370,7 @@ export function DriftWorkspace() {
                   size="sm"
                   onClick={() => void runNow(monitor.id)}
                   disabled={monitor.lastStatus === 'checking'}
-                  loading={monitor.lastStatus === 'checking'}
+                  loading={monitor.lastStatus === 'checking' || checkingId === monitor.id}
                 >
                   Check now
                 </Button>
@@ -354,7 +382,9 @@ export function DriftWorkspace() {
                   size="icon"
                   className="ml-auto text-muted-foreground hover:text-red-400"
                   aria-label={`Delete ${monitor.name}`}
-                  onClick={() => void remove(monitor.id)}
+                  loading={removingId === monitor.id}
+                  disabled={Boolean(removingId)}
+                  onClick={() => setPendingDelete({ id: monitor.id, name: monitor.name })}
                 >
                   <Trash2 className="size-4" />
                 </Button>
@@ -363,6 +393,18 @@ export function DriftWorkspace() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="Delete drift monitor?"
+        message={`"${pendingDelete?.name ?? ''}" and its snapshot history will be permanently removed.`}
+        confirmLabel="Delete monitor"
+        loading={Boolean(removingId)}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

@@ -23,11 +23,13 @@ const ACTIVE_STATUSES = ['pending', 'queued', 'planning', 'running', 'paused'];
 export function OrgToOrgHistoryPanel() {
   const [movements, setMovements] = useState<OrgToOrgMovement[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { manual?: boolean }) => {
     const request = ++requestRef.current;
+    if (options?.manual) setRefreshing(true);
     try {
       const data = await api<OrgToOrgMovement[]>('/data/movements?movementType=org_to_org');
       if (request !== requestRef.current) return;
@@ -37,7 +39,10 @@ export function OrgToOrgHistoryPanel() {
       if (request !== requestRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to load deployment history');
     } finally {
-      if (request === requestRef.current) setLoading(false);
+      if (request === requestRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -61,8 +66,8 @@ export function OrgToOrgHistoryPanel() {
         <p className="text-xs text-muted-foreground">
           Latest 50 org-to-org data deployments you started.
         </p>
-        <Button size="sm" variant="outline" onClick={() => void load()}>
-          <RefreshCw />
+        <Button size="sm" variant="outline" onClick={() => void load({ manual: true })} loading={refreshing}>
+          {!refreshing && <RefreshCw />}
           Refresh
         </Button>
       </div>

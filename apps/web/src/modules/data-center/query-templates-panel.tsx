@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Textarea } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { InlineAlert } from '@/components/studio';
 import { api } from '@/services/api';
@@ -32,6 +33,7 @@ const EMPTY_TEMPLATE_FORM: TemplateFormState = {
 
 export function QueryTemplatesPanel() {
   const [templates, setTemplates] = useState<QueryTemplateApi[]>([]);
+  const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [variables, setVariables] = useState<Record<string, Record<string, string>>>({});
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,8 @@ export function QueryTemplatesPanel() {
   const load = useCallback(() => {
     api<unknown>('/data/query-templates')
       .then((value) => setTemplates(normalizeTemplates(value)))
-      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Could not load templates'));
+      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Could not load templates'))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -192,6 +195,24 @@ export function QueryTemplatesPanel() {
     </div>
   );
 
+  if (loading) {
+    return (
+      <div className="grid gap-4 md:grid-cols-2" aria-busy role="status" aria-label="Loading query templates">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="rounded-lg border border-border/60 p-4 space-y-3">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-3 w-1/2" />
+            <Skeleton className="h-20 w-full" />
+            <div className="flex gap-2">
+              <Skeleton className="h-8 w-24" />
+              <Skeleton className="h-8 w-28" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   if (templates.length === 0) {
     return (
       <div className="space-y-4">
@@ -246,10 +267,11 @@ export function QueryTemplatesPanel() {
                   size="sm"
                   variant="ghost"
                   onClick={() => void deleteTemplate(template)}
-                  disabled={deletingId === template.id}
+                  loading={deletingId === template.id}
+                  disabled={Boolean(deletingId)}
                   aria-label={`Delete ${template.label}`}
                 >
-                  <Trash2 aria-hidden />
+                  {deletingId !== template.id && <Trash2 aria-hidden />}
                 </Button>
               )}
             </div>

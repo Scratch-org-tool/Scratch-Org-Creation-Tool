@@ -3,12 +3,15 @@
 import { memo, useMemo, useState } from 'react';
 import { extractRecordId } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
+import { BusyRow } from '@/components/studio';
 import type { OrgToOrgObjectDeployConfig, OrgToOrgObjectInfo } from './types';
 
 interface OrgToOrgPreviewStepProps {
   checkedObjects: OrgToOrgObjectInfo[];
   objectConfigs: Map<string, OrgToOrgObjectDeployConfig>;
   selectedRecordIds: Map<string, Set<string>>;
+  /** True while record previews for the review step are still being fetched. */
+  loading?: boolean;
   onToggleRecord: (objectName: string, recordId: string) => void;
   onToggleAll: (objectName: string, recordIds: string[]) => void;
   onClearSelection: (objectName: string) => void;
@@ -60,6 +63,7 @@ const ObjectPreviewTable = memo(function ObjectPreviewTable({
   label,
   config,
   selected,
+  loading,
   onToggleRecord,
   onToggleAll,
   onClearSelection,
@@ -68,6 +72,7 @@ const ObjectPreviewTable = memo(function ObjectPreviewTable({
   label: string;
   config: OrgToOrgObjectDeployConfig | undefined;
   selected: ReadonlySet<string>;
+  loading?: boolean;
   onToggleRecord: (objectName: string, recordId: string) => void;
   onToggleAll: (objectName: string, recordIds: string[]) => void;
   onClearSelection: (objectName: string) => void;
@@ -135,7 +140,11 @@ const ObjectPreviewTable = memo(function ObjectPreviewTable({
       )}
       <div className="min-w-0 overflow-x-auto overflow-y-auto max-h-64">
         {records.length === 0 ? (
-          <p className="p-4 text-xs text-muted-foreground">No records match the current filter.</p>
+          loading ? (
+            <BusyRow label="Loading matching records…" className="text-xs" />
+          ) : (
+            <p className="p-4 text-xs text-muted-foreground">No records match the current filter.</p>
+          )
         ) : (
           <table className="text-xs w-max min-w-full">
             <thead className="sticky top-0 z-10 bg-card [&_th]:bg-card border-b border-border/60">
@@ -198,6 +207,7 @@ export function OrgToOrgPreviewStep({
   checkedObjects,
   objectConfigs,
   selectedRecordIds,
+  loading,
   onToggleRecord,
   onToggleAll,
   onClearSelection,
@@ -215,6 +225,7 @@ export function OrgToOrgPreviewStep({
           label={obj.label}
           config={objectConfigs.get(obj.apiName)}
           selected={selectedRecordIds.get(obj.apiName) ?? EMPTY_SELECTION}
+          loading={loading}
           onToggleRecord={onToggleRecord}
           onToggleAll={onToggleAll}
           onClearSelection={onClearSelection}
