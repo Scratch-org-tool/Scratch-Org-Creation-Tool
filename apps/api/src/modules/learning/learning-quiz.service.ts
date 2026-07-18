@@ -12,7 +12,6 @@ import {
   type LearningQuizSubmitInput,
 } from '@sfcc/shared';
 import { NvidiaService } from '../../integrations/nvidia/nvidia.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { getModule, type CurriculumModule, type CurriculumQuizQuestion } from './curriculum';
 import { LearningService } from './learning.service';
 
@@ -110,7 +109,6 @@ export class LearningQuizService {
   constructor(
     private readonly nvidia: NvidiaService,
     private readonly learningService: LearningService,
-    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -216,7 +214,11 @@ export class LearningQuizService {
     const pathJustCompleted = !pathCompleteBefore && pathCompleteAfter;
 
     if (pathJustCompleted) {
-      void this.notifyPathCompleted(userId, attempt.pathId, location.path.title);
+      void this.learningService.notifyPathCompleted(
+        userId,
+        attempt.pathId,
+        location.path.title,
+      );
     }
 
     return {
@@ -230,45 +232,10 @@ export class LearningQuizService {
       passPercent: LEARNING_QUIZ_PASS_PERCENT,
       review,
       moduleCompleted: moduleMeta.completed,
-      pathCompleted: pathCompleteAfter,
+      pathCompleted: pathJustCompleted,
       coaching: buildCoaching(scorePercent, passed, review, location.module.title),
       completedAt: completedAt.toISOString(),
     };
-  }
-
-  /** Learner + assigning admin both hear about a completed path. */
-  private async notifyPathCompleted(userId: string, pathId: string, pathTitle: string) {
-    try {
-      await this.notifications.notify({
-        userId,
-        category: 'system',
-        level: 'success',
-        title: `Path completed: ${pathTitle}`,
-        body: 'Congratulations — every lesson is done and every module quiz is passed. Your badge is on the academy page.',
-        link: `/learning/paths/${pathId}`,
-      });
-      const assignment = await prisma.learningAssignment.findFirst({
-        where: { userId, pathId, status: 'active' },
-      });
-      if (assignment && assignment.assignedBy !== userId) {
-        const learner = await prisma.appUser.findUnique({
-          where: { id: userId },
-          select: { displayName: true, email: true },
-        });
-        await this.notifications.notify({
-          userId: assignment.assignedBy,
-          category: 'system',
-          level: 'success',
-          title: `${learner?.displayName ?? 'A learner'} completed "${pathTitle}"`,
-          body: 'The assigned Salesforce Academy path is fully complete. Review their scores in Team Progress.',
-          link: '/learning/team',
-        });
-      }
-    } catch (error) {
-      this.logger.warn(
-        `path completion notification failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
   }
 
   private toAttemptView(

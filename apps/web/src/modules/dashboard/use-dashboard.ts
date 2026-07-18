@@ -5,9 +5,9 @@ import { api } from '@/services/api';
 import { getSessionCache, hasFreshSessionCache, setSessionCache } from '@/lib/session-cache';
 import type { DashboardData, DashboardDays } from './types';
 
-export function useDashboard(days: DashboardDays = 7) {
+export function useDashboard(days: DashboardDays = 7, enabled = true) {
   const cacheKey = `dashboard:${days}`;
-  const cached = getSessionCache<DashboardData>(cacheKey);
+  const cached = enabled ? getSessionCache<DashboardData>(cacheKey) : null;
   const [data, setData] = useState<DashboardData | null>(cached);
   const [loading, setLoading] = useState(!cached);
   const [refreshing, setRefreshing] = useState(false);
@@ -15,6 +15,13 @@ export function useDashboard(days: DashboardDays = 7) {
   const requestRef = useRef(0);
 
   const fetchDashboard = useCallback(async (manual = false) => {
+    if (!enabled) {
+      setData(null);
+      setLoading(false);
+      setRefreshing(false);
+      setError(null);
+      return;
+    }
     const request = ++requestRef.current;
     if (manual) {
       setRefreshing(true);
@@ -37,10 +44,17 @@ export function useDashboard(days: DashboardDays = 7) {
         setRefreshing(false);
       }
     }
-  }, [cacheKey, days]);
+  }, [cacheKey, days, enabled]);
 
   useEffect(() => {
     requestRef.current += 1;
+    if (!enabled) {
+      setData(null);
+      setLoading(false);
+      setRefreshing(false);
+      setError(null);
+      return;
+    }
     const periodCache = getSessionCache<DashboardData>(cacheKey);
     setData(periodCache);
     setLoading(!periodCache);
@@ -48,7 +62,7 @@ export function useDashboard(days: DashboardDays = 7) {
     setError(null);
     if (hasFreshSessionCache(cacheKey)) return;
     void fetchDashboard(false);
-  }, [cacheKey, fetchDashboard]);
+  }, [cacheKey, enabled, fetchDashboard]);
 
   const refetch = useCallback(() => fetchDashboard(true), [fetchDashboard]);
 

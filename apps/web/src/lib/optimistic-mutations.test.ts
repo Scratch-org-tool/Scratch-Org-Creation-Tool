@@ -210,7 +210,7 @@ describe('admin user-access optimistic mutation', () => {
     displayName: 'User One',
     role: 'user',
     grantedModules: [],
-    effectiveModules: ['dashboard', 'environment', 'data', 'defects'],
+    effectiveModules: ['dashboard'],
     displayRole: 'Viewer',
     status: 'active',
     lastActiveAt: null,

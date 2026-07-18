@@ -96,9 +96,15 @@ describe('canAccessNavChild', () => {
     expect(canAccessNavChild(profile({ role: 'admin' }), workbench)).toBe(true);
   });
 
-  it('shows data children to default users (data is a default module)', () => {
-    expect(canAccessNavChild(profile(), child('/data-center'))).toBe(true);
-    expect(canAccessNavChild(profile(), child('/data-deploy'))).toBe(true);
+  it('hides data children until an administrator grants the data module', () => {
+    expect(canAccessNavChild(profile(), child('/data-center'))).toBe(false);
+    expect(canAccessNavChild(profile(), child('/data-deploy'))).toBe(false);
+    expect(
+      canAccessNavChild(profile({ grantedModules: ['data'] }), child('/data-center')),
+    ).toBe(true);
+    expect(
+      canAccessNavChild(profile({ grantedModules: ['data'] }), child('/data-deploy')),
+    ).toBe(true);
   });
 
   it('shows Org & Users to org-setup OR provisioning users', () => {

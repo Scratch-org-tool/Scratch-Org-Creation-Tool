@@ -37,10 +37,17 @@ import {
   extractJsonArray,
   normalizeAiQuestion,
 } from './learning-quiz.service';
+import { LearningAdminService } from './learning-admin.service';
 import type { NvidiaService } from '../../integrations/nvidia/nvidia.service';
 import type { NotificationsService } from '../notifications/notifications.service';
 
 const USER = 'DPT_test-user';
+
+function notificationService(): NotificationsService {
+  return {
+    notify: vi.fn().mockResolvedValue(null),
+  } as unknown as NotificationsService;
+}
 
 function emptyState() {
   db.learningLessonProgress.findMany.mockResolvedValue([]);
@@ -50,26 +57,57 @@ function emptyState() {
 }
 
 describe('curriculum integrity', () => {
-  it('contains 4 paths ordered beginner → expert', () => {
-    expect(CURRICULUM).toHaveLength(4);
+  it('contains the complete 8-path catalog ordered beginner → expert', () => {
+    expect(CURRICULUM).toHaveLength(8);
     expect(CURRICULUM.map((p) => p.level)).toEqual([
       'beginner',
+      'beginner',
       'intermediate',
+      'intermediate',
+      'advanced',
+      'advanced',
       'advanced',
       'expert',
     ]);
+    expect(CURRICULUM.map((p) => p.id)).toEqual(
+      expect.arrayContaining([
+        'sf-modern-platform',
+        'javascript-engineering',
+        'java-integration-engineering',
+        'salesforce-release-management',
+      ]),
+    );
   });
 
-  it('has globally unique lesson and module ids and non-trivial volume', () => {
+  it('pins the advertised catalog counts and globally unique ids', () => {
     const moduleIds = CURRICULUM.flatMap((p) => p.modules.map((m) => m.id));
     const lessonIds = CURRICULUM.flatMap((p) =>
       p.modules.flatMap((m) => m.lessons.map((l) => l.id)),
     );
+    const questionIds = CURRICULUM.flatMap((p) =>
+      p.modules.flatMap((m) => m.quizBank.map((q) => q.id)),
+    );
     expect(new Set(moduleIds).size).toBe(moduleIds.length);
     expect(new Set(lessonIds).size).toBe(lessonIds.length);
-    expect(moduleIds.length).toBeGreaterThanOrEqual(12);
-    expect(lessonIds.length).toBeGreaterThanOrEqual(40);
+    expect(new Set(questionIds).size).toBe(questionIds.length);
+    expect(moduleIds).toHaveLength(25);
+    expect(lessonIds).toHaveLength(66);
+    expect(questionIds).toHaveLength(228);
     expect(totalLessonCount()).toBe(lessonIds.length);
+  });
+
+  it('keeps every expanded path at three modules and six scripted lessons', () => {
+    const expandedPathIds = [
+      'sf-modern-platform',
+      'javascript-engineering',
+      'java-integration-engineering',
+      'salesforce-release-management',
+    ];
+    for (const pathId of expandedPathIds) {
+      const path = getPath(pathId)!;
+      expect(path.modules).toHaveLength(3);
+      expect(path.modules.flatMap((module) => module.lessons)).toHaveLength(6);
+    }
   });
 
   it('gives every module a quiz bank of at least 8 valid questions', () => {
@@ -121,13 +159,13 @@ describe('LearningService catalog + progress', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new LearningService();
+    service = new LearningService(notificationService());
     emptyState();
   });
 
   it('returns zeroed progress for a fresh user', async () => {
     const catalog = await service.getCatalog(USER);
-    expect(catalog.paths).toHaveLength(4);
+    expect(catalog.paths).toHaveLength(8);
     expect(catalog.stats.lessonsCompleted).toBe(0);
     expect(catalog.stats.averageScorePercent).toBeNull();
     // Fresh users should be pointed at the very first lesson of the beginner path.
@@ -236,6 +274,46 @@ describe('LearningService catalog + progress', () => {
       }),
     );
   });
+
+  it('notifies when the final completion unit is a lesson', async () => {
+    const path = CURRICULUM[0]!;
+    const finalLesson = path.modules.at(-1)!.lessons.at(-1)!;
+    const allLessons = path.modules.flatMap((module) => module.lessons);
+    const before = allLessons
+      .filter((lesson) => lesson.id !== finalLesson.id)
+      .map((lesson) => ({ lessonId: lesson.id, completedAt: new Date() }));
+    const after = allLessons.map((lesson) => ({
+      lessonId: lesson.id,
+      completedAt: new Date(),
+    }));
+    const passedModules = path.modules.map((module) => ({
+      moduleId: module.id,
+      scorePercent: 90,
+      passed: true,
+      completedAt: new Date(),
+    }));
+    const notifications = { notify: vi.fn().mockResolvedValue(null) };
+    service = new LearningService(notifications as unknown as NotificationsService);
+    db.learningLessonProgress.findMany
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
+    db.learningQuizAttempt.findMany.mockResolvedValue(passedModules);
+    db.learningAssignment.findMany.mockResolvedValue([]);
+    db.learningAssignment.findFirst.mockResolvedValue(null);
+    db.learningLessonProgress.upsert.mockResolvedValue({ completedAt: new Date() });
+
+    const result = await service.completeLesson(USER, finalLesson.id);
+
+    expect(result.pathCompleted).toBe(true);
+    await vi.waitFor(() =>
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: USER,
+          title: `Path completed: ${path.title}`,
+        }),
+      ),
+    );
+  });
 });
 
 describe('quiz generation helpers', () => {
@@ -321,11 +399,12 @@ describe('LearningQuizService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    learningService = new LearningService();
+    learningService = new LearningService(
+      notifications as unknown as NotificationsService,
+    );
     quizService = new LearningQuizService(
       nvidia as unknown as NvidiaService,
       learningService,
-      notifications as unknown as NotificationsService,
     );
     emptyState();
   });
@@ -437,6 +516,30 @@ describe('LearningQuizService', () => {
     );
   });
 
+  it('does not report or notify path completion again on a quiz retake', async () => {
+    const module = CURRICULUM[0]!.modules[0]!;
+    const question = module.quizBank[0]!;
+    db.learningQuizAttempt.findUnique.mockResolvedValue({
+      id: 'attempt-retake',
+      userId: USER,
+      moduleId: module.id,
+      pathId: CURRICULUM[0]!.id,
+      status: 'in_progress',
+      questions: [question],
+      totalQuestions: 1,
+    });
+    db.learningQuizAttempt.update.mockResolvedValue({});
+    vi.spyOn(learningService, 'isPathComplete').mockResolvedValue(true);
+    const notifyCompleted = vi.spyOn(learningService, 'notifyPathCompleted');
+
+    const result = await quizService.submitQuiz(USER, 'attempt-retake', {
+      answers: [{ questionId: question.id, selectedIndex: question.correctIndex }],
+    });
+
+    expect(result.pathCompleted).toBe(false);
+    expect(notifyCompleted).not.toHaveBeenCalled();
+  });
+
   it('rejects double submission and foreign attempts', async () => {
     db.learningQuizAttempt.findUnique.mockResolvedValue({
       id: 'attempt-4',
@@ -463,5 +566,74 @@ describe('LearningQuizService', () => {
         answers: [{ questionId: 'x', selectedIndex: 0 }],
       }),
     ).rejects.toThrow('already submitted');
+  });
+});
+
+describe('LearningAdminService access control', () => {
+  const input = {
+    userIds: [USER],
+    pathIds: [CURRICULUM[0]!.id],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('requires Academy permission to be granted in User Access before assignment', async () => {
+    db.appUser.findMany.mockResolvedValue([
+      {
+        id: USER,
+        role: 'user',
+        status: 'active',
+        grantedModules: [],
+        displayName: 'Test Learner',
+      },
+    ]);
+    const service = new LearningAdminService(
+      new LearningService(notificationService()),
+      { notify: vi.fn() } as unknown as NotificationsService,
+    );
+
+    await expect(service.createAssignments('DPT_admin', input)).rejects.toThrow(
+      'Grant Salesforce Academy in Admin → User Access',
+    );
+    expect(db.appUser.update).not.toHaveBeenCalled();
+    expect(db.learningAssignment.create).not.toHaveBeenCalled();
+  });
+
+  it('creates an assignment after an explicit Academy grant', async () => {
+    db.appUser.findMany.mockResolvedValue([
+      {
+        id: USER,
+        role: 'user',
+        status: 'active',
+        grantedModules: ['learning'],
+        displayName: 'Test Learner',
+      },
+    ]);
+    db.appUser.findUnique.mockResolvedValue({ displayName: 'Admin User' });
+    db.learningAssignment.findUnique.mockResolvedValue(null);
+    db.learningAssignment.create.mockResolvedValue({
+      id: 'assignment-1',
+      userId: USER,
+      pathId: input.pathIds[0],
+      assignedBy: 'DPT_admin',
+      note: null,
+      dueAt: null,
+      status: 'active',
+      createdAt: new Date(),
+    });
+    const notify = vi.fn().mockResolvedValue(null);
+    const service = new LearningAdminService(
+      new LearningService(notificationService()),
+      { notify } as unknown as NotificationsService,
+    );
+
+    const result = await service.createAssignments('DPT_admin', input);
+
+    expect(result.created).toHaveLength(1);
+    expect(db.appUser.update).not.toHaveBeenCalled();
+    expect(db.learningAssignment.create).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledOnce());
   });
 });

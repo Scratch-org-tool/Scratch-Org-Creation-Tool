@@ -5,6 +5,7 @@ import {
   APP_MODULES,
   DEFAULT_USER_MODULES,
   LOCKED_MODULES,
+  MODULE_DESCRIPTIONS,
   MODULE_LABELS,
   type AppModule,
 } from '@sfcc/shared';
@@ -36,7 +37,7 @@ export function UserAccessPermissions() {
   return (
     <GlassCard
       title="Permission matrix"
-      description="Which modules each role can access. Admins always have every module."
+      description="Dashboard is the only standard-user default. Every product feature requires an explicit admin grant; admins always have all features."
       noPadding
     >
       <div className="overflow-x-auto">
@@ -60,7 +61,12 @@ export function UserAccessPermissions() {
                   key={module}
                   className="border-b border-border/40 last:border-0 hover:bg-secondary/20"
                 >
-                  <td className="px-4 py-3 font-medium">{MODULE_LABELS[module]}</td>
+                  <td className="px-4 py-3">
+                    <p className="font-medium">{MODULE_LABELS[module]}</p>
+                    <p className="mt-0.5 max-w-md text-[11px] leading-relaxed text-muted-foreground">
+                      {MODULE_DESCRIPTIONS[module]}
+                    </p>
+                  </td>
                   <Cell on={isDefault} />
                   <Cell on={isGrantable} />
                   <Cell on />

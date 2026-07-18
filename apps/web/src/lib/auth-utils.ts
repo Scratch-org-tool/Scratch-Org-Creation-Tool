@@ -4,6 +4,8 @@ export {
   canAccessModule,
   getEffectiveModules,
   MODULE_LABELS,
+  MODULE_DESCRIPTIONS,
+  isRegisteredAppPath,
   moduleForPath,
   LOCKED_MODULES,
   type AppModule,

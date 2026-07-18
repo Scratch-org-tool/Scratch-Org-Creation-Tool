@@ -9,6 +9,10 @@ import { foundationsPath } from './foundations.path';
 import { adminPath } from './admin.path';
 import { developerPath } from './developer.path';
 import { architectPath } from './architect.path';
+import { javascriptPath } from './javascript.path';
+import { modernPlatformPath } from './modern-platform.path';
+import { javaIntegrationPath } from './java.path';
+import { releaseManagementPath } from './release-management.path';
 
 export type {
   CurriculumLesson,
@@ -20,8 +24,12 @@ export type {
 /** All paths, ordered beginner → expert. */
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
+  javascriptPath,
   adminPath,
+  modernPlatformPath,
   developerPath,
+  javaIntegrationPath,
+  releaseManagementPath,
   architectPath,
 ].sort((a, b) => LEARNING_LEVEL_RANK[a.level] - LEARNING_LEVEL_RANK[b.level]);
 

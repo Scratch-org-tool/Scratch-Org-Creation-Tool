@@ -13,12 +13,14 @@ import {
 import type { Request } from 'express';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
+import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { RequireRole, RoleGuard } from '../../common/role.guard';
 import { GitHubIntegrationService } from './github-integration.service';
 import { GitHubWebhookService } from './github-webhook.service';
 
 @Controller('integrations')
-@UseGuards(AuthGuard, RoleGuard)
+@UseGuards(AuthGuard, ModuleGuard, RoleGuard)
+@RequireModule('environment')
 export class ProviderIntegrationController {
   constructor(private readonly github: GitHubIntegrationService) {}
 

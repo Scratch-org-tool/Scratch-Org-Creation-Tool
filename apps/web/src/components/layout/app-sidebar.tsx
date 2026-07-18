@@ -178,14 +178,12 @@ function NavButton({
 function NavEntry({
   item,
   profile,
-  allowed,
   active,
   collapsed,
   onNavigate,
 }: {
   item: NavItem;
   profile: Parameters<typeof canAccessNavChild>[0];
-  allowed: boolean;
   active: boolean;
   collapsed: boolean;
   onNavigate: (href: string) => void;
@@ -202,10 +200,8 @@ function NavEntry({
         label={item.label}
         icon={item.icon}
         active={active}
-        disabled={!allowed}
-        locked={!allowed}
         collapsed={collapsed}
-        onClick={() => allowed && onNavigate(item.href)}
+        onClick={() => onNavigate(item.href)}
       />
       {visibleChildren && visibleChildren.length > 0 && active && !collapsed && (
         <motion.div
@@ -341,17 +337,16 @@ function SidebarPanel({
                 {expanded && <span>Loading...</span>}
               </div>
             ) : (
-              APP_NAV.map((item) => (
-                <NavEntry
-                  key={item.href}
-                  item={item}
-                  profile={profile}
-                  allowed={canAccessNavItem(profile, item)}
-                  active={isNavItemActive(pathname, item)}
-                  collapsed={!expanded}
-                  onNavigate={navigate}
-                />
-              ))
+              APP_NAV.filter((item) => canAccessNavItem(profile, item)).map((item) => (
+                  <NavEntry
+                    key={item.href}
+                    item={item}
+                    profile={profile}
+                    active={isNavItemActive(pathname, item)}
+                    collapsed={!expanded}
+                    onNavigate={navigate}
+                  />
+                ))
             )}
 
             {profile?.role === 'admin' &&
@@ -373,19 +368,18 @@ function SidebarPanel({
           <div className="flex flex-col gap-0.5">
             <NotificationBell collapsed={!expanded} />
 
-            <NavButton
-              label="AI Copilot"
-              icon={Bot}
-              collapsed={!expanded}
-              disabled={!canAccessModule(profile, 'copilot')}
-              locked={!canAccessModule(profile, 'copilot')}
-              accent="purple"
-              onClick={() => {
-                if (!canAccessModule(profile, 'copilot')) return;
-                openCopilot();
-                if (isMobile) setOpenMobile(false);
-              }}
-            />
+            {canAccessModule(profile, 'copilot') && (
+              <NavButton
+                label="AI Copilot"
+                icon={Bot}
+                collapsed={!expanded}
+                accent="purple"
+                onClick={() => {
+                  openCopilot();
+                  if (isMobile) setOpenMobile(false);
+                }}
+              />
+            )}
 
             <NavTooltip
               label="Account"
