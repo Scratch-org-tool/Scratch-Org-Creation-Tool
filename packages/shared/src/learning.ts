@@ -458,3 +458,44 @@ export function quizStatusLabel(state: LearningModuleQuizState): string {
   if (state.attemptCount > 0) return `Best ${state.bestScorePercent ?? 0}% · retry`;
   return 'Not attempted';
 }
+
+/* ------------------------------------------------------------------ */
+/* Video sessions (admin-uploaded lesson videos)                       */
+/* ------------------------------------------------------------------ */
+
+/** One admin-uploaded video attached to a lesson's Video session block. */
+export interface LearningLessonVideoView {
+  id: string;
+  lessonId: string;
+  title: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedByName: string;
+  createdAt: string;
+}
+
+export const LEARNING_VIDEO_TITLE_MAX = 120;
+
+/** MIME types accepted for lesson video uploads. */
+export const LEARNING_VIDEO_MIME_TYPES = [
+  'video/mp4',
+  'video/webm',
+  'video/ogg',
+  'video/quicktime',
+  'video/x-matroska',
+  'video/x-msvideo',
+] as const;
+
+export function isAllowedLearningVideoMime(mime: string): boolean {
+  return (LEARNING_VIDEO_MIME_TYPES as readonly string[]).includes(mime);
+}
+
+export function formatVideoSize(sizeBytes: number): string {
+  if (sizeBytes >= 1024 * 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+  if (sizeBytes >= 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(sizeBytes / 1024))} KB`;
+}
