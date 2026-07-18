@@ -27,11 +27,15 @@ function configuredValue(value: string | undefined): string {
 }
 
 export function resolveGoogleGenAiApiKey(): string {
-  return configuredValue(
-    process.env.GOOGLE_GENAI_API_KEY ??
-      process.env.GEMINI_API_KEY ??
-      process.env.GOOGLE_API_KEY,
-  );
+  for (const candidate of [
+    process.env.GOOGLE_GENAI_API_KEY,
+    process.env.GEMINI_API_KEY,
+    process.env.GOOGLE_API_KEY,
+  ]) {
+    const key = configuredValue(candidate);
+    if (key) return key;
+  }
+  return '';
 }
 
 /** Gemini TTS returns mono 24 kHz signed 16-bit PCM; browsers need a WAV container. */
