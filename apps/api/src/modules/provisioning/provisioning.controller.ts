@@ -34,6 +34,11 @@ export class ProvisioningController {
     return this.provisioningService.provisionConaUsers(body, userId);
   }
 
+  @Post('lifecycle-users')
+  provisionLifecycleUsers(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.provisioningService.provisionLifecycleUsers(body, userId);
+  }
+
   @Post('plan/preview')
   previewTemplatePlan(@Body() body: unknown, @CurrentUser() userId: string) {
     return this.provisioningService.previewTemplatePlan(body, userId);

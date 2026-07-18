@@ -9,6 +9,7 @@ import { foundationsPath } from './foundations.path';
 import { adminPath } from './admin.path';
 import { developerPath } from './developer.path';
 import { architectPath } from './architect.path';
+import { modernPlatformPath } from './modern-platform.path';
 import { javascriptPath } from './javascript.path';
 import { javaPath } from './java.path';
 import { modernPlatformPath } from './modern-platform.path';

@@ -105,6 +105,12 @@ export const ONBOARDING_CONFIG_QUEUE_MAP = {
 
 export const CONA_BOTTLERS = ['5000', '4900', '4600'] as const;
 
+export const CONA_BOTTLER_LABELS: Record<(typeof CONA_BOTTLERS)[number], string> = {
+  '5000': 'Northeast',
+  '4900': 'Abarta',
+  '4600': 'Reyes',
+};
+
 export const ACCOUNT_EXPORT_FIELDS =
   'cfs_ob__Active__c, cfs_ob__Anchor_Delivery_Date__c, cfs_ob__Bottler__c, ' +
   'cfs_ob__BusinessTypeExtension__c, cfs_ob__Business_Type__c, ' +
