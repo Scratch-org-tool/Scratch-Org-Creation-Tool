@@ -1,5 +1,9 @@
-import { api } from '@/services/api';
-import type { ExplainerFocus, ExplainerStoryboard } from '@sfcc/shared';
+import { api, apiBlob } from '@/services/api';
+import type {
+  ExplainerCloudVoice,
+  ExplainerFocus,
+  ExplainerStoryboard,
+} from '@sfcc/shared';
 import type {
   LearningAdminOverview,
   LearningAssignmentResult,
@@ -74,6 +78,41 @@ export function fetchExplainer(input: {
   return api<ExplainerStoryboard>('/learning/tutor/explainer', {
     method: 'POST',
     body: JSON.stringify(input),
+  });
+}
+
+export function fetchExplainerImage(
+  input: {
+    lessonId: string;
+    focus?: ExplainerFocus;
+    question?: string;
+    sceneId: string;
+  },
+  signal?: AbortSignal,
+) {
+  return apiBlob('/learning/tutor/explainer/image', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+  });
+}
+
+export function fetchExplainerSpeech(
+  input: {
+    lessonId: string;
+    focus?: ExplainerFocus;
+    question?: string;
+    sceneId: string;
+    voice: ExplainerCloudVoice;
+  },
+  signal?: AbortSignal,
+) {
+  return apiBlob('/learning/tutor/explainer/speech', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    headers: { 'Content-Type': 'application/json' },
+    signal,
   });
 }
 

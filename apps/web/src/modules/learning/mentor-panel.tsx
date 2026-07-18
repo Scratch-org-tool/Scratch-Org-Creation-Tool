@@ -5,6 +5,7 @@ import {
   Bot,
   Clapperboard,
   CornerDownLeft,
+  Lightbulb,
   MessageSquare,
   Play,
   Sparkles,
@@ -15,7 +16,6 @@ import {
 } from 'lucide-react';
 import type { ExplainerFocus } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/utils/cn';
 import { askTutor } from './learning-api';
@@ -61,7 +61,8 @@ function StoryCard({
   onPlay: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-secondary/20 p-3.5 transition-colors hover:border-violet-400/40">
+    <div className="group relative overflow-hidden rounded-xl border border-border/60 bg-secondary/20 p-3.5 transition-colors hover:border-violet-400/40">
+      <div className="pointer-events-none absolute -right-8 -top-8 size-24 rounded-full bg-violet-500/10 blur-2xl transition-colors group-hover:bg-violet-500/20" />
       <div className="flex items-start gap-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
           <Icon className="size-[18px]" />
@@ -180,7 +181,7 @@ export function MentorPanel({
           <div className="min-w-0">
             <p className="text-sm font-semibold">AI Mentor</p>
             <p className="text-[11px] text-muted-foreground">
-              Watch it explained — or ask anything about this lesson.
+              Build a mental movie — or ask anything about this lesson.
             </p>
           </div>
         </div>
@@ -220,22 +221,8 @@ export function MentorPanel({
 
       {mode === 'story' && storyAvailable ? (
         <div className="flex-1 space-y-3 overflow-y-auto scrollbar-thin p-4 min-h-[180px]">
-          <StoryCard
-            icon={Clapperboard}
-            title="Play this lesson as a story"
-            description="An animated, scene-by-scene walkthrough of the whole lesson — with voice narration and captions."
-            cta="Play lesson story"
-            onPlay={() => onPlayStory!('lesson')}
-          />
-          <StoryCard
-            icon={Sparkles}
-            title={realWorldTitle ? `Scenario: ${realWorldTitle}` : 'Real-world scenario'}
-            description="Watch the real-world case unfold: the problem, the fix, and the outcome — animated."
-            cta="Play scenario"
-            onPlay={() => onPlayStory!('real-world')}
-          />
           <form
-            className="rounded-xl border border-dashed border-border/70 p-3.5"
+            className="relative overflow-hidden rounded-xl border border-violet-400/30 bg-gradient-to-br from-violet-500/15 via-secondary/20 to-sky-500/10 p-3.5"
             onSubmit={(event) => {
               event.preventDefault();
               const question = storyQuestion.trim();
@@ -244,34 +231,54 @@ export function MentorPanel({
               setStoryQuestion('');
             }}
           >
-            <p className="flex items-center gap-1.5 text-xs font-semibold">
+            <div className="pointer-events-none absolute -right-5 -top-8 size-24 rounded-full bg-sky-400/10 blur-2xl" />
+            <p className="relative flex items-center gap-1.5 text-xs font-semibold">
               <Wand2 className="size-3.5 text-violet-300" />
-              Explain anything, visually
+              Turn your question into a concept film
             </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Ask a question and the mentor will direct an animated answer.
+            <p className="relative mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              The mentor answers it as a narrated mental model with generated scene art—not a
+              slide deck reading the lesson back to you.
             </p>
-            <div className="mt-2 flex items-center gap-2">
-              <Input
-                value={storyQuestion}
-                onChange={(event) => setStoryQuestion(event.target.value)}
-                placeholder="e.g. Why do governor limits exist?"
-                maxLength={500}
-                className="h-8 text-xs"
-              />
-              <Button
-                type="submit"
-                size="icon"
-                className="size-8 shrink-0"
-                disabled={storyQuestion.trim().length === 0}
-                aria-label="Play visual answer"
-              >
-                <Play className="size-3.5" />
-              </Button>
+            <Textarea
+              value={storyQuestion}
+              onChange={(event) => setStoryQuestion(event.target.value)}
+              placeholder="What should I finally understand? e.g. Why do governor limits exist?"
+              maxLength={500}
+              rows={2}
+              className="relative mt-2 min-h-[58px] resize-none bg-background/55 text-xs"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              className="relative mt-2.5 h-8 w-full gap-1.5 text-xs"
+              disabled={storyQuestion.trim().length === 0}
+            >
+              <Play className="size-3.5" />
+              Create narrated answer
+            </Button>
+            <div className="relative mt-2 flex flex-wrap justify-center gap-1.5 text-[9px] text-muted-foreground">
+              <span className="rounded-full bg-background/50 px-2 py-0.5">Concept-first</span>
+              <span className="rounded-full bg-background/50 px-2 py-0.5">Generated scenes</span>
+              <span className="rounded-full bg-background/50 px-2 py-0.5">Selectable voices</span>
             </div>
           </form>
+          <StoryCard
+            icon={Lightbulb}
+            title="Catch the lesson concept"
+            description="Build the core mental model in five connected scenes, then compress it into one idea you can recall."
+            cta="Play concept story"
+            onPlay={() => onPlayStory!('lesson')}
+          />
+          <StoryCard
+            icon={Sparkles}
+            title={realWorldTitle ? `Apply it: ${realWorldTitle}` : 'Apply it to a case'}
+            description="Optional: watch the tension, turning point, and consequence when the concept meets a realistic case."
+            cta="Watch case story"
+            onPlay={() => onPlayStory!('real-world')}
+          />
           <p className="text-center text-[10px] text-muted-foreground">
-            Voice narration uses your browser&apos;s speech engine — no audio is sent anywhere.
+            Choose the narrator, speed, voice, and captions inside the player.
           </p>
         </div>
       ) : (
