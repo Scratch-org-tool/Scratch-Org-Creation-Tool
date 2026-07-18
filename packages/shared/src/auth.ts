@@ -47,6 +47,14 @@ export const LOCKED_MODULES = [
   'learning',
 ] as const;
 
+/**
+ * Default modules an administrator may switch OFF per user from User Access.
+ * `dashboard` is deliberately not revocable: it is the post-login landing page
+ * and the redirect target for locked routes, so removing it would strand the
+ * user in a redirect loop.
+ */
+export const REVOCABLE_DEFAULT_MODULES = ['environment', 'data', 'defects'] as const;
+
 export type AppModule = (typeof APP_MODULES)[number];
 export type UserRole = 'admin' | 'user';
 export type UserAccessStatus = 'active' | 'inactive';
@@ -57,8 +65,19 @@ export interface UserAccessProfile {
   displayName: string;
   role: UserRole;
   grantedModules: AppModule[];
+  /** Default modules explicitly switched off for this user by an admin. */
+  revokedModules?: AppModule[];
+  /** When true, the Academy only shows paths an admin assigned to this user. */
+  learningAssignedOnly?: boolean;
   status?: UserAccessStatus;
   lastActiveAt?: string | null;
+}
+
+/** Server-side normalization: only revocable defaults may be revoked. */
+export function sanitizeRevokedModules(modules: readonly string[] | undefined): AppModule[] {
+  if (!modules || modules.length === 0) return [];
+  const revocable = new Set<string>(REVOCABLE_DEFAULT_MODULES);
+  return [...new Set(modules.filter((m) => revocable.has(m)))] as AppModule[];
 }
 
 /**
@@ -89,16 +108,28 @@ export function resolveRole(
   return 'user';
 }
 
-export function getEffectiveModules(profile: Pick<UserAccessProfile, 'role' | 'grantedModules'>): AppModule[] {
+export function getEffectiveModules(
+  profile: Pick<UserAccessProfile, 'role' | 'grantedModules'> &
+    Partial<Pick<UserAccessProfile, 'revokedModules'>>,
+): AppModule[] {
   if (profile.role === 'admin') {
     return [...APP_MODULES];
   }
   const granted = new Set<AppModule>([...DEFAULT_USER_MODULES, ...profile.grantedModules]);
+  // Revocations are admin-controlled and only ever apply to revocable
+  // defaults, so a stale/legacy grant of a default module cannot bypass them.
+  for (const revoked of sanitizeRevokedModules(profile.revokedModules)) {
+    granted.delete(revoked);
+  }
   return APP_MODULES.filter((m) => granted.has(m));
 }
 
 export function canAccessModule(
-  profile: Pick<UserAccessProfile, 'role' | 'grantedModules'> | null | undefined,
+  profile:
+    | (Pick<UserAccessProfile, 'role' | 'grantedModules'> &
+        Partial<Pick<UserAccessProfile, 'revokedModules'>>)
+    | null
+    | undefined,
   module: AppModule,
 ): boolean {
   if (!profile) return false;

@@ -1,13 +1,17 @@
 # Salesforce Academy (Learning Module)
 
-An admin-controlled, AI-powered Salesforce and engineering training program built into the
-platform. It takes a complete fresher to architect-level understanding through eight guided paths,
-with an AI mentor on every lesson, an instant quiz after every module, and full progress visibility
-for administrators.
+An admin-controlled, AI-powered training program built into the platform. It takes a complete
+fresher to architect-level understanding through seven guided paths — the Salesforce core
+curriculum plus programming (JavaScript, Java) and delivery (release management) tracks — with an
+AI mentor on every lesson, an instant quiz after every module, and full progress visibility for
+administrators.
 
 ## What learners get
 
-- **Eight learning paths, beginner → expert** (25 modules, 66 lessons, ~84 hours of curriculum):
+- **Seven learning paths in three catalog groups** (22 modules, 69 lessons, ~55 hours of
+  curriculum):
+
+  *Salesforce core curriculum*
   1. **Salesforce Foundations** (Beginner) — CRM concepts, the platform, navigation, data model,
      reports, collaboration. Designed so a new joiner needs zero prior knowledge.
   2. **JavaScript Engineering** (Beginner) — modern JavaScript and TypeScript, async APIs,
@@ -24,8 +28,22 @@ for administrators.
      environments, CI/CD gates, runbooks, recovery, hotfixes, and delivery improvement.
   8. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
      and identity architecture, Salesforce DX, scratch orgs, packaging, CI/CD, and governance.
-  The ~84-hour estimate includes lesson study, demonstrations, hands-on practice, mentor work,
-  quizzes, and review—not only the authored reading time.
+
+  *Programming & platform skills*
+  5. **JavaScript Mastery** (Intermediate) — language fundamentals, modern ES6+ syntax, async
+     programming with promises/await, the DOM and events, fetch + REST APIs, and the exact
+     patterns Lightning Web Components are built on. Full code samples in every module.
+  6. **Java Programming** (Intermediate) — the JVM platform, types and control flow, OO design
+     with interfaces and collections/generics/streams, exceptions, HTTP + JSON against the
+     Salesforce REST API, and Maven/JUnit builds — the language of the middleware next to
+     every org (and the one Apex grew from).
+
+  *Delivery & release management*
+  7. **Release Management & DevOps** (Advanced) — branching and environment strategy, release
+     cadence/calendars/freeze windows, CI/CD quality gates with validate-only deploys, test
+     strategy and static analysis, deployment/rollback mechanics, release planning with
+     approvals and notes, go-live runbooks and hypercare, and DORA release-health metrics —
+     mapped onto this platform's Releases, Drift, and Calendar modules.
 - **Every lesson** includes learning objectives, structured explanations, a **real-world
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
@@ -50,23 +68,32 @@ for administrators.
   block shows real training videos that an **administrator uploads for that lesson** (MP4, WebM,
   OGG, MOV, MKV, AVI). Learners play them inline with the standard player (seek, volume,
   fullscreen); playback is authenticated, so videos are only reachable by users with Academy
-  access. Admins upload and delete directly inside the block; files are stored on the API server
-  under `LEARNING_VIDEO_DIR` with metadata in Postgres, and the streaming endpoint supports HTTP
-  Range requests. The 24 new lessons have reviewed, time-coded five-minute narration and editor
-  directions in `docs/salesforce-academy-expanded-training-video-scripts.md`; administrators render
-  those production inputs and upload the result against the stable lesson ID.
+  access (and, for assigned-only learners, only for paths assigned to them). Admins upload and
+  delete directly inside the block; files are stored on the API server under `LEARNING_VIDEO_DIR`
+  with metadata in Postgres, and the streaming endpoint supports HTTP Range requests. Production
+  scripts for recording these videos live in `docs/training/` (see below).
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
-  (with a 228-question curated bank as automatic fallback when AI is unavailable). Scoring happens
+  (with a 220-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
   every question gets an explanation plus a coaching summary of focus areas. Pass mark: 70%.
 - **Progress capture** — every lesson completion and quiz attempt (score, pass/fail, source,
   timestamps) is persisted. Module completion = all lessons read + quiz passed; path completion
   earns a named badge.
+- **Production docs for every lesson** — `docs/training/` holds one generated document per path
+  with, for every lesson: the full concept explanation, the real-world example, key takeaways,
+  resources, and a timecoded **5-minute video script** (word-for-word narration, on-screen
+  direction, demo steps) ready for recording or external AI video tools. Regenerate with
+  `npm run docs:training` whenever curriculum changes.
 
 ## What admins get
 
 - **Module gating** — `learning` is a locked module: standard users see the Academy only when an
   administrator grants it (Admin → User Access), exactly like other locked modules.
+- **Catalog scope per user** — in User Access → Manage, admins can flip a learner to
+  **assigned paths only**. The catalog, lessons, quizzes, AI mentor, stories, and uploaded video
+  sessions (list + stream) of unassigned paths are then completely invisible to that user
+  (enforced server-side with 403s, not just hidden in the UI) until an admin assigns the path.
+  Stats and progress totals reflect only the visible curriculum.
 - **Assignments** — from **Academy Progress** (`/learning/team`), admins assign one or more paths
   to one or more users with an optional note and due date. Academy access must first be explicitly
   enabled in **Admin → User Access**; assignments never bypass that control. Assigned learners

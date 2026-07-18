@@ -204,6 +204,8 @@ export class LearningAdminService {
           role: true,
           status: true,
           grantedModules: true,
+          revokedModules: true,
+          learningAssignedOnly: true,
         },
       }),
       prisma.learningLessonProgress.findMany({
@@ -289,6 +291,7 @@ export class LearningAdminService {
             pathId: path.id,
             title: path.title,
             level: path.level,
+            category: path.category,
             assigned: assignedPathIds.has(path.id),
             assignmentId: assignment?.id ?? null,
             dueAt: assignment?.dueAt?.toISOString() ?? null,
@@ -308,6 +311,7 @@ export class LearningAdminService {
         const profile = {
           role: user.role as UserRole,
           grantedModules: user.grantedModules as AppModule[],
+          revokedModules: user.revokedModules as AppModule[],
         };
 
         return {
@@ -315,6 +319,7 @@ export class LearningAdminService {
           email: user.email,
           displayName: user.displayName,
           hasLearningAccess: canAccessModule(profile, 'learning'),
+          learningAssignedOnly: user.role !== 'admin' && user.learningAssignedOnly,
           lessonsCompleted: [...entry.lessonsByPath.values()].reduce(
             (sum, set) => sum + set.size,
             0,

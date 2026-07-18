@@ -232,6 +232,8 @@ describe('admin user-access optimistic mutation', () => {
     const draft: ManageDraft = {
       role: 'admin',
       grantedModules: [],
+      revokedModules: [],
+      learningAssignedOnly: false,
       status: 'inactive',
     };
     const pending = applyAccessDraft(overview, user.id, draft);
@@ -246,6 +248,20 @@ describe('admin user-access optimistic mutation', () => {
     const server = { ...pending.users[0]!, displayName: 'Server Name', optimisticState: undefined };
     expect(reconcileAccessRow(pending, server).users[0]?.displayName).toBe('Server Name');
     expect(overview.users[0]).toEqual(user);
+  });
+
+  it('revoking a default module removes it from the optimistic effective set', () => {
+    const draft: ManageDraft = {
+      role: 'user',
+      grantedModules: ['learning'],
+      revokedModules: ['data'],
+      learningAssignedOnly: true,
+      status: 'active',
+    };
+    const pending = applyAccessDraft(overview, user.id, draft);
+    expect(pending.users[0]?.effectiveModules).not.toContain('data');
+    expect(pending.users[0]?.effectiveModules).toContain('learning');
+    expect(pending.users[0]?.learningAssignedOnly).toBe(true);
   });
 });
 

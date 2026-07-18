@@ -712,6 +712,11 @@ model AppUser {
   displayName    String
   role           AppUserRole @default(user)
   grantedModules String[]    @default([])
+  /// Default modules an admin explicitly switched off for this user
+  /// (revocable defaults only — see REVOCABLE_DEFAULT_MODULES in @sfcc/shared).
+  revokedModules String[]    @default([])
+  /// When true, the Salesforce Academy only shows paths an admin assigned.
+  learningAssignedOnly Boolean @default(false)
   status         String      @default("active")
   lastActiveAt   DateTime?
   /// Personal opt-in for outbound email alerts (work-item updates, job

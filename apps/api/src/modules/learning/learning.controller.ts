@@ -116,18 +116,22 @@ export class LearningController {
 
   /** Admin-uploaded video sessions attached to this lesson. */
   @Get('lessons/:lessonId/videos')
-  listLessonVideos(@Param('lessonId') lessonId: string) {
+  async listLessonVideos(@CurrentUser() userId: string, @Param('lessonId') lessonId: string) {
+    await this.learningService.assertLessonVisible(userId, lessonId);
     return this.videoService.listForLesson(lessonId);
   }
 
   /** Stream an uploaded lesson video with HTTP Range support (seeking). */
   @Get('videos/:videoId/stream')
   async streamLessonVideo(
+    @CurrentUser() userId: string,
     @Param('videoId') videoId: string,
     @Req() request: Request,
     @Res() response: Response,
   ) {
     const handle = await this.videoService.resolveFile(videoId);
+    // Assigned-only learners must not stream videos of paths hidden from them.
+    await this.learningService.assertLessonVisible(userId, handle.video.lessonId);
     response.setHeader('Content-Type', handle.mimeType);
     response.setHeader('Accept-Ranges', 'bytes');
     response.setHeader('Cache-Control', 'private, no-store');
@@ -173,53 +177,72 @@ export class LearningController {
   }
 
   @Post('tutor')
-  askTutor(@Body() body: unknown) {
+  async askTutor(@CurrentUser() userId: string, @Body() body: unknown) {
     const parsed = learningTutorAskSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
+    }
+    if (parsed.data.lessonId) {
+      await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     }
     return this.tutorService.ask(parsed.data);
   }
 
   /** AI-scripted animated storyboard (voice + graphics) for a lesson. */
   @Post('tutor/explainer')
-  getExplainer(@Body() body: unknown) {
+  async getExplainer(@CurrentUser() userId: string, @Body() body: unknown) {
     const parsed = learningExplainerRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     return this.explainerService.getStoryboard(parsed.data);
   }
 
   /** Generated motion clip (ComfyUI/LTX) for one scene; 204 means fall back to still art. */
   @Post('tutor/explainer/video')
-  async getExplainerVideo(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerVideo(
+    @CurrentUser() userId: string,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerVideoRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     const media = await this.explainerService.getSceneVideo(parsed.data);
     this.sendMedia(response, media, 'academy-scene-motion');
   }
 
   /** Generated still art (Stable Diffusion/FLUX) for one scene; 204 means use the diagram fallback. */
   @Post('tutor/explainer/image')
-  async getExplainerImage(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerImage(
+    @CurrentUser() userId: string,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerImageRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     const media = await this.explainerService.getSceneImage(parsed.data);
     this.sendMedia(response, media, 'academy-scene');
   }
 
   /** Selectable studio narration for one scene; 204 means use browser speech. */
   @Post('tutor/explainer/speech')
-  async getExplainerSpeech(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerSpeech(
+    @CurrentUser() userId: string,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerSpeechRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     const media = await this.explainerService.getSceneSpeech(parsed.data);
     this.sendMedia(response, media, 'academy-narration');
   }

@@ -12,6 +12,7 @@ export const foundationsPath: CurriculumPath = {
   description:
     'Start here if you are new to Salesforce or CRM in general. This path explains what Salesforce is, how the platform organizes information, and how real teams use it every day. You will finish able to navigate any org, read its data model, and build your first report.',
   level: 'beginner',
+  category: 'salesforce',
   badge: 'Foundations Graduate',
   estimatedHours: 6,
   skills: ['CRM concepts', 'Lightning navigation', 'Data model literacy', 'Reports & dashboards'],

@@ -10,8 +10,7 @@ import { adminPath } from './admin.path';
 import { developerPath } from './developer.path';
 import { architectPath } from './architect.path';
 import { javascriptPath } from './javascript.path';
-import { modernPlatformPath } from './modern-platform.path';
-import { javaIntegrationPath } from './java.path';
+import { javaPath } from './java.path';
 import { releaseManagementPath } from './release-management.path';
 
 export type {
@@ -21,14 +20,17 @@ export type {
   CurriculumQuizQuestion,
 } from './curriculum.types';
 
-/** All paths, ordered beginner → expert. */
+/**
+ * All paths, ordered beginner → expert (stable within a level: Salesforce
+ * core first, then programming tracks, then delivery tracks).
+ */
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
   javascriptPath,
   adminPath,
-  modernPlatformPath,
+  javascriptPath,
+  javaPath,
   developerPath,
-  javaIntegrationPath,
   releaseManagementPath,
   architectPath,
 ].sort((a, b) => LEARNING_LEVEL_RANK[a.level] - LEARNING_LEVEL_RANK[b.level]);

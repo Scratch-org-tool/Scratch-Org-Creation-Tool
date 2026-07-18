@@ -23,12 +23,19 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/contexts/auth-context';
 import { cn } from '@/utils/cn';
+import {
+  LEARNING_PATH_CATEGORY_DESCRIPTIONS,
+  LEARNING_PATH_CATEGORY_LABELS,
+  LEARNING_PATH_CATEGORY_RANK,
+} from '@sfcc/shared';
 import { LEVEL_THEMES, formatDate, formatDuration, levelLabel } from './learning-ui';
 import { ProgressRing } from './progress-ring';
 import { useAcademyWorkspace } from './use-academy-workspace';
-import type { LearningCatalogResponse, LearningLevel, LearningPathSummary } from './types';
-
-const LEVEL_FILTERS = ['all', 'beginner', 'intermediate', 'advanced', 'expert'] as const;
+import type {
+  LearningCatalogResponse,
+  LearningPathCategory,
+  LearningPathSummary,
+} from './types';
 
 function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
   const { stats, continueTarget } = catalog;
@@ -64,12 +71,13 @@ function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
             AI-powered training
           </div>
           <h2 className="mt-2 text-2xl md:text-3xl font-bold">
-            Build Salesforce expertise and modern engineering skills
+            Master Salesforce, programming, and releases — from first login to architect
           </h2>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-            {catalog.paths.length} guided paths spanning Salesforce, JavaScript, Java, and release
-            engineering — with real-world examples, code, an AI mentor, and instant module quizzes.
-            Every completion and score is captured on your profile.
+            {stats.totalPaths} guided path{stats.totalPaths === 1 ? '' : 's'} with real-world
+            examples, curated resources, an AI mentor for every lesson, and instant quizzes after
+            each module — spanning the Salesforce platform, JavaScript and Java, and release
+            management. Every completion and score is captured on your profile.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             {continueHref && continueTarget ? (
@@ -80,6 +88,11 @@ function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
                   <ArrowRight className="size-4" />
                 </Link>
               </Button>
+            ) : stats.totalPaths === 0 ? (
+              <span className="inline-flex items-center gap-2 rounded-md bg-secondary/60 px-4 py-2 text-sm font-medium text-muted-foreground">
+                <Target className="size-4" />
+                No training assigned yet — your administrator curates your catalog
+              </span>
             ) : (
               <span className="inline-flex items-center gap-2 rounded-md bg-emerald-500/15 px-4 py-2 text-sm font-medium text-emerald-300">
                 <Trophy className="size-4" />
@@ -350,6 +363,13 @@ export function AcademyWorkspace() {
 
           <AssignmentRail paths={catalog.paths} />
 
+          {catalog.assignedOnly && (
+            <InlineAlert variant="info">
+              Your administrator curates your catalog — it shows the training paths assigned to
+              you. Ask an admin if you would like access to more tracks.
+            </InlineAlert>
+          )}
+
           <div>
             <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
               <div>
@@ -390,29 +410,57 @@ export function AcademyWorkspace() {
                 </div>
               </div>
             </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {visiblePaths.map((path) => (
-                <PathCard key={path.id} path={path} />
-              ))}
-            </div>
-            {visiblePaths.length === 0 && (
-              <div className="rounded-xl border border-dashed border-border/70 px-4 py-10 text-center">
-                <p className="text-sm font-medium">No learning paths match these filters.</p>
-                <button
-                  type="button"
-                  className="mt-2 text-xs text-primary underline-offset-2 hover:underline"
-                  onClick={() => {
-                    setQuery('');
-                    setLevel('all');
-                  }}
-                >
-                  Clear search and level
-                </button>
+            {catalog.paths.length === 0 ? (
+              <GlassCard>
+                <div className="flex flex-col items-center gap-3 py-10 text-center">
+                  <div className="flex size-12 items-center justify-center rounded-xl bg-secondary/50">
+                    <GraduationCap className="size-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No training paths assigned yet</p>
+                  <p className="max-w-sm text-xs text-muted-foreground">
+                    Your catalog is curated by an administrator. You will be notified as soon as a
+                    training path is assigned to you.
+                  </p>
+                </div>
+              </GlassCard>
+            ) : (
+              <div className="space-y-6">
+                {groupPathsByCategory(catalog.paths).map(([category, paths]) => (
+                  <section key={category} aria-label={LEARNING_PATH_CATEGORY_LABELS[category]}>
+                    <div className="mb-2">
+                      <h3 className="text-sm font-semibold">
+                        {LEARNING_PATH_CATEGORY_LABELS[category]}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        {LEARNING_PATH_CATEGORY_DESCRIPTIONS[category]}
+                      </p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {paths.map((path) => (
+                        <PathCard key={path.id} path={path} />
+                      ))}
+                    </div>
+                  </section>
+                ))}
               </div>
             )}
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function groupPathsByCategory(
+  paths: LearningPathSummary[],
+): Array<[LearningPathCategory, LearningPathSummary[]]> {
+  const groups = new Map<LearningPathCategory, LearningPathSummary[]>();
+  for (const path of paths) {
+    const list = groups.get(path.category) ?? [];
+    list.push(path);
+    groups.set(path.category, list);
+  }
+  return [...groups.entries()].sort(
+    (a, b) => LEARNING_PATH_CATEGORY_RANK[a[0]] - LEARNING_PATH_CATEGORY_RANK[b[0]],
   );
 }

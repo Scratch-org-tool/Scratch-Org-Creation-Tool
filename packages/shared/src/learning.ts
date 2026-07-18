@@ -28,6 +28,33 @@ export const LEARNING_LEVEL_RANK: Record<LearningLevel, number> = {
   expert: 3,
 };
 
+/**
+ * Catalog groupings. `salesforce` is the core platform curriculum,
+ * `programming` covers language tracks (JavaScript, Java, …), and
+ * `delivery` covers release management / DevOps process tracks.
+ */
+export const LEARNING_PATH_CATEGORIES = ['salesforce', 'programming', 'delivery'] as const;
+export type LearningPathCategory = (typeof LEARNING_PATH_CATEGORIES)[number];
+
+export const LEARNING_PATH_CATEGORY_LABELS: Record<LearningPathCategory, string> = {
+  salesforce: 'Salesforce core curriculum',
+  programming: 'Programming & platform skills',
+  delivery: 'Delivery & release management',
+};
+
+export const LEARNING_PATH_CATEGORY_DESCRIPTIONS: Record<LearningPathCategory, string> = {
+  salesforce: 'The guided platform journey — from first login to architect.',
+  programming: 'Language foundations that make you dangerous in code reviews and LWC work.',
+  delivery: 'Ship changes safely: branching, pipelines, releases, and post-release care.',
+};
+
+/** Sort ranking used to present catalog groups in a stable order. */
+export const LEARNING_PATH_CATEGORY_RANK: Record<LearningPathCategory, number> = {
+  salesforce: 0,
+  programming: 1,
+  delivery: 2,
+};
+
 /** Minimum quiz score (percent) required to complete a module. */
 export const LEARNING_QUIZ_PASS_PERCENT = 70;
 /** Number of questions served per module quiz. */
@@ -152,6 +179,7 @@ export interface LearningPathSummary {
   tagline: string;
   description: string;
   level: LearningLevel;
+  category: LearningPathCategory;
   /** Certificate-style badge awarded on completion, e.g. "Foundations Badge". */
   badge: string;
   estimatedHours: number;
@@ -192,6 +220,11 @@ export interface LearningCatalogResponse {
   paths: LearningPathSummary[];
   stats: LearningStats;
   continueTarget: LearningContinueTarget | null;
+  /**
+   * True when an administrator restricted this user to assigned paths only —
+   * the catalog then contains just those paths and the UI explains why.
+   */
+  assignedOnly: boolean;
 }
 
 export interface LearningLessonResponse {
@@ -293,6 +326,7 @@ export interface LearningAdminPathProgress {
   pathId: string;
   title: string;
   level: LearningLevel;
+  category: LearningPathCategory;
   assigned: boolean;
   assignmentId: string | null;
   dueAt: string | null;
@@ -310,6 +344,8 @@ export interface LearningAdminLearnerRow {
   email: string;
   displayName: string;
   hasLearningAccess: boolean;
+  /** True when this learner's catalog is restricted to assigned paths. */
+  learningAssignedOnly: boolean;
   lessonsCompleted: number;
   modulesCompleted: number;
   quizzesPassed: number;

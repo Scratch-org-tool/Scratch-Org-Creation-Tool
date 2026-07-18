@@ -24,6 +24,8 @@ export interface UserAccessRow {
   displayName: string;
   role: 'admin' | 'user';
   grantedModules: AppModule[];
+  revokedModules?: AppModule[];
+  learningAssignedOnly?: boolean;
   effectiveModules: AppModule[];
   displayRole: string;
   status: 'active' | 'inactive';
@@ -41,5 +43,9 @@ export interface UserAccessOverview {
 export interface ManageDraft {
   role: 'admin' | 'user';
   grantedModules: AppModule[];
+  /** Default modules switched off for this user (revocable defaults only). */
+  revokedModules: AppModule[];
+  /** Restrict the Academy to admin-assigned paths for this user. */
+  learningAssignedOnly: boolean;
   status: 'active' | 'inactive';
 }

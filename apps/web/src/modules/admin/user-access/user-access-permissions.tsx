@@ -7,19 +7,15 @@ import {
   LOCKED_MODULES,
   MODULE_DESCRIPTIONS,
   MODULE_LABELS,
+  REVOCABLE_DEFAULT_MODULES,
   type AppModule,
 } from '@sfcc/shared';
 import { GlassCard } from '@/components/studio';
 import { cn } from '@/utils/cn';
 
-const COLUMNS = [
-  { key: 'default', label: 'New users (default)' },
-  { key: 'grantable', label: 'Grantable to users' },
-  { key: 'admin', label: 'Admin' },
-] as const;
-
 const defaultSet = new Set<AppModule>(DEFAULT_USER_MODULES as readonly AppModule[]);
 const grantableSet = new Set<AppModule>(LOCKED_MODULES as readonly AppModule[]);
+const revocableSet = new Set<AppModule>(REVOCABLE_DEFAULT_MODULES as readonly AppModule[]);
 
 function Cell({ on }: { on: boolean }) {
   return (
@@ -33,11 +29,21 @@ function Cell({ on }: { on: boolean }) {
   );
 }
 
+function controlLabel(module: AppModule): { text: string; className: string } {
+  if (grantableSet.has(module)) {
+    return { text: 'Grant per user', className: 'bg-sky-500/15 text-sky-300' };
+  }
+  if (revocableSet.has(module)) {
+    return { text: 'On by default · revocable', className: 'bg-emerald-500/15 text-emerald-300' };
+  }
+  return { text: 'Always on (landing page)', className: 'bg-secondary/60 text-muted-foreground' };
+}
+
 export function UserAccessPermissions() {
   return (
     <GlassCard
       title="Permission matrix"
-      description="Dashboard is the only standard-user default. Every product feature requires an explicit admin grant; admins always have all features."
+      description="Every module is controlled per user from the Manage drawer. Admins always have every module."
       noPadding
     >
       <div className="overflow-x-auto">
@@ -45,30 +51,31 @@ export function UserAccessPermissions() {
           <thead>
             <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
               <th className="px-4 py-3 font-medium">MODULE</th>
-              {COLUMNS.map((col) => (
-                <th key={col.key} className="px-4 py-3 text-center font-medium">
-                  {col.label}
-                </th>
-              ))}
+              <th className="px-4 py-3 text-center font-medium">New users (default)</th>
+              <th className="px-4 py-3 text-center font-medium">Per-user control</th>
+              <th className="px-4 py-3 text-center font-medium">Admin</th>
             </tr>
           </thead>
           <tbody>
             {APP_MODULES.map((module) => {
-              const isDefault = defaultSet.has(module);
-              const isGrantable = grantableSet.has(module);
+              const control = controlLabel(module);
               return (
                 <tr
                   key={module}
                   className="border-b border-border/40 last:border-0 hover:bg-secondary/20"
                 >
-                  <td className="px-4 py-3">
-                    <p className="font-medium">{MODULE_LABELS[module]}</p>
-                    <p className="mt-0.5 max-w-md text-[11px] leading-relaxed text-muted-foreground">
-                      {MODULE_DESCRIPTIONS[module]}
-                    </p>
+                  <td className="px-4 py-3 font-medium">{MODULE_LABELS[module]}</td>
+                  <Cell on={defaultSet.has(module)} />
+                  <td className="px-4 py-3 text-center">
+                    <span
+                      className={cn(
+                        'inline-block rounded-full px-2 py-0.5 text-[11px] font-medium',
+                        control.className,
+                      )}
+                    >
+                      {control.text}
+                    </span>
                   </td>
-                  <Cell on={isDefault} />
-                  <Cell on={isGrantable} />
                   <Cell on />
                 </tr>
               );
@@ -78,12 +85,16 @@ export function UserAccessPermissions() {
       </div>
       <div className={cn('flex flex-wrap gap-x-6 gap-y-1 px-4 py-3 text-xs text-muted-foreground')}>
         <span>
-          <span className="font-medium text-foreground">Default</span> — auto-granted to every new
-          account.
+          <span className="font-medium text-foreground">On by default · revocable</span> — granted
+          automatically, but an admin can switch it off per user.
         </span>
         <span>
-          <span className="font-medium text-foreground">Grantable</span> — enabled per user from the
-          Manage drawer.
+          <span className="font-medium text-foreground">Grant per user</span> — invisible until an
+          admin enables it from the Manage drawer.
+        </span>
+        <span>
+          <span className="font-medium text-foreground">Academy scope</span> — with Salesforce
+          Academy granted, admins can additionally restrict a user to assigned training paths only.
         </span>
       </div>
     </GlassCard>

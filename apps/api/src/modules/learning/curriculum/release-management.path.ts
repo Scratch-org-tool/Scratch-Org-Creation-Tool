@@ -1,949 +1,1004 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * Path 7 — Salesforce Release Management (Advanced).
- * Strategy, metadata and packaging, environments, delivery controls, operating
- * models, and recovery practices for source-driven Salesforce teams.
+ * Path 7 — Release Management & DevOps (Advanced, delivery track).
+ * The process track for this platform: branching, pipelines, quality gates,
+ * release execution, and post-release health — taught with Salesforce
+ * specifics (metadata, orgs, freezes) rather than generic web-app DevOps.
  */
 export const releaseManagementPath: CurriculumPath = {
-  id: 'salesforce-release-management',
-  title: 'Salesforce Release Management',
-  tagline: 'Move small, traceable changes safely from source to production.',
+  id: 'release-management',
+  title: 'Release Management & DevOps',
+  tagline: 'Ship Salesforce changes on schedule, with rollback plans you trust.',
   description:
-    'Build a release system rather than a release-day ritual. This path connects Git and release strategy to Salesforce metadata, packaging, environments, CI/CD quality gates, deployment operations, recovery, and measurable improvement. The practices are tool-neutral, risk-based, and designed for teams that need both delivery speed and strong controls.',
+    'Deployments fail loudly; releases fail quietly — a missed approval, an untested profile, a freeze window nobody communicated. This path turns deployment mechanics into release discipline: environment and branching strategy, CI/CD pipelines with real quality gates, release planning with approvals and notes, go-live runbooks with rollback rehearsals, and the metrics that prove your process is getting better. Everything maps directly onto this platform\'s Releases, Deployment, Drift, and Calendar modules.',
   level: 'advanced',
-  badge: 'Salesforce Release Engineer',
-  estimatedHours: 9,
-  skills: [
-    'Release strategy & traceability',
-    'Git & trunk-based development',
-    'Metadata API & packaging',
-    'Environment strategy & drift control',
-    'Salesforce CI/CD quality gates',
-    'Deployment operations',
-    'Recovery & feature flags',
-    'Delivery performance measurement',
-  ],
+  category: 'delivery',
+  badge: 'Release Captain',
+  estimatedHours: 6,
+  skills: ['Branching & environment strategy', 'CI/CD quality gates', 'Release planning & approvals', 'Rollback & release metrics'],
   modules: [
     {
-      id: 'sf-release-strategy-source',
-      title: 'Release Strategy, Source, and Packaging',
+      id: 'release-foundations',
+      title: 'Release Foundations',
       summary:
-        'Turn business change into small, versioned release units, then model Salesforce metadata and dependencies so those units can be promoted safely.',
+        'What release management actually is, how environments and branches map to each other, and the cadence/calendar decisions that everything else hangs on.',
       lessons: [
         {
-          id: 'release-strategy-traceability',
-          title: 'Release strategy: trunk, trains, versions, and evidence',
+          id: 'release-what-is-release-management',
+          title: 'Release management in plain language',
           summary:
-            'Design a release cadence around short-lived Git branches, explicit risk, predictable trains, meaningful versions, and end-to-end traceability.',
-          durationMinutes: 34,
+            'The difference between a deployment and a release, why Salesforce makes releasing uniquely tricky, and the roles in a healthy release process.',
+          durationMinutes: 15,
           objectives: [
-            'Choose an appropriate cadence and risk path for each class of Salesforce change',
-            'Apply trunk-based development with short-lived branches and protected integration',
-            'Use release trains and semantic versioning without confusing cadence, artifact, and package versions',
-            'Trace a production deployment from business intent to immutable source and validation evidence',
+            'Distinguish deployments (technical) from releases (business events)',
+            'Explain the Salesforce-specific challenges: metadata, org drift, three platform releases a year',
+            'Name the roles and artifacts of a working release process',
           ],
           sections: [
             {
-              heading: 'Start with value, risk, and a release policy',
+              heading: 'A release is a promise, a deployment is a mechanism',
               body:
-                'Release management coordinates demand, technical change, and operational risk; it is not merely the final deployment command. Define a small set of change classes before choosing a branch model or tool. A help-text edit, a new additive field, an Apex transaction change, a sharing-model change, and a field deletion should not all follow identical paths. Give each class a minimum evidence set, approval level, environment path, and recovery requirement.\n\nPrefer small batches. Small changes reduce dependency collisions, shorten review, make a failed change easier to identify, and lower the cost of recovery. A useful policy states who owns the change, what user or business result it serves, the affected components and data, its risk class, required tests, activation plan, and stop conditions. Regulatory controls can require separation of duties without requiring a meeting for every low-risk change.',
+                'A DEPLOYMENT moves metadata and code from one org to another — a technical operation this platform executes in minutes. A RELEASE is the business event wrapped around one or more deployments: an agreed scope, tested and approved, delivered to users on a communicated date, with notes explaining what changed and a plan for when it goes wrong.\n\nTeams that conflate the two ship "whatever was in the sandbox on Friday". Teams that separate them can answer the three questions leadership always asks: what exactly went out, who approved it, and how do we undo it? This platform\'s Releases module exists precisely to group deployments and work items into that versioned, approvable unit.',
             },
             {
-              heading: 'Trunk-based development keeps integration continuous',
+              heading: 'Why Salesforce releasing is its own discipline',
               body:
-                'In trunk-based development, main is protected and releasable, while developers integrate through short-lived branches—normally hours or a few days, not an alternate code line maintained for weeks. Automated checks and peer review guard the merge. Feature flags or incomplete-but-inert metadata keep unfinished behavior from forcing long-lived branches. A release branch can be useful briefly to stabilize a train, but every extra long-lived branch creates merge, back-propagation, and “which version is real?” costs.\n\nSalesforce metadata makes branch hygiene especially important: decomposed source still produces conflicts in shared objects, flows, permission sets, and labels. Rebase or merge from main frequently, keep each pull request cohesive, and assign an explicit owner to resolve semantic XML conflicts. Passing XML syntax does not prove that two independently edited Flow versions still express the intended behavior.',
-              code: {
-                language: 'bash',
-                snippet:
-                  '# Create a short-lived branch from the protected trunk\ngit switch main\ngit pull --ff-only\ngit switch -c release-4821-order-routing\n\n# Integrate current trunk before opening the pull request\ngit fetch origin\ngit rebase origin/main\n\n# After review and CI merge the change through the repository UI.\n# Tag the exact production commit after successful promotion.\ngit tag -a sf-release-2026.07.2 <production-commit> \\\n  -m "Order routing release 2026.07.2"',
-                caption:
-                  'A short-lived branch and immutable production tag; repository protections, not a local command, perform the merge.',
-              },
+                'Salesforce adds constraints generic DevOps guides ignore. Changes are METADATA, and some of it (profiles, permission sets, picklist values) merges unpredictably or deploys partially. Orgs DRIFT: admins can change production directly, so "what is in production" is not guaranteed to equal "what is in git". Sandboxes refresh on their own cadence and destroy in-flight work if unplanned. And Salesforce itself upgrades every org three times a year — your calendar must absorb Spring/Summer/Winter releases you do not control.\n\nA Salesforce release process therefore needs three habits from day one: version control as the source of truth, drift detection to catch out-of-band changes (this platform\'s Drift module), and a release calendar that respects sandbox refreshes and platform release windows.',
             },
             {
-              heading: 'Release trains and versions answer different questions',
+              heading: 'Roles and artifacts',
               body:
-                'A release train is a predictable departure schedule: ready changes that meet the cutoff ride the train; changes that miss it wait rather than destabilize the release. Trains improve stakeholder planning and shared-environment coordination. They do not justify accumulating huge batches. Teams can integrate continuously and still activate or promote on a weekly train, while truly low-risk changes may use a faster path and emergency fixes use a governed hotfix lane.\n\nA version identifies content, not a meeting date. Semantic Versioning communicates compatibility for a product with a declared public contract: MAJOR for incompatible contract changes, MINOR for backward-compatible capability, and PATCH for backward-compatible fixes. Salesforce package versions also carry platform-specific version fields and ancestry rules, so do not infer installability from a SemVer label alone. Calendar-based train names are equally valid for org releases; map every human-friendly name to one source commit and one immutable artifact.',
-            },
-            {
-              heading: 'Make traceability a generated release artifact',
-              body:
-                'Traceability should answer, without archaeology: why did this change exist, who approved it, what exact bytes moved, which checks passed, where did they move, and what happened afterward? Generate a release manifest from the pipeline. Record work items, source commit, signed or protected tag, artifact digest, component and destructive-change manifests, package version IDs where applicable, target-org identity, validation job, approvals, deployment result, and verification evidence.\n\nNever rebuild between UAT and production. Promote the same package version or content-addressed deployment bundle and apply target-specific configuration through an explicit, reviewed mechanism. A commit hash identifies source, while an artifact digest proves the deployed payload; retain both because generated manifests, conversion, or packaging can make the payload differ from a raw checkout.',
-              code: {
-                language: 'yaml',
-                snippet:
-                  'release:\n  id: sf-release-2026.07.2\n  sourceCommit: 4f6c2d1\n  artifactSha256: 8d60d6b6a50c3d7f-example\n  riskClass: medium\n  workItems: [CRM-4821, CRM-4830]\n  componentsManifest: manifest/package.xml\n  destructiveManifest: manifest/destructiveChangesPost.xml\n  packageVersions: []\n  targets:\n    - alias: production\n      validationJob: 0Af-example\n      approval: CAB-2026-0718\n      result: succeeded\n  verification:\n    evidence: evidence/sf-release-2026.07.2.json\n    owner: release-manager@example.invalid',
-                caption:
-                  'Illustrative, tool-neutral release evidence. Real manifests should use complete digests and durable evidence links.',
-              },
+                'Small team or large, the same hats exist: a RELEASE MANAGER owns the calendar, scope, and go/no-go; DEVELOPERS/ADMINS own changes and their tests; QA owns verification evidence; the BUSINESS OWNER accepts scope and signs off; on-call owns hypercare after go-live. One person may wear several hats — the failure mode is a hat nobody wears.\n\nThe artifacts that make the process real rather than tribal: a versioned release record (scope + deployments + work items), release notes humans can read, an approval trail, a runbook with rollback steps, and a post-release review. If it is not written down, it does not exist at 2 a.m. during an incident.',
             },
           ],
           realWorld: {
-            title: 'From quarterly mega-release to a dependable weekly train',
+            title: 'The Friday sandbox dump',
             scenario:
-              'A service organization kept feature branches open for six to ten weeks and combined roughly 120 work items into quarterly deployments. Shared Flow and permission-set conflicts appeared only during release hardening, and incident responders could not map the deployed ZIP back to a single reviewed commit.',
+              'A retail team "released" by deploying everything in their UAT sandbox to production every second Friday. Nobody could list what was included, an unfinished pricing flow went live half-built, and the resulting discount bug ran all weekend because no one knew it had shipped — or how to remove it.',
             solution:
-              'The team protected main, limited branches to small vertical changes, introduced a weekly train with explicit cutoffs, and gave security-model and destructive changes a higher-risk path. Its pipeline generated a manifest tying every promoted artifact digest to work items, approvals, target validation, and a production tag.',
+              'They adopted release records in this platform: every release got a version, an explicit scope of work items and deployments, business sign-off before the window, generated release notes, and a rollback note per risky item.',
             outcome:
-              'Within two quarters, the median batch fell from 120 work items to 11, late merge conflicts became exceptional, and the support team could identify the owning change and recovery plan from the release ID during the first minutes of an incident.',
+              'The next pricing issue was traced to its release in minutes, rolled back with the documented step, and leadership finally trusted the team enough to approve a faster weekly cadence — scope control, not slower shipping, was what earned it.',
           },
           keyTakeaways: [
-            'Classify change risk and evidence needs instead of forcing every change through one path',
-            'Keep main releasable with short-lived branches, protected merges, and flags for incomplete behavior',
-            'Use release trains for cadence and versions for identity and compatibility',
-            'Map every release name to exactly one source commit and immutable artifact digest',
-            'Generate traceability from delivery events; do not reconstruct it manually after an incident',
+            'Deployment = mechanism; release = scoped, approved, communicated business event',
+            'Salesforce specifics: metadata quirks, org drift, sandbox refreshes, three platform upgrades a year',
+            'Version control + drift detection + a release calendar are the non-negotiable base',
+            'Artifacts (release record, notes, approvals, runbook) beat tribal memory',
           ],
           resources: [
             {
-              title: 'Salesforce Well-Architected: Application Lifecycle Management',
-              url: 'https://architect.salesforce.com/docs/architect/well-architected-tools/guide/adaptable-application-lifecycle-management',
+              title: 'Application Lifecycle and Development Models (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/application_lifecycle_and_development_models',
+              source: 'trailhead',
+            },
+            {
+              title: 'Salesforce Well-Architected: Adaptable',
+              url: 'https://architect.salesforce.com/well-architected/adaptable/overview',
               source: 'architect',
-            },
-            {
-              title: 'Git: Branching Workflows',
-              url: 'https://git-scm.com/book/en/v2/Git-Branching-Branching-Workflows',
-              source: 'other',
-            },
-            {
-              title: 'Semantic Versioning 2.0.0',
-              url: 'https://semver.org/',
-              source: 'other',
+              note: 'Change management from the architect lens',
             },
           ],
         },
         {
-          id: 'release-metadata-packaging',
-          title: 'Metadata, destructive changes, and package boundaries',
+          id: 'release-branching-environments',
+          title: 'Branching strategies and environment flow',
           summary:
-            'Build precise Salesforce deployment payloads, sequence dependencies, and choose deliberately between unpackaged, unlocked, and managed delivery.',
-          durationMinutes: 38,
+            'Trunk-based vs GitFlow for Salesforce teams, mapping branches to orgs, and keeping environments from becoming snowflakes.',
+          durationMinutes: 20,
           objectives: [
-            'Explain the relationship between Salesforce source format, Metadata API payloads, and package.xml manifests',
-            'Sequence additive and destructive changes without breaking metadata or data dependencies',
-            'Model hard and operational dependencies across deployable units',
-            'Choose unpackaged, unlocked, or managed packaging based on ownership and distribution needs',
+            'Compare trunk-based development with GitFlow-style release branches',
+            'Map branches to orgs: scratch/dev sandboxes → integration → UAT → production',
+            'Handle hotfixes without derailing the next release',
           ],
           sections: [
             {
-              heading: 'A manifest is a payload boundary, not a dependency solver',
+              heading: 'Pick a branching model you can actually run',
               body:
-                'Salesforce DX source format decomposes complex metadata into reviewable files. Metadata API is the deployment interface for a broad set of platform metadata, and package.xml is a manifest that selects components for retrieve or deploy. The CLI can convert source format as needed. A manifest is valuable for producing a repeatable release boundary, but it does not discover every dependency or guarantee that selected metadata is complete.\n\nUse explicit members for controlled release payloads, review generated manifests, and check the Metadata Coverage Report for component support. Wildcards are convenient for baselines but can silently widen a release as an org grows. Keep the manifest API version aligned with a version supported by the target and intentionally tested by the project; an API bump is a release change, not routine text formatting.',
+                'TRUNK-BASED development keeps one long-lived branch (main); work happens in short-lived feature branches merged within days, and releases are cut from main (often as tags or short release branches). It minimizes merge pain and drift between branches, but demands strong CI and feature flags for unfinished work.\n\nGITFLOW-style models add long-lived develop and release branches. They feel safer for teams with fixed release windows and heavy UAT phases — common in Salesforce shops — at the cost of painful merges and "which branch has the fix?" archaeology. The honest guidance: fewer long-lived branches is better; add a release branch only if your UAT stabilization genuinely needs one. Whatever you pick, write it down with a diagram new joiners can follow.',
+            },
+            {
+              heading: 'Branches map to orgs',
+              body:
+                'A Salesforce pipeline gives each stage a branch AND an org. A typical shape: feature branches ↔ scratch orgs or developer sandboxes (this platform creates scratch orgs per feature); main/develop ↔ an integration sandbox where merged work first meets itself; a release branch ↔ UAT/Full sandbox where business testing happens against production-shaped data; production ↔ the release tag that was approved.\n\nTwo rules keep the map honest. Changes flow through GIT, not org-to-org copying, so the branch always describes the org. And every org should be rebuildable from its branch — if rebuilding UAT from the release branch scares the team, drift has already won.',
               code: {
-                language: 'xml',
+                language: 'text',
                 snippet:
-                  '<?xml version="1.0" encoding="UTF-8"?>\n<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n  <types>\n    <members>OrderReleaseService</members>\n    <members>OrderReleaseServiceTest</members>\n    <name>ApexClass</name>\n  </types>\n  <types>\n    <members>Order__c.Release_Status__c</members>\n    <name>CustomField</name>\n  </types>\n  <version>67.0</version>\n</Package>',
-                caption:
-                  'An explicit Summer ’26 example. Pin and test the API version appropriate to the project and target org.',
+                  'feature/quote-discounts ──▶ scratch org (dev + unit tests)\n        │  PR + review + CI\n        ▼\nmain ────────────────────▶ integration sandbox (auto-deploy on merge)\n        │  cut release/2026.07\n        ▼\nrelease/2026.07 ─────────▶ UAT full sandbox (business sign-off)\n        │  tag v2026.07 + approve\n        ▼\nproduction ◀───────────── deploy the approved tag; hotfixes branch from the tag',
+                caption: 'One branch per stage, one org per branch — and git is the only road between them.',
               },
             },
             {
-              heading: 'Destructive changes require ordering and recovery design',
+              heading: 'Hotfixes and the drift problem',
               body:
-                'Removing a local source file does not by itself instruct Metadata API to delete the component in an org. List removals in a destructive manifest; wildcards are not supported there. destructiveChangesPre.xml runs deletions before additions and updates, while destructiveChangesPost.xml runs them afterward. Post-destructive ordering fits a common refactor: first deploy code and permissions that no longer reference a field, then remove the field. Pre-destructive ordering fits the less common case where an old component blocks creation of its replacement.\n\nTreat deletion as a separate risk class. Inventory references in Apex, Flow, formulas, reports, integrations, permission sets, and data pipelines; archive source and export affected data; validate in a production-like org; and rehearse recovery. Post-destructive changes are processed before deployment tests, so passing tests is not proof that deleted data or operational dependencies are recoverable.',
-              code: {
-                language: 'xml',
-                snippet:
-                  '<?xml version="1.0" encoding="UTF-8"?>\n<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n  <types>\n    <members>Order__c.Legacy_Route__c</members>\n    <name>CustomField</name>\n  </types>\n  <version>67.0</version>\n</Package>',
-                caption:
-                  'manifest/destructiveChangesPost.xml for a field removed only after consumers have been updated and its data archived.',
-              },
-            },
-            {
-              heading: 'Build and test the dependency graph',
-              body:
-                'Hard dependencies are compile- or deploy-time references: an Apex class needs its fields and classes, a permission set needs the component it grants, and an app needs its tabs. Operational dependencies can evade the compiler: a Flow expects reference data, an integration expects a Named Credential and remote endpoint, or a report expects a value introduced by a data migration. Map both kinds. Add providers before consumers; for removal, update or remove consumers before providers.\n\nPackage dependencies make some edges explicit, but package.xml deployments remain order-sensitive and the platform can still surface hidden references only at validation time. Keep foundational schema and shared contracts low in the graph, reject circular package dependencies, and exercise installation into a clean org. A successful incremental deployment into a mature sandbox can conceal an undeclared dependency already present there.',
-              code: {
-                language: 'json',
-                snippet:
-                  '{\n  "packageDirectories": [\n    {\n      "path": "packages/core",\n      "package": "Release Core",\n      "versionNumber": "2.3.0.NEXT",\n      "default": true\n    },\n    {\n      "path": "packages/orders",\n      "package": "Order Routing",\n      "versionNumber": "4.1.0.NEXT",\n      "dependencies": [\n        {\n          "package": "Release Core",\n          "versionNumber": "2.3.0.LATEST"\n        }\n      ]\n    }\n  ]\n}',
-                caption:
-                  'An illustrative sfdx-project.json fragment making the Orders-to-Core package edge explicit.',
-              },
-            },
-            {
-              heading: 'Choose packaging by lifecycle and ownership',
-              body:
-                'Unpackaged source deployment is a valid choice for org-specific metadata when the team needs flexible boundaries and owns the whole target. Unlocked packages add immutable package versions, declared dependencies, installation inventory, and upgrade semantics; Salesforce positions them especially for internal business applications. Subscribers can modify unlocked metadata, which is useful for customer control but makes drift governance essential.\n\nSecond-generation managed packages are designed for controlled distribution, especially AppExchange products. Namespaces, manageability rules, version ancestry, and protected implementation support a publisher-subscriber contract, but those constraints make later boundary mistakes expensive. Do not choose managed packaging merely to make an internal deployment look mature, and do not split an org into dozens of tiny unlocked packages before dependency boundaries are understood. A mixed model—stable shared capabilities packaged, tightly org-specific configuration source-deployed—is often the most maintainable.',
+                'Production breaks between releases. A HOTFIX branches from the production tag (not from main, which already contains unreleased work), fixes the one thing, deploys with an expedited-but-real approval, and is merged BACK into main and any active release branch immediately — the forgotten back-merge is how fixes silently vanish in the next release, the most embarrassing regression there is.\n\nDrift is the same disease in the other direction: a change made directly in production that git does not know about. Schedule drift checks (this platform\'s Drift module compares orgs against their expected state), and triage every finding: retrofit it into git, or revert it in the org. Zero unexplained drift is the operational definition of "git is the source of truth".',
             },
           ],
           realWorld: {
-            title: 'A “simple” field deletion that had twelve consumers',
+            title: 'The vanishing hotfix',
             scenario:
-              'A team planned to replace Legacy_Route__c and deleted its source file. Validation failed on an Apex reference; further review found two Flows, a permission set, three reports, an ETL mapping, and historical data still depending on the field.',
+              'A team hotfixed a broken approval process directly in production on a Tuesday. The fix was never back-merged; the next scheduled release deployed the OLD version of the process, re-breaking approvals during quarter-end — the same incident, twice, with an audience the second time.',
             solution:
-              'The release engineer added the replacement field first, backfilled and reconciled data, migrated every consumer, and observed a release with no writes to the legacy field. A later release carried an explicit post-destructive manifest and archived data, while shared routing metadata moved into an unlocked base package with a declared application dependency.',
+              'Hotfixes moved to tagged branches with a checklist item — "back-merge to main and active release branches" — enforced by a pipeline check that blocks the next release if a hotfix tag is not an ancestor of the release candidate. Weekly drift checks catch anything patched org-side.',
             outcome:
-              'The deletion validated cleanly and no downstream job failed. The team added dependency inventory and a two-stage deprecation pattern to its destructive-change standard, preventing hidden consumers from being discovered during the production window.',
+              'Regression-by-release disappeared, drift findings dropped to near zero within a quarter as retrofits caught up, and the release checklist grew its most valuable line item from a real scar.',
           },
           keyTakeaways: [
-            'Source format improves reviewability; Metadata API and explicit manifests define deployable payloads',
-            'package.xml selects components but does not infer a complete dependency graph',
-            'Update consumers before post-destructive removal of their providers, and protect affected data separately',
-            'Test dependencies in clean environments because mature sandboxes can hide missing prerequisites',
-            'Use unlocked packages for internal modular delivery and managed packages for publisher-controlled distribution when their constraints fit',
+            'Prefer the fewest long-lived branches your UAT process allows',
+            'Each pipeline stage = a branch + an org; git is the only path between orgs',
+            'Hotfix from the production tag; back-merge immediately and verify it',
+            'Scheduled drift checks operationally enforce "git is the source of truth"',
           ],
           resources: [
             {
-              title: 'Metadata API: Deploying and Retrieving Metadata',
-              url: 'https://developer.salesforce.com/docs/atlas.en-us.api_meta.meta/api_meta/meta_deploy.htm',
-              source: 'developer',
+              title: 'Trunk-based development',
+              url: 'https://trunkbaseddevelopment.com/',
+              source: 'other',
+              note: 'The reference site, with team-size guidance',
             },
             {
-              title: 'Metadata API: Deleting Components from an Org',
-              url: 'https://developer.salesforce.com/docs/atlas.en-us.api_meta.meta/api_meta/meta_deploy_deleting_files.htm',
-              source: 'developer',
+              title: 'Org Development Model (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/org-development-model',
+              source: 'trailhead',
+            },
+          ],
+        },
+        {
+          id: 'release-cadence-calendar',
+          title: 'Cadence, calendars, and freeze windows',
+          summary:
+            'Choosing a release rhythm, building the calendar around sandbox refreshes and Salesforce\'s own releases, and running freezes that protect instead of paralyze.',
+          durationMinutes: 15,
+          objectives: [
+            'Choose and defend a release cadence for a Salesforce team',
+            'Build a release calendar including platform releases and sandbox refreshes',
+            'Define freeze windows with explicit exception rules',
+          ],
+          sections: [
+            {
+              heading: 'Cadence: rhythm beats heroics',
+              body:
+                'A fixed cadence (weekly, biweekly, monthly) turns releasing from an event into a habit: scope cuts become "it catches the next train" instead of a crisis, stakeholders learn when to expect change, and the process itself gets practiced enough to be boring — which is the goal.\n\nChoose cadence by your slowest reliable step, usually UAT. If business testing genuinely needs a week, a weekly cadence will ship untested work; be honest and go biweekly, then shorten as automation grows. Urgent-fix pressure is not a reason for a slower cadence — it is what the hotfix lane is for.',
             },
             {
-              title: 'Salesforce DX: What Is an Unlocked Package?',
-              url: 'https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_unlocked_pkg_whats_a_package.htm',
-              source: 'developer',
+              heading: 'The calendar has more on it than your releases',
+              body:
+                'A Salesforce release calendar carries four layers: your release windows (with code-cut and UAT-entry dates), Salesforce\'s three seasonal releases (test in a preview sandbox BEFORE they hit production — pin the dates each cycle), sandbox refresh schedules (a refresh mid-UAT destroys the test environment), and business blackout periods (quarter-end, Black Friday, audit season).\n\nThis platform\'s Calendar module holds all four: scheduled deploys, drift checks, releases, sandbox refreshes, and freeze windows in one view. The discipline is updating it BEFORE reality changes — a calendar that trails reality is decoration.',
             },
             {
-              title: 'Second-Generation Managed Packaging Developer Guide',
-              url: 'https://developer.salesforce.com/docs/atlas.en-us.pkg2_dev.meta/pkg2_dev/sfdx_dev_dev2gp.htm',
-              source: 'developer',
+              heading: 'Freezes that protect without paralyzing',
+              body:
+                'A freeze window pauses normal releases during high-risk periods. A freeze that works has three properties: a defined SCOPE (production metadata changes — not "all work"; development and integration continue), a defined EXCEPTION path (sev-1 fixes deploy during a freeze with an incident ticket and a named approver), and a defined END with a plan for the queue that built up — releasing five weeks of pent-up scope as one mega-release recreates the risk the freeze avoided.\n\nCommunicate freezes like outages: dates announced ahead, reminders at start, an explicit all-clear. The quiet failure mode is the "shadow freeze" nobody wrote down, discovered by a team mid-deploy.',
+            },
+          ],
+          realWorld: {
+            title: 'UAT deleted by a scheduled refresh',
+            scenario:
+              'A team entered their biggest UAT cycle of the year the same week IT\'s automation refreshed the Full sandbox on its quarterly schedule. Three days of tester evidence, configured test data, and in-progress defect reproductions vanished overnight. The release slipped three weeks.',
+            solution:
+              'Sandbox refresh schedules moved into the shared release calendar with a hard rule — no refresh within an active UAT window without release-manager sign-off — and refresh reminders (this platform\'s Sandbox Refresh module) now page the release manager before executing.',
+            outcome:
+              'The next three releases ran UAT uninterrupted; one refresh was consciously deferred nine days with a single click instead of costing three weeks. The calendar became the first artifact opened in every release kickoff.',
+          },
+          keyTakeaways: [
+            'Fixed cadence turns releases into habit; scope cuts become routine',
+            'Calendar = your windows + Salesforce seasonal releases + sandbox refreshes + blackouts',
+            'Freezes need scope, an exception path, and an end-of-freeze queue plan',
+            'A calendar that trails reality is decoration — update it first',
+          ],
+          resources: [
+            {
+              title: 'Salesforce release readiness (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/salesforce-release-readiness-strategies',
+              source: 'trailhead',
+              note: 'Preparing for the seasonal platform releases',
+            },
+            {
+              title: 'Salesforce sandbox refresh intervals (Help)',
+              url: 'https://help.salesforce.com/s/articleView?id=sf.data_sandbox_environments.htm',
+              source: 'help',
             },
           ],
         },
       ],
       quizBank: [
         {
-          id: 'release-strategy-q1',
-          topic: 'Trunk-based development',
-          prompt: 'Which working pattern best represents trunk-based development for a Salesforce team?',
+          id: 'q-rel-found-1',
+          topic: 'Concepts',
+          prompt: 'What is the difference between a deployment and a release?',
           options: [
-            'A permanent branch for every sandbox, merged at quarter end',
-            'Short-lived branches merged frequently into a protected, releasable main branch',
-            'Direct unreviewed commits to main because integration must be fast',
-            'One release branch that becomes the source of truth after each deployment',
+            'They are synonyms',
+            'A deployment is the technical move of changes; a release is the scoped, approved, communicated business event around it',
+            'Releases are only for code, deployments only for config',
+            'A release is any deployment that succeeds',
           ],
           correctIndex: 1,
           explanation:
-            'Trunk-based development integrates small changes frequently through protected main; it does not require unreviewed commits or permanent environment branches.',
+            'Deployments are mechanics. A release adds scope control, approval, communication, and a rollback plan — the parts leadership and auditors care about.',
         },
         {
-          id: 'release-strategy-q2',
-          topic: 'Release trains',
-          prompt: 'What is the central operating rule of a release train?',
+          id: 'q-rel-found-2',
+          topic: 'Salesforce specifics',
+          prompt: 'Which trio of Salesforce realities most shapes its release process?',
           options: [
-            'Every planned feature must ship even if a gate fails',
-            'All teams keep branches open until the train date',
-            'Ready changes depart on a predictable cadence; changes missing the cutoff take a later train',
-            'Only emergency changes can be released between Salesforce seasonal upgrades',
-          ],
-          correctIndex: 2,
-          explanation:
-            'A train creates predictable departure times and protects the release by letting unready changes wait; it should not force unsafe scope.',
-        },
-        {
-          id: 'release-strategy-q3',
-          topic: 'Semantic versioning',
-          prompt:
-            'Under Semantic Versioning, a change that breaks a declared public contract normally increments which part?',
-          options: ['MAJOR', 'MINOR', 'PATCH', 'Build metadata only'],
-          correctIndex: 0,
-          explanation:
-            'SemVer reserves MAJOR for incompatible contract changes, MINOR for backward-compatible capability, and PATCH for backward-compatible fixes.',
-        },
-        {
-          id: 'release-strategy-q4',
-          topic: 'Traceability',
-          prompt: 'Which pair most directly proves what reviewed content was promoted to production?',
-          options: [
-            'A release meeting invitation and a screenshot',
-            'The sandbox name and the deployer’s username',
-            'A work-item count and an approximate deployment time',
-            'The source commit plus the immutable artifact or package-version digest/identifier',
-          ],
-          correctIndex: 3,
-          explanation:
-            'The commit identifies reviewed source and the artifact digest or immutable package version identifies the actual promoted payload.',
-        },
-        {
-          id: 'release-strategy-q5',
-          topic: 'Metadata manifests',
-          prompt: 'What does package.xml do in a Metadata API workflow?',
-          options: [
-            'Selects metadata members for retrieval or deployment',
-            'Automatically discovers every transitive dependency',
-            'Deletes any component missing from the local repository',
-            'Guarantees that the selected components compile in every target org',
-          ],
-          correctIndex: 0,
-          explanation:
-            'package.xml selects a payload boundary. Dependency discovery, deletion, and target validation require separate mechanisms.',
-        },
-        {
-          id: 'release-strategy-q6',
-          topic: 'Destructive changes',
-          prompt:
-            'An Apex class currently references a field that the same release will remove. What is the safe ordering?',
-          options: [
-            'Delete the field in destructiveChangesPre.xml, then compile the unchanged class',
-            'Remove the field manually after production tests',
-            'Deploy the class without the reference, then delete the field with post-destructive changes',
-            'Omit the field from package.xml and assume it is deleted',
-          ],
-          correctIndex: 2,
-          explanation:
-            'The consumer must stop referencing the provider first; post-destructive changes then remove the field explicitly.',
-        },
-        {
-          id: 'release-strategy-q7',
-          topic: 'Dependencies',
-          prompt: 'Why can an incremental deployment pass while installation into a clean org fails?',
-          options: [
-            'Clean orgs do not support Metadata API',
-            'The mature org may already contain an undeclared dependency',
-            'Package versions cannot be installed in scratch orgs',
-            'Source format is only valid in production',
+            'Apex, LWC, and Flow',
+            'Metadata merge quirks, org drift, and Salesforce\'s three seasonal platform releases',
+            'Licenses, editions, and API limits',
+            'Chatter, Files, and Reports',
           ],
           correctIndex: 1,
           explanation:
-            'Existing fields, permissions, configuration, or data can mask missing prerequisites; clean installation exposes the real dependency graph.',
+            'Partial-merging metadata, admins changing production directly, and platform upgrades you do not control are the release-specific challenges.',
         },
         {
-          id: 'release-strategy-q8',
-          topic: 'Packaging',
-          prompt:
-            'Which packaging choice best fits an internal application whose customer team must retain the ability to modify packaged metadata?',
+          id: 'q-rel-found-3',
+          topic: 'Drift',
+          prompt: 'What does "org drift" mean?',
           options: [
-            'A second-generation managed package with protected implementation',
-            'A first-generation managed package solely for namespace isolation',
-            'An unmanaged package used as a repeatable upgrade mechanism',
-            'An unlocked package, with governance for subscriber modifications',
+            'Sandbox storage filling up',
+            'The org\'s actual state diverging from the version-controlled source of truth',
+            'Users moving between profiles',
+            'API versions deprecating',
           ],
-          correctIndex: 3,
+          correctIndex: 1,
           explanation:
-            'Unlocked packages are intended for modular internal delivery and allow subscriber modification; that flexibility must be paired with drift controls.',
+            'Direct production changes make the org disagree with git. Scheduled drift checks find it; each finding is retrofitted to git or reverted.',
+        },
+        {
+          id: 'q-rel-found-4',
+          topic: 'Branching',
+          prompt: 'What is the main argument for trunk-based development over long-lived branches?',
+          options: [
+            'It requires no code review',
+            'Short-lived branches merged frequently minimize merge conflicts and branch drift',
+            'It eliminates the need for CI',
+            'It allows deploying without tests',
+          ],
+          correctIndex: 1,
+          explanation:
+            'The longer branches live, the more they diverge and the worse merges get. Trunk-based keeps divergence — and merge archaeology — small.',
+        },
+        {
+          id: 'q-rel-found-5',
+          topic: 'Environments',
+          prompt: 'In a healthy pipeline, how do changes travel between orgs?',
+          options: [
+            'Org-to-org copies whenever convenient',
+            'Through version control — each stage\'s org is deployed from its branch',
+            'Manual re-entry in each org',
+            'Only through change sets',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Git is the road between orgs. Every org rebuildable from its branch is the test that the pipeline is honest.',
+        },
+        {
+          id: 'q-rel-found-6',
+          topic: 'Hotfixes',
+          prompt: 'Where should a production hotfix branch from, and what must happen after it ships?',
+          options: [
+            'From main; nothing further',
+            'From the production release tag; then back-merge into main and any active release branch',
+            'From the oldest feature branch; then delete it',
+            'From UAT; then refresh the sandbox',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Branching from the tag avoids shipping unreleased work; the immediate back-merge prevents the next release from regressing the fix.',
+        },
+        {
+          id: 'q-rel-found-7',
+          topic: 'Cadence',
+          prompt: 'What should primarily determine a team\'s release cadence?',
+          options: [
+            'The CEO\'s travel schedule',
+            'The slowest reliable step in the process — usually business UAT',
+            'The number of developers',
+            'Salesforce license tier',
+          ],
+          correctIndex: 1,
+          explanation:
+            'A cadence faster than your testing capability ships untested work. Match the rhythm to reality, then improve the bottleneck.',
+        },
+        {
+          id: 'q-rel-found-8',
+          topic: 'Calendar',
+          prompt: 'Besides your own release windows, what belongs on a Salesforce release calendar?',
+          options: [
+            'Only public holidays',
+            'Salesforce seasonal release dates, sandbox refresh schedules, and business blackout periods',
+            'Developer vacation days only',
+            'Nothing — calendars are for meetings',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Platform upgrades, refreshes, and blackouts all interact with your windows — invisible ones cause incidents like refreshing mid-UAT.',
+        },
+        {
+          id: 'q-rel-found-9',
+          topic: 'Freezes',
+          prompt: 'Which three elements make a freeze window workable?',
+          options: [
+            'Total silence, no deploys of any kind, indefinite duration',
+            'Defined scope, a documented sev-1 exception path, and a plan for the post-freeze queue',
+            'A verbal agreement among developers',
+            'Freezing sandboxes as well as production',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Freezes protect high-risk periods without stopping development — but only when scope, exceptions, and the thaw are explicit.',
+        },
+        {
+          id: 'q-rel-found-10',
+          topic: 'Artifacts',
+          prompt: 'Which set of artifacts distinguishes a managed release from a "sandbox dump"?',
+          options: [
+            'A zip of the sandbox metadata',
+            'Versioned release record with scope, approval trail, human-readable notes, and a rollback runbook',
+            'A Slack message announcing the deploy',
+            'The deployment job id',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Scope, approvals, notes, and rollback are what let you answer: what shipped, who approved it, and how do we undo it?',
         },
       ],
     },
     {
-      id: 'sf-release-environments-pipeline',
-      title: 'Environments, Promotion, and CI/CD Gates',
+      id: 'release-pipeline',
+      title: 'Building the Pipeline',
       summary:
-        'Create reproducible Salesforce test contexts, control drift, and promote one artifact through automated and human quality gates.',
+        'CI/CD for Salesforce with real quality gates: validation deploys, test strategy, static analysis, and deployment/rollback mechanics that hold up under pressure.',
       lessons: [
         {
-          id: 'release-environment-promotion',
-          title: 'Environment strategy: reproducibility, data, and drift',
+          id: 'release-cicd-quality-gates',
+          title: 'CI/CD pipelines and quality gates',
           summary:
-            'Match scratch orgs and sandboxes to test purposes, seed safe deterministic data, detect drift, and promote artifacts instead of org state.',
-          durationMinutes: 36,
+            'What a Salesforce pipeline actually runs at each stage, validate-only deploys as the core trick, and gates that block bad changes without blocking the team.',
+          durationMinutes: 20,
           objectives: [
-            'Assign scratch orgs and sandbox types to explicit development and test purposes',
-            'Provision repeatable environments and deterministic, privacy-safe seed data',
-            'Detect and reconcile metadata drift without treating an org as the release artifact',
-            'Promote one immutable artifact through environments while separating target configuration',
+            'Describe each pipeline stage from commit to production deploy',
+            'Use check-only (validate) deploys as pre-merge quality gates',
+            'Design gates that are strict on main and fast on feature branches',
           ],
           sections: [
             {
-              heading: 'Design environments around test purpose and risk',
+              heading: 'Continuous integration, Salesforce edition',
               body:
-                'An environment exists to answer a question. Scratch orgs are disposable, source-defined environments well suited to isolated feature work, package development, and automated tests. Developer and Developer Pro sandboxes support persistent team work and can use source tracking when enabled. Partial Copy and Full sandboxes provide increasingly production-like data volume and integration conditions for regression, performance, migration, and user acceptance—but they cost more time and capacity to refresh and protect.\n\nDo not create a rigid “one branch equals one org” architecture or require every change to visit every environment. Route changes by risk and evidence needs. An additive permission-set description does not need the same journey as a sharing recalculation or bulk data migration. Record each environment’s purpose, owner, refresh/provisioning policy, data classification, connected systems, release-version policy, and concurrency limit.',
+                'CI means every change is automatically built and verified when pushed. For Salesforce: on every pull request, the pipeline creates or reuses an isolated org (scratch orgs shine here — this platform provisions them from templates), deploys the branch, runs the relevant Apex tests and static analysis, and reports pass/fail on the PR. Merge is blocked until green.\n\nThe payoff is integration bugs found within minutes of the commit that caused them, by a machine, instead of three weeks later in UAT by a human who then has to bisect three weeks of merges. CI is the single highest-leverage investment a Salesforce team can make.',
             },
             {
-              heading: 'Make scratch-org provisioning executable',
+              heading: 'The validate-only deploy: Salesforce\'s secret gate',
               body:
-                'A scratch-org definition captures edition, features, and settings; source and setup scripts complete the environment. Keep definitions in version control and maintain variants only for real product shapes, such as person accounts or an optional industry feature. Org Shape can help reproduce enabled features and settings, but it does not clone production metadata, data, limits, credentials, or every runtime condition.\n\nProvision from an authorized Dev Hub, deploy or install dependencies in graph order, assign permission sets, seed data, run smoke tests, and always delete temporary orgs. Pin CLI and plugin versions in CI where practical. Reproducibility means a failed build can be investigated from its definition and logs, not that every external service will behave identically.',
-              code: {
-                language: 'json',
-                snippet:
-                  '{\n  "orgName": "Order Routing Release Lab",\n  "edition": "Enterprise",\n  "features": ["PersonAccounts"],\n  "settings": {\n    "lightningExperienceSettings": {\n      "enableS1DesktopEnabled": true\n    }\n  }\n}',
-                caption:
-                  'A minimal project-scratch-def.json example; include only features and settings the test actually requires.',
-              },
-            },
-            {
-              heading: 'Seed scenarios, not a production copy',
-              body:
-                'Good seed data is deterministic, minimal, referentially complete, and labeled by scenario. Use stable external IDs so imports are idempotent; create boundary cases such as zero lines, maximum discount, duplicate external key, restricted user, and failed integration response. Version seed schemas with the feature and make tests refer to scenario keys rather than Salesforce record IDs.\n\nUse synthetic data by default. When realistic production-derived data is required in a sandbox, apply approved masking and minimization before broad access, and never copy secrets, tokens, personal data, or live outbound endpoints into a developer seed. A Full sandbox is not automatically safe merely because it is non-production. Disable or redirect integrations, scheduled jobs, emails, and payment-like side effects as part of refresh automation.',
-              code: {
-                language: 'bash',
-                snippet:
-                  'set -euo pipefail\nORG_ALIAS="release-order-routing-${BUILD_ID}"\n\nsf org create scratch \\\n  --definition-file config/project-scratch-def.json \\\n  --alias "$ORG_ALIAS" --duration-days 3\nsf project deploy start --source-dir force-app --target-org "$ORG_ALIAS"\nsf org assign permset --name Order_Routing_Tester --target-org "$ORG_ALIAS"\nsf data import tree --plan data/order-routing-plan.json --target-org "$ORG_ALIAS"\nsf apex run test --target-org "$ORG_ALIAS" --test-level RunLocalTests --wait 30\nsf org delete scratch --target-org "$ORG_ALIAS" --no-prompt',
-                caption:
-                  'A fail-fast, disposable build flow. A production pipeline should also guarantee cleanup when an earlier command fails.',
-              },
-            },
-            {
-              heading: 'Control drift and promote artifacts—not orgs',
-              body:
-                'Drift is a difference between the authoritative release state and a target org. It can be authorized, such as an emergency production fix; expected, such as environment-specific endpoints; platform-generated; or unauthorized. Run scheduled comparisons for governed metadata, classify differences, and either back-propagate approved changes through review or restore the target from source. Never “fix” drift by blindly retrieving an entire org over main.\n\nPromotion should move the same unlocked or managed package version, or the same hashed deployment bundle, through integration, UAT, and production. Rebuilding at each stage invalidates prior evidence. Keep target configuration—Named Credential principals, certificates, endpoint values, and protected secrets—outside the generic artifact or apply it through a separately controlled configuration contract. Validate each target because org capabilities and installed dependencies differ even when the payload is identical.',
+                'A check-only deployment compiles metadata and runs specified tests against a REAL target org without committing anything. It is the perfect gate: validate the release candidate against a production-shaped org (or production itself) hours before the window, so surprises surface while everyone is calm.\n\nA mature pipeline validates at three points: PR-time against an integration-shaped org, release-cut time against UAT, and pre-release against production (a "quick deploy" can then release the validated package within ten days without re-running tests). This platform\'s deployment tooling exposes check-only as a first-class option — use it until it is boring.',
               code: {
                 language: 'yaml',
                 snippet:
-                  'promotion:\n  releaseId: sf-release-2026.07.2\n  artifact:\n    uri: artifacts/sf-release-2026.07.2.zip\n    sha256: 8d60d6b6a50c3d7f-example\n    rebuildBetweenStages: false\n  stages:\n    - target: integration\n      purpose: automated-integration\n    - target: uat\n      purpose: business-acceptance\n    - target: production\n      purpose: live\n  targetConfiguration:\n    source: controlled-environment-store\n    includedInArtifact: false',
-                caption:
-                  'The artifact identity remains fixed; each target still receives its own validation and controlled configuration.',
+                  '# Pipeline sketch: PR verification for a Salesforce repo\non: pull_request\njobs:\n  verify:\n    steps:\n      - checkout\n      - run: sf org create scratch --definition-file config/project-scratch-def.json --alias pr-org\n      - run: sf project deploy start --target-org pr-org          # real deploy to isolated org\n      - run: sf apex run test --target-org pr-org --code-coverage --result-format junit\n      - run: sf code-analyzer run --workspace force-app --rule-selector Recommended  # static analysis\n      - run: sf project deploy validate --target-org integration  # check-only vs shared org\n      # merge is blocked unless every step is green',
+                caption: 'Every PR: isolated org, tests, analysis, and a validate against the shared target.',
               },
+            },
+            {
+              heading: 'Gates that respect the team',
+              body:
+                'A quality gate is a CHECK with a THRESHOLD and a CONSEQUENCE: coverage below 85% blocks merge; any Critical static-analysis finding blocks merge; validation failure blocks the release. Gates must be fast (feature-branch gates in minutes — run impacted tests, not the whole org suite), deterministic (a flaky gate teaches people to click re-run until green, which is no gate at all), and tiered — light on feature branches, full on main and release branches.\n\nEvery gate needs a documented override path with named approvers and an audit trail, because a gate that can never be overridden will be deleted the first time it blocks a sev-1 fix.',
             },
           ],
           realWorld: {
-            title: 'The UAT sandbox that lied',
+            title: 'The 11 p.m. profile failure',
             scenario:
-              'A deployment passed UAT but failed in a newly refreshed staging sandbox. UAT contained an old manually created field and reference record that were absent from Git, so the release had unknowingly depended on drift for months.',
+              'A team\'s monthly release repeatedly failed at 11 p.m. in production with profile and field-level-security errors that UAT never showed — UAT had been hand-patched over months and no longer resembled production. Each failure meant a scramble-and-abort with the business watching.',
             solution:
-              'The team classified and removed UAT drift, added the missing schema dependency to the base package, and converted the reference record into an idempotent seed keyed by an external ID. It began nightly governed-metadata comparisons and rebuilt feature validation in disposable scratch orgs.',
+              'They added a check-only validation of the full release package against PRODUCTION at release-cut time, three days before the window, and rebuilt UAT from the release branch each cycle so it stopped being a snowflake.',
             outcome:
-              'Clean-environment validation exposed dependency mistakes before shared testing, UAT stopped acting as an accidental source of truth, and approved emergency changes were back-propagated to main within one business day.',
+              'The next three releases deployed first-try in under 20 minutes using quick deploy of the pre-validated package. The 11 p.m. war room became a 15-minute checklist, and release-night attendance dropped from eight people to two.',
           },
           keyTakeaways: [
-            'Give every environment an explicit test purpose, owner, data policy, and lifecycle',
-            'Use scratch orgs for disposable source-defined isolation; use sandboxes when persistence or production-like data is the test requirement',
-            'Seed deterministic scenarios with external IDs and protect non-production data and integrations',
-            'Classify drift, review authorized changes back into source, and reject blind org-to-repo overwrites',
-            'Promote one immutable artifact and validate it separately against every target',
+            'CI on every PR: isolated org, deploy, tests, analysis — merge blocked until green',
+            'Check-only deploys validate against real orgs without changing them',
+            'Validate the release package against production days early; quick-deploy it in the window',
+            'Gates must be fast, deterministic, tiered, and overridable with an audit trail',
           ],
           resources: [
             {
-              title: 'Salesforce Well-Architected: Resilient Application Lifecycle',
-              url: 'https://architect.salesforce.com/docs/architect/well-architected/guide/resilient',
-              source: 'architect',
+              title: 'Continuous Integration using Salesforce DX (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/sfdx_travis_ci',
+              source: 'trailhead',
             },
             {
-              title: 'Salesforce DX Developer Guide: Scratch Orgs',
-              url: 'https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_scratch_orgs.htm',
-              source: 'developer',
-            },
-            {
-              title: 'Salesforce CLI: Data Commands',
-              url: 'https://developer.salesforce.com/docs/platform/salesforce-cli-reference/guide/cli_reference_data_commands_unified.html',
+              title: 'sf project deploy validate (CLI reference)',
+              url: 'https://developer.salesforce.com/docs/atlas.en-us.sfdx_cli_reference.meta/sfdx_cli_reference/cli_reference_project_commands_unified.htm',
               source: 'developer',
             },
           ],
         },
         {
-          id: 'release-cicd-quality-gates',
-          title: 'CI/CD pipeline gates, validation, and approvals',
+          id: 'release-testing-static-analysis',
+          title: 'Test strategy and static analysis',
           summary:
-            'Layer fast static checks, risk-based tests, target validation, immutable evidence, and accountable approvals into a delivery pipeline.',
-          durationMinutes: 40,
+            'A test pyramid that fits Salesforce, coverage as a floor not a goal, and static analysis (PMD/Code Analyzer) wired into the pipeline.',
+          durationMinutes: 18,
           objectives: [
-            'Design a build-once Salesforce pipeline with progressively stronger quality gates',
-            'Combine metadata checks, static analysis, security controls, and dependency validation',
-            'Select fast impacted tests without weakening promotion confidence or Salesforce coverage rules',
-            'Use production validation, quick deploy, and human approval as distinct controls',
+            'Structure unit, integration, and UAT layers for Salesforce changes',
+            'Treat coverage thresholds as a floor and assertions as the point',
+            'Gate merges on static-analysis findings by severity',
           ],
           sections: [
             {
-              heading: 'Build once and increase confidence by stage',
+              heading: 'The Salesforce test pyramid',
               body:
-                'A pipeline should reject cheap failures early and reserve scarce org time for changes that passed. A practical sequence is: normalize and inspect the change; verify manifest and destructive scope; scan secrets and dependencies; run LWC/unit tests and static analysis; deploy to a disposable or integration org; run impacted integration tests; build and hash the release artifact; validate that artifact in higher targets; collect approval; deploy; verify; and publish evidence.\n\nSeparate continuous integration from production release. Every pull request should integrate and prove basic correctness, while a policy decides whether an approved artifact is automatically delivered or waits for a train or change window. Credentials use short-lived or tightly scoped authentication, logs redact secrets, and only the deployment identity receives production metadata permissions.',
+                'The base: fast APEX UNIT TESTS asserting behavior (not just achieving coverage) — data built via factories, callouts mocked, run on every PR. The middle: INTEGRATION-LEVEL checks — Flow tests, cross-module Apex suites, and automated UI smoke tests for the critical journeys, run on merge to main and nightly. The top: HUMAN UAT against production-shaped data in a Full/Partial sandbox, scoped to the release, with recorded evidence.\n\nThe inversion anti-pattern — thin unit tests, everything discovered manually in UAT — makes every release cycle slow AND fragile: bugs found latest cost most. Push detection down the pyramid relentlessly.',
+            },
+            {
+              heading: 'Coverage honestly',
+              body:
+                'Salesforce requires 75% coverage to deploy Apex to production; healthy teams gate at 85%+ — but as a FLOOR, not a target. Coverage measures which lines EXECUTED, not which behaviors are VERIFIED: a test calling a method with no assertions produces coverage and zero protection. Review tests for assertion quality the way you review code, and track per-class coverage on core domains rather than one org-wide average that hides hollow spots.\n\nThis platform\'s Apex Quality module runs org test suites and trends coverage over time — a falling trend on a core class is a review conversation, not a deploy-day discovery.',
+            },
+            {
+              heading: 'Static analysis: the reviewer that never sleeps',
+              body:
+                'Salesforce Code Analyzer (bundled into this platform\'s tooling) runs PMD and the Apex rules over every changeset: SOQL/DML inside loops, missing sharing declarations, hardcoded ids, unclosed queries, CRUD/FLS violations, plus Flow anti-patterns. Findings carry severities — gate on them: Critical/High block merge; Medium requires review; Low is advisory.\n\nAdopting analysis on a legacy codebase? Baseline first: record existing findings, fail the build only on NEW ones, and burn the baseline down deliberately. Turning on 4,000 failures at once teaches the team to ignore the tool permanently.',
               code: {
-                language: 'yaml',
+                language: 'apex',
                 snippet:
-                  'pipeline:\n  - stage: inspect\n    gates: [format, manifest-scope, secret-scan, dependency-policy]\n  - stage: verify\n    gates: [lwc-unit, apex-impacted, static-analysis, scratch-deploy]\n  - stage: package\n    outputs: [immutable-artifact, sha256, release-manifest]\n  - stage: validate-uat\n    input: immutable-artifact\n    gates: [integration-tests, business-acceptance]\n  - stage: validate-production\n    input: immutable-artifact\n    gates: [salesforce-validation, operational-readiness]\n  - stage: release\n    gates: [risk-based-approval, change-window]\n  - stage: observe\n    gates: [technical-smoke, business-smoke, error-budget]',
-                caption:
-                  'A vendor-neutral pipeline contract: each later stage consumes the artifact produced once by package.',
+                  '// The classic finding: SOQL inside a loop — invisible in a 5-record test,\n// fatal at 200 records in production.\nfor (Opportunity opp : Trigger.new) {\n    Account acc = [SELECT OwnerId FROM Account WHERE Id = :opp.AccountId]; // PMD: AvoidSoqlInLoops\n    opp.OwnerId = acc.OwnerId;\n}\n\n// The fix the analyzer is pushing you toward: query once, look up in the loop.\nMap<Id, Account> accounts = new Map<Id, Account>(\n    [SELECT OwnerId FROM Account WHERE Id IN :accountIds]);\nfor (Opportunity opp : Trigger.new) {\n    opp.OwnerId = accounts.get(opp.AccountId)?.OwnerId;\n}',
+                caption: 'Static analysis finds the pattern at review time — before a 200-record batch finds it in production.',
               },
-            },
-            {
-              heading: 'Quality gates need policies, not vanity scores',
-              body:
-                'Static gates should cover XML/schema validity, duplicate or missing members, unsupported metadata, dependency direction, secret patterns, Apex and JavaScript quality, security rules, and destructive-change review. Salesforce Code Analyzer can combine engines for Apex and Lightning code; ESLint and Jest cover LWC concerns. Pin rule configuration, severity threshold, and engine versions so a pipeline result is reproducible.\n\nA legacy org may need a ratchet: record an approved baseline, block new critical/high findings immediately, and reduce existing debt with owners and deadlines. Never lower a gate silently to make a release pass. Suppressions need a narrow rule, code location, reason, approver, and expiry. Static analysis cannot prove business correctness, authorization behavior, data migration safety, or runtime performance, so it complements rather than replaces tests.',
-            },
-            {
-              heading: 'Select tests from impact, then add defense in depth',
-              body:
-                'Fast feedback can map changed Apex, Flows, LWCs, objects, and permissions to owning tests. Include tests for direct references, shared transaction boundaries, security personas, bulk behavior, and historically fragile areas. Run LWC unit tests and pure logic tests without an org; use scratch or integration orgs for metadata and cross-component behavior. Run a broader suite on a schedule and before high-risk promotion to catch gaps in the impact map.\n\nSalesforce production deployment rules still apply. RunLocalTests excludes tests originating from installed managed packages and namespaced unlocked packages; RunAllTestsInOrg includes them. RunSpecifiedTests can shorten a carefully analyzed deployment, but the selected tests must give each Apex class and trigger in the deployment at least 75% coverage individually—not merely preserve overall org coverage. Test selection is an evidence-backed optimization, never “the three tests that happen to pass.”',
-              code: {
-                language: 'bash',
-                snippet:
-                  '# Validate the frozen production payload and run the selected tests.\nsf project deploy validate \\\n  --manifest manifest/package.xml \\\n  --post-destructive-changes manifest/destructiveChangesPost.xml \\\n  --target-org production \\\n  --test-level RunSpecifiedTests \\\n  --tests OrderReleaseServiceTest \\\n  --tests OrderReleaseSecurityTest \\\n  --wait 120\n\n# After approval, use the successful validation job returned above.\nsf project deploy quick \\\n  --job-id 0AfXXXXXXXXXXXXXXX \\\n  --target-org production --wait 120',
-                caption:
-                  'Illustrative sf CLI validation and quick deploy. The real pipeline captures the returned job ID rather than hard-coding one.',
-              },
-            },
-            {
-              heading: 'Validation, quick deploy, and approval are separate gates',
-              body:
-                'sf project deploy validate runs a check-only deployment with Apex tests against production and returns a job ID. A successful validation can currently be quick-deployed to that production org for ten days, avoiding a second test run; confirm job status and eligibility at release time. Quick deploy reduces release-window execution time, but it does not replace data backup, integration readiness, feature activation, post-deploy steps, or verification.\n\nAn approval answers a judgment question automation cannot: is the residual risk acceptable now? Present the approver with frozen scope, risk classification, unresolved findings, validation age and target, destructive/data operations, recovery decision, business owner, support coverage, and stop thresholds. Apply separation of duties where policy requires it, but keep low-risk approvals asynchronous and evidence-driven. Any artifact or destructive-scope change after approval invalidates both approval and prior evidence.',
             },
           ],
           realWorld: {
-            title: 'A fast pipeline that was fast only when nothing changed',
+            title: 'Ninety-two percent coverage, zero protection',
             scenario:
-              'A team ran the full org test suite on every pull request, so feedback took more than two hours. Developers batched commits and bypassed CI for “urgent” changes. Production deployment then repeated the same suite during a narrow window, while static-analysis findings were copied into a spreadsheet no gate consumed.',
+              'An insurer\'s org showed 92% coverage, yet a premium-calculation change shipped a rounding bug that mispriced 30,000 renewals. The class\'s test called calculatePremium() for coverage and asserted nothing — the bug executed green through the entire pipeline.',
             solution:
-              'The team introduced deterministic impacted-test mapping plus scratch deployment at pull-request time, blocked new high-severity findings, and retained broad nightly and promotion suites. It built one hashed payload, validated that exact payload in production before the window, and required an evidence-based approval before quick deploy.',
+              'The team audited tests on the top twenty revenue-critical classes for assertion quality, rewrote the hollow ones around business scenarios with exact expected figures, and added a review rule: a test without meaningful assertions is a defect.',
             outcome:
-              'Median pull-request feedback fell below twenty minutes without reducing promotion coverage, bypasses stopped, and production execution became a short controlled action. Failed checks were visible at the change that introduced them rather than in a release-day spreadsheet.',
+              'The rewritten suite caught two further calculation bugs pre-merge within the quarter. Coverage barely moved — protection moved enormously, and "what do the assertions prove?" became the first question in test review.',
           },
           keyTakeaways: [
-            'Fail cheaply first, then spend org and human capacity on progressively stronger evidence',
-            'Build and hash one artifact; every validation and deployment must refer to that identity',
-            'Ratchet legacy static-analysis debt while blocking new severe findings',
-            'Use impacted tests for feedback and broad suites for defense in depth',
-            'Treat production validation, risk acceptance, quick deploy, and post-deploy verification as distinct controls',
+            'Pyramid: unit tests on every PR; integration on merge; scoped human UAT last',
+            'Coverage is a floor; assertion quality is the actual protection',
+            'Gate on static-analysis severity; baseline legacy findings and burn down',
+            'Bugs found lower in the pyramid cost an order of magnitude less',
           ],
           resources: [
-            {
-              title: 'Salesforce CLI: project deploy validate',
-              url: 'https://developer.salesforce.com/docs/platform/salesforce-cli-reference/guide/cli_reference_project_deploy_validate.html',
-              source: 'developer',
-            },
-            {
-              title: 'Salesforce CLI: project deploy quick',
-              url: 'https://developer.salesforce.com/docs/platform/salesforce-cli-reference/guide/cli_reference_project_deploy_quick.html',
-              source: 'developer',
-            },
             {
               title: 'Salesforce Code Analyzer',
               url: 'https://developer.salesforce.com/docs/platform/salesforce-code-analyzer/overview',
               source: 'developer',
             },
+            {
+              title: 'Apex Testing (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/apex_testing',
+              source: 'trailhead',
+            },
+          ],
+        },
+        {
+          id: 'release-deployment-strategies',
+          title: 'Deployment strategies and rollback plans',
+          summary:
+            'Delta vs full deploys, destructive changes, data + metadata sequencing, and rollback plans you have actually rehearsed.',
+          durationMinutes: 20,
+          objectives: [
+            'Choose between delta and full deployments deliberately',
+            'Sequence risky releases: destructive changes, data migrations, feature flags',
+            'Write and rehearse a rollback plan per release',
+          ],
+          sections: [
+            {
+              heading: 'Delta vs full, and the destructive-change trap',
+              body:
+                'A DELTA deploy ships only what changed between two git points — fast, minimal blast radius, the right default (this platform\'s git-based deployment computes deltas). A FULL deploy ships the entire repository state — slower but self-correcting, worth running periodically to squash accumulated drift.\n\nDELETIONS never happen implicitly: removing a field from git does not remove it from the org. Destructive changes ship as their own manifest, ideally in a separate, post-verification step — deleting a field still referenced by a report or integration is a self-inflicted sev-2. Deprecate (hide, stop writing) one release before you destroy.',
+            },
+            {
+              heading: 'Sequencing the risky release',
+              body:
+                'Real releases mix metadata, data, and behavior changes, and ORDER is part of correctness. The stable pattern: 1) pre-deploy data preparation (backfill new fields, load reference data — this platform\'s data deployment handles org-to-org data with previews and rollback), 2) metadata deploy with new behavior OFF behind a flag (custom permission or custom-setting toggle), 3) post-deploy verification — smoke tests, a report spot-check, integration heartbeats, 4) progressive enablement — pilot group first, then everyone, 5) cleanup of flags and deprecated components in a LATER release.\n\nFeature flags decouple "deployed" from "live", which converts many all-or-nothing releases into reversible ones — flipping a flag off is a rollback that takes seconds and needs no deploy window.',
+            },
+            {
+              heading: 'Rollback: a plan, not a hope',
+              body:
+                'Salesforce has no one-click org restore, so rollback is designed per release, per item: metadata rolls back by deploying the PREVIOUS git tag (delta in reverse — trivial IF everything lives in git); flags roll back by flipping off; data migrations roll back via captured before-images (this platform\'s data deploy keeps rollback data) or a written compensating script; some items (deleted data, sent emails) do NOT roll back — the plan must say so and define forward-fix instead.\n\nTwo disciplines separate teams that recover in minutes from teams that improvise at midnight: every release names its rollback decision-maker and time-box ("if smoke tests fail past 30 minutes, we roll back — X decides"), and the metadata rollback path is REHEARSED in a sandbox each cycle so the first execution is never production.',
+              code: {
+                language: 'text',
+                snippet:
+                  'ROLLBACK CARD — Release 2026.07 · Quote Discounts\n----------------------------------------------------\nTrigger: smoke tests failing OR error rate > 2% for 30 min\nDecision-maker: R. Mehta (release manager)\n\n1. Flip custom permission "Quote_Discounts_Enabled" OFF   (~1 min, no deploy)\n2. If metadata fault: deploy tag v2026.06 delta            (~12 min, rehearsed 07-14 in UAT)\n3. Data: discount backfill reversible via captured rollback set RB-118\n4. NOT reversible: 340 quote PDFs already emailed — comms owner: L. Ortiz\n5. Announce in #releases; open incident if step 2 executed',
+                caption: 'One card per release: triggers, owner, timed steps, and what will not roll back.',
+              },
+            },
+          ],
+          realWorld: {
+            title: 'The rollback that had never been run',
+            scenario:
+              'A CPQ pricing release misbehaved at 7 a.m. as order volume ramped. The team had a rollback "plan" — one line: "redeploy previous version" — that had never been executed. The old branch would not validate (a permission set had changed underneath), and improvising the fix took four hours of revenue-impacting downtime.',
+            solution:
+              'Rollback became a first-class release artifact: new behavior behind a flag wherever possible, previous-tag redeploy rehearsed in UAT during each release week, rollback data captured for migrations, and a named decision-maker with a 30-minute time-box.',
+            outcome:
+              'The next pricing incident was neutralized in 90 seconds by flipping the flag off, root-caused calmly, and forward-fixed the same afternoon. Downtime cost went from four hours to effectively zero — the rehearsal habit paid for itself in one incident.',
+          },
+          keyTakeaways: [
+            'Delta by default; periodic full deploys self-correct drift',
+            'Destructive changes are explicit, separate, and one release behind deprecation',
+            'Flags decouple deploy from enable — seconds-fast rollback for behavior',
+            'Rollback plans name triggers, owners, and time-boxes — and get rehearsed',
+          ],
+          resources: [
+            {
+              title: 'Metadata API deployment (Developer Guide)',
+              url: 'https://developer.salesforce.com/docs/atlas.en-us.api_meta.meta/api_meta/meta_deploy.htm',
+              source: 'developer',
+            },
+            {
+              title: 'DevOps Center (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/devops-center',
+              source: 'trailhead',
+              note: 'Salesforce\'s own pipeline tooling concepts',
+            },
           ],
         },
       ],
       quizBank: [
         {
-          id: 'release-pipeline-q1',
-          topic: 'Environment fit',
-          prompt: 'Which environment best fits isolated, source-defined feature validation created on demand?',
-          options: ['A Full sandbox', 'Production in maintenance mode', 'A scratch org', 'A Partial Copy sandbox'],
-          correctIndex: 2,
-          explanation:
-            'Scratch orgs are temporary and source-defined, making them a strong fit for isolated feature and automated validation.',
-        },
-        {
-          id: 'release-pipeline-q2',
-          topic: 'Sandbox strategy',
-          prompt: 'When is a Full or Partial Copy sandbox more appropriate than a scratch org?',
+          id: 'q-rel-pipe-1',
+          topic: 'CI',
+          prompt: 'What should happen automatically on every pull request in a mature Salesforce pipeline?',
           options: [
-            'When testing needs production-like data relationships, volume, or integrations',
-            'Whenever a developer wants faster provisioning',
-            'When no data privacy controls are available',
-            'When the repository is not the source of truth',
-          ],
-          correctIndex: 0,
-          explanation:
-            'Copy sandboxes serve tests needing realistic data or persistent integration context, subject to masking and side-effect controls.',
-        },
-        {
-          id: 'release-pipeline-q3',
-          topic: 'Data seeding',
-          prompt: 'What makes a Salesforce seed process safely repeatable?',
-          options: [
-            'Hard-coded record IDs copied from production',
-            'A fresh random schema for every run',
-            'Live customer data and active outbound endpoints',
-            'Deterministic scenarios upserted by stable external IDs',
-          ],
-          correctIndex: 3,
-          explanation:
-            'Stable scenario keys and external IDs support idempotent loading without dependence on org-specific record IDs.',
-        },
-        {
-          id: 'release-pipeline-q4',
-          topic: 'Drift',
-          prompt: 'An authorized emergency metadata fix was made in production. What should happen next?',
-          options: [
-            'Leave it only in production because the incident is closed',
-            'Retrieve the entire production org and overwrite main',
-            'Capture the focused change, review it into source, and reconcile downstream environments',
-            'Refresh every sandbox before documenting it',
-          ],
-          correctIndex: 2,
-          explanation:
-            'Authorized hotfix drift must be back-propagated through normal review so source and future releases remain authoritative.',
-        },
-        {
-          id: 'release-pipeline-q5',
-          topic: 'Static-analysis gates',
-          prompt: 'What is a defensible way to introduce static analysis into a legacy codebase?',
-          options: [
-            'Block new severe findings and ratchet an owned, expiring baseline downward',
-            'Ignore all findings until the entire backlog is fixed',
-            'Change rule versions on every run',
-            'Suppress any rule that delays a release without recording why',
-          ],
-          correctIndex: 0,
-          explanation:
-            'A controlled baseline prevents new debt immediately while making existing debt visible and progressively smaller.',
-        },
-        {
-          id: 'release-pipeline-q6',
-          topic: 'Test selection',
-          prompt: 'What is the safest role for impacted-test selection?',
-          options: [
-            'It permanently replaces broad regression testing',
-            'It provides fast feedback, supplemented by broader scheduled and promotion suites',
-            'It selects only tests modified in the same commit',
-            'It bypasses Salesforce production code-coverage rules',
+            'Direct deploy to production',
+            'Deploy to an isolated org, run tests and static analysis, block merge until green',
+            'An email to the release manager',
+            'A full sandbox refresh',
           ],
           correctIndex: 1,
           explanation:
-            'Impact analysis speeds the inner loop, while broad suites protect against incomplete dependency maps and still satisfy target requirements.',
+            'CI verifies every change in isolation within minutes — integration bugs surface at the commit, not three weeks later in UAT.',
         },
         {
-          id: 'release-pipeline-q7',
-          topic: 'RunSpecifiedTests',
-          prompt:
-            'For a production deployment using RunSpecifiedTests, what Apex coverage rule is especially important?',
+          id: 'q-rel-pipe-2',
+          topic: 'Validation',
+          prompt: 'What does a check-only (validate) deployment do?',
           options: [
-            'Only the org-wide average must exceed 50%',
-            'Tests from installed managed packages must always be selected',
-            'Every Flow needs an Apex test with 100% coverage',
-            'Selected tests must cover each deployed Apex class and trigger by at least 75%',
-          ],
-          correctIndex: 3,
-          explanation:
-            'RunSpecifiedTests applies the 75% requirement individually to each Apex class and trigger in the deployment package.',
-        },
-        {
-          id: 'release-pipeline-q8',
-          topic: 'Validation and quick deploy',
-          prompt: 'Which statement about Salesforce quick deploy is accurate?',
-          options: [
-            'It deploys any new payload after an approver checks a box',
-            'It uses a successful validation of the same payload and production org within the job’s validity window',
-            'It is the required deployment method for sandboxes',
-            'It eliminates the need for post-deploy verification',
+            'Deploys but skips tests',
+            'Compiles and tests against the target org WITHOUT committing changes',
+            'Only checks file syntax locally',
+            'Creates a backup of the org',
           ],
           correctIndex: 1,
           explanation:
-            'Quick deploy executes an eligible successful production validation job; it does not widen scope or replace operational controls.',
+            'Check-only runs the full deployment and test process without persisting — the perfect dress rehearsal against production days early.',
+        },
+        {
+          id: 'q-rel-pipe-3',
+          topic: 'Quick deploy',
+          prompt: 'What does a successful production validation enable?',
+          options: [
+            'Skipping UAT forever',
+            'A quick deploy of that exact validated package within ten days, without re-running tests',
+            'Automatic nightly deployment',
+            'Unlimited deploys with no tests for a month',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Quick deploy releases the pre-validated package during the window in minutes — validation took the risk out earlier, while everyone was calm.',
+        },
+        {
+          id: 'q-rel-pipe-4',
+          topic: 'Gates',
+          prompt: 'Why must quality gates be deterministic (not flaky)?',
+          options: [
+            'Flaky gates use more CPU',
+            'A gate people re-run until green stops filtering anything — it trains the team to ignore it',
+            'Determinism is required by Salesforce',
+            'Flaky gates block hotfixes permanently',
+          ],
+          correctIndex: 1,
+          explanation:
+            'The first time "just re-run it" works, the gate\'s authority is gone. Fix or quarantine flaky checks immediately.',
+        },
+        {
+          id: 'q-rel-pipe-5',
+          topic: 'Testing',
+          prompt: 'Why is 92% code coverage NOT sufficient evidence of a safe change?',
+          options: [
+            'Salesforce requires 100%',
+            'Coverage proves lines executed — only assertions prove behavior is correct',
+            'Coverage excludes triggers',
+            'It is sufficient evidence',
+          ],
+          correctIndex: 1,
+          explanation:
+            'A test with no assertions produces coverage and zero protection. Review tests for what they PROVE, not what they touch.',
+        },
+        {
+          id: 'q-rel-pipe-6',
+          topic: 'Static analysis',
+          prompt: 'How should a team adopt static analysis on a large legacy codebase?',
+          options: [
+            'Fail the build on all 4,000 existing findings at once',
+            'Baseline existing findings, fail only on NEW ones, and burn the baseline down deliberately',
+            'Run it manually once a year',
+            'Only analyze test classes',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Failing on everything teaches the team to ignore the tool. New-findings-only keeps the gate meaningful while debt shrinks on a plan.',
+        },
+        {
+          id: 'q-rel-pipe-7',
+          topic: 'Deploys',
+          prompt: 'Removing a custom field from the git repository and deploying — what happens to the field in the org?',
+          options: [
+            'It is deleted automatically',
+            'Nothing — deletions require an explicit destructive-changes manifest',
+            'It is archived to the recycle bin',
+            'The deploy fails',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Salesforce deploys are additive by default. Destructive changes ship explicitly — and should trail deprecation by a release.',
+        },
+        {
+          id: 'q-rel-pipe-8',
+          topic: 'Feature flags',
+          prompt: 'What is the release value of deploying new behavior behind a flag (custom permission / setting)?',
+          options: [
+            'It doubles test coverage',
+            'It decouples deploy from enable — rollback becomes flipping the flag off in seconds',
+            'It removes the need for approvals',
+            'It hides the change from auditors',
+          ],
+          correctIndex: 1,
+          explanation:
+            '"Deployed but off" converts all-or-nothing releases into reversible ones and enables progressive rollout to pilot groups.',
+        },
+        {
+          id: 'q-rel-pipe-9',
+          topic: 'Rollback',
+          prompt: 'Which element is essential in a real rollback plan?',
+          options: [
+            'A promise to be careful',
+            'Named decision-maker, explicit triggers/time-box, per-item steps, and a list of what cannot roll back',
+            'The phone number of Salesforce support',
+            'A second production org',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Rollback is a designed, owned procedure. Items that cannot be reversed (sent emails, deleted data) need forward-fix plans stated upfront.',
+        },
+        {
+          id: 'q-rel-pipe-10',
+          topic: 'Rollback',
+          prompt: 'Why rehearse the previous-tag redeploy in a sandbox every release cycle?',
+          options: [
+            'To use spare sandbox capacity',
+            'So the first execution of your rollback is never in production during an incident',
+            'Salesforce licensing requires it',
+            'To keep git history clean',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Unrehearsed rollbacks fail in surprising ways (dependencies changed underneath). Rehearsal converts a midnight improvisation into a checklist.',
         },
       ],
     },
     {
-      id: 'sf-release-operations-recovery',
-      title: 'Release Operations, Recovery, and Improvement',
+      id: 'release-execution',
+      title: 'Running the Release',
       summary:
-        'Operate native or third-party delivery tooling through one control model, execute repeatable runbooks, recover deliberately, and learn from production signals.',
+        'The human side done professionally: planning and approvals, release notes people read, go-live runbooks, hypercare, and the metrics that drive improvement.',
       lessons: [
         {
-          id: 'release-tooling-runbooks',
-          title: 'Delivery tooling, runbooks, and change windows',
+          id: 'release-planning-notes-approvals',
+          title: 'Release planning, notes, and approvals',
           summary:
-            'Apply consistent release controls through DevOps Center, Gearset, Copado, or composable CI, then make production execution explicit and rehearsable.',
-          durationMinutes: 35,
+            'Scope cuts without drama, approval flows that add safety instead of ceremony, and release notes for three different audiences.',
+          durationMinutes: 15,
           objectives: [
-            'Evaluate Salesforce release tools by operating capability and control fit rather than vendor claims',
-            'Keep Git, artifact identity, and evidence authoritative across native and third-party tooling',
-            'Write an executable deployment runbook with owners, commands, decisions, and stop conditions',
-            'Choose risk-based change windows and coordinate business, platform, and integration readiness',
+            'Run a release cycle: scope lock, code cut, UAT entry, go/no-go',
+            'Design an approval flow that is auditable but not bureaucratic',
+            'Write release notes for business users, admins, and engineers',
           ],
           sections: [
             {
-              heading: 'Choose an operating model before choosing a tool',
+              heading: 'The cycle: dates that create calm',
               body:
-                'A sound release system needs work-to-change traceability, source control, metadata-aware comparison, dependency handling, automated validation, test and analysis integration, approvals, credential control, promotion evidence, and recovery support. Decide which capabilities matter, who operates them, and what evidence must leave the system before evaluating products. A polished deployment diff does not compensate for an unclear source of truth or an unowned hotfix path.\n\nSalesforce DevOps Center provides a native, work-item-oriented path to source-controlled changes and staged promotion. Third-party platforms such as Gearset and Copado commonly add their own metadata comparison, pipeline, orchestration, testing, backup, or governance patterns. A composable CLI pipeline can provide the same control primitives with more engineering ownership. Product coverage, integrations, licensing, and behavior evolve; validate them against a representative metadata set, branch model, identity architecture, audit requirement, and failure drill rather than assuming feature parity.',
+                'A release cycle is four dates everyone knows: SCOPE LOCK (what is in; later arrivals catch the next train), CODE CUT (the release branch/tag is created; only stabilization fixes enter), UAT ENTRY/EXIT (business verification with recorded evidence), and GO/NO-GO (a 15-minute meeting reviewing a checklist: UAT sign-off, validation green, rollback card ready, comms drafted, no open sev-1s).\n\nThe emotional shift this creates is underrated: scope pressure becomes "next release is in two weeks" instead of a fight, and go/no-go becomes checklist review instead of vibes. This platform\'s Releases module tracks the version, its work items, deployments, and approval state in one record.',
             },
             {
-              heading: 'Use one release contract across control planes',
+              heading: 'Approvals that mean something',
               body:
-                'Teams often create split-brain delivery: admins promote in one UI, developers deploy from CI, and incident responders run local CLI commands. Multiple interfaces can coexist, but they must write to one governed flow. Git remains authoritative for intended metadata; package version or artifact digest identifies deployable content; the pipeline policy defines gates; and a release record collects evidence from every adapter.\n\nRequire external tools to consume reviewed source and emit machine-readable status. Use service identities rather than personal credentials, least privilege per stage, and immutable logs exported to the audit retention boundary. Define how a tool-created branch is reviewed, how merge conflicts are surfaced, how emergency changes return to trunk, and how the organization exits the tool without losing release history.',
-              code: {
-                language: 'yaml',
-                snippet:
-                  'releaseContract:\n  id: sf-release-2026.07.2\n  intent:\n    workItems: [CRM-4821]\n    businessOwner: service-operations\n  source:\n    repository: crm-platform\n    commit: 4f6c2d1\n  artifact:\n    digest: sha256:8d60d6b6a50c3d7f-example\n  controls:\n    riskClass: medium\n    requiredGates: [peer-review, static-analysis, apex-tests, prod-validation]\n    approverRole: release-manager\n  adapters:\n    promotionTool: selected-control-plane\n    deploymentApi: salesforce-metadata-api\n  evidenceUri: evidence/sf-release-2026.07.2.json',
-                caption:
-                  'A portable contract keeps release identity and controls stable even if the orchestration product changes.',
-              },
+                'An approval flow answers: who confirms the change WORKS (QA/UAT sign-off), who accepts the RISK (business owner), and who confirms the org is READY (release manager)? Two or three named approvals, recorded on the release record with timestamps, are auditable and fast. Twelve-signature chains are neither — they diffuse accountability until nobody actually reads what they sign.\n\nCalibrate rigor to risk: a label fix and a sharing-model change should not share a process. Define lanes (standard / expedited / emergency) with entry criteria, and let the emergency lane be genuinely fast — a sev-1 fix blocked on a vacationing approver is how teams learn to bypass process permanently.',
             },
             {
-              heading: 'A deployment runbook is a decision system',
+              heading: 'Release notes: three audiences, one source',
               body:
-                'A useful runbook is specific enough for a qualified person who did not author the change. State scope and artifact digest; roles and contact path; prerequisites; target identity; backups; integration, batch, and user readiness; exact automated job or commands; expected durations; validation IDs; ordered data or activation steps; smoke checks; observation period; stop thresholds; recovery actions; and evidence links. Mark which steps are automated and which require judgment.\n\nRehearse high-risk runbooks in a production-like environment, including the abort path. Use timestamps and named owners, not “the team checks logs.” Make commands idempotent or declare when they are not. Never paste secrets into a runbook. Store the durable procedure in version control and generate the release-specific values from the manifest so operators do not manually transcribe commit IDs or component lists.',
-              code: {
-                language: 'yaml',
-                snippet:
-                  'runbook:\n  releaseId: sf-release-2026.07.2\n  artifactDigest: sha256:8d60d6b6a50c3d7f-example\n  roles:\n    commander: release-manager\n    deployer: production-service-identity\n    verifier: service-owner\n  prechecks:\n    - production validation job is successful and eligible\n    - async order queue is below 500\n    - backup job completed successfully\n  execute:\n    - quick deploy validation job 0Af-example\n    - assign feature permission to pilot group\n  stopIf:\n    - deployment reports any component failure\n    - order error rate exceeds 2 percent for 5 minutes\n  verify:\n    - create and cancel a synthetic order\n    - confirm integration correlation ID in downstream system\n  recovery: disable pilot permission, then follow recovery-runbook-17',
-                caption:
-                  'Concrete thresholds and owners turn a checklist into an executable decision record.',
-              },
-            },
-            {
-              heading: 'Change windows are a risk treatment, not a ceremony',
-              body:
-                'Choose a window when user traffic, Salesforce maintenance, integrations, scheduled and batch work, data loads, support coverage, and business deadlines make the residual risk acceptable. High-risk schema deletion or a data conversion may require a quiet period and staffed bridge; a prevalidated, additive, flagged change may be safer during normal staffed hours. Avoid peak business periods, but do not default every release to 2 a.m. when decision-makers and engineers are exhausted.\n\nFreeze the artifact before the go/no-go review. Publish expected user impact, support routing, start and end times, owners, and status channel. At the window, verify Salesforce Trust and target identity, pause only the jobs named in the runbook, execute, observe for the defined period, and explicitly close or invoke recovery. A freeze that allows “one tiny extra fix” after validation is not a freeze.',
+                'BUSINESS USERS need "what changes for me Monday morning" — features, changed screens, new steps, in their words, with screenshots for anything visual. ADMINS need operational detail: new permissions and flags, changed automations, data migrations, known limitations. ENGINEERS need the changelog: work items, deployments, tags, and links back to the release record.\n\nGenerate the skeleton from the release scope (this platform drafts AI release notes from the work items and deployments in the release) and edit for humans — generated notes are a starting point, not a shipping product. Send the business version BEFORE go-live; notes discovered after the change hit users read as an apology.',
             },
           ],
           realWorld: {
-            title: 'Three deployment tools, no shared release truth',
+            title: 'The release nobody told support about',
             scenario:
-              'Admins promoted with a graphical comparison tool, developers used a CI script, and emergency fixes came from laptops. All methods could deploy successfully, but they used different manifests and evidence stores. During an outage, nobody knew whether the production class came from the approved train or a later hotfix.',
+              'A team shipped a redesigned case-close flow on a Sunday. Monday 8 a.m., the support floor found their muscle memory broken mid-call: 200 agents, no warning, no notes. The support director escalated to the COO by 9:15, and the (well-built) feature spent its first week as an incident.',
             solution:
-              'The organization retained role-appropriate interfaces but imposed one release contract: reviewed Git commit, immutable payload digest, central risk policy, service identities, and a shared evidence record. It wrote and rehearsed a production runbook with target checks, stop thresholds, business verification, and a mandatory hotfix backflow step.',
+              'Release comms became a go/no-go checklist item: business-facing notes distributed three days early to affected team leads, a two-minute walkthrough video for UI changes, and a named comms owner per release. No sign-off from affected department leads, no go.',
             outcome:
-              'The next audit traced every production component change to one release ID, while admins kept a usable UI and developers kept automation. A later failed smoke check was stopped within the observation window because ownership and thresholds were explicit.',
+              'The next flow change landed with agents who had already watched the walkthrough; support tickets about "the new screen" dropped to near zero, and the support director became the release process\'s loudest advocate — the cheapest stakeholder win the team ever bought.',
           },
           keyTakeaways: [
-            'Evaluate release tooling against required controls, metadata coverage, integrations, auditability, and failure behavior',
-            'Allow multiple interfaces only when they honor one source, artifact identity, policy, and evidence contract',
-            'Use service identities, least privilege, durable logs, and a tested tool-exit path',
-            'Write runbooks with exact owners, order, thresholds, expected results, and recovery decisions',
-            'Set change windows by residual risk and staffing, then freeze the validated artifact',
+            'Four dates run the cycle: scope lock, code cut, UAT window, go/no-go',
+            'Two or three named, recorded approvals beat twelve-signature ceremony',
+            'Risk-calibrated lanes: standard, expedited, emergency — all defined upfront',
+            'Notes ship BEFORE go-live, written per audience, generated then humanized',
           ],
           resources: [
             {
-              title: 'Salesforce DevOps Center Developer Guide',
-              url: 'https://developer.salesforce.com/docs/atlas.en-us.devops_center_dev.meta/devops_center_dev/devops_center_dev_overview.htm',
-              source: 'developer',
+              title: 'Salesforce release management best practices (Architect)',
+              url: 'https://architect.salesforce.com/well-architected/adaptable/overview',
+              source: 'architect',
             },
             {
-              title: 'Salesforce DevOps Developer Center',
-              url: 'https://developer.salesforce.com/developer-centers/devops',
-              source: 'developer',
-            },
-            {
-              title: 'Gearset Pipelines Documentation',
-              url: 'https://docs.gearset.com/en/collections/10441566-pipelines',
-              source: 'other',
-            },
-            {
-              title: 'Copado Documentation',
-              url: 'https://docs.copado.com/home/en-us/',
-              source: 'other',
+              title: 'Change management (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/org-change-management',
+              source: 'trailhead',
             },
           ],
         },
         {
-          id: 'release-recovery-improvement',
-          title: 'Recovery, verification, observability, and delivery improvement',
+          id: 'release-go-live-hypercare',
+          title: 'Go-live runbooks and hypercare',
           summary:
-            'Engineer reversible behavior, a controlled hotfix lane, production verification, and feedback using current DORA-style delivery measures.',
-          durationMinutes: 42,
+            'A minute-by-minute release window, smoke tests that prove life, and a hypercare period that catches what testing missed.',
+          durationMinutes: 18,
           objectives: [
-            'Choose between disable, revert, restore, and forward-fix recovery strategies',
-            'Design testable Salesforce feature flags and a governed hotfix lane',
-            'Verify technical and business outcomes after deployment with release-correlated signals',
-            'Use current DORA-style metrics to improve the delivery system without gaming teams',
+            'Write a go-live runbook with owners and timings per step',
+            'Design post-deploy smoke tests for critical business journeys',
+            'Run a hypercare period with real monitoring and exit criteria',
           ],
           sections: [
             {
-              heading: 'Recovery is broader than metadata rollback',
+              heading: 'The runbook: choreography, not heroics',
               body:
-                'A successful Salesforce metadata deployment has no universal one-click undo. Reverting source and redeploying can restore many classes, Flows, and configuration components, but it cannot un-delete business data, reverse an external side effect, or guarantee that a previous package version can be installed over a newer one. Destructive metadata, schema conversion, permission exposure, data migration, and outbound integration each need a specific recovery mechanism.\n\nChoose the fastest safe action: disable behavior with a flag; revert compatible metadata; restore data from a tested backup; compensate an external transaction; or fix forward when reversal is more dangerous. Record a recovery point objective for the release and the decision threshold before deployment. Backups count only when ownership, retention, restore procedure, and restore testing are known.',
-              code: {
-                language: 'bash',
-                snippet:
-                  '# Prepare a reviewable metadata reversal from the production commit.\ngit switch -c release-hotfix-revert-order-routing sf-release-2026.07.2\ngit revert --no-commit <change-commit>\n\n# Validate the resulting reversal payload before production execution.\nsf project deploy validate \\\n  --source-dir force-app/main/default/classes/OrderReleaseService.cls \\\n  --target-org production \\\n  --test-level RunSpecifiedTests \\\n  --tests OrderReleaseServiceTest --wait 120',
-                caption:
-                  'A metadata reversal still goes through review and validation; data and external effects require separate recovery steps.',
-              },
+                'A go-live runbook lists every step with an OWNER, an EXPECTED DURATION, and a VERIFICATION: pre-window checks (validation green, approvals recorded, rollback card printed), the window itself (maintenance banner up, integrations paused if needed, quick deploy executed, data steps run, flags flipped for pilot), and verification before declaring success.\n\nWrite it so a competent colleague who was not in the planning meetings could execute it. Timestamps get filled in as you go — that log is gold for the retrospective and for auditors. Releases become boring when the runbook, not adrenaline, does the driving; boring is the goal.',
             },
             {
-              heading: 'Feature flags separate deployment from exposure',
+              heading: 'Smoke tests: prove the business still works',
               body:
-                'A feature flag lets the team deploy inert capability, expose it to a pilot, expand it, or disable it without rebuilding the artifact. Custom Permissions work well for user- or persona-scoped behavior and can be checked in Apex with FeatureManagement.checkPermission or in Flow formulas with $Permission. Custom Metadata can hold system-wide mode, thresholds, or cohorts. Keep authorization and rollout concerns distinct: a release flag must not accidentally grant data access.\n\nEvery flag needs an owner, safe default, activation and kill procedure, telemetry, tests for on and off states, and an expiry date. Evaluate the flag before irreversible work, and define behavior for asynchronous jobs whose initiating user differs from the eventual execution context. Remove stale flags after rollout; nested permanent flags create an untestable second architecture.',
-              code: {
-                language: 'apex',
-                snippet:
-                  'public with sharing class OrderRouter {\n    public static RoutingResult route(Order__c orderRecord) {\n        if (!FeatureManagement.checkPermission(\'Use_New_Order_Routing\')) {\n            return LegacyOrderRouter.route(orderRecord);\n        }\n\n        return NewOrderRouter.route(orderRecord);\n    }\n}',
-                caption:
-                  'A Custom Permission scopes exposure by assigned user; both routing paths need tests and operational signals.',
-              },
+                'Within minutes of deploy completion, verify the CRITICAL JOURNEYS — not everything, the five-to-ten flows the business cannot live without: create a lead and convert it, quote a standard deal, close a case, run the revenue report, confirm the ERP integration heartbeat. Script them (who clicks what, what must appear), pre-assign each to a person, and time-box to 20-30 minutes.\n\nAutomate what you can (API-level checks and integration heartbeats catch a broad class of failures instantly — this platform\'s monitoring shows job health live), but keep a human on the UI paths: users experience the UI, not the API. Smoke results are the input to the "declare success or trigger rollback" decision — which is why the rollback card defined the threshold BEFORE the window.',
             },
             {
-              heading: 'The hotfix lane is fast because it is prepared',
+              heading: 'Hypercare: the release is not done at deploy',
               body:
-                'Branch a hotfix from the exact production tag or commit, not from unreleased main. Keep scope minimal, link the incident, run the required static, test, security, and target-validation gates, and use an expedited named approval. Tag and record the deployed result. Then merge the exact fix back into main and any active release line immediately so the next normal release cannot reintroduce the defect.\n\nExpedited does not mean invisible. Pre-authorize who can invoke the lane, what severity qualifies, which gates may be shortened, how compensating review occurs, and how credentials are obtained. Exercise the lane periodically with a harmless scenario. If every inconvenient deadline becomes an emergency, fix the normal path rather than normalizing bypasses.',
-            },
-            {
-              heading: 'Verify outcomes and correlate production signals',
-              body:
-                'Deployment success proves that the platform accepted metadata, not that users can complete the intended journey. Begin with technical checks: deployment result, Apex and Flow errors, asynchronous queue health, scheduled work, integration acknowledgments, permission access, and data-migration reconciliation. Then run safe business checks such as quote creation, case routing, or order cancellation with synthetic records and cleanup. Compare a defined baseline and observe through the risk-appropriate window.\n\nInstrument release ID and correlation ID where logs, events, and integrations permit it. Salesforce Event Monitoring can provide events such as unexpected Apex exceptions, with access and retention depending on current entitlements; Flow error handling, platform-event dead-letter/retry behavior, external API monitoring, and business reconciliation add other views. Define alert owner and threshold before release. Debug logs alone are temporary diagnostic data, not a production observability strategy.',
-              code: {
-                language: 'yaml',
-                snippet:
-                  'postDeployVerification:\n  releaseId: sf-release-2026.07.2\n  observationMinutes: 30\n  checks:\n    - name: synthetic-order-round-trip\n      owner: service-operations\n      expected: completed-and-cancelled\n      timeoutSeconds: 90\n    - name: order-routing-error-rate\n      owner: on-call-engineer\n      threshold: "< 2% over 5 minutes"\n    - name: downstream-reconciliation\n      owner: integration-operations\n      expected: "source count equals acknowledged count"\n  onFailure:\n    action: disable-feature-flag\n    incidentSeverity: SEV-2',
-                caption:
-                  'Verification combines a user journey, technical threshold, and cross-system business reconciliation.',
-              },
-            },
-            {
-              heading: 'Improve the system with DORA-style measures',
-              body:
-                'Current DORA guidance uses five software-delivery performance measures. Throughput comprises change lead time (commit to successful production), deployment frequency, and failed deployment recovery time. Instability comprises change fail rate (deployments needing immediate intervention) and deployment rework rate (unplanned deployments that remediate production problems). Measure at a service or product boundary with consistent event definitions; a Salesforce org containing many products should not collapse every team into one misleading average.\n\nUse measures for learning, never individual targets. Correlate commit, artifact, deployment, incident, recovery, and rework events by release ID. Segment by risk class and watch trends: a shorter lead time accompanied by rising failure and rework is not improvement. Review failed gates and incidents, choose one constraint—oversized batches, flaky tests, approval queues, environment contention, slow recovery—and test a process change. Smaller batches, reliable automation, and rehearsed recovery often improve speed and stability together.',
+                'Hypercare is a defined period (48 hours to two weeks, scaled to risk) of heightened attention after go-live: a named rotation watching error rates, integration health, and support tickets; a fast lane for release-related defects that bypasses normal triage; and a daily 15-minute review of what surfaced.\n\nDefine EXIT CRITERIA up front — error rates at baseline, no open release-tagged sev-1/2, ticket volume normal — and close hypercare explicitly with a short retrospective: what leaked past which pyramid layer, and which gate or test gets strengthened so it cannot leak again. That loop, run every release, is how a mediocre process becomes a great one in two quarters.',
             },
           ],
           realWorld: {
-            title: 'A release that deployed cleanly but routed orders twice',
+            title: 'The integration that died quietly at go-live',
             scenario:
-              'A new routing path passed deployment and Apex tests, but a retry interaction with middleware created duplicate routing requests. The deployment dashboard stayed green while operations noticed duplicates twenty minutes later. Reverting Apex would not cancel requests already accepted downstream.',
+              'A release changed an Opportunity field an ERP integration read. Deploy succeeded, UI smoke tests passed, everyone went to bed. The integration had been failing since 9:07 p.m.; by morning, 14 hours of orders were missing from the ERP and month-end reconciliation was chaos.',
             solution:
-              'The release commander disabled the new path through its Custom Permission, stopped new duplicates, and ran a compensating reconciliation with the integration owner. A minimal hotfix from the production tag added an idempotency key, passed the expedited pipeline, and was merged back to main. Post-deploy checks gained a source-to-acknowledgment count and release correlation ID.',
+              'Integration heartbeats became a mandatory smoke-test line item — synthetic transactions pushed through each critical integration within 15 minutes of deploy — and hypercare monitoring watched integration error rates on a dashboard with paging thresholds for the first 48 hours.',
             outcome:
-              'Service was stabilized before a metadata reversal could have completed, all duplicate requests were identified, and the next release detected a simulated retry in its observation window. The retrospective tracked the event as both a change failure and a rework deployment, then prioritized idempotency tests over adding another approval.',
+              'Two releases later the same class of failure fired the heartbeat alert at go-live plus 12 minutes; the field mapping was fixed within the window, zero orders were lost, and the incident-that-did-not-happen made the case for the monitoring investment better than any slide deck.',
           },
           keyTakeaways: [
-            'Plan recovery separately for metadata, data, permissions, packages, and external side effects',
-            'Feature flags provide rapid exposure control only when both states, ownership, telemetry, and removal are designed',
-            'Branch hotfixes from production, retain essential gates, and merge the deployed fix back immediately',
-            'Verify user and business outcomes after platform deployment success',
-            'Correlate observability with release IDs and define thresholds, owners, and actions in advance',
-            'Use DORA’s current five measures to find system constraints, not to rank people or reward gaming',
+            'Runbooks have owners, durations, and verifications per step — executable by a stranger',
+            'Smoke-test the critical journeys, UI and integrations, within minutes of deploy',
+            'Hypercare = named rotation + fast defect lane + daily review, with exit criteria',
+            'Every leak strengthens a lower layer: the improvement loop that compounds',
           ],
           resources: [
             {
-              title: 'Salesforce Well-Architected: Resilient Releases',
-              url: 'https://architect.salesforce.com/docs/architect/well-architected/guide/resilient',
-              source: 'architect',
+              title: 'Salesforce incident & change readiness (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/org-change-management',
+              source: 'trailhead',
             },
             {
-              title: 'Apex Unexpected Exception Event Type',
-              url: 'https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_eventlogfile_apexunexpectedexception.htm',
-              source: 'developer',
-            },
-            {
-              title: 'Salesforce Well-Architected: Platform Transformation',
-              url: 'https://architect.salesforce.com/docs/architect/fundamentals/guide/platform-transformation',
-              source: 'architect',
-            },
-            {
-              title: 'DORA Software Delivery Performance Metrics',
-              url: 'https://dora.dev/guides/dora-metrics/',
+              title: 'Google SRE: Being on-call (concepts transfer)',
+              url: 'https://sre.google/sre-book/being-on-call/',
               source: 'other',
+              note: 'The hypercare mindset, formalized',
+            },
+          ],
+        },
+        {
+          id: 'release-metrics-improvement',
+          title: 'Release health: DORA metrics and continuous improvement',
+          summary:
+            'Measuring the four DORA metrics for a Salesforce team, running retrospectives that change the process, and paying down release debt.',
+          durationMinutes: 17,
+          objectives: [
+            'Define and measure the four DORA metrics in a Salesforce context',
+            'Run release retrospectives that produce process changes, not blame',
+            'Balance feature delivery against automation and release-debt work',
+          ],
+          sections: [
+            {
+              heading: 'Four numbers that describe your delivery',
+              body:
+                'DORA\'s research distilled delivery performance into four metrics. DEPLOYMENT FREQUENCY: how often you ship to production. LEAD TIME FOR CHANGES: commit-to-production time. CHANGE FAILURE RATE: the share of releases causing an incident or rollback. TIME TO RESTORE: how fast you recover when one does. Elite teams ship on demand with lead times under a day, failure rates under 5%, and restore times under an hour — but the VALUE is your own trend, not the league table.\n\nFor a Salesforce team the instrumentation is concrete: deployment records give frequency; work-item-to-release timestamps give lead time; release-tagged incidents give failure rate; incident timelines give restore time. This platform\'s release and monitoring data holds all four — the discipline is reviewing them monthly, on a chart, in the open.',
+            },
+            {
+              heading: 'Retrospectives that actually change the process',
+              body:
+                'A release retrospective is 30 minutes, within a week of go-live, with one question: what does the PROCESS learn? Wins worth keeping, leaks worth plugging (each mapped to the gate or pyramid layer that should have caught it), and at most TWO improvement actions with owners and deadlines — ten actions is zero actions wearing a list.\n\nBlamelessness is not softness; it is accuracy. "Why was it possible to deploy with a failing integration test?" changes the pipeline. "Who deployed it?" changes nothing except who hides mistakes next quarter. The actions feed the next cycle, which is why teams that retro every release improve visibly quarter over quarter and teams that skip it re-live the same release forever.',
+            },
+            {
+              heading: 'Release debt is real debt',
+              body:
+                'Manual steps in the runbook, flaky tests everyone re-runs, environments only one person can rebuild, a hand-maintained deploy spreadsheet — that is RELEASE DEBT, and it compounds: each manual step adds failure probability and makes releases scarier, which pushes teams toward bigger, rarer, riskier releases. The spiral runs in both directions; automation runs it downward.\n\nBudget it like feature work: a standing slice of each cycle (10-20%) for automating one manual step, fixing one flaky test, or scripting one environment rebuild. The compounding is fast — a team that automates one runbook step per release has a one-page runbook within a year, and the "small release more often" flywheel starts turning on its own.',
+            },
+          ],
+          realWorld: {
+            title: 'From quarterly fear to biweekly boredom',
+            scenario:
+              'A financial-services team released quarterly because releases were terrifying: 30-step manual runbooks, a 40% change-failure rate, all-weekend windows. Each failure made the next release bigger and scarier — the classic doom loop, fully installed.',
+            solution:
+              'They started measuring the four DORA metrics on a wall chart, retroed every release with a two-action limit, and spent 15% of each cycle on release debt: validation automation first, then smoke-test scripting, then flag-based rollbacks, then runbook step elimination — one debt item at a time, every cycle, without exception.',
+            outcome:
+              'Four quarters later: biweekly releases, change-failure rate under 8%, restore time from six hours to 20 minutes via flag rollbacks, and release windows that fit inside a lunch break. The wall chart of four trend lines convinced leadership to fund the platform team permanently — numbers did what advocacy could not.',
+          },
+          keyTakeaways: [
+            'Measure frequency, lead time, failure rate, restore time — and watch trends',
+            'Retro every release: blameless, two owned actions, feeding the next cycle',
+            'Map every leaked defect to the layer that should have caught it',
+            'Spend 10-20% of each cycle on release debt; the compounding is the strategy',
+          ],
+          resources: [
+            {
+              title: 'DORA research and metrics',
+              url: 'https://dora.dev/',
+              source: 'other',
+              note: 'The research base for the four metrics',
+            },
+            {
+              title: 'Salesforce Well-Architected',
+              url: 'https://architect.salesforce.com/well-architected/overview',
+              source: 'architect',
             },
           ],
         },
       ],
       quizBank: [
         {
-          id: 'release-operations-q1',
-          topic: 'Tool selection',
-          prompt: 'What should a team define before selecting a Salesforce DevOps product?',
+          id: 'q-rel-exec-1',
+          topic: 'Planning',
+          prompt: 'What does "scope lock" mean in a release cycle?',
           options: [
-            'The vendor whose interface has the most screens',
-            'Required controls, metadata coverage, operating ownership, evidence, and failure behavior',
-            'A permanent branch for each product license',
-            'A plan to replace Git with the deployment history',
+            'The org is locked for all users',
+            'The release\'s contents are fixed — later work catches the next release',
+            'Only admins may deploy',
+            'The git repository becomes read-only',
           ],
           correctIndex: 1,
           explanation:
-            'The operating model and control requirements provide testable selection criteria; product branding does not.',
+            'Scope lock converts "just squeeze this in" pressure into a routine answer: the next train leaves in two weeks.',
         },
         {
-          id: 'release-operations-q2',
-          topic: 'Control planes',
-          prompt: 'How can graphical and CLI deployment interfaces safely coexist?',
+          id: 'q-rel-exec-2',
+          topic: 'Approvals',
+          prompt: 'Which approval set is both auditable and practical?',
           options: [
-            'Each interface keeps its own source of truth',
-            'Admins use production as source while developers use Git',
-            'Both honor one reviewed source, artifact identity, gate policy, and evidence record',
-            'Whichever interface deploys last becomes authoritative',
-          ],
-          correctIndex: 2,
-          explanation:
-            'Different user experiences are compatible when they are adapters to one governed release contract rather than independent delivery systems.',
-        },
-        {
-          id: 'release-operations-q3',
-          topic: 'Runbooks',
-          prompt: 'Which item turns a deployment checklist into an operational decision system?',
-          options: [
-            'Named owners, measurable stop conditions, and explicit recovery actions',
-            'A general instruction to monitor the org',
-            'Credentials pasted beside each command',
-            'A component list recreated manually during the window',
-          ],
-          correctIndex: 0,
-          explanation:
-            'Specific ownership, thresholds, and pre-decided actions let operators respond consistently under pressure.',
-        },
-        {
-          id: 'release-operations-q4',
-          topic: 'Change windows',
-          prompt: 'How should a production change window be selected?',
-          options: [
-            'All changes deploy at 2 a.m. regardless of staffing',
-            'Only Salesforce seasonal release dates matter',
-            'The window is chosen after deployment starts',
-            'Match residual risk to traffic, jobs, integrations, business deadlines, and support coverage',
-          ],
-          correctIndex: 3,
-          explanation:
-            'A window is a risk control balancing system activity and the people needed to make and support decisions.',
-        },
-        {
-          id: 'release-operations-q5',
-          topic: 'Recovery',
-          prompt: 'Why is “git revert and redeploy” not a complete Salesforce recovery plan?',
-          options: [
-            'Git cannot version Salesforce metadata',
-            'It does not restore deleted data or reverse external side effects and package upgrades automatically',
-            'Metadata deployments can never reverse Apex',
-            'A revert always bypasses tests',
+            'Twelve signatures from every department',
+            'QA/UAT sign-off, business-owner risk acceptance, and release-manager readiness — named and timestamped',
+            'A verbal OK in stand-up',
+            'No approvals if tests pass',
           ],
           correctIndex: 1,
           explanation:
-            'Source reversal can repair compatible metadata, while data, integrations, permissions, and package lifecycle need their own recovery mechanisms.',
+            'Three meaningful, recorded approvals answer works/risk/ready. Long chains diffuse accountability until signatures mean nothing.',
         },
         {
-          id: 'release-operations-q6',
-          topic: 'Feature flags',
-          prompt: 'Which practice makes a Salesforce feature flag operationally safe?',
+          id: 'q-rel-exec-3',
+          topic: 'Approvals',
+          prompt: 'Why should an emergency (sev-1) release lane exist with genuinely fast approval?',
           options: [
-            'Default it on and omit the old-path test',
-            'Use the flag as a substitute for object and field security',
-            'Give it an owner, safe default, on/off tests, telemetry, kill procedure, and expiry',
-            'Keep every flag permanently for future flexibility',
-          ],
-          correctIndex: 2,
-          explanation:
-            'Flags are temporary operational controls that require tested states, clear ownership, observability, and removal.',
-        },
-        {
-          id: 'release-operations-q7',
-          topic: 'Hotfix lane',
-          prompt: 'What prevents a production hotfix from being lost in the next normal release?',
-          options: [
-            'Start from unreleased main and deploy everything',
-            'Leave the change only in the production org',
-            'Create a permanent emergency branch',
-            'Branch from production, then merge the exact deployed fix back to main and active release lines',
-          ],
-          correctIndex: 3,
-          explanation:
-            'Starting from production controls scope, and immediate back-propagation keeps future release lines from reintroducing the defect.',
-        },
-        {
-          id: 'release-operations-q8',
-          topic: 'Post-deploy verification',
-          prompt: 'What does a successful Salesforce deployment status prove?',
-          options: [
-            'The platform accepted the metadata deployment, not that every business journey works',
-            'All downstream systems processed the new behavior',
-            'No user lacks a required permission',
-            'The release cannot increase error rates later',
-          ],
-          correctIndex: 0,
-          explanation:
-            'Platform acceptance is necessary but must be followed by technical, integration, security, and business-outcome checks.',
-        },
-        {
-          id: 'release-operations-q9',
-          topic: 'Observability',
-          prompt: 'Which observability design most improves release diagnosis?',
-          options: [
-            'Enable debug logs permanently for every user',
-            'Correlate release and transaction IDs across platform, integration, and business signals',
-            'Rely only on deployer email',
-            'Collect metrics without thresholds or owners',
+            'To skip testing permanently',
+            'Because if the formal path cannot handle emergencies, teams learn to bypass process entirely',
+            'To avoid documenting hotfixes',
+            'Auditors require it',
           ],
           correctIndex: 1,
           explanation:
-            'Correlation connects a release to affected transactions across boundaries; thresholds and owners turn those signals into action.',
+            'Process survives only if it works under pressure. A defined fast lane with after-the-fact review beats ad-hoc bypassing every time.',
         },
         {
-          id: 'release-operations-q10',
-          topic: 'DORA metrics',
-          prompt: 'Which list reflects DORA’s current five software-delivery performance measures?',
+          id: 'q-rel-exec-4',
+          topic: 'Release notes',
+          prompt: 'When should business-facing release notes reach affected users?',
           options: [
-            'Story points, velocity, utilization, defect count, and uptime',
-            'Build duration, test count, code coverage, approval count, and release size',
-            'Change lead time, deployment frequency, failed deployment recovery time, change fail rate, and deployment rework rate',
-            'MTBF, CPU, heap, API calls, and storage',
+            'Never — notes are internal',
+            'Before go-live, so changes arrive expected instead of as surprises',
+            'A week after go-live',
+            'Only when someone complains',
           ],
-          correctIndex: 2,
+          correctIndex: 1,
           explanation:
-            'DORA currently groups the first three as throughput and change fail rate plus deployment rework rate as instability.',
+            'Notes after the fact read as an apology. Pre-release comms (plus a walkthrough for UI changes) prevents the Monday-morning revolt.',
+        },
+        {
+          id: 'q-rel-exec-5',
+          topic: 'Runbook',
+          prompt: 'What makes a go-live runbook trustworthy?',
+          options: [
+            'It is memorized by the release manager',
+            'Every step has an owner, expected duration, and a verification — executable by someone outside the planning meetings',
+            'It is at least 50 pages',
+            'It is written during the release window',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Owners, timings, and verifications turn go-live into choreography. If only one person can run it, it is a risk, not a runbook.',
+        },
+        {
+          id: 'q-rel-exec-6',
+          topic: 'Smoke tests',
+          prompt: 'What should post-deploy smoke tests cover?',
+          options: [
+            'Every feature in the org',
+            'The five-to-ten critical business journeys — UI paths AND integration heartbeats',
+            'Only the newest feature',
+            'Database storage levels',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Smoke tests prove the business still works: key user journeys plus synthetic transactions through critical integrations, in ~30 minutes.',
+        },
+        {
+          id: 'q-rel-exec-7',
+          topic: 'Hypercare',
+          prompt: 'Which elements define a real hypercare period?',
+          options: [
+            'Hoping users report problems',
+            'Named rotation, monitored dashboards, a fast defect lane, daily review, and explicit exit criteria',
+            'Disabling monitoring to reduce noise',
+            'A frozen backlog for a month',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Hypercare is structured attention with a defined end — error rates at baseline and no open release-tagged sev-1/2 close it out.',
+        },
+        {
+          id: 'q-rel-exec-8',
+          topic: 'DORA',
+          prompt: 'What are the four DORA metrics?',
+          options: [
+            'Coverage, velocity, bugs, uptime',
+            'Deployment frequency, lead time for changes, change failure rate, time to restore',
+            'Story points, burn-down, capacity, morale',
+            'Logins, API calls, storage, licenses',
+          ],
+          correctIndex: 1,
+          explanation:
+            'The four together describe speed AND stability — and improving them together is what distinguishes elite delivery.',
+        },
+        {
+          id: 'q-rel-exec-9',
+          topic: 'Retrospectives',
+          prompt: 'Why limit a release retrospective to about two improvement actions?',
+          options: [
+            'Meetings must stay under ten minutes',
+            'Two owned, deadlined actions get done; ten-item lists are zero actions in disguise',
+            'Most releases have at most two problems',
+            'Actions expire after two weeks',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Improvement compounds through completed actions per cycle, not through comprehensive lists nobody executes.',
+        },
+        {
+          id: 'q-rel-exec-10',
+          topic: 'Release debt',
+          prompt: 'Why does release debt (manual steps, flaky tests, snowflake environments) push teams toward RARER releases?',
+          options: [
+            'It does not — debt encourages frequency',
+            'Each manual step adds fear and failure probability, so teams batch bigger releases — which raises risk further',
+            'Auditors mandate quarterly releases',
+            'Flaky tests only run quarterly',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Fear drives batching; batching drives risk — the doom loop. Automating a step per cycle runs the same loop in reverse.',
         },
       ],
     },

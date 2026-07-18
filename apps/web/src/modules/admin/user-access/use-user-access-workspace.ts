@@ -9,7 +9,7 @@ import {
   hasFreshSessionCache,
   setSessionCache,
 } from '@/lib/session-cache';
-import type { AppModule } from '@sfcc/shared';
+import { DEFAULT_USER_MODULES, type AppModule } from '@sfcc/shared';
 import type {
   ManageDraft,
   UserAccessOverview,
@@ -126,6 +126,8 @@ export function useUserAccessWorkspace() {
     setDraft({
       role: user.role,
       grantedModules: [...user.grantedModules],
+      revokedModules: [...(user.revokedModules ?? [])],
+      learningAssignedOnly: user.learningAssignedOnly ?? false,
       status: user.status,
     });
   };
@@ -135,9 +137,16 @@ export function useUserAccessWorkspace() {
     setDraft(null);
   };
 
+  /** Locked modules toggle the grant list; default modules toggle the revoke list. */
   const toggleDraftModule = (module: AppModule) => {
     setDraft((d) => {
       if (!d) return d;
+      if ((DEFAULT_USER_MODULES as readonly AppModule[]).includes(module)) {
+        const revoked = d.revokedModules.includes(module)
+          ? d.revokedModules.filter((m) => m !== module)
+          : [...d.revokedModules, module];
+        return { ...d, revokedModules: revoked };
+      }
       const next = d.grantedModules.includes(module)
         ? d.grantedModules.filter((m) => m !== module)
         : [...d.grantedModules, module];
@@ -172,6 +181,8 @@ export function useUserAccessWorkspace() {
         body: JSON.stringify({
           role: data.role,
           grantedModules: data.grantedModules,
+          revokedModules: data.revokedModules,
+          learningAssignedOnly: data.learningAssignedOnly,
           status: data.status,
         }),
       });

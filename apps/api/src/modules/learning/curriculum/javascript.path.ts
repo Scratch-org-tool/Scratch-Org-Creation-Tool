@@ -1,905 +1,1024 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * Path 2 — JavaScript Engineering (Beginner).
- * A path from language mechanics to
- * production-quality Lightning Web Components.
+ * Path 5 — JavaScript Mastery (Intermediate, programming track).
+ * The language track behind every Lightning Web Component, browser console
+ * session, and Node-based DevOps script in this platform. Written for someone
+ * who can navigate Salesforce but has never owned JavaScript properly.
  */
 export const javascriptPath: CurriculumPath = {
-  id: 'javascript-engineering',
-  title: 'JavaScript Engineering',
-  tagline: 'Modern JavaScript, resilient browser code, and tested LWC delivery.',
+  id: 'js-training',
+  title: 'JavaScript Mastery',
+  tagline: 'Own the language behind LWC, the browser, and every DevOps script.',
   description:
-    'Build a dependable JavaScript foundation before applying it to Salesforce. This path moves from values, functions, modules, and data structures through asynchronous APIs, secure and accessible browser work, TypeScript contracts, Jest testing, and an end-to-end Lightning Web Component capstone.',
-  level: 'beginner',
-  badge: 'JavaScript Practitioner',
-  estimatedHours: 12,
-  skills: [
-    'Modern JavaScript',
-    'Data transformation',
-    'Asynchronous APIs',
-    'DOM, accessibility & web security',
-    'TypeScript contracts',
-    'Jest & LWC engineering',
-  ],
+    'JavaScript runs every Lightning Web Component, every browser DevTools session, and most automation scripts in a modern Salesforce team. This path builds the language from first principles — values, functions, and objects — through modern ES6+ syntax and asynchronous programming, and finishes where Salesforce developers live: the DOM, REST APIs, and the exact patterns Lightning Web Components are built on.',
+  level: 'intermediate',
+  category: 'programming',
+  badge: 'JavaScript Craftsman',
+  estimatedHours: 7,
+  skills: ['Language fundamentals', 'Modern ES6+ syntax', 'Async & promises', 'DOM, REST & LWC patterns'],
   modules: [
     {
-      id: 'jseng-language-data',
-      title: 'Language & Data Foundations',
+      id: 'js-fundamentals',
+      title: 'JavaScript Fundamentals',
       summary:
-        'Reason precisely about JavaScript values and scope, organize behavior with functions and modules, and transform collection data without accidental mutation.',
+        'Values, types, variables, control flow, functions, arrays, and objects — the mental model everything else builds on.',
       lessons: [
         {
-          id: 'jseng-language-fundamentals',
-          title: 'Values, scope, functions & ES modules',
+          id: 'js-values-types-variables',
+          title: 'Values, types, and variables',
           summary:
-            'Learn the runtime rules behind everyday JavaScript and turn small functions into explicit, reusable module APIs.',
-          durationMinutes: 50,
+            'What JavaScript actually is, how dynamic typing works, and how to declare variables you can trust.',
+          durationMinutes: 15,
           objectives: [
-            'Distinguish JavaScript primitive values, object references, equality rules, and nullish states',
-            'Predict lexical scope and use closures without leaking mutable global state',
-            'Design focused functions with explicit inputs, outputs, defaults, and failure conditions',
-            'Split an application into modern ECMAScript modules with clear named exports and imports',
+            'Explain where JavaScript runs and why Salesforce developers need it',
+            'Name the primitive types and predict simple type coercions',
+            'Choose correctly between const and let, and avoid var',
           ],
           sections: [
             {
-              heading: 'Values, references, and deliberate comparisons',
+              heading: 'One language, everywhere your work runs',
               body:
-                'JavaScript has seven primitive types: string, number, bigint, boolean, undefined, symbol, and null. Primitives behave like values; objects, arrays, and functions are reference values. Copying an object variable copies the reference, so two variables can observe the same mutation. const prevents rebinding a variable, but it does not freeze the referenced object.\n\nPrefer strict equality (=== and !==) so JavaScript does not coerce operands before comparing them. Treat null as an intentional empty value and undefined as missing or not yet assigned. The nullish coalescing operator (??) supplies a default only for null or undefined, preserving meaningful values such as 0, false, and an empty string. Use Number.isNaN() rather than comparing with NaN, because NaN is not equal to itself.',
+                'JavaScript is the only language web browsers execute natively — which makes it the language of Lightning Web Components, Visualforce enhancements, browser DevTools, and every embedded widget your users touch. The same language also runs on servers through Node.js, which is why the Salesforce CLI, most deployment scripts, and this very platform are written in it.\n\nUnlike Apex, JavaScript is not compiled inside Salesforce and has no governor limits — it runs on the user\'s machine (or your build server). That freedom cuts both ways: you gain instant feedback and a huge ecosystem, and you take on responsibility for correctness that the platform will not enforce for you.',
             },
             {
-              heading: 'Lexical scope and closures',
+              heading: 'Dynamic types without surprises',
               body:
-                'let and const are block-scoped; a name declared inside a function or block is unavailable outside it. Name lookup is lexical: JavaScript resolves a name according to where the function was defined, not where it was called. This makes behavior predictable when callbacks run later.\n\nA closure is a function bundled with access to its surrounding lexical environment. Closures power factories, event handlers, and private state, but they can also retain large objects longer than expected. Capture only what the returned function needs, keep mutable state narrow, and expose behavior instead of exposing an internal variable for callers to change.',
+                'JavaScript has a small set of primitive types: string, number, boolean, null, undefined, bigint, and symbol — plus objects for everything else. A variable has no fixed type; the VALUE it currently holds does. typeof tells you what you are looking at.\n\nCoercion is where beginners get burned: the == operator converts types before comparing ("5" == 5 is true), while === compares value AND type ("5" === 5 is false). Professional JavaScript uses === and !== everywhere. The other classic: undefined means "never assigned", while null means "deliberately empty" — the difference matters when an Apex method returns no data versus an empty payload.',
               code: {
                 language: 'javascript',
                 snippet:
-                  'const STANDARD_TAX_RATE = 0.2;\n\nexport function createInvoiceTotal({ taxRate = STANDARD_TAX_RATE } = {}) {\n  if (typeof taxRate !== "number" || !Number.isFinite(taxRate)) {\n    throw new TypeError("taxRate must be a finite number");\n  }\n\n  return function totalFor(lines) {\n    const subtotal = lines.reduce(\n      (sum, { price, quantity = 1 }) => sum + price * quantity,\n      0,\n    );\n    return subtotal * (1 + taxRate);\n  };\n}\n\nconst totalForUk = createInvoiceTotal();\nconsole.log(totalForUk([{ price: 25, quantity: 2 }]).toFixed(2)); // 60.00',
-                caption:
-                  'Save as pricing.mjs and run with Node: the returned function closes over a validated tax rate.',
+                  "const orgLimit = 100000;          // number\nconst orgName = 'UAT Full Copy';  // string\nlet isConnected = false;          // boolean — will change later\n\nconsole.log(typeof orgLimit);     // 'number'\nconsole.log('5' == 5);            // true  — coerced, avoid\nconsole.log('5' === 5);           // false — strict, always use\nconsole.log(null == undefined);   // true  — the one coercion trap to memorize",
+                caption: 'Strict equality (===) removes an entire class of production bugs.',
               },
             },
             {
-              heading: 'Functions as small contracts',
+              heading: 'const by default, let when it changes, var never',
               body:
-                'A useful function has a name that states intent, parameters that reveal required data, one coherent responsibility, and a predictable return value. Validate assumptions at the boundary, then keep the center of the function simple. Default parameters handle omitted arguments; destructured parameters make named options readable; rest parameters gather a variable number of inputs.\n\nFunction declarations are hoisted and work well for primary operations. Function expressions are values that can be passed to map(), event listeners, and promise methods. Arrow functions are concise and capture this lexically; they do not have their own this, arguments, or prototype, so they should not be used as constructors or as object methods that require a dynamic receiver. Pure functions, which do not mutate external state, are easiest to compose and test.',
-            },
-            {
-              heading: 'Modern ECMAScript modules',
-              body:
-                'An ES module is a file with its own top-level scope. Named exports such as export function calculate() make the public API explicit; consumers use matching named imports such as import { calculate } from "./pricing.js". Static imports stay at the top level, enabling tooling to analyze dependencies. Imported bindings are read-only live views of the exporting module, not copied variables.\n\nUse named exports for most application code because refactoring tools can follow the same symbol name across files. Reserve a default export for a genuinely primary value and avoid modules that perform surprising work merely by being imported. Browsers load an entry module with <script type="module">; supported Node projects use .mjs or package configuration. Module code runs in strict mode, and relative browser specifiers include a path and usually a file extension.',
+                'const declares a binding that cannot be reassigned — your default for everything. let declares a block-scoped variable for values that genuinely change (loop counters, accumulators). var is the legacy form with function-wide scope and "hoisting" behavior that creates bugs; modern codebases (including LWC) simply never use it.\n\nNote the nuance: const prevents REASSIGNMENT, not mutation. A const array can still be pushed to; a const object\'s fields can still change. That is fine in practice — the discipline you want is "one name, one meaning" inside any scope.',
             },
           ],
           realWorld: {
-            title: 'One pricing rule, five conflicting copies',
+            title: 'The equality bug that hid a data-loader failure',
             scenario:
-              'A sales portal calculated tax in a form handler, a summary panel, and three utility files. One copy treated a zero discount as missing, while another silently accepted a string tax rate. Customers saw different totals before and after checkout.',
+              'A team\'s custom data-load monitor compared record counts with ==. The API returned counts as strings, the UI stored expectations as numbers — "2500" == 2500 passed, so a partial load of 2,500 out of 25,000 records showed green because a separate truncation bug also cut a digit.',
             solution:
-              'The team moved validation and calculation into a pure pricing module with named exports. A closure-based factory captured the configured tax rate, every caller passed structured line items, and strict equality plus nullish defaults replaced truthiness shortcuts.',
+              'They switched every comparison to === and added an explicit Number() conversion at the API boundary, so mismatched types failed loudly in testing instead of silently agreeing in production.',
             outcome:
-              'All screens produced the same totals, invalid configuration failed at startup with a clear error, and the pricing behavior could be tested once instead of through five user interfaces.',
+              'The next partial load failed the dashboard immediately, was re-run the same afternoon, and the team adopted a lint rule (eqeqeq) so the class of bug cannot return.',
           },
           keyTakeaways: [
-            'const protects a binding from reassignment; it does not make an object immutable',
-            'Use strict equality and nullish defaults to avoid surprising coercion and lost zero-like values',
-            'Closures retain lexical state and are useful when that state is intentionally small and private',
-            'Functions are easier to reuse when inputs, return values, side effects, and errors are explicit',
-            'ES modules provide file scope and analyzable named import and export contracts',
+            'JavaScript runs in the browser (LWC, DevTools) and on servers (Node, the SF CLI)',
+            'Values have types; variables do not — use typeof to inspect',
+            'Always use === / !==; convert types explicitly at boundaries',
+            'Declare with const by default, let when reassignment is real, var never',
           ],
           resources: [
             {
-              title: 'JavaScript Guide',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide',
+              title: 'MDN: JavaScript first steps',
+              url: 'https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps',
               source: 'other',
-              note: 'MDN language guide',
+              note: 'The canonical reference for the language',
             },
             {
-              title: 'Functions',
+              title: 'Modern JavaScript Development (Trailhead)',
+              url: 'https://trailhead.salesforce.com/content/learn/modules/modern-javascript-development',
+              source: 'trailhead',
+              note: 'Salesforce\'s own JS refresher for LWC work',
+            },
+          ],
+        },
+        {
+          id: 'js-control-flow-functions',
+          title: 'Control flow and functions',
+          summary:
+            'if/else, loops, and the three ways to write functions — plus scope and closures explained without mystery.',
+          durationMinutes: 18,
+          objectives: [
+            'Use if/else, switch, and the ternary operator appropriately',
+            'Write function declarations, expressions, and arrow functions',
+            'Explain scope and closures with a practical example',
+          ],
+          sections: [
+            {
+              heading: 'Branching and looping',
+              body:
+                'if / else if / else covers most decisions; switch reads better when one value routes to many cases (like a deployment status: Pending, InProgress, Succeeded, Failed). The ternary operator (condition ? a : b) is for choosing a VALUE inline — great for display labels, wrong for multi-step logic.\n\nFor iteration, modern code prefers for...of to loop values of any array ("for (const org of orgs)"), classic for when you need the index, and while for "until something happens" polling loops — like waiting on a deploy status. for...in walks object KEYS and surprises people on arrays; reserve it for objects.',
+            },
+            {
+              heading: 'Three ways to write a function',
+              body:
+                'Function declarations (function name() {}) are hoisted — callable before their definition — and read well for top-level operations. Function expressions assign a function to a const. Arrow functions (=>) are the compact modern form used for callbacks and array transforms.\n\nThe real difference is "this": arrow functions do not create their own this — they inherit it from the surrounding scope. That is exactly why LWC event handlers and array callbacks written as arrows "just work" while old-style function callbacks needed .bind(this). Default parameters (function deploy(target, validateOnly = false)) and rest parameters (...args) round out the everyday toolkit.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "function summarize(results) {                 // declaration — hoisted\n    return results.filter(isFailure).length;\n}\n\nconst isFailure = (result) => !result.success; // arrow — inherits `this`\n\nconst retry = async (fn, attempts = 3) => {    // default parameter\n    for (let i = 1; i <= attempts; i++) {\n        try { return await fn(); }\n        catch (err) { if (i === attempts) throw err; }\n    }\n};",
+                caption: 'Declarations for named operations, arrows for callbacks and utilities.',
+              },
+            },
+            {
+              heading: 'Scope and closures — the feature everything relies on',
+              body:
+                'Scope is "where a name is visible": block scope for let/const, plus the chain of enclosing functions. A closure is simply a function that REMEMBERS the scope it was created in, even after that scope has finished running.\n\nClosures are not an interview trick — they are how real code is structured. A function that returns a configured function ("makeLogger(prefix)"), a debounced search handler that remembers its timer, a counter that keeps private state without globals: all closures. Once you can predict what a closure captures, callbacks and event handlers stop feeling magical.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "function makePoller(jobId) {\n    let attempts = 0;                       // private state, captured\n    return async function poll() {\n        attempts += 1;\n        const status = await fetchStatus(jobId);\n        console.log(`Attempt ${attempts}: ${status}`);\n        return status;\n    };\n}\n\nconst pollDeploy = makePoller('0Af...');    // remembers jobId + attempts\nawait pollDeploy();                          // Attempt 1: InProgress\nawait pollDeploy();                          // Attempt 2: Succeeded",
+                caption: 'A closure keeps jobId and attempts alive between calls — no globals needed.',
+              },
+            },
+          ],
+          realWorld: {
+            title: 'A flaky "Cancel deploy" button',
+            scenario:
+              'A deployment console\'s Cancel button sometimes cancelled the WRONG job. The click handler was wired inside a classic for loop with var i, so every handler closed over the same final loop variable — a textbook closure-over-var bug.',
+            solution:
+              'Changing var to let gave each loop iteration its own binding, and the team refactored the handlers to arrow functions that captured the specific job object rather than an index.',
+            outcome:
+              'Cancellations became deterministic, and the incident became the team\'s go-to onboarding story for why block scoping and closures must be understood, not memorized.',
+          },
+          keyTakeaways: [
+            'Use for...of for values, classic for when you need the index, while for polling',
+            'Arrow functions inherit this — the reason they fit callbacks and LWC handlers',
+            'A closure is a function plus the variables it captured at creation',
+            'Block scoping (let/const) eliminates the classic loop-handler bug',
+          ],
+          resources: [
+            {
+              title: 'MDN: Functions guide',
               url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Functions',
               source: 'other',
-              note: 'MDN functions, scope, and closures',
             },
             {
-              title: 'JavaScript Modules',
+              title: 'MDN: Closures',
+              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures',
+              source: 'other',
+              note: 'The clearest closure explanation in print',
+            },
+          ],
+        },
+        {
+          id: 'js-arrays-objects',
+          title: 'Arrays and objects: shaping data',
+          summary:
+            'map, filter, reduce, object literals, optional chaining, and immutable updates — the daily bread of UI and script work.',
+          durationMinutes: 18,
+          objectives: [
+            'Transform lists with map, filter, find, some/every, and reduce',
+            'Read and write nested objects safely with optional chaining',
+            'Update data immutably with spread — the pattern LWC reactivity expects',
+          ],
+          sections: [
+            {
+              heading: 'Arrays: transform, don\'t mutate-in-place',
+              body:
+                'Salesforce work is list work: records, deploy results, org members. The core methods — map (transform each item), filter (keep some), find (first match), some/every (boolean checks), reduce (fold to one value) — replace almost every manual loop and read as intent instead of mechanics.\n\nEach takes a callback and returns a NEW array (except reduce, which returns whatever you build). Chaining them ("results.filter(r => !r.success).map(r => r.fullName)") is the JavaScript equivalent of a SOQL query over in-memory data. Know the mutators too — push, splice, sort — and remember sort mutates in place and compares as strings unless you pass a comparator.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "const results = [\n    { fullName: 'AccountTrigger', success: true,  time: 340 },\n    { fullName: 'CaseFlow',       success: false, time: 45  },\n    { fullName: 'OppHandler',     success: false, time: 210 },\n];\n\nconst failures   = results.filter(r => !r.success).map(r => r.fullName);\nconst totalTime  = results.reduce((sum, r) => sum + r.time, 0);\nconst allPassed  = results.every(r => r.success);\n\nconsole.log(failures);   // ['CaseFlow', 'OppHandler']\nconsole.log(totalTime);  // 595\nconsole.log(allPassed);  // false",
+                caption: 'filter → map → reduce reads like the sentence you would say out loud.',
+              },
+            },
+            {
+              heading: 'Objects: literals, access, and safe navigation',
+              body:
+                'Objects are labeled boxes of key/value pairs — the shape of every API response you will ever parse. Dot access (org.alias) for known keys, bracket access (org[fieldName]) for dynamic ones. Object.keys / values / entries turn objects back into arrays for iteration.\n\nOptional chaining (response?.result?.records) returns undefined instead of throwing when a link in the chain is missing — the polite way to read deep API payloads. Pair it with the nullish coalescing operator (?? "default") to supply fallbacks only when the value is null/undefined, not when it is legitimately 0 or false.',
+            },
+            {
+              heading: 'Immutable updates with spread — why LWC cares',
+              body:
+                'The spread operator (...) copies arrays and objects: {...org, status: "Connected"} builds a NEW object with one field changed; [...list, newItem] builds a NEW array with one more element. Destructuring goes the other way, unpacking values into names: const { alias, instanceUrl } = org.\n\nThis is not style preference. LWC (like React) detects changes by reference: if you mutate an object in place, the framework may not re-render because the reference did not change. Teams that internalize "change = new object" ship reactive UIs that update reliably; teams that mutate chase ghost bugs.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "const org = { alias: 'uat', status: 'Disconnected', modules: ['data'] };\n\n// WRONG for reactive UIs — same reference, framework may not notice\norg.status = 'Connected';\n\n// RIGHT — a new object; every consumer sees a new reference\nconst connected = { ...org, status: 'Connected' };\n\n// Arrays too\nconst withDeploy = { ...connected, modules: [...connected.modules, 'deployment'] };\n\nconst { alias, status } = withDeploy;   // destructuring\nconsole.log(alias, status);             // 'uat' 'Connected'",
+                caption: 'Spread-to-copy is the update pattern LWC and React reactivity are built around.',
+              },
+            },
+          ],
+          realWorld: {
+            title: 'The dashboard that stopped refreshing',
+            scenario:
+              'An LWC org-health dashboard updated its data by pushing into an existing array property. The wire data changed, the console.log showed fresh values — but the table on screen never re-rendered, and users kept acting on stale deploy statuses.',
+            solution:
+              'The team replaced in-place mutation with immutable updates: this.rows = [...this.rows, newRow] and row edits via this.rows = this.rows.map(...). References changed, so the framework re-rendered.',
+            outcome:
+              'The dashboard became trustworthy again, and "new data means new object" went into the team\'s LWC code-review checklist — the single most common fix in their component reviews.',
+          },
+          keyTakeaways: [
+            'map/filter/reduce express intent — prefer them to manual loops',
+            'Optional chaining (?.) and nullish coalescing (??) make API payloads safe to read',
+            'Spread copies; destructuring unpacks — learn both directions',
+            'LWC detects change by reference: update immutably or the UI will not react',
+          ],
+          resources: [
+            {
+              title: 'MDN: Array methods reference',
+              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array',
+              source: 'other',
+            },
+            {
+              title: 'JavaScript.info: Objects',
+              url: 'https://javascript.info/object',
+              source: 'other',
+              note: 'Deep, readable chapter series',
+            },
+          ],
+        },
+      ],
+      quizBank: [
+        {
+          id: 'q-js-fund-1',
+          topic: 'Types',
+          prompt: 'What does "5" === 5 evaluate to in JavaScript, and why?',
+          options: [
+            'true — the values are equal after coercion',
+            'false — strict equality compares type and value, and the types differ',
+            'true — numbers are always coerced to strings',
+            'It throws a TypeError',
+          ],
+          correctIndex: 1,
+          explanation:
+            'The === operator never coerces: a string and a number are different types, so the comparison is false. Use === everywhere and convert explicitly.',
+        },
+        {
+          id: 'q-js-fund-2',
+          topic: 'Variables',
+          prompt: 'Which declaration should be your default for a value that is never reassigned?',
+          options: ['var', 'let', 'const', 'global'],
+          correctIndex: 2,
+          explanation:
+            'const communicates "one name, one meaning" and prevents accidental reassignment. Reach for let only when the binding genuinely changes; var is legacy.',
+        },
+        {
+          id: 'q-js-fund-3',
+          topic: 'Types',
+          prompt: 'What is the practical difference between null and undefined?',
+          options: [
+            'They are interchangeable in all code',
+            'undefined means never assigned; null means deliberately empty',
+            'null is a string; undefined is a number',
+            'undefined can only appear in strict mode',
+          ],
+          correctIndex: 1,
+          explanation:
+            'undefined is the absence of assignment; null is an intentional "no value" a developer (or API) set. APIs often use null to mean "cleared on purpose".',
+        },
+        {
+          id: 'q-js-fund-4',
+          topic: 'Functions',
+          prompt: 'What is special about how arrow functions handle `this`?',
+          options: [
+            'They create a fresh `this` on every call',
+            'They inherit `this` from the scope where they were defined',
+            'They cannot access `this` at all',
+            '`this` inside an arrow always refers to the window object',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Arrows have no own `this` — they capture the surrounding scope\'s. That is why they are ideal for callbacks and class-field handlers in LWC.',
+        },
+        {
+          id: 'q-js-fund-5',
+          topic: 'Closures',
+          prompt: 'A function returned from another function still uses the outer function\'s variables. What is this called?',
+          options: ['Hoisting', 'A closure', 'Prototypal inheritance', 'Currying'],
+          correctIndex: 1,
+          explanation:
+            'A closure is a function bundled with the scope it was created in — the returned function keeps the outer variables alive.',
+        },
+        {
+          id: 'q-js-fund-6',
+          topic: 'Arrays',
+          prompt: 'Which method chain returns the names of only the failed results?',
+          options: [
+            'results.map(r => r.name).filter(r => !r.success)',
+            'results.filter(r => !r.success).map(r => r.name)',
+            'results.reduce(r => r.name)',
+            'results.forEach(r => !r.success && r.name)',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Filter first (keep failures), then map to names. Mapping first would discard the success flag before you filter on it.',
+        },
+        {
+          id: 'q-js-fund-7',
+          topic: 'Arrays',
+          prompt: 'What does reduce do?',
+          options: [
+            'Removes elements matching a predicate',
+            'Sorts the array in descending order',
+            'Folds an array into a single accumulated value',
+            'Splits an array into equal chunks',
+          ],
+          correctIndex: 2,
+          explanation:
+            'reduce runs a callback with an accumulator across every element — sums, lookups by id, and grouped maps are all one-liner reduces.',
+        },
+        {
+          id: 'q-js-fund-8',
+          topic: 'Objects',
+          prompt: 'What does response?.result?.records evaluate to when result is missing?',
+          options: [
+            'It throws "cannot read properties of undefined"',
+            'undefined — optional chaining short-circuits safely',
+            'null — optional chaining converts gaps to null',
+            'An empty array',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Optional chaining stops at the first null/undefined link and yields undefined instead of throwing — ideal for deep API payloads.',
+        },
+        {
+          id: 'q-js-fund-9',
+          topic: 'Immutability',
+          prompt: 'Why do LWC and React codebases update state with {...obj, field: value} instead of obj.field = value?',
+          options: [
+            'The spread form runs faster',
+            'Frameworks detect changes by reference — a new object triggers re-render, a mutation may not',
+            'Direct assignment is a syntax error in strict mode',
+            'Spread automatically persists the change to the server',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Change detection compares references. Mutating in place keeps the same reference, so the UI can silently skip re-rendering.',
+        },
+        {
+          id: 'q-js-fund-10',
+          topic: 'Control flow',
+          prompt: 'Which loop is the modern default for iterating the VALUES of an array?',
+          options: ['for...in', 'for...of', 'while(true)', 'do...while'],
+          correctIndex: 1,
+          explanation:
+            'for...of iterates values directly. for...in iterates keys (and surprises on arrays); reserve it for objects.',
+        },
+      ],
+    },
+    {
+      id: 'js-modern',
+      title: 'Modern JavaScript (ES6+)',
+      summary:
+        'The syntax and structure of current codebases: template literals, destructuring, modules, classes, and asynchronous programming with promises and async/await.',
+      lessons: [
+        {
+          id: 'js-modern-syntax',
+          title: 'Modern syntax that changed the language',
+          summary:
+            'Template literals, destructuring in depth, spread/rest, and short-circuit patterns — the difference between 2010 code and today\'s.',
+          durationMinutes: 15,
+          objectives: [
+            'Build strings with template literals instead of concatenation',
+            'Destructure objects and arrays in parameters, returns, and imports',
+            'Use spread/rest and default values to write flexible functions',
+          ],
+          sections: [
+            {
+              heading: 'Template literals: strings you can read',
+              body:
+                'Backtick strings interpolate expressions with ${...} and span multiple lines without escape gymnastics. Every log line, error message, and generated snippet in a modern codebase uses them: `Deploy ${id} finished in ${seconds}s`.\n\nThey also enable tagged templates (a function that processes a template), which libraries use for things like HTML escaping and GraphQL queries. You will mostly consume those rather than write them — but recognize the syntax when you see it.',
+            },
+            {
+              heading: 'Destructuring everywhere',
+              body:
+                'Destructuring unpacks values by shape. In assignments: const { alias, instanceUrl } = org. In function parameters — the big one — it replaces "options objects plus manual reads" with a self-documenting signature: function connect({ alias, sandbox = false }) {}.\n\nArray destructuring pairs with functions that return multiple values: const [first, ...rest] = queue. Renaming (const { Id: recordId } = record) keeps external field names out of your internal style. Once destructuring is in your fingers, code reviews get shorter because intent is visible in the signature.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "function deployMetadata({ sourceOrg, targetOrg, checkOnly = true, tests = [] }) {\n    console.log(`Deploying ${sourceOrg} -> ${targetOrg} (checkOnly=${checkOnly})`);\n    return run({ sourceOrg, targetOrg, checkOnly, tests });\n}\n\n// Call sites read like configuration:\ndeployMetadata({ sourceOrg: 'dev', targetOrg: 'uat' });\ndeployMetadata({ sourceOrg: 'uat', targetOrg: 'prod', checkOnly: false,\n                 tests: ['AccountTriggerTest'] });",
+                caption: 'Destructured parameters with defaults: the signature documents itself.',
+              },
+            },
+            {
+              heading: 'Spread, rest, and short-circuit idioms',
+              body:
+                'Spread expands (merge objects, clone arrays, pass an array as arguments); rest collects (function log(...messages)). Together they replace most uses of arguments, concat, and Object.assign.\n\nThe everyday logical idioms: value ?? fallback (default only for null/undefined), flag && doThing() (call when truthy), and ||= / ??= for lazy initialization. Used sparingly they make code tighter; overused they make it cryptic — a good rule is one short-circuit per line.',
+            },
+          ],
+          realWorld: {
+            title: 'An options object nobody could call correctly',
+            scenario:
+              'A shared deploy helper took seven positional parameters ("deploy(src, tgt, true, false, null, undefined, 300)"). Call sites were unreadable, arguments were regularly transposed, and one swapped boolean silently turned validation-only deploys into real ones in a staging org.',
+            solution:
+              'The helper was rewritten to a single destructured options parameter with defaults, making every call site self-describing and making the dangerous flag (checkOnly) explicit and defaulted to safe.',
+            outcome:
+              'The transposition class of bug disappeared, new team members could use the helper without reading its source, and the safe-by-default signature was adopted as the team standard for utilities.',
+          },
+          keyTakeaways: [
+            'Template literals replace string concatenation everywhere',
+            'Destructured parameters with defaults are the modern options pattern',
+            'Spread expands, rest collects — they are two sides of ...',
+            'Prefer ?? over || for defaults when 0 or false are valid values',
+          ],
+          resources: [
+            {
+              title: 'MDN: Destructuring assignment',
+              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Destructuring_assignment',
+              source: 'other',
+            },
+            {
+              title: 'JavaScript.info: Modern JavaScript',
+              url: 'https://javascript.info/',
+              source: 'other',
+              note: 'Free, current, and thorough',
+            },
+          ],
+        },
+        {
+          id: 'js-modules-classes',
+          title: 'Modules and classes',
+          summary:
+            'import/export, how LWC files are modules, class syntax, getters, and when a plain object beats a class.',
+          durationMinutes: 18,
+          objectives: [
+            'Split code across ES modules with named and default exports',
+            'Write classes with fields, methods, getters, and inheritance',
+            'Recognize LWC components as standard ES modules and classes',
+          ],
+          sections: [
+            {
+              heading: 'ES modules: one file, one responsibility',
+              body:
+                'Modules give every file its own scope: nothing leaks globally, and you say exactly what crosses the boundary. Named exports (export const parseOrg = ...) are the workhorse — they refactor cleanly and autocomplete well. A default export is the module\'s single main thing; LWC uses exactly one default export per component.\n\nImports mirror the exports: import { parseOrg } from "./org-utils"; import MyComponent from "./myComponent". Circular imports (A imports B imports A) are the classic module smell — when you hit one, extract the shared piece into a third module instead of fighting the loader.',
+            },
+            {
+              heading: 'Classes without ceremony',
+              body:
+                'A class bundles state (fields) and behavior (methods) behind a constructor: class DeployJob { constructor(id) { this.id = id; } }. Class fields can be declared inline with defaults, getters compute derived values on access, and static members belong to the class itself.\n\nUnder the hood classes are prototype sugar — which matters only in that instanceof, method overriding, and super calls all behave predictably. extends models "is-a" relationships; use it sparingly. For pure data, a plain object literal is lighter than a class; reach for classes when behavior and state genuinely travel together.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "class DeployJob {\n    static MAX_POLLS = 60;\n    status = 'Pending';                 // class field with default\n\n    constructor(id, targetOrg) {\n        this.id = id;\n        this.targetOrg = targetOrg;\n    }\n    get isDone() {                      // derived, computed on access\n        return ['Succeeded', 'Failed'].includes(this.status);\n    }\n    advance(next) {\n        this.status = next;\n        return this;\n    }\n}\n\nconst job = new DeployJob('0Af000...', 'uat');\njob.advance('InProgress');\nconsole.log(job.isDone);               // false",
+                caption: 'Fields, a getter, and a fluent method — everyday class JavaScript.',
+              },
+            },
+            {
+              heading: 'LWC is "just" modules and classes',
+              body:
+                'Open any Lightning Web Component: import { LightningElement, api } from "lwc"; export default class OrgCard extends LightningElement { @api org; get title() { ... } }. That is a standard ES module with a default-exported class extending a base class, plus decorators.\n\nThis is the payoff of the whole module: once modules, classes, fields, and getters are second nature, LWC stops being a framework to memorize and becomes a thin, learnable layer — lifecycle hooks and decorators — over the JavaScript you already own.',
+            },
+          ],
+          realWorld: {
+            title: 'Untangling a 3,000-line utils file',
+            scenario:
+              'A team\'s LWC codebase had grown a single utils.js imported by 40 components. Unrelated helpers shared state through module-level variables, a rename broke three components nobody expected, and tree-shaking was impossible — every component shipped all 3,000 lines.',
+            solution:
+              'They split the file into focused modules (dates.js, orgFormat.js, deployPolling.js) with named exports only, enforced one-responsibility-per-module in review, and let the bundler drop unused code per component.',
+            outcome:
+              'Component bundles shrank measurably, renames became mechanical IDE operations, and the "where does this helper live" question stopped consuming code-review time.',
+          },
+          keyTakeaways: [
+            'Named exports for utilities; one default export for a module\'s main thing',
+            'Classes = constructor + fields + methods + getters; extends for true is-a only',
+            'Plain objects beat classes for pure data',
+            'Every LWC component is a normal ES module exporting a class',
+          ],
+          resources: [
+            {
+              title: 'MDN: JavaScript modules',
               url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules',
               source: 'other',
-              note: 'MDN module syntax and loading',
+            },
+            {
+              title: 'LWC Dev Guide: Component structure',
+              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/create-components-introduction.html',
+              source: 'developer',
+              note: 'See modules + classes in LWC context',
             },
           ],
         },
         {
-          id: 'jseng-collections-transformations',
-          title: 'Collections, immutability, errors & transformation',
+          id: 'js-async',
+          title: 'Asynchronous JavaScript: promises and async/await',
           summary:
-            'Choose the right collection, derive new data safely, and make malformed input fail in an observable, useful way.',
-          durationMinutes: 55,
+            'The event loop in one picture, promises as values, async/await with real error handling, and running work in parallel.',
+          durationMinutes: 20,
           objectives: [
-            'Select arrays, Map, or Set according to ordering, lookup, and uniqueness requirements',
-            'Build readable filter-map-reduce pipelines and indexed transformations',
-            'Apply immutable update patterns while recognizing shallow-copy limitations',
-            'Throw, propagate, and handle Error objects at the boundary that can recover',
+            'Explain why JavaScript is non-blocking and what the event loop does',
+            'Consume and create promises; handle errors with try/catch and .catch',
+            'Run independent operations in parallel with Promise.all / allSettled',
           ],
           sections: [
             {
-              heading: 'Arrays are ordered sequences, not universal lookup tables',
+              heading: 'One thread, never blocked',
               body:
-                'Arrays preserve order and provide transformation methods with distinct jobs: filter() selects elements, map() converts each selected element, find() returns the first match, some() and every() answer predicates, and reduce() combines a sequence into one result. Prefer the method that states the intent rather than forcing every task into reduce().\n\nThese methods do not mutate the source array, although a callback can still mutate objects inside it. A pipeline such as orders.filter(isPaid).map(toRow) makes intermediate meaning visible. For large data sets, a single well-named loop can avoid multiple allocations and remain clearer than a deeply chained expression; readability and measured performance both matter.',
+                'JavaScript runs on a single thread. Instead of waiting for slow work (network calls, timers), it hands the work to the environment and continues; when the work finishes, a callback is queued and the event loop runs it once the current code completes. That is why a UI stays responsive while three API calls are in flight — and why nothing you write should ever "sleep" the thread.\n\nThe practical consequence: any function that touches the network is asynchronous, returns immediately, and delivers its result LATER. Every Apex call from LWC, every fetch, every Salesforce CLI invocation from Node follows this shape.',
             },
             {
-              heading: 'Map for keyed lookup; Set for uniqueness',
+              heading: 'Promises, then async/await',
               body:
-                'Map stores key-value pairs and accepts keys of any type, including object identity. It is a better semantic fit than a plain object for a dynamic lookup table: it has size, clear iteration order, and methods such as get(), set(), has(), and delete() without prototype-key surprises. Use a plain object for a record with a fixed set of named fields.\n\nSet stores each value once. It is ideal for membership checks and deduplication when SameValueZero equality is appropriate. Converting an array to new Set(values) removes duplicate primitive values, while duplicate object-shaped records still need a stable key such as an Id because distinct object references are distinct Set members.',
+                'A promise is an object representing a future result: pending, then fulfilled with a value or rejected with an error. You can chain (.then) and trap errors (.catch), but modern code prefers async/await: inside an async function, await pauses THAT FUNCTION (not the thread) until the promise settles, and rejected promises become throwable errors you handle with try/catch.\n\nTwo rules prevent 90% of async bugs. First: an async function ALWAYS returns a promise — callers must await it (a missing await is the classic silent bug). Second: handle errors at the level that can act on them; a swallowed .catch(() => {}) hides failures the user needed to see.',
               code: {
                 language: 'javascript',
                 snippet:
-                  'class DataShapeError extends Error {\n  constructor(message) {\n    super(message);\n    this.name = "DataShapeError";\n  }\n}\n\nfunction summarizePaidOrders(orders) {\n  if (!Array.isArray(orders)) {\n    throw new DataShapeError("orders must be an array");\n  }\n\n  const seenOrderIds = new Set();\n  const revenueByCustomer = new Map();\n\n  for (const order of orders) {\n    if (\n      typeof order !== "object" ||\n      order === null ||\n      typeof order.id !== "string" ||\n      typeof order.customerId !== "string" ||\n      !Number.isFinite(order.total)\n    ) {\n      throw new DataShapeError("each order needs string ids and a finite total");\n    }\n    if (seenOrderIds.has(order.id)) continue;\n    seenOrderIds.add(order.id);\n    if (order.status !== "paid") continue;\n\n    const previous = revenueByCustomer.get(order.customerId) ?? 0;\n    revenueByCustomer.set(order.customerId, previous + order.total);\n  }\n\n  return Array.from(revenueByCustomer, ([customerId, revenue]) => ({\n    customerId,\n    revenue,\n  })).sort((a, b) => b.revenue - a.revenue);\n}\n\nconst source = [\n  { id: "O-1", customerId: "C-1", total: 80, status: "paid" },\n  { id: "O-2", customerId: "C-1", total: 20, status: "paid" },\n  { id: "O-2", customerId: "C-1", total: 20, status: "paid" },\n  { id: "O-3", customerId: "C-2", total: 50, status: "draft" },\n];\n\nconsole.log(summarizePaidOrders(source));\nconsole.log(source.length); // 4: the input was not mutated',
-                caption:
-                  'An executable transformation using Set for deduplication, Map for aggregation, validation for bad data, and a new result array.',
+                  "async function waitForDeploy(jobId) {\n    for (let i = 0; i < 60; i++) {\n        const res = await fetch(`/api/deploys/${jobId}`);\n        if (!res.ok) throw new Error(`Status check failed: ${res.status}`);\n        const { status } = await res.json();\n        if (status === 'Succeeded') return status;\n        if (status === 'Failed') throw new Error('Deployment failed');\n        await new Promise(resolve => setTimeout(resolve, 5000)); // poll delay\n    }\n    throw new Error('Timed out waiting for deployment');\n}\n\ntry {\n    await waitForDeploy('0Af000...');\n    console.log('Ready to release');\n} catch (err) {\n    console.error(err.message);   // one place, real handling\n}",
+                caption: 'A polling loop with await: sequential-looking code, fully non-blocking.',
               },
             },
             {
-              heading: 'Immutability is controlled change',
+              heading: 'Parallelism on purpose',
               body:
-                'Immutable code derives a new value instead of modifying a value another part of the application may still use. Add an array item with [...items, item], replace one with items.map(), remove one with items.filter(), and update an object with { ...record, status: "Closed" }. Stable inputs make rendering, caching, and tests easier because change is represented by a new reference.\n\nSpread syntax is shallow. The new outer object still shares nested objects unless those levels are copied too. Copy only the branch being changed, use structuredClone() when its supported data model is appropriate, or adopt a project-approved immutable-state tool for deeply nested state. Object.freeze() is also shallow and is mainly useful for catching accidental writes during development, not for turning arbitrary object graphs into persistent data structures.',
-            },
-            {
-              heading: 'Errors should preserve context and recovery boundaries',
-              body:
-                'Throw an Error, TypeError, or a domain-specific Error subclass when a function cannot fulfill its contract. Include actionable context without secrets. Do not throw strings: Error objects carry a name, message, stack, and can retain an underlying cause. A catch block should recover, translate the error, add context and rethrow, or report it; silently swallowing an exception converts a visible failure into corrupt or missing behavior.\n\nPlace try/catch around the smallest operation whose failure you can handle. Parsing imported data may recover by marking one file invalid; an inner arithmetic helper usually cannot. finally runs whether the operation succeeds or fails and is appropriate for deterministic cleanup such as releasing a UI busy state. Validation errors are expected input outcomes; programmer errors should remain loud enough to reach tests and monitoring.',
-            },
-          ],
-          realWorld: {
-            title: 'Duplicate orders inflated a customer dashboard',
-            scenario:
-              'A retrying integration delivered several paid orders twice. A dashboard appended every payload to an array and mutated totals in place, so duplicate deliveries inflated revenue and stale UI references made the defect intermittent.',
-            solution:
-              'The ingestion boundary validated each record, used a Set of order IDs for idempotent deduplication, aggregated revenue in a Map keyed by customer ID, and returned a newly sorted summary array. Invalid rows raised a typed error for the import monitor.',
-            outcome:
-              'Repeated deliveries produced identical totals, the UI rerendered consistently from new references, and operations received an actionable error instead of a partially corrupted dashboard.',
-          },
-          keyTakeaways: [
-            'Use arrays for ordered sequences, Map for dynamic keyed lookup, and Set for unique membership',
-            'Choose transformation methods by intent and prefer a clear loop over an unreadable chain',
-            'Immutable updates create new references, but spread and Object.freeze are shallow',
-            'Validate data at trust boundaries before a transformation depends on its shape',
-            'Catch an error only where code can recover, translate it, add context, or clean up',
-          ],
-          resources: [
-            {
-              title: 'Indexed Collections',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Indexed_collections',
-              source: 'other',
-              note: 'MDN arrays and array methods',
-            },
-            {
-              title: 'Map',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map',
-              source: 'other',
-              note: 'MDN keyed collections reference',
-            },
-            {
-              title: 'Set',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set',
-              source: 'other',
-              note: 'MDN unique collections reference',
-            },
-            {
-              title: 'Control Flow and Error Handling',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Control_flow_and_error_handling',
-              source: 'other',
-              note: 'MDN exceptions and cleanup',
-            },
-          ],
-        },
-      ],
-      quizBank: [
-        {
-          id: 'js-q-language-data-01',
-          topic: 'Bindings and values',
-          prompt:
-            'What happens when const customer = { status: "new" }; is followed by customer.status = "active";?',
-          options: [
-            'A SyntaxError occurs because every const value is deeply immutable',
-            'The property changes because const prevents rebinding, not object mutation',
-            'A new customer object is created automatically',
-            'The assignment is ignored in every JavaScript runtime',
-          ],
-          correctIndex: 1,
-          explanation:
-            'const prevents assigning a different value to the customer binding. It does not freeze the object referenced by that binding, so its status property can change.',
-        },
-        {
-          id: 'js-q-language-data-02',
-          topic: 'Equality',
-          prompt: 'Which statement about 0 === false is correct?',
-          options: [
-            'It is true because both values are falsy',
-            'It is true only inside an if statement',
-            'It is false because strict equality does not coerce different types',
-            'It throws because numbers and booleans cannot be compared',
-          ],
-          correctIndex: 2,
-          explanation:
-            'Strict equality compares without type coercion. Number 0 and boolean false have different types, so the expression is false even though both are falsy in a condition.',
-        },
-        {
-          id: 'js-q-language-data-03',
-          topic: 'Closures',
-          prompt: 'Why can a function returned by a factory still read a factory parameter later?',
-          options: [
-            'Every parameter is copied into the global object',
-            'The returned function closes over the lexical environment where it was created',
-            'JavaScript reruns the factory before every call',
-            'Function parameters are stored in localStorage',
-          ],
-          correctIndex: 1,
-          explanation:
-            'A closure retains access to bindings in its defining lexical environment, even after the outer function has returned.',
-        },
-        {
-          id: 'js-q-language-data-04',
-          topic: 'Arrow functions',
-          prompt: 'Which property of an arrow function is important when deciding whether to use it?',
-          options: [
-            'It creates a new dynamic this value on every call',
-            'It can always be called with new',
-            'It captures this lexically and has no own arguments object',
-            'It is automatically asynchronous',
-          ],
-          correctIndex: 2,
-          explanation:
-            'Arrow functions do not define their own this or arguments and cannot be constructors. Their lexical this is useful for callbacks but wrong for methods needing a dynamic receiver.',
-        },
-        {
-          id: 'js-q-language-data-05',
-          topic: 'ES modules',
-          prompt:
-            'A module contains export function formatDate() {}. Which static import consumes that named export?',
-          options: [
-            'import formatDate from "./dates.js";',
-            'require("./dates.js").default;',
-            'import { formatDate } from "./dates.js";',
-            'include formatDate from "./dates.js";',
-          ],
-          correctIndex: 2,
-          explanation:
-            'A named export is imported with braces and its exported name. A brace-free import consumes a default export instead.',
-        },
-        {
-          id: 'js-q-language-data-06',
-          topic: 'Array transformations',
-          prompt:
-            'Which array method is intended to produce one transformed output element for each input element?',
-          options: ['filter()', 'map()', 'find()', 'some()'],
-          correctIndex: 1,
-          explanation:
-            'map() creates a new array from callback results. filter() selects elements, find() returns the first match, and some() returns a boolean.',
-        },
-        {
-          id: 'js-q-language-data-07',
-          topic: 'Map and Set',
-          prompt: 'When is Map a better fit than a plain object?',
-          options: [
-            'When a record has a fixed set of JSON field names',
-            'When every key must be converted to a string',
-            'When dynamic keys can include object identities and the collection is iterated',
-            'When duplicate values must be removed automatically',
-          ],
-          correctIndex: 2,
-          explanation:
-            'Map accepts keys of any type, preserves insertion order for iteration, and provides an explicit collection API. Set, not Map, represents unique membership.',
-        },
-        {
-          id: 'js-q-language-data-08',
-          topic: 'Immutable updates',
-          prompt:
-            'Which expression returns an array where the matching record is updated without mutating the source array?',
-          options: [
-            'records.push(updatedRecord)',
-            'records[index].status = "Closed"',
-            'records.sort((a, b) => a.id.localeCompare(b.id))',
-            'records.map((record) => record.id === id ? { ...record, status: "Closed" } : record)',
-          ],
-          correctIndex: 3,
-          explanation:
-            'map() creates a new outer array, and object spread creates a new object for the changed record. The other options mutate the existing array or one of its objects.',
-        },
-      ],
-    },
-    {
-      id: 'jseng-async-browser',
-      title: 'Async APIs & Secure Browser Interfaces',
-      summary:
-        'Coordinate asynchronous work, make cancelable and resilient HTTP requests, and build accessible DOM interactions that remain safe in an LWC security context.',
-      lessons: [
-        {
-          id: 'jseng-promises-resilient-fetch',
-          title: 'Promises, async/await & resilient API handling',
-          summary:
-            'Turn network uncertainty into explicit success, failure, timeout, cancellation, and retry behavior.',
-          durationMinutes: 60,
-          objectives: [
-            'Explain promise states and choose sequential or concurrent composition intentionally',
-            'Use async/await with error propagation and cleanup that preserves the original failure',
-            'Handle fetch responses, HTTP status, content type, and JSON parsing as separate concerns',
-            'Cancel obsolete requests and retry only transient, safe operations with bounded backoff',
-          ],
-          sections: [
-            {
-              heading: 'Promises represent one eventual result',
-              body:
-                'A Promise is pending and then settles exactly once as fulfilled with a value or rejected with a reason. Calling then(), catch(), or finally() returns a new promise, which is why errors and transformed values flow through a chain. Promise handlers run as microtasks after the current synchronous stack finishes; creating a promise does not move CPU-heavy work to another thread.\n\nAwait independent operations concurrently with Promise.all([a(), b()]) when all results are required and one rejection should fail the group. Use Promise.allSettled() when every outcome must be inspected. Do not accidentally serialize independent work by awaiting the first request before starting the second, and do not start unbounded thousands of requests when a concurrency limit is needed.',
-            },
-            {
-              heading: 'async/await makes control flow visible',
-              body:
-                'An async function always returns a promise. await pauses only that async function until the operand settles; it does not block the browser. A rejection is thrown at the await expression, so ordinary try/catch/finally expresses recovery and cleanup. If the current layer cannot recover, let the rejection propagate or rethrow it with meaningful context and a cause.\n\nKeep the try block narrow so it is clear which operation failed. Set loading state before the operation and clear it in finally. Never combine await with a catch that logs and returns undefined unless undefined is an intentional, documented fallback; otherwise callers can mistake failure for valid missing data.',
-            },
-            {
-              heading: 'fetch has transport and application-level outcomes',
-              body:
-                'fetch() rejects for failures such as an invalid URL, network failure, or cancellation. It normally fulfills for HTTP 404 and 500 responses, so code must check response.ok or response.status before reading success data. Body readers such as json() are asynchronous and can reject independently when the body is malformed or an abort occurs.\n\nVerify the response shape at the trust boundary. A Content-Type check detects an HTML login page returned where JSON was expected, but it does not prove that parsed JSON has required fields. Add runtime validation before application code relies on the payload. Include authentication and correlation details through approved platform mechanisms, never by logging tokens or embedding secrets in browser code.',
+                'Sequential awaits run one after another — correct when step B needs step A\'s result, wasteful when the calls are independent. Promise.all([a, b, c]) starts everything at once and awaits all results together, failing fast if ANY rejects. Promise.allSettled never short-circuits — you get every outcome, ideal for "check all 12 orgs and report each".\n\nThe habit to build: when you write two consecutive awaits, ask whether the second needs the first. Three independent 2-second API calls are 6 seconds sequential and 2 seconds with Promise.all — users feel that difference on every page load.',
               code: {
                 language: 'javascript',
                 snippet:
-                  'class HttpError extends Error {\n  constructor(status, statusText) {\n    super(`HTTP ${status}: ${statusText}`);\n    this.name = "HttpError";\n    this.status = status;\n  }\n}\n\nfunction wait(ms, signal) {\n  return new Promise((resolve, reject) => {\n    const timer = setTimeout(finish, ms);\n\n    function cleanup() {\n      clearTimeout(timer);\n      signal?.removeEventListener("abort", abort);\n    }\n    function finish() {\n      cleanup();\n      resolve();\n    }\n    function abort() {\n      cleanup();\n      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));\n    }\n\n    if (signal?.aborted) abort();\n    else signal?.addEventListener("abort", abort, { once: true });\n  });\n}\n\nasync function fetchJson(url, { signal, retries = 2, fetchImpl = fetch } = {}) {\n  let attempt = 0;\n\n  while (true) {\n    try {\n      const response = await fetchImpl(url, {\n        headers: { Accept: "application/json" },\n        signal,\n      });\n      if (!response.ok) throw new HttpError(response.status, response.statusText);\n\n      const contentType = response.headers.get("content-type") ?? "";\n      if (!contentType.includes("application/json")) {\n        throw new TypeError(`Expected JSON, received ${contentType || "unknown content"}`);\n      }\n      return await response.json();\n    } catch (error) {\n      if (signal?.aborted) throw error;\n      const retryable = !(error instanceof HttpError) || error.status >= 500;\n      if (!retryable || attempt >= retries) throw error;\n      await wait(100 * 2 ** attempt, signal);\n      attempt += 1;\n    }\n  }\n}\n\nlet calls = 0;\nconst fakeFetch = async () => {\n  calls += 1;\n  return calls === 1\n    ? new Response("busy", { status: 503, statusText: "Unavailable" })\n    : new Response(JSON.stringify({ accounts: [{ id: "A-1" }] }), {\n        headers: { "Content-Type": "application/json" },\n      });\n};\n\n(async () => {\n  const controller = new AbortController();\n  const timeout = setTimeout(() => controller.abort(), 2_000);\n  try {\n    console.log(await fetchJson("https://example.test/accounts", {\n      signal: controller.signal,\n      fetchImpl: fakeFetch,\n    }));\n  } finally {\n    clearTimeout(timeout);\n  }\n})();',
-                caption:
-                  'A modern browser or Node runtime can execute this deterministic example: a fake 503 response is retried once, while the request remains cancelable.',
+                  "// Sequential: ~6s. Parallel: ~2s.\nconst [limits, orgs, jobs] = await Promise.all([\n    fetch('/api/limits').then(r => r.json()),\n    fetch('/api/orgs').then(r => r.json()),\n    fetch('/api/jobs?active=true').then(r => r.json()),\n]);\n\n// Health-check every org; one bad org must not hide the others\nconst checks = await Promise.allSettled(orgs.map(o => pingOrg(o.alias)));\nconst down = checks\n    .map((c, i) => ({ alias: orgs[i].alias, ok: c.status === 'fulfilled' }))\n    .filter(c => !c.ok);",
+                caption: 'Promise.all for speed; allSettled when every result matters individually.',
               },
-            },
-            {
-              heading: 'Cancellation, retries, and stale-result protection',
-              body:
-                'Pass an AbortSignal into APIs that support cancellation. A search interface should abort the prior fetch when the query changes and abort outstanding work when its owner is removed. An AbortSignal is one-use: after it is aborted, create a new controller for the next operation. Cancellation is expected control flow, so distinguish AbortError from an outage before showing an error to the user.\n\nRetry transient network failures, selected 5xx responses, and sometimes 429 according to Retry-After. Bound attempts, add exponential backoff with jitter in production, and honor cancellation during the wait. Automatic retries are safest for idempotent reads; retrying a non-idempotent create can duplicate business data unless the API accepts an idempotency key. When an API cannot be canceled, retain a request sequence number and ignore a late response that no longer matches the latest request.',
             },
           ],
           realWorld: {
-            title: 'A type-ahead search showed the wrong account',
+            title: 'The environment page that took nine seconds',
             scenario:
-              'A user typed "Acme" quickly. Four searches ran concurrently, and the slow response for "A" arrived last, replacing the precise results for "Acme". During an outage, every keystroke also retried indefinitely and amplified traffic.',
+              'An environment overview loaded org limits, connected orgs, and recent jobs with three sequential awaits, then pinged each of six orgs one by one. The page took nine seconds; users assumed the tool was broken and kept a spreadsheet instead.',
             solution:
-              'The component aborted the previous fetch for each new query, checked response.ok and the JSON shape, ignored AbortError as expected control flow, and used a maximum of two backoff retries only for transient idempotent reads. A request sequence guard provided stale-result protection for a non-cancelable adapter.',
+              'The three independent fetches moved into one Promise.all, and the six pings into Promise.allSettled so a single unreachable sandbox no longer failed the whole page — its card simply showed "unreachable".',
             outcome:
-              'Only the latest query could update the screen, outages produced a useful retry message without a request storm, and telemetry separated user cancellation from real service failures.',
+              'Load time dropped to just over two seconds, the spreadsheet died, and the team added a lint rule flagging consecutive awaits on independent calls.',
           },
           keyTakeaways: [
-            'Promise handlers run asynchronously, but promises do not make CPU work multithreaded',
-            'Start independent operations before awaiting them when concurrency is intended',
-            'fetch normally fulfills on HTTP errors, so inspect response.ok or status explicitly',
-            'Cancellation prevents obsolete work; a sequence guard prevents obsolete results from winning',
-            'Retry only bounded, transient, and safe operations, with backoff and cancellation support',
+            'JavaScript never blocks: slow work completes later via the event loop',
+            'await pauses the function, not the thread; async functions return promises',
+            'A missing await is the classic silent bug — lint for floating promises',
+            'Promise.all for independent speed; allSettled when each result must be reported',
           ],
           resources: [
             {
-              title: 'Using Promises',
+              title: 'MDN: Using promises',
               url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Using_promises',
               source: 'other',
-              note: 'MDN promise composition and errors',
             },
             {
-              title: 'async function',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function',
+              title: 'JavaScript.info: Async/await',
+              url: 'https://javascript.info/async-await',
               source: 'other',
-              note: 'MDN async/await reference',
-            },
-            {
-              title: 'Using the Fetch API',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch',
-              source: 'other',
-              note: 'MDN response and body handling',
-            },
-            {
-              title: 'AbortSignal',
-              url: 'https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal',
-              source: 'other',
-              note: 'MDN cancellation contract',
-            },
-          ],
-        },
-        {
-          id: 'jseng-dom-accessibility-security',
-          title: 'Events, DOM, accessibility & XSS-safe LWC context',
-          summary:
-            'Build event-driven interfaces with semantic markup, safe rendering primitives, and a correct mental model of Shadow DOM and Lightning Web Security.',
-          durationMinutes: 60,
-          objectives: [
-            'Handle browser events with delegation, predictable propagation, and lifecycle cleanup',
-            'Update the DOM through semantic elements while preserving keyboard and screen-reader behavior',
-            'Render untrusted text without creating an HTML or URL injection sink',
-            'Work within LWC ownership, Shadow DOM, Content Security Policy, and Lightning Web Security boundaries',
-          ],
-          sections: [
-            {
-              heading: 'Events are the interface between behavior and time',
-              body:
-                'addEventListener() registers behavior without overwriting other listeners. event.target is the deepest dispatch target visible in the current scope; event.currentTarget is the element whose listener is running. Events usually travel through capture, target, and bubble phases. Event delegation places one bubbling listener on a stable ancestor and resolves the actionable descendant with closest(), which is efficient for dynamic lists.\n\nUse preventDefault() only to replace a defined browser default, not as a general event stopper. Use stopPropagation() sparingly because it hides events from owners higher in the tree. Match listener lifetimes to UI lifetimes: retain the same function reference and remove global listeners, observers, and timers during teardown. In LWC, prefer declarative template listeners; clean up imperative listeners attached outside the component.',
-              code: {
-                language: 'javascript',
-                snippet:
-                  'const records = [\n  { id: "A-1", name: "Acme" },\n  { id: "A-2", name: "<img src=x onerror=alert(1)>" },\n];\n\nconst region = document.createElement("section");\nregion.setAttribute("aria-labelledby", "account-heading");\n\nconst heading = document.createElement("h2");\nheading.id = "account-heading";\nheading.textContent = "Choose an account";\n\nconst list = document.createElement("ul");\nconst status = document.createElement("p");\nstatus.setAttribute("role", "status");\nstatus.setAttribute("aria-live", "polite");\n\nfor (const record of records) {\n  const item = document.createElement("li");\n  const button = document.createElement("button");\n  button.type = "button";\n  button.dataset.recordId = record.id;\n  button.textContent = record.name;\n  item.append(button);\n  list.append(item);\n}\n\nlist.addEventListener("click", (event) => {\n  const button = event.target instanceof Element\n    ? event.target.closest("button[data-record-id]")\n    : null;\n  if (!button || !list.contains(button)) return;\n\n  const record = records.find(({ id }) => id === button.dataset.recordId);\n  status.textContent = record ? `Selected ${record.name}` : "Account not found";\n});\n\nregion.append(heading, list, status);\ndocument.body.append(region);',
-                caption:
-                  'Run in a browser console: semantic buttons support keyboard use, one delegated listener handles the list, and textContent displays the hostile-looking name as harmless text.',
-              },
-            },
-            {
-              heading: 'DOM structure is also an accessibility API',
-              body:
-                'Use the native element whose semantics match the action: button for an action, a for navigation, label with an input, and headings in a meaningful hierarchy. Native controls provide keyboard behavior, focusability, roles, and states that a clickable div does not. Supply visible labels, useful alternative text, and an announced status region for important asynchronous updates. ARIA supplements native semantics; it should not recreate semantics already built into HTML.\n\nDo not remove focus indicators. After an operation, move focus only when the workflow requires it, such as placing focus in an opened modal and restoring it to the opener on close. Test with only a keyboard, browser accessibility inspection, and a screen reader. In LWC, prefer Lightning base components when they meet the requirement because they package SLDS behavior and accessibility, while still verifying labels, errors, and focus in the composed experience.',
-            },
-            {
-              heading: 'Safe rendering keeps data out of parser contexts',
-              body:
-                'Cross-site scripting occurs when attacker-controlled data is interpreted as executable markup, script, a dangerous URL, or an inline handler. For plain text, assign textContent or let an LWC template expression render the value; both keep the value in a text context. Build structure with createElement() and properties. Do not concatenate user data into innerHTML, outerHTML, insertAdjacentHTML(), script text, style text, or javascript: URLs.\n\nIf a requirement truly accepts rich HTML, use a security-reviewed sanitizer configured for the exact policy and keep sanitization close to the rendering sink. Escaping for HTML text is not interchangeable with URL, CSS, or JavaScript-context protection. Validate protocols for user-supplied links, avoid eval() and Function(), and treat server data as untrusted even when it originated from a familiar Salesforce field.',
-            },
-            {
-              heading: 'Shadow DOM ownership and Lightning Web Security',
-              body:
-                'LWC uses Shadow DOM semantics to encapsulate component internals. Query only DOM the component owns, preferably through template references or this.template querying where appropriate; do not reach through another component to manipulate its private nodes. Events crossing a shadow boundary can be retargeted, so expose stable public properties, methods, and CustomEvent contracts rather than depending on internal markup.\n\nLightning Web Security creates JavaScript sandboxes by namespace and distorts selected platform APIs to prevent unsafe cross-namespace behavior. LWS sanitizes strings inserted through sinks such as innerHTML according to allowlists, but Salesforce explicitly notes that it does not validate input text. LWS and Content Security Policy are defense-in-depth, not permission to render unsanitized markup or store secrets client-side. Use supported APIs, test third-party libraries with LWS enabled, and preserve browser-standard behavior wherever possible.',
-            },
-          ],
-          realWorld: {
-            title: 'A case feed exposed both keyboard and injection defects',
-            scenario:
-              'A custom case feed rendered subject lines with innerHTML and used clickable div elements. A subject containing HTML created an injection path, keyboard users could not open a case, and one listener per row leaked when filters rebuilt the list.',
-            solution:
-              'The team rendered subjects as text, replaced div actions with labeled buttons, announced selection changes in a status region, and delegated one click listener from the stable list. The LWC version used template event handlers, component-owned DOM, and a small composed CustomEvent contract.',
-            outcome:
-              'The security test payload displayed literally, keyboard and screen-reader acceptance tests passed, and repeated filtering no longer increased listener count or response time.',
-          },
-          keyTakeaways: [
-            'event.target identifies the visible dispatch target; event.currentTarget identifies the active listener owner',
-            'Native semantic controls provide behavior and accessibility that generic elements do not',
-            'Use textContent or escaped LWC template expressions for untrusted plain text',
-            'Shadow DOM makes component internals private; communicate through intentional public APIs and events',
-            'LWS is defense-in-depth and does not replace input validation or context-safe rendering',
-          ],
-          resources: [
-            {
-              title: 'Introduction to Events',
-              url: 'https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Scripting/Events',
-              source: 'other',
-              note: 'MDN event handling fundamentals',
-            },
-            {
-              title: 'Communicate with Events',
-              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/events.html',
-              source: 'developer',
-              note: 'Official LWC event guidance',
-            },
-            {
-              title: 'Component Accessibility',
-              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/create-components-accessibility.html',
-              source: 'developer',
-              note: 'Official LWC accessibility guidance',
-            },
-            {
-              title: 'Lightning Web Security Sanitization',
-              url: 'https://developer.salesforce.com/docs/platform/lightning-components-security/guide/lws-sanitize.html',
-              source: 'developer',
-              note: 'Official sanitization boundaries and warning',
-            },
-            {
-              title: 'How Lightning Web Security Works',
-              url: 'https://developer.salesforce.com/docs/platform/lightning-components-security/guide/lws-architecture.html',
-              source: 'developer',
-              note: 'Namespace sandbox and distortion model',
             },
           ],
         },
       ],
       quizBank: [
         {
-          id: 'js-q-async-browser-01',
-          topic: 'Promise scheduling',
-          prompt:
-            'A fulfilled promise receives a then() handler while synchronous code is still running. When does the handler execute?',
+          id: 'q-js-mod-1',
+          topic: 'Template literals',
+          prompt: 'Which string syntax supports ${expression} interpolation?',
+          options: ['Single quotes', 'Double quotes', 'Backticks (template literals)', 'All string forms'],
+          correctIndex: 2,
+          explanation:
+            'Only backtick template literals interpolate expressions and span multiple lines naturally.',
+        },
+        {
+          id: 'q-js-mod-2',
+          topic: 'Destructuring',
+          prompt: 'What does function connect({ alias, sandbox = false }) demonstrate?',
           options: [
-            'Immediately, in the middle of the current statement',
-            'As a microtask after the current synchronous call stack finishes',
-            'Only after a one-second timer',
-            'On a new CPU thread created by the promise',
+            'Two positional parameters',
+            'A destructured options parameter with a default value',
+            'A rest parameter',
+            'A generator function',
           ],
           correctIndex: 1,
           explanation:
-            'Promise reactions are queued as microtasks. They run after the current stack completes; a promise does not itself create a worker thread.',
+            'The function takes one object and unpacks alias and sandbox from it, defaulting sandbox to false — the modern options-object pattern.',
         },
         {
-          id: 'js-q-async-browser-02',
-          topic: 'Promise composition',
-          prompt: 'What does Promise.all([first, second]) do if second rejects?',
+          id: 'q-js-mod-3',
+          topic: 'Modules',
+          prompt: 'How many default exports may one ES module have?',
+          options: ['Unlimited', 'One', 'One per class', 'Zero — default exports were removed'],
+          correctIndex: 1,
+          explanation:
+            'A module may have any number of named exports but at most one default export — LWC components use exactly one.',
+        },
+        {
+          id: 'q-js-mod-4',
+          topic: 'Classes',
+          prompt: 'What is a getter in a class?',
           options: [
-            'It fulfills with only the first result',
-            'It remains pending forever',
-            'It rejects the aggregate promise with that rejection',
-            'It converts the rejection to undefined automatically',
+            'A method that must be called with parentheses',
+            'A property computed on access, defined with the get keyword',
+            'A static factory function',
+            'A private field',
           ],
+          correctIndex: 1,
+          explanation:
+            'get title() { ... } computes a derived value each time .title is read — LWC templates bind to getters constantly.',
+        },
+        {
+          id: 'q-js-mod-5',
+          topic: 'LWC connection',
+          prompt: 'Structurally, what is a Lightning Web Component\'s JavaScript file?',
+          options: [
+            'A proprietary Salesforce format',
+            'An ES module that default-exports a class extending LightningElement',
+            'A JSON manifest',
+            'An immediately-invoked function expression',
+          ],
+          correctIndex: 1,
+          explanation:
+            'LWC deliberately builds on web standards: standard module, standard class, plus decorators like @api.',
+        },
+        {
+          id: 'q-js-mod-6',
+          topic: 'Event loop',
+          prompt: 'While a fetch call is in flight, what does the JavaScript thread do?',
+          options: [
+            'Blocks until the response arrives',
+            'Continues running other code; the response callback is queued for later',
+            'Spawns a second thread per request',
+            'Pauses all rendering',
+          ],
+          correctIndex: 1,
+          explanation:
+            'The environment performs the I/O; JavaScript stays free. When the response lands, the continuation is queued and the event loop runs it.',
+        },
+        {
+          id: 'q-js-mod-7',
+          topic: 'Async/await',
+          prompt: 'What does an async function ALWAYS return?',
+          options: ['undefined', 'The awaited value directly', 'A promise', 'An iterator'],
           correctIndex: 2,
           explanation:
-            'Promise.all requires every input to fulfill and rejects when any input rejects. Promise.allSettled is the alternative when every outcome must be collected.',
+            'async wraps the return value in a promise — which is why callers must await (or .then) it, and why a missing await slips by silently.',
         },
         {
-          id: 'js-q-async-browser-03',
-          topic: 'Fetch responses',
-          prompt: 'How does fetch() normally handle an HTTP 404 response?',
+          id: 'q-js-mod-8',
+          topic: 'Error handling',
+          prompt: 'Inside an async function, how do you handle a rejected awaited promise?',
           options: [
-            'It fulfills with a Response whose ok property is false',
-            'It rejects before a Response exists',
-            'It retries until the server returns 200',
-            'It fulfills directly with parsed JSON',
+            'You cannot — rejections crash the page',
+            'With try/catch around the await',
+            'With window.onerror only',
+            'By setting promise.rejected = false',
+          ],
+          correctIndex: 1,
+          explanation:
+            'await converts rejection into a thrown error, so ordinary try/catch is the handling mechanism.',
+        },
+        {
+          id: 'q-js-mod-9',
+          topic: 'Parallelism',
+          prompt: 'Three independent 2-second API calls: how long with Promise.all versus sequential awaits?',
+          options: [
+            '~2s parallel vs ~6s sequential',
+            '~6s in both cases',
+            '~2s in both cases',
+            'Promise.all cannot run calls in parallel',
           ],
           correctIndex: 0,
           explanation:
-            'fetch rejects for request or network failures, but HTTP error statuses normally produce a fulfilled Response. Application code must inspect ok or status.',
+            'Promise.all starts all three immediately and resolves when the slowest finishes; sequential awaits add the durations.',
         },
         {
-          id: 'js-q-async-browser-04',
-          topic: 'Cancellation',
-          prompt: 'What is the correct way to make a fetch request cancelable?',
+          id: 'q-js-mod-10',
+          topic: 'Parallelism',
+          prompt: 'When should you prefer Promise.allSettled over Promise.all?',
           options: [
-            'Pass an AbortController signal to fetch and later call controller.abort()',
-            'Call Promise.cancel() on the result',
-            'Set response.ok to false',
-            'Reuse an already-aborted signal for every later request',
-          ],
-          correctIndex: 0,
-          explanation:
-            'fetch accepts an AbortSignal. Calling abort on its controller rejects outstanding work; an aborted signal is one-use and a later operation needs a new controller.',
-        },
-        {
-          id: 'js-q-async-browser-05',
-          topic: 'Resilient retries',
-          prompt: 'Which request is generally safest to retry automatically after a transient failure?',
-          options: [
-            'A payment creation with no idempotency protection',
-            'An idempotent read with bounded attempts and backoff',
-            'Every failed request in an infinite tight loop',
-            'A canceled request that the user explicitly abandoned',
+            'When you need the fastest single result',
+            'When every individual outcome must be reported even if some fail',
+            'When promises must run one at a time',
+            'Never — allSettled is deprecated',
           ],
           correctIndex: 1,
           explanation:
-            'Idempotent reads do not create duplicate business actions. Retries still need a bound, backoff, and cancellation; writes require an API-level idempotency strategy.',
-        },
-        {
-          id: 'js-q-async-browser-06',
-          topic: 'DOM events',
-          prompt: 'Inside a delegated listener on a list, what does event.currentTarget refer to?',
-          options: [
-            'The deepest child originally clicked',
-            'The element whose listener is currently executing',
-            'The window in every event',
-            'The last element appended to the list',
-          ],
-          correctIndex: 1,
-          explanation:
-            'currentTarget is the listener owner. target is the dispatch target visible at that listener and may be a descendant or a retargeted component boundary.',
-        },
-        {
-          id: 'js-q-async-browser-07',
-          topic: 'Accessibility',
-          prompt: 'What is the best starting element for an action a user can click or activate with a keyboard?',
-          options: [
-            'A div with only a click listener',
-            'A span with a color change',
-            'A native button with an accessible name',
-            'An image with no alternative text',
-          ],
-          correctIndex: 2,
-          explanation:
-            'A native button supplies action semantics, focusability, and keyboard activation. Its visible text or accessibility attributes must also provide a meaningful name.',
-        },
-        {
-          id: 'js-q-async-browser-08',
-          topic: 'XSS and Lightning Web Security',
-          prompt:
-            'How should an LWC display an untrusted case subject that is required to be plain text?',
-          options: [
-            'Concatenate it into innerHTML because LWS validates all input',
-            'Evaluate it and display the returned value',
-            'Disable LWS sanitization for the component',
-            'Render it through a template text expression and keep it out of HTML parsing sinks',
-          ],
-          correctIndex: 3,
-          explanation:
-            'Template text rendering keeps the value in a text context. LWS sanitizes selected inserted markup but does not validate input text and does not justify unsafe innerHTML composition.',
+            'allSettled never short-circuits: you receive fulfilled/rejected status per promise — ideal for health checks across many orgs.',
         },
       ],
     },
     {
-      id: 'jseng-typed-quality',
-      title: 'Typed Contracts, Testing & LWC Delivery',
+      id: 'js-browser-lwc',
+      title: 'JavaScript in the Browser & LWC',
       summary:
-        'Add TypeScript contracts and runtime narrowing, verify behavior with Jest, debug systematically, and assemble the practices into an LWC-oriented capstone.',
+        'The DOM, events, fetch and REST APIs, and the exact JavaScript patterns Lightning Web Components run on — closing the loop back to Salesforce.',
       lessons: [
         {
-          id: 'jseng-typescript-lwc-contracts',
-          title: 'TypeScript types, narrowing & Salesforce contracts',
+          id: 'js-dom-events',
+          title: 'The DOM and events',
           summary:
-            'Use TypeScript to make assumptions reviewable, then validate the runtime boundaries where static types cannot protect an LWC.',
-          durationMinutes: 60,
+            'Selecting and updating elements, listening to events, bubbling and delegation — and how LWC templates wrap the same machinery.',
+          durationMinutes: 18,
           objectives: [
-            'Use inference, interfaces, unions, generics, and readonly types without falling back to any',
-            'Narrow unknown data with control flow, type predicates, and discriminated unions',
-            'Design compile-time contracts while retaining runtime validation at external boundaries',
-            'Apply Salesforce type definitions carefully within the current LWC TypeScript Developer Preview workflow',
+            'Select and update DOM elements safely',
+            'Wire event listeners and read event payloads',
+            'Explain bubbling and use event delegation deliberately',
           ],
           sections: [
             {
-              heading: 'Types document the values code is allowed to use',
+              heading: 'The DOM is a live tree',
               body:
-                'TypeScript adds static analysis to JavaScript and then erases types when it emits JavaScript. Let the compiler infer obvious local values, but annotate public function parameters, return values, exported models, and state boundaries. Interfaces describe extendable object shapes; type aliases can also express unions, tuples, primitives, and mapped types. Generics preserve a relationship between input and output types rather than replacing uncertainty with any.\n\nPrefer unknown for a value whose type has not been established. any opts out of checking and lets an unsafe value spread through the program. readonly properties and ReadonlyArray communicate that a caller must not mutate through that reference, but they are compile-time restrictions, not runtime freezing. Keep strict compiler settings and fix unsafe assumptions instead of silencing them with broad assertions.',
+                'The browser parses HTML into the Document Object Model — a tree of element nodes that JavaScript can query and change, and the page updates instantly. document.querySelector(css) / querySelectorAll are the selection workhorses; element.textContent, classList, and setAttribute are the safe updaters.\n\nSafety rule that security reviews enforce: use textContent for user-supplied text. innerHTML parses its input as HTML — feeding it untrusted data is a cross-site-scripting (XSS) vulnerability. In LWC you rarely touch the DOM directly (templates do it), but refreshing DevTools-level DOM literacy is what makes you dangerous at debugging any UI.',
             },
             {
-              heading: 'Narrow before use',
+              heading: 'Events: the browser\'s notification system',
               body:
-                'Control-flow analysis narrows a union after checks such as typeof value === "string", value instanceof Error, property existence, or a discriminant comparison. A user-defined predicate such as isContact(value): value is Contact centralizes a reusable runtime check. Avoid assertions that merely tell the compiler to trust unverified network data.\n\nDiscriminated unions model state without impossible combinations: { kind: "loading" }, { kind: "ready", data }, or { kind: "error", message }. A switch on kind gives each branch the correct fields. Passing the default branch to a function that accepts never makes a newly added state produce a compile error until every switch handles it.',
+                'Every interaction fires an event: click, input, change, submit, keydown. addEventListener(type, handler) subscribes; the handler receives an event object with .target (the element), value payloads, and control methods like preventDefault() (stop a form\'s native submit) and stopPropagation().\n\nEvents BUBBLE: after firing on the target they travel up through ancestors. That enables delegation — one listener on a container handling clicks from hundreds of rows by inspecting event.target — the pattern behind every data table, and the reason LWC can bind onclick on a parent element cheaply.',
               code: {
-                language: 'typescript',
+                language: 'javascript',
                 snippet:
-                  'interface Contact {\n  readonly id: string;\n  readonly name: string;\n  readonly email?: string;\n}\n\ntype ContactState =\n  | { kind: "loading" }\n  | { kind: "ready"; contacts: readonly Contact[] }\n  | { kind: "error"; message: string };\n\nfunction isContact(value: unknown): value is Contact {\n  if (typeof value !== "object" || value === null) return false;\n  const candidate = value as Record<string, unknown>;\n  return (\n    typeof candidate.id === "string" &&\n    typeof candidate.name === "string" &&\n    (candidate.email === undefined || typeof candidate.email === "string")\n  );\n}\n\nfunction parseContacts(payload: unknown): readonly Contact[] {\n  if (!Array.isArray(payload)) throw new TypeError("Expected a contact array");\n  return payload.map((item, index) => {\n    if (!isContact(item)) throw new TypeError(`Invalid contact at index ${index}`);\n    return { ...item };\n  });\n}\n\nfunction assertNever(value: never): never {\n  throw new Error(`Unhandled state: ${JSON.stringify(value)}`);\n}\n\nfunction statusMessage(state: ContactState): string {\n  switch (state.kind) {\n    case "loading":\n      return "Loading contacts";\n    case "ready":\n      return `${state.contacts.length} contacts loaded`;\n    case "error":\n      return `Could not load contacts: ${state.message}`;\n    default:\n      return assertNever(state);\n  }\n}\n\nconst contacts = parseContacts([{ id: "C-1", name: "Ada" }]);\nconsole.log(statusMessage({ kind: "ready", contacts }));',
-                caption:
-                  'Compile and run this TypeScript example: unknown input is checked at runtime and a discriminated union makes every UI state explicit.',
+                  "// One listener handles every row's Retry button — even rows added later\nconst table = document.querySelector('#deploy-table');\ntable.addEventListener('click', (event) => {\n    const button = event.target.closest('button[data-action=\"retry\"]');\n    if (!button) return;                       // click was elsewhere\n    const jobId = button.dataset.jobId;        // from data-job-id=\"...\"\n    retryDeploy(jobId);\n});",
+                caption: 'Event delegation: one listener, unlimited rows, no per-row wiring.',
               },
             },
             {
-              heading: 'Static contracts end at runtime boundaries',
+              heading: 'The same ideas inside LWC',
               body:
-                'A type annotation does not inspect JSON, an Apex return value, local storage, a message event, or a third-party library. Receive these values as unknown when practical and parse them into trusted domain models. Validation can be a focused predicate as shown here or a project-standard schema validator; return useful field context without exposing sensitive values.\n\nSeparate transport shapes from UI models. An adapter can validate an Apex DTO, normalize Salesforce field names, apply null handling once, and return a readonly domain object. The LWC then renders a stable contract instead of repeating optional chaining and coercion throughout event handlers. Type CustomEvent detail and public component properties as narrow contracts, while remembering that callers and server responses still require runtime defenses.',
-            },
-            {
-              heading: 'Applying TypeScript to Lightning Web Components',
-              body:
-                'Salesforce currently documents TypeScript for LWC as a Developer Preview. The documented workflow supplies Salesforce type definitions, including the @salesforce/lightning-types package, but the LWC compiler does not itself compile TypeScript; projects must transform TypeScript to JavaScript before deployment. Preview limitations and setup requirements can change, so follow the current Salesforce guide rather than assuming a generic web configuration is deployable.\n\nAdopt it incrementally around high-value contracts: pure data adapters, component state unions, @api surfaces, event detail, wire or imperative Apex results, and tested utilities. Keep generated JavaScript out of hand-edited logic according to project conventions. If a production team cannot accept preview features, the same design discipline remains available in JavaScript through small modules, JSDoc types, runtime validators, ESLint, and Jest.',
+                'LWC templates declare listeners inline — <button onclick={handleRetry}> — and the framework manages addEventListener for you. Custom events carry data upward from child to parent components: this.dispatchEvent(new CustomEvent("select", { detail: { orgId } })), which the parent handles as onselect.\n\nInside a component you query only your own template (this.template.querySelector) because shadow DOM isolates each component\'s markup. All the mental models from this lesson — targets, payloads, bubbling — transfer directly; LWC just scopes and formalizes them.',
             },
           ],
           realWorld: {
-            title: 'A nullable Apex field broke only one customer org',
+            title: 'A 500-row table with 500 listeners',
             scenario:
-              'An account-health LWC asserted that an Apex response matched its TypeScript interface. One org had legacy records where a nested score object was null, so rendering failed even though the editor and build showed no error.',
+              'A deployment-history table attached three listeners to every row at render time. With 500 rows the page allocated 1,500 listeners, scrolling stuttered on mid-range laptops, and rows added by live polling arrived with no listeners at all — their buttons simply did nothing.',
             solution:
-              'The boundary accepted the response as unknown, validated required fields, converted nullable transport fields into an explicit ready or incomplete domain state, and used a discriminated union for loading, success, empty, and error rendering. The team also documented the preview compilation step.',
+              'The team replaced per-row wiring with one delegated listener on the table body, reading the action and row id from data-* attributes on the clicked button.',
             outcome:
-              'Legacy data produced an intentional incomplete-state message instead of a blank component, every state was covered by compile-time exhaustiveness and Jest tests, and developers stopped treating assertions as runtime validation.',
+              'Interaction became instant, dynamically added rows worked automatically, and the delegation pattern moved into the team\'s component playbook.',
           },
           keyTakeaways: [
-            'Type inference reduces noise, while exported and boundary contracts deserve explicit types',
-            'unknown requires proof before use; any disables the proof system',
-            'Discriminated unions represent valid states and never checks enforce exhaustive handling',
-            'TypeScript types are erased, so external data still needs runtime validation',
-            'LWC TypeScript is currently a Developer Preview with a separate compile-to-JavaScript step',
+            'querySelector + textContent/classList cover most DOM updates safely',
+            'Never feed untrusted data to innerHTML — that is XSS',
+            'Events bubble; delegation puts one listener where hundreds existed',
+            'LWC formalizes the same system: template bindings + CustomEvent up',
           ],
           resources: [
             {
-              title: 'TypeScript for the New Programmer',
-              url: 'https://www.typescriptlang.org/docs/handbook/typescript-from-scratch.html',
+              title: 'MDN: Introduction to events',
+              url: 'https://developer.mozilla.org/en-US/docs/Learn/JavaScript/Building_blocks/Events',
               source: 'other',
-              note: 'Official TypeScript introduction',
             },
             {
-              title: 'Narrowing',
-              url: 'https://www.typescriptlang.org/docs/handbook/2/narrowing.html',
-              source: 'other',
-              note: 'Official control-flow and predicate guide',
-            },
-            {
-              title: 'TypeScript for Lightning Web Components (Developer Preview)',
-              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/ts.html',
+              title: 'LWC Dev Guide: Handle events',
+              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/events.html',
               source: 'developer',
-              note: 'Current Salesforce setup, limits, and compilation workflow',
-            },
-            {
-              title: 'Work with Salesforce Data',
-              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/data-guideline.html',
-              source: 'developer',
-              note: 'Official LWC data-access guidance',
             },
           ],
         },
         {
-          id: 'jseng-jest-capstone',
-          title: 'Jest, linting, debugging & the LWC capstone',
+          id: 'js-fetch-apis',
+          title: 'fetch, JSON, and REST APIs',
           summary:
-            'Create a fast quality loop and prove an accessible, resilient account explorer from pure transformations through component behavior.',
-          durationMinutes: 70,
+            'Calling REST endpoints properly: requests, headers, JSON parsing, status handling, and a hardened helper you will reuse everywhere.',
+          durationMinutes: 18,
           objectives: [
-            'Write deterministic Jest tests around behavior, errors, async work, DOM output, and component events',
-            'Use linting, type checking, formatting, and focused test commands as distinct feedback layers',
-            'Debug from a reproducible symptom with breakpoints, network evidence, and readable LWC source',
-            'Design and verify an end-to-end LWC capstone that integrates modules, data contracts, state, accessibility, and security',
+            'Make GET/POST requests with fetch, headers, and JSON bodies',
+            'Handle HTTP status codes and network errors distinctly',
+            'Serialize and parse JSON confidently, including failure modes',
           ],
           sections: [
             {
-              heading: 'Test observable behavior at the cheapest useful boundary',
+              heading: 'JSON: the wire format of everything',
               body:
-                'Unit tests should make a promise about behavior: given an input or interaction, assert the returned value, rendered state, event, or failure visible to a caller. Use Arrange-Act-Assert, descriptive test names, and controlled fixtures. Test pure adapters directly; test an LWC through its public API and shadow DOM output rather than private methods or internal implementation order.\n\nSalesforce uses Jest with @salesforce/sfdx-lwc-jest for local LWC tests. Create the component with createElement(), append it to the document, provide mocked wire or Apex results, perform a real DOM interaction, await pending microtasks, and assert output or events. Remove appended elements after each test. Jest does not connect to an org or run in a real browser, so retain targeted integration, accessibility, and org-level acceptance tests.',
+                'Every Salesforce REST response, every webhook, every config file in this platform is JSON: objects, arrays, strings, numbers, booleans, null. JSON.parse turns text into data (and throws on malformed input — catch it at boundaries); JSON.stringify goes the other way, with pretty-printing via JSON.stringify(data, null, 2) for logs.\n\nMind the type gaps: JSON has no dates (they travel as ISO strings you convert with new Date(iso)), no undefined, and no comments. A field that is missing, null, or an empty string are three DIFFERENT states — good API code decides explicitly what each means.',
             },
             {
-              heading: 'Deterministic tests make transformations safe to change',
+              heading: 'fetch, done properly',
               body:
-                'Cover a representative success, meaningful boundary values, invalid input, and a regression for every repaired defect. Assert outcomes rather than line coverage alone. A test can freeze fixture objects to expose accidental writes, while equality assertions verify the new value. For asynchronous code, return or await the promise so Jest knows when the test is complete; use resolved and rejected mocks instead of real networks.\n\nMock only at a boundary the code genuinely owns. A tiny fake Apex adapter or wire test utility keeps outcomes controlled; mocking every internal function couples tests to implementation and makes refactoring expensive. Keep fixtures small enough that a failure explains itself.',
+                'fetch(url, options) returns a promise of a Response. Two traps define competent usage. First: fetch only REJECTS on network failure — a 404 or 500 still fulfills, so you must check response.ok / response.status yourself. Second: the body is read asynchronously (await response.json()), and reading it twice throws.\n\nRequests with bodies set method, a Content-Type header, and a stringified body. Authenticated APIs (like this platform\'s) add an Authorization header per request. AbortController adds timeouts — a fetch with no timeout is a hung spinner waiting to happen.',
               code: {
                 language: 'javascript',
                 snippet:
-                  'function toAccountRows(records) {\n  if (!Array.isArray(records)) throw new TypeError("records must be an array");\n  return records.map(({ Id, Name, AnnualRevenue = 0 }) => ({\n    id: Id,\n    name: Name,\n    revenue: Number(AnnualRevenue),\n  }));\n}\n\ndescribe("toAccountRows", () => {\n  test("normalizes Salesforce fields for the view", () => {\n    expect(toAccountRows([\n      { Id: "001-A", Name: "Acme", AnnualRevenue: 2500 },\n    ])).toEqual([\n      { id: "001-A", name: "Acme", revenue: 2500 },\n    ]);\n  });\n\n  test("does not mutate a frozen input", () => {\n    const source = Object.freeze([\n      Object.freeze({ Id: "001-A", Name: "Acme", AnnualRevenue: null }),\n    ]);\n    expect(toAccountRows(source)[0].revenue).toBe(0);\n    expect(source[0]).toEqual({ Id: "001-A", Name: "Acme", AnnualRevenue: null });\n  });\n\n  test("rejects a non-array boundary value", () => {\n    expect(() => toAccountRows(null)).toThrow(TypeError);\n  });\n});',
-                caption:
-                  'Save as accountRows.test.js in a Jest project: the suite verifies normalization, immutability, and the invalid-input contract.',
+                  "async function api(path, { method = 'GET', body, token, timeoutMs = 15000 } = {}) {\n    const controller = new AbortController();\n    const timer = setTimeout(() => controller.abort(), timeoutMs);\n    try {\n        const response = await fetch(path, {\n            method,\n            headers: {\n                'Content-Type': 'application/json',\n                ...(token ? { Authorization: `Bearer ${token}` } : {}),\n            },\n            body: body ? JSON.stringify(body) : undefined,\n            signal: controller.signal,\n        });\n        if (!response.ok) {\n            const detail = await response.text().catch(() => '');\n            throw new Error(`HTTP ${response.status}: ${detail || response.statusText}`);\n        }\n        return response.status === 204 ? null : await response.json();\n    } finally {\n        clearTimeout(timer);\n    }\n}\n\nconst job = await api('/api/deploys', {\n    method: 'POST',\n    body: { sourceOrg: 'dev', targetOrg: 'uat', checkOnly: true },\n    token: sessionToken,\n});",
+                caption: 'A hardened fetch helper: status checking, JSON, auth, and a real timeout.',
               },
             },
             {
-              heading: 'Lint, type-check, test, then debug with evidence',
+              heading: 'Talking to Salesforce\'s REST API',
               body:
-                'Each feedback tool answers a different question. A formatter makes layout consistent. ESLint detects configured syntax, correctness, and maintainability hazards. TypeScript checks static contracts. Jest executes examples. Run the fastest relevant checks while editing and the project-required suite before delivery; never disable a rule without understanding the invariant it protects.\n\nFor a runtime defect, first record exact reproduction steps and expected versus actual behavior. Read the first relevant error and stack, enable pause on exceptions, inspect values and call frames, and use the Network panel to separate transport, HTTP, payload, and rendering failures. Salesforce Debug Mode serves less optimized LWC code and richer warnings but slows that user, so enable it only while debugging. Form one hypothesis, gather evidence, make the smallest change, and add a regression test.',
-            },
-            {
-              heading: 'Capstone: an account health explorer LWC',
-              body:
-                'Build an LWC that accepts a search term, loads account-health records through a replaceable Salesforce data adapter, and presents loading, empty, ready, and error states. Put normalization and runtime validation in a pure module. Deduplicate by record ID, derive a sorted readonly view, and use a request sequence token so a late non-cancelable Apex result cannot replace a newer search. Keep secrets and external credentials server-side.\n\nThe template uses a labeled lightning-input, a real submit action, an announced status, and semantic result controls. Render names as text, expose selection through a small CustomEvent detail containing only the record ID, and never query another component internals. Jest tests cover each state, rapid out-of-order searches, malformed data, keyboard-equivalent button interaction, safe hostile-looking text, and the selection event. Lint, type-check where the preview workflow is approved, run Jest, then exercise the component in an LWS-enabled scratch org with keyboard and screen-reader checks.\n\nDefinition of done: modules have explicit contracts; no input mutation or unhandled rejection occurs; stale results cannot win; errors offer a retry path; DOM output is semantic and XSS-safe; tests do not call a real org; and the README-level handoff records assumptions, commands, and the TypeScript preview build step.',
+                'The same shape reaches Salesforce directly: GET {instanceUrl}/services/data/v62.0/query?q=SELECT+Id+FROM+Account with an Authorization: Bearer {accessToken} header returns { totalSize, done, records }. Composite endpoints batch multiple operations in one round trip.\n\nFrom LWC you will usually go through Apex (sharing and secrets stay server-side) — but understanding the raw HTTP layer is what lets you read debug logs, use Workbench/Postman fluently, and script integrations from Node when no UI exists. API-literacy is a superpower during incidents.',
             },
           ],
           realWorld: {
-            title: 'The capstone becomes a release-ready account explorer',
+            title: 'The integration that "never failed"',
             scenario:
-              'A prototype account search worked on the happy path but directly consumed Apex field names, displayed only a spinner on failure, allowed old searches to overwrite new ones, and had no proof that a hostile account name was rendered safely.',
+              'A nightly Node sync pushed records into Salesforce and logged "sync complete" every night. Weeks later, thousands of records were missing: the API had been returning 400 errors for a renamed field, but the script never checked response.ok — fetch does not reject on HTTP errors, so the failures passed silently.',
             solution:
-              'The team extracted and tested a validating adapter, represented UI state as a discriminated union, added a request sequence guard and retry action, used semantic LWC controls and text rendering, emitted a minimal selection event, and built Jest fixtures for success, empty, malformed, rejected, and out-of-order responses.',
+              'Every call moved to a shared helper that throws on non-2xx with the response body in the message, plus a summary that counts successes and failures and exits non-zero when anything failed.',
             outcome:
-              'The component passed lint, type, Jest, keyboard, LWS, and scratch-org acceptance checks. A later Apex field change failed one focused contract test instead of silently breaking the UI in production.',
+              'The very next run failed loudly with the exact field error in the log, the mapping was fixed within an hour, and the helper became mandatory in code review for any script touching an API.',
           },
           keyTakeaways: [
-            'Test public behavior and controlled boundaries rather than private implementation details',
-            'Await asynchronous work in Jest and replace remote dependencies with deterministic mocks',
-            'Formatting, linting, type checking, and tests catch different classes of defects',
-            'Debugging begins with reproducible evidence and a falsifiable hypothesis',
-            'A production LWC combines validated data, explicit state, stale-result protection, semantic DOM, safe rendering, and layered tests',
+            'fetch fulfills on 404/500 — always check response.ok yourself',
+            'JSON has no dates or undefined; decide what missing vs null means',
+            'Add auth per request and a timeout via AbortController',
+            'One hardened API helper, reused everywhere, prevents silent failures',
           ],
           resources: [
             {
-              title: 'Getting Started with Jest',
-              url: 'https://jestjs.io/docs/getting-started',
+              title: 'MDN: Using the Fetch API',
+              url: 'https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch',
               source: 'other',
-              note: 'Official Jest fundamentals',
             },
             {
-              title: 'Testing Asynchronous Code',
-              url: 'https://jestjs.io/docs/asynchronous',
-              source: 'other',
-              note: 'Official async completion patterns',
-            },
-            {
-              title: 'Test Lightning Web Components',
-              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/testing.html',
+              title: 'Salesforce REST API Developer Guide',
+              url: 'https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/intro_rest.htm',
               source: 'developer',
-              note: 'Official Salesforce Jest guidance',
+            },
+          ],
+        },
+        {
+          id: 'js-lwc-patterns',
+          title: 'JavaScript patterns that power LWC',
+          summary:
+            'Decorators, reactivity, getters in templates, debouncing, and component communication — LWC as applied JavaScript.',
+          durationMinutes: 20,
+          objectives: [
+            'Map @api, @track, and @wire to plain JavaScript concepts',
+            'Drive templates with getters and immutable state updates',
+            'Debounce user input and communicate between components correctly',
+          ],
+          sections: [
+            {
+              heading: 'Decorators are annotations on class members',
+              body:
+                '@api marks a class field as a public property a parent can set (or App Builder can configure). @track forces deep observation of an object/array field — needed only when you MUTATE nested data, which you can usually avoid by reassigning immutably instead. @wire declares a reactive data dependency: when its parameters change, the framework re-invokes the adapter.\n\nStrip the decorators away and it is all fundamentals: public fields, change detection by reference (the immutability lesson), and functions re-run when inputs change. That is why strong JavaScript makes LWC feel small.',
             },
             {
-              title: 'Write Jest Tests for the Wire Service',
-              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/unit-testing-using-wire-utility.html',
-              source: 'developer',
-              note: 'Official wire adapter test utilities',
+              heading: 'Templates read state; getters shape it',
+              body:
+                'An LWC template binds to fields and getters: {status}, {formattedDate}, for:each iteration, lwc:if conditions. The discipline that keeps components maintainable is: fields hold RAW state; getters derive everything presentational (labels, filtered lists, css classes). Getters re-evaluate on re-render, so they stay in sync automatically — no manual "update the label too" bookkeeping.\n\nHandlers stay thin: read the event, update state immutably, let getters and the template do the rest. When a handler grows past a screen, extract logic into a plain module — plain functions are unit-testable without mounting a component.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "import { LightningElement, api } from 'lwc';\n\nexport default class DeployList extends LightningElement {\n    @api deployments = [];\n    filter = 'all';\n\n    get visibleDeployments() {          // derived — never stored\n        if (this.filter === 'failed') {\n            return this.deployments.filter(d => !d.success);\n        }\n        return this.deployments;\n    }\n    get emptyMessage() {\n        return this.filter === 'failed'\n            ? 'No failed deployments — nice.'\n            : 'No deployments yet.';\n    }\n    handleFilterChange(event) {\n        this.filter = event.detail.value; // raw state changes; getters follow\n    }\n}",
+                caption: 'Raw state in fields, presentation in getters — the maintainable LWC shape.',
+              },
             },
             {
-              title: 'Debug Lightning Web Components',
-              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/debug-intro.html',
+              heading: 'Debouncing and component communication',
+              body:
+                'Search-as-you-type must not fire an Apex call per keystroke. Debouncing waits until typing pauses: store a timer, clear it on each keystroke, run the search when 300ms pass quietly — a closure over a timer id, nothing more.\n\nCommunication follows the platform rules: parent → child through @api properties; child → parent through CustomEvent; unrelated components through Lightning Message Service. Resist back-channel hacks (querying another component\'s internals) — they break shadow-DOM encapsulation and every future refactor.',
+              code: {
+                language: 'javascript',
+                snippet:
+                  "searchTerm = '';\ndelayTimer;\n\nhandleSearchInput(event) {\n    const value = event.target.value;\n    clearTimeout(this.delayTimer);\n    this.delayTimer = setTimeout(() => {\n        this.searchTerm = value;        // @wire(search, { term: '$searchTerm' })\n    }, 300);                            // re-fires only after typing pauses\n}",
+                caption: 'A ten-line debounce: the difference between 1 API call and 15 per search.',
+              },
+            },
+          ],
+          realWorld: {
+            title: 'Search that hammered the org',
+            scenario:
+              'An account search component fired an Apex call on every keystroke. Typing "enterprise" produced ten calls; under month-end load the org\'s concurrent Apex limit was breached and unrelated integrations started failing with REQUEST_LIMIT_EXCEEDED.',
+            solution:
+              'The team added a 300ms debounce to the input handler and moved the search to a reactive @wire on the debounced term, so only settled queries reached the server.',
+            outcome:
+              'API calls per search session dropped by roughly 90%, the limit breaches stopped, and the debounce helper was published in the team\'s shared LWC utilities module.',
+          },
+          keyTakeaways: [
+            'Decorators annotate plain class members — the concepts underneath are standard JS',
+            'Fields hold raw state; getters derive presentation; handlers stay thin',
+            'Debounce user input before it reaches the server',
+            'Parent → @api down; child → CustomEvent up; unrelated → message service',
+          ],
+          resources: [
+            {
+              title: 'LWC Dev Guide: Reactivity',
+              url: 'https://developer.salesforce.com/docs/platform/lwc/guide/js-props-reactivity.html',
               source: 'developer',
-              note: 'Official browser and Salesforce debugging workflow',
+            },
+            {
+              title: 'Trailhead: Build Lightning Web Components',
+              url: 'https://trailhead.salesforce.com/content/learn/trails/build-lightning-web-components',
+              source: 'trailhead',
+              note: 'Hands-on component building trail',
             },
           ],
         },
       ],
       quizBank: [
         {
-          id: 'js-q-typed-quality-01',
-          topic: 'unknown and any',
-          prompt: 'Why is unknown safer than any for an unverified API payload?',
+          id: 'q-js-web-1',
+          topic: 'DOM safety',
+          prompt: 'Why is element.innerHTML dangerous with user-supplied text?',
           options: [
-            'unknown automatically validates every field at runtime',
-            'unknown requires narrowing before property access, while any bypasses checking',
-            'unknown converts the payload to an empty object',
-            'unknown can contain only strings and numbers',
+            'It is slower than textContent',
+            'It parses the text as HTML, enabling cross-site scripting (XSS)',
+            'It only works in Chrome',
+            'It cannot render Unicode',
           ],
           correctIndex: 1,
           explanation:
-            'unknown represents a value whose type has not been proved. TypeScript requires a check or predicate before use; any opts out of those checks.',
+            'innerHTML executes whatever markup (including script-bearing payloads) the string contains. Use textContent for untrusted data.',
         },
         {
-          id: 'js-q-typed-quality-02',
-          topic: 'Discriminated unions',
-          prompt:
-            'What makes { kind: "loading" } | { kind: "ready"; data: Item[] } convenient to narrow?',
+          id: 'q-js-web-2',
+          topic: 'Events',
+          prompt: 'What is event delegation?',
           options: [
-            'The shared kind property has distinct literal values',
-            'Every branch has exactly the same fields',
-            'TypeScript runs a network request for each branch',
-            'The union is converted to a class at runtime',
-          ],
-          correctIndex: 0,
-          explanation:
-            'The literal kind property is a discriminant. Checking it lets control-flow analysis select the matching branch and its available fields.',
-        },
-        {
-          id: 'js-q-typed-quality-03',
-          topic: 'Runtime contracts',
-          prompt:
-            'Why should JSON parsed from an Apex or HTTP response still be validated in a TypeScript application?',
-          options: [
-            'Interfaces are erased and do not inspect runtime values',
-            'JSON cannot contain arrays in TypeScript',
-            'TypeScript encrypts only validated objects',
-            'The compiler automatically changes every server response',
-          ],
-          correctIndex: 0,
-          explanation:
-            'TypeScript checks source code and erases its types during compilation. External data can violate a declared interface, so the runtime boundary must establish its shape.',
-        },
-        {
-          id: 'js-q-typed-quality-04',
-          topic: 'Readonly types',
-          prompt: 'What does readonly on a TypeScript property guarantee by itself?',
-          options: [
-            'The entire object graph is deeply frozen at runtime',
-            'The database field can never change',
-            'Checked code cannot assign through that property reference',
-            'The property is removed from emitted JavaScript',
-          ],
-          correctIndex: 2,
-          explanation:
-            'readonly is a compile-time restriction on assignment through the typed reference. It does not perform runtime freezing or automatically make nested values readonly.',
-        },
-        {
-          id: 'js-q-typed-quality-05',
-          topic: 'LWC TypeScript',
-          prompt: 'Which statement matches the current official Salesforce LWC TypeScript guidance?',
-          options: [
-            'It is a Developer Preview and TypeScript must be compiled to JavaScript before deployment',
-            'Every org compiles arbitrary TypeScript on the server with no project setup',
-            'TypeScript is required for all Lightning Web Components',
-            'Salesforce types remove the need to validate Apex responses',
-          ],
-          correctIndex: 0,
-          explanation:
-            'Salesforce documents LWC TypeScript as a Developer Preview. The LWC compiler does not compile TypeScript, so the documented project workflow transforms it before deployment.',
-        },
-        {
-          id: 'js-q-typed-quality-06',
-          topic: 'Jest test design',
-          prompt: 'What should an LWC Jest test prefer to assert?',
-          options: [
-            'The exact order of every private helper call',
-            'Observable DOM, events, and public behavior after controlled input',
-            'A live production org response',
-            'Only that every source line executed',
+            'Assigning events to a web worker',
+            'One listener on a container handling events that bubble up from many children',
+            'Automatically retrying failed event handlers',
+            'Delegating events to the server',
           ],
           correctIndex: 1,
           explanation:
-            'Behavior-focused tests survive internal refactoring. Local LWC Jest tests use controlled mocks and assert public properties, interactions, rendered output, and events.',
+            'Because events bubble, a single ancestor listener can serve unlimited (even future) children by inspecting event.target.',
         },
         {
-          id: 'js-q-typed-quality-07',
-          topic: 'Asynchronous tests',
-          prompt: 'Why must a Jest test return or await the promise under test?',
-          options: [
-            'Otherwise Jest can finish the test before the asynchronous assertion runs',
-            'Otherwise JavaScript changes the promise into a callback',
-            'It forces every promise onto a separate thread',
-            'It connects Jest to a Salesforce org',
-          ],
-          correctIndex: 0,
+          id: 'q-js-web-3',
+          topic: 'Events',
+          prompt: 'Which method stops a form from performing its native page-reloading submit?',
+          options: ['event.stopPropagation()', 'event.preventDefault()', 'event.cancel()', 'return null'],
+          correctIndex: 1,
           explanation:
-            'Jest needs the returned or awaited promise to know when asynchronous work settles. Without it, the test can pass or finish before a later assertion or rejection occurs.',
+            'preventDefault() suppresses the browser\'s default action; stopPropagation() only stops bubbling to ancestors.',
         },
         {
-          id: 'js-q-typed-quality-08',
-          topic: 'Capstone resilience',
-          prompt:
-            'An imperative Apex search cannot be canceled. What prevents an older slow result from replacing the newest results?',
+          id: 'q-js-web-4',
+          topic: 'fetch',
+          prompt: 'A fetch call receives an HTTP 500 response. What happens to the promise?',
           options: [
-            'Mutating the previous result array',
-            'Removing every catch block',
-            'Comparing a captured request sequence token before committing state',
-            'Using innerHTML to render results faster',
+            'It rejects with the server error',
+            'It fulfills — you must check response.ok yourself',
+            'It retries automatically',
+            'It returns null',
           ],
-          correctIndex: 2,
+          correctIndex: 1,
           explanation:
-            'Each request captures a sequence value. Only the response matching the current latest sequence may update state, so a late obsolete response is ignored.',
+            'fetch only rejects on network-level failure. HTTP error statuses fulfill normally — unchecked, they become silent failures.',
+        },
+        {
+          id: 'q-js-web-5',
+          topic: 'JSON',
+          prompt: 'How do dates travel in JSON payloads?',
+          options: [
+            'As native Date objects',
+            'As ISO-8601 strings you convert with new Date(iso)',
+            'As Unix epoch booleans',
+            'JSON cannot carry date information',
+          ],
+          correctIndex: 1,
+          explanation:
+            'JSON has no date type — APIs send ISO strings ("2026-07-18T10:30:00Z") and clients parse them explicitly.',
+        },
+        {
+          id: 'q-js-web-6',
+          topic: 'HTTP',
+          prompt: 'Which headers does a JSON POST to an authenticated API typically need?',
+          options: [
+            'Accept-Language and Range',
+            'Content-Type: application/json and Authorization: Bearer <token>',
+            'Cache-Control only',
+            'No headers are ever required',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Content-Type declares the body format; the Authorization bearer token authenticates the caller — the pattern this platform\'s API uses.',
+        },
+        {
+          id: 'q-js-web-7',
+          topic: 'LWC decorators',
+          prompt: 'What does @api on an LWC class field do?',
+          options: [
+            'Makes the field private',
+            'Exposes it as a public property a parent (or App Builder) can set',
+            'Caches the field in localStorage',
+            'Marks it as an Apex method',
+          ],
+          correctIndex: 1,
+          explanation:
+            '@api defines the component\'s public contract — parents pass data down through these properties.',
+        },
+        {
+          id: 'q-js-web-8',
+          topic: 'LWC reactivity',
+          prompt: 'A component mutates an object field in place (this.org.status = "Connected") and the template does not update. Why?',
+          options: [
+            'Templates only render once',
+            'Change detection is by reference — the mutation kept the same reference',
+            'The field name is reserved',
+            'Objects cannot appear in templates',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Reassign immutably (this.org = { ...this.org, status: "Connected" }) so the reference changes and the framework re-renders.',
+        },
+        {
+          id: 'q-js-web-9',
+          topic: 'Debouncing',
+          prompt: 'What does debouncing a search input achieve?',
+          options: [
+            'It encrypts each keystroke',
+            'It delays the search until typing pauses, collapsing many calls into one',
+            'It caches all previous results forever',
+            'It disables the input while a call is in flight',
+          ],
+          correctIndex: 1,
+          explanation:
+            'Clearing and resetting a timer per keystroke means only the final, settled term triggers the server call.',
+        },
+        {
+          id: 'q-js-web-10',
+          topic: 'Component communication',
+          prompt: 'How should a child LWC notify its parent that a row was selected?',
+          options: [
+            'Mutate the parent\'s fields directly',
+            'Dispatch a CustomEvent with the payload in detail',
+            'Write to window.selectedRow',
+            'Call the parent\'s Apex controller',
+          ],
+          correctIndex: 1,
+          explanation:
+            'this.dispatchEvent(new CustomEvent("select", { detail })) is the sanctioned upward channel; parents bind onselect.',
         },
       ],
     },

@@ -8,6 +8,8 @@ export {
   isRegisteredAppPath,
   moduleForPath,
   LOCKED_MODULES,
+  DEFAULT_USER_MODULES,
+  REVOCABLE_DEFAULT_MODULES,
   type AppModule,
   type UserRole,
   type UserAccessProfile,

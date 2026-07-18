@@ -140,6 +140,14 @@ function LearnerRow({
                 No academy access
               </span>
             )}
+            {learner.learningAssignedOnly && (
+              <span
+                className="rounded-full bg-amber-500/15 px-2 py-px text-[10px] font-medium text-amber-300"
+                title="This user only sees paths assigned to them (User Access → Manage)"
+              >
+                Assigned paths only
+              </span>
+            )}
             {learner.activeAssignments > 0 && (
               <span className="rounded-full bg-sky-500/15 px-2 py-px text-[10px] font-medium text-sky-300">
                 {learner.completedAssignments}/{learner.activeAssignments} assigned done
