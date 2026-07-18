@@ -4,6 +4,13 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/services/api';
 import type { AutomationRunView } from '@/components/scratch-org/types';
+import {
+  DATASET_OPTIONS,
+  resolvePostDeployDefaults,
+  type Dataset,
+  type PartnerBottler,
+  type PartnerMode,
+} from './post-deploy-defaults';
 
 interface PostDeployPanelProps {
   run: AutomationRunView | null;
@@ -15,31 +22,6 @@ interface PostDeployPanelProps {
 type DiscoverResponse = {
   picklists: Array<{ name: string; values: string[] }>;
 };
-
-const DATASET_OPTIONS = ['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'] as const;
-type Dataset = (typeof DATASET_OPTIONS)[number];
-type PartnerMode = 'excel' | 'org_to_org' | 'org_to_org_matched';
-type PartnerBottler = '5000' | '4900' | '4600' | 'all';
-
-function isDataset(value: string): value is Dataset {
-  return (DATASET_OPTIONS as readonly string[]).includes(value);
-}
-
-export function resolvePostDeployDefaults(config: AutomationRunView['config']) {
-  const configuredDatasets = config?.dataSeed?.datasets;
-  const mode = config?.partnerImport?.mode;
-  return {
-    datasets: configuredDatasets
-      ? configuredDatasets.filter(isDataset)
-      : [...DATASET_OPTIONS],
-    partnerMode: (
-      mode === 'excel' || mode === 'org_to_org' || mode === 'org_to_org_matched'
-        ? mode
-        : 'org_to_org_matched'
-    ) as PartnerMode,
-    bottler: (config?.partnerImport?.bottler ?? '5000') as PartnerBottler,
-  };
-}
 
 export function PostDeployPanel({ run, automationRunId, sourceOrgId: sourceOrgIdProp, onRefresh }: PostDeployPanelProps) {
   const generatedId = useId().replace(/:/g, '');

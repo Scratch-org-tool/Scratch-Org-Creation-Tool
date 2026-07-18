@@ -249,7 +249,9 @@ function JobPanelContent({
           run={w.run}
           automationRunId={w.automationRunId}
           sourceOrgId={w.form.dataDeploymentOrgId || w.form.sourceOrgId || undefined}
-          onRefresh={() => w.automationRunId && void w.refreshRun(w.automationRunId)}
+          onRefresh={async () => {
+            if (w.automationRunId) await w.refreshRun(w.automationRunId);
+          }}
         />
       }
     />

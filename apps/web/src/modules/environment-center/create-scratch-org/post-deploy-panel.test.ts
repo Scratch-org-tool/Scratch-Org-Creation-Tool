@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePostDeployDefaults } from './post-deploy-panel';
+import { resolvePostDeployDefaults } from './post-deploy-defaults';
 
 describe('resolvePostDeployDefaults', () => {
   it('preserves template datasets and matched partner behavior', () => {
