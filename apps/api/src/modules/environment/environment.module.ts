@@ -13,6 +13,7 @@ import { DataCoreModule } from '../data/data-core.module';
 import { AzureService } from '../../integrations/azure/azure.service';
 import { AzureIntegrationService } from '../integrations/azure-integration.service';
 import { ExistingScratchOrgService } from './existing-scratch-org.service';
+import { ScratchOrgRenewalModule } from './scratch-org-renewal.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ExistingScratchOrgService } from './existing-scratch-org.service';
     OrgsModule,
     ScratchTemplatesModule,
     DataCoreModule,
+    ScratchOrgRenewalModule,
   ],
   controllers: [EnvironmentController],
   providers: [

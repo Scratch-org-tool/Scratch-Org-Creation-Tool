@@ -4,11 +4,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import * as XLSX from 'xlsx';
 import { prisma } from '@sfcc/db';
-import { createSfCliClient } from '@sfcc/sf-cli';
+import { createSfCliClient, isBulkCompoundQueryError } from '@sfcc/sf-cli';
 import {
   ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+  ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD,
   ACCOUNT_PARTNER_BOTTLER_FIELD,
   ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
+  ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD,
   ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
   ACCOUNT_PARTNER_OBJECT,
   ACCOUNT_PARTNER_ROLE_FIELD,
@@ -497,18 +499,12 @@ export class AccountPartnerImportService {
       const targetPartnerPath = join(sourceWorkDir, 'target-account-partners.csv');
       const safeBottler = escapeSoqlLiteral(input.bottler);
       const [
-        sourceResult,
+        records,
         targetAccountResult,
         targetEmployeeResult,
         targetPartnerResult,
       ] = await Promise.all([
-        this.sfCli.exportBulk(
-          query,
-          source.alias,
-          exportPath,
-          15,
-          { cwd: sourceWorkDir },
-        ),
+        this.fetchSourcePartnerRecords(source.alias, query, exportPath, sourceWorkDir),
         this.sfCli.exportBulk(
           'SELECT Id, Name, cfs_ob__u_CustomerNumber__c FROM Account '
           + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
@@ -537,9 +533,6 @@ export class AccountPartnerImportService {
           { cwd: sourceWorkDir },
         ),
       ]);
-      if (!sourceResult.success) {
-        throw new Error(sourceResult.error ?? 'Account Partner source query failed');
-      }
       if (!targetAccountResult.success) {
         throw new Error(targetAccountResult.error ?? 'Target Account lookup failed');
       }
@@ -549,7 +542,6 @@ export class AccountPartnerImportService {
       if (!targetPartnerResult.success) {
         throw new Error(targetPartnerResult.error ?? 'Existing Account Partner lookup failed');
       }
-      const records = parseBulkCsv(await readFile(exportPath, 'utf8'));
       const targetAccountRecords = parseBulkCsv(
         await readFile(targetAccountPath, 'utf8'),
       );
@@ -618,6 +610,26 @@ export class AccountPartnerImportService {
     }
   }
 
+  private async fetchSourcePartnerRecords(
+    alias: string,
+    query: string,
+    exportPath: string,
+    workDir: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const bulkResult = await this.sfCli.exportBulk(query, alias, exportPath, 15, { cwd: workDir });
+    if (bulkResult.success) {
+      return parseBulkCsv(await readFile(exportPath, 'utf8'));
+    }
+    if (isBulkCompoundQueryError(bulkResult.error)) {
+      const restResult = await this.sfCli.queryAll(alias, query);
+      if (!restResult.success) {
+        throw new Error(restResult.error ?? 'Account Partner source REST query failed');
+      }
+      return restResult.data?.records ?? [];
+    }
+    throw new Error(bulkResult.error ?? 'Account Partner source query failed');
+  }
+
   private async assertTargetMappingSchema(alias: string) {
     const [partnerResult, accountResult, employeeResult] = await Promise.all([
       this.sfCli.describeSObject(alias, ACCOUNT_PARTNER_OBJECT),
@@ -651,15 +663,27 @@ export class AccountPartnerImportService {
           .map((field): [string, DescribedField] => [field.name.toLowerCase(), field]),
       );
     const partnerFields = fields(partnerResult);
+    const lookupFields = new Set([
+      ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD,
+      ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD,
+    ].map((name) => name.toLowerCase()));
     for (const fieldName of [
       ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
       ACCOUNT_PARTNER_ROLE_FIELD,
       ACCOUNT_PARTNER_BOTTLER_FIELD,
-      'cfs_ob__Account__c',
-      'cfs_ob__EmployeeMaster__c',
+      ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD,
+      ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD,
     ]) {
       const field = partnerFields.get(fieldName.toLowerCase());
       if (!field) throw new Error(`Target Account Partner field is missing: ${fieldName}`);
+      if (lookupFields.has(fieldName.toLowerCase())) {
+        if (!field.createable) {
+          throw new Error(
+            `Target Account Partner lookup must be createable on insert: ${fieldName}`,
+          );
+        }
+        continue;
+      }
       if (!field.createable || !field.updateable) {
         throw new Error(
           `Target Account Partner field must be createable and updateable: ${fieldName}`,

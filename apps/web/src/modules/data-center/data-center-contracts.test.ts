@@ -14,11 +14,13 @@ import {
   normalizeTemplates,
   orderDeploymentObjects,
   preflightKey,
+  previewStateKey,
   rollbackInsertedCount,
   templateToQuery,
+  toggleAllSelection,
   type ReplicationQuery,
 } from './data-center-contracts';
-import type { OrgToOrgObjectMeta } from './types';
+import type { OrgToOrgObjectDeployConfig, OrgToOrgObjectMeta } from './types';
 
 const meta = (overrides: Partial<OrgToOrgObjectMeta> = {}): OrgToOrgObjectMeta => ({
   objectName: 'Account',
@@ -231,6 +233,69 @@ describe('Data Center dependency and recovery safety', () => {
       results: [{ insertedCount: 2 }, { nested: { insertedCount: 3 } }],
     })).toBe(5);
     expect(rollbackInsertedCount({ safe: true, restored: 4 })).toBe(0);
+  });
+});
+
+describe('Record selection (select all)', () => {
+  it('selects every id when at least one is unselected', () => {
+    const next = toggleAllSelection(new Set(['a']), ['a', 'b', 'c']);
+    expect([...next].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('deselects every id when all are already selected', () => {
+    const next = toggleAllSelection(new Set(['a', 'b', 'c', 'other']), ['a', 'b', 'c']);
+    expect([...next]).toEqual(['other']);
+  });
+
+  it('never treats an empty id list as "all selected"', () => {
+    // `[].every()` is vacuously true — this previously made the select-all
+    // checkbox a silent no-op when preview rows had no resolvable Id.
+    const next = toggleAllSelection(new Set(['a']), []);
+    expect([...next]).toEqual(['a']);
+  });
+
+  it('ignores blank ids from rows without an Id column', () => {
+    const next = toggleAllSelection(new Set(), ['a', '', 'b', '']);
+    expect([...next].sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('Preview reuse fingerprint', () => {
+  const previewConfig = (
+    overrides: Partial<OrgToOrgObjectDeployConfig> = {},
+  ): OrgToOrgObjectDeployConfig => ({
+    objectName: 'Account',
+    recordLimit: 200,
+    filters: [],
+    selectedReferenceFields: [],
+    selectedDeployFields: ['Name'],
+    matchField: 'External__c',
+    queryMode: 'builder',
+    customSoql: '',
+    ...overrides,
+  });
+
+  it('is stable across preview result fields and volatile state', () => {
+    const base = previewConfig();
+    const withResults = previewConfig({
+      matchCount: 12,
+      previewRecords: [{ Id: '001' }],
+      previewSoql: 'SELECT Id FROM Account',
+      displayFields: ['Id', 'Name'],
+    });
+    expect(previewStateKey(base)).toBe(previewStateKey(withResults));
+  });
+
+  it('changes when any query-affecting field changes', () => {
+    const base = previewConfig();
+    expect(previewStateKey(base)).not.toBe(previewStateKey(previewConfig({ recordLimit: 5 })));
+    expect(previewStateKey(base)).not.toBe(previewStateKey(previewConfig({
+      filters: [{ field: 'Name', operator: 'eq', value: 'Acme' }],
+    })));
+    expect(previewStateKey(base)).not.toBe(previewStateKey(previewConfig({
+      queryMode: 'soql',
+      customSoql: 'SELECT Id FROM Account',
+    })));
   });
 });
 

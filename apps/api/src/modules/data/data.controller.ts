@@ -438,7 +438,13 @@ export class DataController {
     @Body() body: unknown,
     @CurrentUser() userId: string,
   ) {
-    const input = accountPartnerMigrationSchema.parse(body);
+    const parsed = accountPartnerMigrationSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+      );
+    }
+    const input = parsed.data;
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
     try {
@@ -455,7 +461,13 @@ export class DataController {
     @Body() body: unknown,
     @CurrentUser() userId: string,
   ) {
-    const input = accountPartnerMigrationSchema.parse(body);
+    const parsed = accountPartnerMigrationSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+      );
+    }
+    const input = parsed.data;
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
     return this.dataService.enqueueAccountPartnerMigration(input, userId);

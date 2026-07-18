@@ -2,6 +2,7 @@ import './load-env';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import helmet from 'helmet';
 import { initFirebase } from '@sfcc/firebase';
 import { AppModule } from './app.module';
 
@@ -34,6 +35,16 @@ export async function startApi(): Promise<void> {
   if (trustedProxies !== undefined) {
     app.getHttpAdapter().getInstance().set('trust proxy', trustedProxies);
   }
+
+  // Standard hardening headers (nosniff, HSTS, frame denial, …). The CSP is
+  // owned by the web app's middleware — the API serves JSON plus Swagger UI,
+  // which helmet's default CSP would break.
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
 
   app.enableCors({
     origin: resolveCorsOrigins(),
