@@ -114,6 +114,7 @@ export function expandLifecycleUsers(input: LifecycleExpansionInput): Array<{
   modules: string[];
   locations: string[];
   profile: string;
+  permissionSets: string[]; // Onboarding_Admin_Extension (+ Lifecycle_Super_User for Master Data)
 }>;
 
 /** Token substitution + email-format and 80-char guards (same rules as formatProvisioningUsername). */
@@ -149,14 +150,17 @@ provisionLifecycleUsers(@Body() body: unknown, @CurrentUser() userId: string) {
 `provisioning.service.ts` — `provisionLifecycleUsers(body, userId)`:
 
 1. `lifecycleUserGenerationSchema.parse(body)`; `assertOrgOwned(orgId, userId, prisma)`.
-2. Create `ProvisioningBatch` (status `queued`, `totalRows = roles.length`) to get the batch id,
-   then `expandLifecycleUsers({ ...input, seed: batch.id, bottlerLabel })` and create the
+2. `expandLifecycleUsers({ ...input, seed: randomUUID(), bottlerLabel })` — validation and
+   username generation happen **before any writes**, so bad patterns (e.g. duplicate usernames)
+   return an error without leaving a batch behind. The generated usernames/emails are persisted
+   in the batch rows and job payload, which keeps worker retries deterministic.
+3. Create `ProvisioningBatch` (status `queued`, `totalRows = roles.length`) with nested
    `ProvisionedUser` rows (mirrors `provisionFromCsv`, which is the only path with batch
    tracking today — the CONA path has none).
-3. Enqueue `QUEUE_NAMES.USER_PROVISION`, job name `lifecycle_user_provision`, payload
+4. Enqueue `QUEUE_NAMES.USER_PROVISION`, job name `lifecycle_user_provision`, payload
    `{ orgId, batchId, users, conaMode: true }` — the worker switches on payload flags, not job
    name, so **no worker changes**.
-4. Return `{ batchId, jobId, totalUsers, users }` (echoing usernames/emails for the UI receipt).
+5. Return `{ batchId, jobId, totalUsers, users }` (echoing usernames/emails for the UI receipt).
 
 No preview endpoint: the web app already imports `@sfcc/shared`, so the live preview calls
 `expandLifecycleUsers` client-side with a placeholder seed and re-renders as inputs change
