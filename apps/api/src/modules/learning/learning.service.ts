@@ -1,11 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
   averagePercent,
+  canAccessLearningPath,
   isModuleCompleted,
   isPathCompleted,
   moduleProgressPercent,
   pathProgressPercent,
+  resolveLearningPaths,
   type LearningAssignmentView,
   type LearningCatalogResponse,
   type LearningContinueTarget,
@@ -14,7 +20,9 @@ import {
   type LearningPathSummary,
   type LearningQuizAttemptSummary,
   type LearningStats,
+  type UserAccessProfile,
 } from '@sfcc/shared';
+import { getAppUser } from '../auth/app-user.service';
 import {
   CURRICULUM,
   getLesson,
@@ -68,6 +76,22 @@ function toAssignmentView(
 
 @Injectable()
 export class LearningService {
+  /** Resolve the caller's Academy access profile (throws if missing). */
+  async requireProfile(userId: string): Promise<UserAccessProfile> {
+    const profile = await getAppUser(userId);
+    if (!profile) throw new ForbiddenException('User profile not found');
+    return profile;
+  }
+
+  /** Enforce that the user may open this learning path. */
+  async assertPathAccess(userId: string, pathId: string): Promise<UserAccessProfile> {
+    const profile = await this.requireProfile(userId);
+    if (!canAccessLearningPath(profile, pathId)) {
+      throw new ForbiddenException('You do not have access to this training track');
+    }
+    return profile;
+  }
+
   /** Load everything needed to overlay one user's progress onto the curriculum. */
   async loadUserState(userId: string): Promise<UserLearningState> {
     const [lessonRows, attemptRows, assignmentRows] = await Promise.all([
@@ -188,20 +212,30 @@ export class LearningService {
   }
 
   private buildStats(paths: LearningPathSummary[], state: UserLearningState): LearningStats {
-    const allAttempts = [...state.quizAttemptsByModule.values()].flat();
+    // Scope totals to the paths this user can see (not the full curriculum).
+    const visibleLessonIds = new Set(
+      paths.flatMap((path) => path.modules.flatMap((module) => module.lessons.map((l) => l.id))),
+    );
+    const visibleModuleIds = new Set(paths.flatMap((path) => path.modules.map((m) => m.id)));
+    const allAttempts = [...state.quizAttemptsByModule.entries()]
+      .filter(([moduleId]) => visibleModuleIds.has(moduleId))
+      .flatMap(([, attempts]) => attempts);
     const modulesCompleted = paths
       .flatMap((p) => p.modules)
       .filter((m) => m.completed).length;
+    const lessonsCompleted = [...state.lessonCompletions.keys()].filter((id) =>
+      visibleLessonIds.has(id),
+    ).length;
     return {
-      lessonsCompleted: state.lessonCompletions.size,
-      totalLessons: totalLessonCount(),
+      lessonsCompleted,
+      totalLessons: visibleLessonIds.size || totalLessonCount(),
       modulesCompleted,
-      totalModules: totalModuleCount(),
+      totalModules: visibleModuleIds.size || totalModuleCount(),
       pathsCompleted: paths.filter((p) => p.completed).length,
       totalPaths: paths.length,
-      quizzesPassed: [...state.quizAttemptsByModule.values()].filter((attempts) =>
-        attempts.some((a) => a.passed),
-      ).length,
+      quizzesPassed: [...state.quizAttemptsByModule.entries()]
+        .filter(([moduleId]) => visibleModuleIds.has(moduleId))
+        .filter(([, attempts]) => attempts.some((a) => a.passed)).length,
       quizAttempts: allAttempts.length,
       averageScorePercent: averagePercent(allAttempts.map((a) => a.scorePercent)),
     };
@@ -247,8 +281,12 @@ export class LearningService {
   }
 
   async getCatalog(userId: string): Promise<LearningCatalogResponse> {
+    const profile = await this.requireProfile(userId);
+    const allowed = new Set(resolveLearningPaths(profile));
     const state = await this.loadUserState(userId);
-    const paths = CURRICULUM.map((path) => this.buildPathSummary(path, state));
+    const paths = CURRICULUM.filter((path) => allowed.has(path.id as never)).map((path) =>
+      this.buildPathSummary(path, state),
+    );
     return {
       paths,
       stats: this.buildStats(paths, state),
@@ -259,6 +297,7 @@ export class LearningService {
   async getPathDetail(userId: string, pathId: string): Promise<LearningPathSummary> {
     const path = getPath(pathId);
     if (!path) throw new NotFoundException('Learning path not found');
+    await this.assertPathAccess(userId, pathId);
     const state = await this.loadUserState(userId);
     return this.buildPathSummary(path, state);
   }
@@ -266,6 +305,7 @@ export class LearningService {
   async getLessonView(userId: string, lessonId: string): Promise<LearningLessonResponse> {
     const location = getLesson(lessonId);
     if (!location) throw new NotFoundException('Lesson not found');
+    await this.assertPathAccess(userId, location.path.id);
     const { path, module, lesson, lessonIndex } = location;
 
     const progress = await prisma.learningLessonProgress.findUnique({
@@ -308,6 +348,7 @@ export class LearningService {
   ): Promise<{ completed: true; completedAt: string; pathCompleted: boolean; pathId: string }> {
     const location = getLesson(lessonId);
     if (!location) throw new NotFoundException('Lesson not found');
+    await this.assertPathAccess(userId, location.path.id);
     const { path, module } = location;
 
     const wasCompleteBefore = await this.isPathComplete(userId, path.id);

@@ -6,8 +6,12 @@ import type {
   CurriculumQuizQuestion,
 } from './curriculum.types';
 import { foundationsPath } from './foundations.path';
+import { handsOnPath } from './hands-on.path';
+import { javascriptPath } from './javascript.path';
+import { javaPath } from './java.path';
 import { adminPath } from './admin.path';
 import { developerPath } from './developer.path';
+import { releaseManagementPath } from './release-management.path';
 import { architectPath } from './architect.path';
 
 export type {
@@ -20,8 +24,12 @@ export type {
 /** All paths, ordered beginner → expert. */
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
+  handsOnPath,
+  javascriptPath,
+  javaPath,
   adminPath,
   developerPath,
+  releaseManagementPath,
   architectPath,
 ].sort((a, b) => LEARNING_LEVEL_RANK[a.level] - LEARNING_LEVEL_RANK[b.level]);
 

@@ -44,6 +44,8 @@ export function UserAccessWorkspace() {
     openManage,
     closeManage,
     toggleDraftModule,
+    toggleDraftLearningPath,
+    toggleDraftLearningFeature,
     saveManage,
     pendingRole,
     setPendingRole,
@@ -147,6 +149,8 @@ export function UserAccessWorkspace() {
         draft={draft}
         saving={saving}
         error={error}
+        onToggleLearningPath={toggleDraftLearningPath}
+        onToggleLearningFeature={toggleDraftLearningFeature}
         onClose={closeManage}
         onDraftChange={setDraft}
         onToggleModule={toggleDraftModule}

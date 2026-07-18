@@ -9,7 +9,18 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Switch } from '@/components/ui/switch';
-import { LOCKED_MODULES, MODULE_LABELS, type AppModule } from '@/lib/auth-utils';
+import {
+  LEARNING_CORE_PATH_IDS,
+  LEARNING_FEATURES,
+  LEARNING_FEATURE_LABELS,
+  LEARNING_PATH_IDS,
+  LEARNING_PATH_LABELS,
+  LOCKED_MODULES,
+  MODULE_LABELS,
+  type AppModule,
+  type LearningFeature,
+  type LearningPathId,
+} from '@sfcc/shared';
 import { cn } from '@/utils/cn';
 import type { ManageDraft, UserAccessRow } from './types';
 
@@ -21,6 +32,8 @@ interface UserAccessManageDrawerProps {
   onClose: () => void;
   onDraftChange: (draft: ManageDraft) => void;
   onToggleModule: (module: AppModule) => void;
+  onToggleLearningPath: (pathId: LearningPathId) => void;
+  onToggleLearningFeature: (feature: LearningFeature) => void;
   onSave: () => void;
   isSelf: boolean;
 }
@@ -33,9 +46,14 @@ export function UserAccessManageDrawer({
   onClose,
   onDraftChange,
   onToggleModule,
+  onToggleLearningPath,
+  onToggleLearningFeature,
   onSave,
   isSelf,
 }: UserAccessManageDrawerProps) {
+  const learningEnabled =
+    draft?.role === 'admin' || Boolean(draft?.grantedModules.includes('learning'));
+
   return (
     <Sheet open={Boolean(user && draft)} onOpenChange={(open) => !open && !saving && onClose()}>
       {user && draft && (
@@ -113,9 +131,74 @@ export function UserAccessManageDrawer({
             </div>
           )}
 
+          {draft.role !== 'admin' && learningEnabled && (
+            <>
+              <div>
+                <p className="text-sm font-medium mb-1">Academy training tracks</p>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Only checked tracks appear for this user. Unchecked tracks stay completely hidden.
+                  Defaults (when none saved) are the Salesforce core tracks only.
+                </p>
+                <div className="space-y-2">
+                  {LEARNING_PATH_IDS.map((pathId) => {
+                    const checked =
+                      draft.grantedLearningPaths.length > 0
+                        ? draft.grantedLearningPaths.includes(pathId)
+                        : (LEARNING_CORE_PATH_IDS as readonly string[]).includes(pathId);
+                    return (
+                      <label
+                        key={pathId}
+                        className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2 text-sm cursor-pointer hover:bg-secondary/30"
+                      >
+                        <span>{LEARNING_PATH_LABELS[pathId]}</span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={saving}
+                          onChange={() => onToggleLearningPath(pathId)}
+                          className="h-4 w-4"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-sm font-medium mb-1">Academy features</p>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Features that are off do not appear in the learner UI and are blocked by the API.
+                </p>
+                <div className="space-y-2">
+                  {LEARNING_FEATURES.map((feature) => {
+                    const checked =
+                      draft.grantedLearningFeatures.length > 0
+                        ? draft.grantedLearningFeatures.includes(feature)
+                        : true;
+                    return (
+                      <label
+                        key={feature}
+                        className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2 text-sm cursor-pointer hover:bg-secondary/30"
+                      >
+                        <span>{LEARNING_FEATURE_LABELS[feature]}</span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={saving}
+                          onChange={() => onToggleLearningFeature(feature)}
+                          className="h-4 w-4"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
           {draft.role === 'admin' && (
             <p className="text-xs text-muted-foreground">
-              Admins have access to all modules automatically.
+              Admins have access to all modules, Academy tracks, and Academy features automatically.
             </p>
           )}
         </div>

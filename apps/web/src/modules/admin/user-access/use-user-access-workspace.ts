@@ -126,6 +126,8 @@ export function useUserAccessWorkspace() {
     setDraft({
       role: user.role,
       grantedModules: [...user.grantedModules],
+      grantedLearningPaths: [...(user.grantedLearningPaths ?? [])],
+      grantedLearningFeatures: [...(user.grantedLearningFeatures ?? [])],
       status: user.status,
     });
   };
@@ -141,7 +143,47 @@ export function useUserAccessWorkspace() {
       const next = d.grantedModules.includes(module)
         ? d.grantedModules.filter((m) => m !== module)
         : [...d.grantedModules, module];
-      return { ...d, grantedModules: next };
+      const clearingLearning = module === 'learning' && !next.includes('learning');
+      return {
+        ...d,
+        grantedModules: next,
+        ...(clearingLearning
+          ? { grantedLearningPaths: [], grantedLearningFeatures: [] }
+          : {}),
+      };
+    });
+  };
+
+  const toggleDraftLearningPath = (pathId: string) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const base =
+        d.grantedLearningPaths.length > 0
+          ? d.grantedLearningPaths
+          : ([
+              'sf-foundations',
+              'sf-admin',
+              'sf-developer',
+              'sf-architect',
+            ] as string[]);
+      const next = base.includes(pathId)
+        ? base.filter((id) => id !== pathId)
+        : [...base, pathId];
+      return { ...d, grantedLearningPaths: next };
+    });
+  };
+
+  const toggleDraftLearningFeature = (feature: string) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const base =
+        d.grantedLearningFeatures.length > 0
+          ? d.grantedLearningFeatures
+          : (['videos', 'mentor', 'quizzes', 'story'] as string[]);
+      const next = base.includes(feature)
+        ? base.filter((id) => id !== feature)
+        : [...base, feature];
+      return { ...d, grantedLearningFeatures: next };
     });
   };
 
@@ -172,6 +214,12 @@ export function useUserAccessWorkspace() {
         body: JSON.stringify({
           role: data.role,
           grantedModules: data.grantedModules,
+          grantedLearningPaths: data.grantedModules.includes('learning')
+            ? data.grantedLearningPaths
+            : [],
+          grantedLearningFeatures: data.grantedModules.includes('learning')
+            ? data.grantedLearningFeatures
+            : [],
           status: data.status,
         }),
       });
@@ -239,6 +287,8 @@ export function useUserAccessWorkspace() {
     openManage,
     closeManage,
     toggleDraftModule,
+    toggleDraftLearningPath,
+    toggleDraftLearningFeature,
     saveManage,
     pendingRole,
     setPendingRole,

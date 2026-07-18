@@ -69,3 +69,14 @@ structured the way video tools expect:
   grounding doesn't support.
 - Reading remains available — the quiz gate (“all lessons read”) is unchanged; watching a video
   session and pressing *Mark complete* counts identically to reading.
+
+## Hybrid update (uploads + scripts)
+
+The Academy now supports **admin-uploaded lesson videos** as the primary learner
+experience, while keeping **production scripts** (AI + curriculum fallback) for
+recording and export. Upload via `POST /learning/admin/lessons/:lessonId/videos`;
+list/stream via `GET /learning/lessons/:lessonId/videos` and
+`GET /learning/videos/:videoId/stream`. Scripts remain at
+`GET /learning/lessons/:lessonId/video-script`. Full 5-minute scripts for every
+lesson: `docs/academy-training-materials-and-video-scripts.md`.
+

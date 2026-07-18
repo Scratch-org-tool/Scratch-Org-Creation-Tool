@@ -6,15 +6,26 @@ every lesson, an instant quiz after every module, and full progress visibility f
 
 ## What learners get
 
-- **Four learning paths, beginner → expert** (13 modules, 42 lessons, ~42 hours of curriculum):
+- **Eight learning paths** (Salesforce core + hands-on + adjacent skills — modules/lessons grow with
+  the curriculum registry):
   1. **Salesforce Foundations** (Beginner) — CRM concepts, the platform, navigation, data model,
      reports, collaboration. Designed so a new joiner needs zero prior knowledge.
-  2. **Admin & Configuration Mastery** (Intermediate) — the security model (profiles, permission
+  2. **Salesforce Hands-on Lab** (Beginner) — blank org / Trailhead Playground click-paths: custom
+     objects, layouts, App Builder, records, Flow, and reports from scratch.
+  3. **JavaScript Training** (Beginner) — LWC-ready JS: types, functions, arrays/objects, async,
+     DOM, modules, and modern patterns used in Lightning Web Components.
+  4. **Java Training** (Intermediate) — classes, collections, exceptions, OOP, and testing as a
+     bridge into Apex thinking.
+  5. **Admin & Configuration Mastery** (Intermediate) — the security model (profiles, permission
      sets, OWD, sharing), Flow automation, validation/formulas, data loading, sandboxes and releases.
-  3. **Platform Developer Track** (Advanced) — Apex, SOQL/SOSL, triggers, governor limits, testing,
+  6. **Platform Developer Track** (Advanced) — Apex, SOQL/SOSL, triggers, governor limits, testing,
      async Apex, Lightning Web Components, APIs and integration patterns.
-  4. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
+  7. **Release Management** (Intermediate) — environments, change sets vs DX, branching, CI/CD,
+     validation, rollback, and release governance.
+  8. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
      and identity architecture, Salesforce DX, scratch orgs, packaging, CI/CD, and governance.
+- **Training materials pack** — every lesson has concept briefs, real-world examples, and a
+  ready-to-record ~5-minute video script in `docs/academy-training-materials-and-video-scripts.md`.
 - **Every lesson** includes learning objectives, structured explanations, a **real-world
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
@@ -35,14 +46,12 @@ every lesson, an instant quiz after every module, and full progress visibility f
   Story scripts use the same NVIDIA integration as the platform copilot; all generated media comes
   from self-hosted open-source engines (no per-request vendor cost, nothing leaves your network).
   Storyboards fall back to a question-aware, lesson-derived script when NVIDIA is unavailable.
-- **Video sessions** — every lesson page has a `Read | Video session` switch. The video session
-  is the complete production script of that topic, end to end: a timecoded cold open, concept
-  segments, **hands-on demo segments with numbered click-paths** (how to create, how to execute),
-  the real-world story, recap, and next-step CTA — each with word-for-word narration and
-  on-screen/animation direction. One click plays it as an in-app animated session (story player);
-  exports (Copy, `.md` production script, narration-only `.txt`) feed external AI video tools
-  (HeyGen, Synthesia, InVideo, CapCut…). AI-scripted with a deterministic curriculum-derived
-  fallback, so all 42 topics always have a script. See `docs/academy-video-sessions-plan.md`.
+- **Video sessions (hybrid)** — every lesson page has a `Read | Video session` switch (when the
+  videos feature is granted). Learners watch **admin-uploaded** MP4/WebM sessions streamed with
+  Range support. Admins also get a **production script** (AI-first, curriculum fallback) with
+  Copy / `.md` / narration `.txt` exports so they can record externally (HeyGen, Synthesia,
+  CapCut…) and upload the finished file. Scripts for every lesson live in
+  `docs/academy-training-materials-and-video-scripts.md`.
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
   (with a 130-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
@@ -55,10 +64,17 @@ every lesson, an instant quiz after every module, and full progress visibility f
 
 - **Module gating** — `learning` is a locked module: standard users see the Academy only when an
   administrator grants it (Admin → User Access), exactly like other locked modules.
+- **Track & feature grants** — from the Manage drawer on User Access, admins choose which
+  **training tracks** and **lesson features** (videos, AI mentor, quizzes, story mode) each user
+  may see. Ungranted tracks and features are hidden in the UI and rejected by the API. New tracks
+  (Hands-on, JavaScript, Java, Release Management) require an explicit grant; Salesforce core
+  tracks remain the default when Academy is enabled without a saved track list.
 - **Assignments** — from **Academy Progress** (`/learning/team`), admins assign one or more paths
   to one or more users with an optional note and due date. Assigning **automatically grants** the
-  learning module to that user and sends them an in-app notification (email follows the platform's
-  notification settings).
+  learning module **and the assigned track ids** to that user and sends them an in-app notification
+  (email follows the platform's notification settings).
+- **Lesson video uploads** — admins upload/replace/delete per-lesson training videos from the
+  Video session block (`POST /learning/admin/lessons/:lessonId/videos`).
 - **Team progress dashboard** — per-learner rows with lessons completed, quizzes passed, average
   score, last activity, and per-path progress bars; team totals (active learners, assignments,
   average score). Assignments can be revoked; progress is never deleted.
@@ -88,7 +104,10 @@ All routes require authentication and the `learning` module (admins always have 
 | GET | `/api/learning/paths/:pathId` | One path with per-lesson/quiz status |
 | GET | `/api/learning/lessons/:lessonId` | Full lesson content + prev/next navigation |
 | POST | `/api/learning/lessons/:lessonId/complete` | Idempotent lesson completion |
-| GET | `/api/learning/lessons/:lessonId/video-script` | Complete end-to-end video session script (AI-first, curriculum fallback) |
+| GET | `/api/learning/lessons/:lessonId/videos` | Admin-uploaded video sessions for a lesson |
+| GET | `/api/learning/videos/:videoId/stream` | Stream an uploaded video (HTTP Range supported) |
+| POST | `/api/learning/admin/lessons/:lessonId/videos` | Admin: upload a video (multipart `file` + optional `title`) |
+| DELETE | `/api/learning/admin/videos/:videoId` | Admin: delete an uploaded video (file + metadata) |
 | POST | `/api/learning/modules/:moduleId/quiz` | Start (or resume) a quiz attempt |
 | GET | `/api/learning/modules/:moduleId/attempts` | The user's attempt history for a module |
 | POST | `/api/learning/quiz/:attemptId/submit` | Score an attempt server-side; returns full review |
@@ -125,6 +144,8 @@ GPU sizing, and the phased rollout live in `docs/academy-open-media-plan.md`.
 | `LEARNING_QUIZ_AI_TIMEOUT_MS` | `25000` | Budget for AI quiz generation before static fallback |
 | `LEARNING_TUTOR_TIMEOUT_MS` | `30000` | Budget for AI mentor answers |
 | `LEARNING_EXPLAINER_TIMEOUT_MS` | `30000` | Budget for AI storyboard scripting before static fallback |
+| `LEARNING_VIDEO_DIR` | `<api cwd>/uploads/learning-videos` | Where admin-uploaded lesson videos are stored on disk |
+| `LEARNING_VIDEO_MAX_MB` | `1024` | Maximum upload size per video file |
 | `VIBEVOICE_SPACE_URL` | — | Hosted VibeVoice Gradio Space for narration (preferred when set); `VIBEVOICE_SPACE_API` (`/generate_podcast_wrapper`), `VIBEVOICE_CFG_SCALE` (1.3), `HF_SPEECH_TIMEOUT_MS` (300 s) |
 | `ZIMAGE_SPACE_URL` | — | Hosted Z-Image-Turbo Gradio Space for scene art (preferred when set); `ZIMAGE_SPACE_API` (`/generate_image`), `ZIMAGE_STEPS` (9), `HF_IMAGE_TIMEOUT_MS` (120 s) |
 | `WAN_VIDEO_SPACE_URL` | — | Hosted Wan 2.2 image-to-video Gradio Space (preferred when set; animates the scene still, so the image tier must be on); `WAN_VIDEO_SPACE_API` (`/generate_video`), `WAN_VIDEO_STEPS` (4), `WAN_VIDEO_DURATION_SECONDS` (2.5), `HF_VIDEO_TIMEOUT_MS` (480 s) |

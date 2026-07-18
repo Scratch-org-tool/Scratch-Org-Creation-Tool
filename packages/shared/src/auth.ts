@@ -48,6 +48,10 @@ export interface UserAccessProfile {
   displayName: string;
   role: UserRole;
   grantedModules: AppModule[];
+  /** Academy tracks the user may open. Empty inherits Salesforce core tracks. */
+  grantedLearningPaths?: string[];
+  /** Academy features (videos/mentor/quizzes/story). Empty inherits all. */
+  grantedLearningFeatures?: string[];
   status?: UserAccessStatus;
   lastActiveAt?: string | null;
 }

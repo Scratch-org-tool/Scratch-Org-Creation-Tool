@@ -59,12 +59,13 @@ function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
             AI-powered training
           </div>
           <h2 className="mt-2 text-2xl md:text-3xl font-bold">
-            Master Salesforce, from first login to architect
+            Master Salesforce — plus JavaScript, Java, and release skills
           </h2>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-            Four guided paths with real-world examples, curated Trailhead resources, an AI mentor
-            for every lesson, and instant quizzes after each module. Every completion and score is
-            captured on your profile.
+            Guided paths for Salesforce (foundations through architect), hands-on blank-org labs,
+            JavaScript, Java, and release management — with real-world examples, an AI mentor,
+            video sessions, and quizzes. Your administrator controls which tracks and features you
+            can see.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             {continueHref && continueTarget ? (

@@ -712,6 +712,12 @@ model AppUser {
   displayName    String
   role           AppUserRole @default(user)
   grantedModules String[]    @default([])
+  /// Academy track ids the user may see (see LEARNING_PATH_IDS). Empty +
+  /// learning module granted → Salesforce core tracks only.
+  grantedLearningPaths String[] @default([])
+  /// Academy feature ids (videos/mentor/quizzes/story). Empty + learning
+  /// module granted → all features.
+  grantedLearningFeatures String[] @default([])
   status         String      @default("active")
   lastActiveAt   DateTime?
   /// Personal opt-in for outbound email alerts (work-item updates, job
@@ -1345,6 +1351,22 @@ model LearningLessonProgress {
 /// Server-scored quiz session. `questions` retains the full question set
 /// INCLUDING correct answers + explanations (never sent to the client while
 /// status = in_progress); `answers` stores the learner's submission for review.
+/// Admin-uploaded video attached to a lesson's Video session block. The file
+/// itself lives on disk under LEARNING_VIDEO_DIR; this row is the metadata.
+model LearningLessonVideo {
+  id           String   @id @default(uuid())
+  lessonId     String
+  title        String
+  fileName     String   @unique
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  uploadedBy   String
+  createdAt    DateTime @default(now())
+
+  @@index([lessonId, createdAt])
+}
+
 model LearningQuizAttempt {
   id             String    @id @default(uuid())
   userId         String

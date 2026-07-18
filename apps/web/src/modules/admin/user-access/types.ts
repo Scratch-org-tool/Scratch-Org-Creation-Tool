@@ -1,4 +1,4 @@
-import type { AppModule } from '@sfcc/shared';
+import type { AppModule, LearningFeature, LearningPathId } from '@sfcc/shared';
 
 export type { AuthAuditEventView, AuthAuditEventsPage } from '@sfcc/shared';
 
@@ -24,6 +24,8 @@ export interface UserAccessRow {
   displayName: string;
   role: 'admin' | 'user';
   grantedModules: AppModule[];
+  grantedLearningPaths?: LearningPathId[] | string[];
+  grantedLearningFeatures?: LearningFeature[] | string[];
   effectiveModules: AppModule[];
   displayRole: string;
   status: 'active' | 'inactive';
@@ -41,5 +43,7 @@ export interface UserAccessOverview {
 export interface ManageDraft {
   role: 'admin' | 'user';
   grantedModules: AppModule[];
+  grantedLearningPaths: string[];
+  grantedLearningFeatures: string[];
   status: 'active' | 'inactive';
 }

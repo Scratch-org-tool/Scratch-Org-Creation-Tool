@@ -29,6 +29,23 @@ const db = vi.hoisted(() => ({
 
 vi.mock('@sfcc/db', () => ({ prisma: db }));
 
+const getAppUserMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    id: 'DPT_test-user',
+    email: 'learner@example.com',
+    displayName: 'Learner',
+    role: 'user' as const,
+    grantedModules: ['learning'] as string[],
+    // Empty → Salesforce core tracks only (compat default).
+    grantedLearningPaths: [] as string[],
+    grantedLearningFeatures: [] as string[],
+  })),
+);
+
+vi.mock('../auth/app-user.service', () => ({
+  getAppUser: getAppUserMock,
+}));
+
 import { CURRICULUM, getLesson, getModule, getPath, totalLessonCount } from './curriculum';
 import { LearningService } from './learning.service';
 import {
@@ -47,17 +64,42 @@ function emptyState() {
   db.learningQuizAttempt.findMany.mockResolvedValue([]);
   db.learningAssignment.findMany.mockResolvedValue([]);
   db.appUser.findMany.mockResolvedValue([]);
+  getAppUserMock.mockResolvedValue({
+    id: USER,
+    email: 'learner@example.com',
+    displayName: 'Learner',
+    role: 'user',
+    grantedModules: ['learning'],
+    grantedLearningPaths: [],
+    grantedLearningFeatures: [],
+  });
 }
 
 describe('curriculum integrity', () => {
-  it('contains 4 paths ordered beginner → expert', () => {
-    expect(CURRICULUM).toHaveLength(4);
+  it('contains 8 paths spanning beginner → expert', () => {
+    expect(CURRICULUM).toHaveLength(8);
     expect(CURRICULUM.map((p) => p.level)).toEqual([
       'beginner',
+      'beginner',
+      'beginner',
+      'intermediate',
+      'intermediate',
       'intermediate',
       'advanced',
       'expert',
     ]);
+    expect(CURRICULUM.map((p) => p.id)).toEqual(
+      expect.arrayContaining([
+        'sf-foundations',
+        'sf-hands-on',
+        'js-fundamentals',
+        'java-fundamentals',
+        'sf-admin',
+        'release-management',
+        'sf-developer',
+        'sf-architect',
+      ]),
+    );
   });
 
   it('has globally unique lesson and module ids and non-trivial volume', () => {
@@ -67,8 +109,8 @@ describe('curriculum integrity', () => {
     );
     expect(new Set(moduleIds).size).toBe(moduleIds.length);
     expect(new Set(lessonIds).size).toBe(lessonIds.length);
-    expect(moduleIds.length).toBeGreaterThanOrEqual(12);
-    expect(lessonIds.length).toBeGreaterThanOrEqual(40);
+    expect(moduleIds.length).toBeGreaterThanOrEqual(20);
+    expect(lessonIds.length).toBeGreaterThanOrEqual(60);
     expect(totalLessonCount()).toBe(lessonIds.length);
   });
 
@@ -182,7 +224,16 @@ describe('LearningService catalog + progress', () => {
   });
 
   it('prioritizes assigned paths in the continue target', async () => {
-    const assignedPath = CURRICULUM[2]!;
+    const assignedPath = getPath('sf-admin')!;
+    getAppUserMock.mockResolvedValue({
+      id: USER,
+      email: 'learner@example.com',
+      displayName: 'Learner',
+      role: 'user',
+      grantedModules: ['learning'],
+      grantedLearningPaths: ['sf-foundations', 'sf-admin'],
+      grantedLearningFeatures: [],
+    });
     db.learningAssignment.findMany.mockResolvedValue([
       {
         id: 'as-1',

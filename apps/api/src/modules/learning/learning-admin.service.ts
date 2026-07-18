@@ -79,7 +79,13 @@ export class LearningAdminService {
 
     const users = await prisma.appUser.findMany({
       where: { id: { in: input.userIds } },
-      select: { id: true, role: true, grantedModules: true, displayName: true },
+      select: {
+        id: true,
+        role: true,
+        grantedModules: true,
+        grantedLearningPaths: true,
+        displayName: true,
+      },
     });
     const usersById = new Map(users.map((u) => [u.id, u]));
     const missing = input.userIds.filter((id) => !usersById.has(id));
@@ -98,7 +104,13 @@ export class LearningAdminService {
 
     for (const userId of input.userIds) {
       const user = usersById.get(userId)!;
-      await this.ensureLearningAccess(userId, user.role as UserRole, user.grantedModules);
+      await this.ensureLearningAccess(
+        userId,
+        user.role as UserRole,
+        user.grantedModules,
+        user.grantedLearningPaths ?? [],
+        input.pathIds,
+      );
 
       for (const pathId of input.pathIds) {
         const existing = await prisma.learningAssignment.findUnique({
@@ -159,23 +171,36 @@ export class LearningAdminService {
     return { created, skippedExisting };
   }
 
-  /** Assignment implies access: grant the learning module to non-admins. */
+  /**
+   * Assignment implies access: grant the learning module and the assigned
+   * track ids so the path appears in the learner's catalog.
+   */
   private async ensureLearningAccess(
     userId: string,
     role: UserRole,
     grantedModules: string[],
+    grantedLearningPaths: string[],
+    pathIds: string[],
   ): Promise<void> {
     if (role === 'admin') return;
     const profile = { role, grantedModules: grantedModules as AppModule[] };
-    if (canAccessModule(profile, 'learning')) return;
+    const needsModule = !canAccessModule(profile, 'learning');
+    const nextPaths = [...new Set([...grantedLearningPaths, ...pathIds])];
+    const pathsChanged =
+      nextPaths.length !== grantedLearningPaths.length ||
+      nextPaths.some((id) => !grantedLearningPaths.includes(id));
+    if (!needsModule && !pathsChanged) return;
     try {
       await prisma.appUser.update({
         where: { id: userId },
-        data: { grantedModules: [...grantedModules, 'learning'] },
+        data: {
+          ...(needsModule ? { grantedModules: [...grantedModules, 'learning'] } : {}),
+          ...(pathsChanged ? { grantedLearningPaths: nextPaths } : {}),
+        },
       });
     } catch (error) {
       this.logger.warn(
-        `failed to auto-grant learning module to ${userId}: ${error instanceof Error ? error.message : String(error)}`,
+        `failed to auto-grant learning access to ${userId}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

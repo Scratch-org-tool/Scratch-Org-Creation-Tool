@@ -38,6 +38,8 @@ import {
   type UpdateMeInput,
   getEffectiveModules,
   displayAccessRole,
+  sanitizeLearningFeatures,
+  sanitizeLearningPathIds,
   toAppUserId,
   type AppModule,
   type UserAccessStatus,
@@ -566,7 +568,13 @@ export class AuthService {
   async updateUserAccess(
     requesterFirebaseUid: string,
     targetUserId: string,
-    body: { grantedModules?: AppModule[]; role?: UserRole; status?: UserAccessStatus },
+    body: {
+      grantedModules?: AppModule[];
+      grantedLearningPaths?: string[];
+      grantedLearningFeatures?: string[];
+      role?: UserRole;
+      status?: UserAccessStatus;
+    },
     context: AuthAuditContext,
   ) {
     const requester = await this.assertAdmin(requesterFirebaseUid);
@@ -604,9 +612,29 @@ export class AuthService {
       throw new ForbiddenException(AUTH_ACCESS_LAST_ADMIN);
     }
 
+    const sanitizedBody = {
+      ...body,
+      ...(body.grantedLearningPaths != null
+        ? { grantedLearningPaths: sanitizeLearningPathIds(body.grantedLearningPaths) }
+        : {}),
+      ...(body.grantedLearningFeatures != null
+        ? { grantedLearningFeatures: sanitizeLearningFeatures(body.grantedLearningFeatures) }
+        : {}),
+    };
+
+    // Clearing the Academy module also clears track/feature grants so revoked
+    // users do not retain hidden path permissions.
+    if (
+      sanitizedBody.grantedModules != null &&
+      !sanitizedBody.grantedModules.includes('learning')
+    ) {
+      sanitizedBody.grantedLearningPaths = [];
+      sanitizedBody.grantedLearningFeatures = [];
+    }
+
     let updated;
     try {
-      updated = await updateAppUser(targetUserId, body);
+      updated = await updateAppUser(targetUserId, sanitizedBody);
     } catch {
       throw new BadRequestException(AUTH_GENERIC_INVALID);
     }
@@ -733,6 +761,8 @@ export class AuthService {
     displayName: string;
     role: UserRole;
     grantedModules: AppModule[];
+    grantedLearningPaths?: string[];
+    grantedLearningFeatures?: string[];
     status?: UserAccessStatus;
     lastActiveAt?: string | null;
     createdAt?: string;
@@ -740,6 +770,8 @@ export class AuthService {
   }): MeResponse {
     return {
       ...profile,
+      grantedLearningPaths: profile.grantedLearningPaths ?? [],
+      grantedLearningFeatures: profile.grantedLearningFeatures ?? [],
       effectiveModules: getEffectiveModules(profile),
     };
   }
@@ -750,6 +782,8 @@ export class AuthService {
     displayName: string;
     role: UserRole;
     grantedModules: AppModule[];
+    grantedLearningPaths?: string[];
+    grantedLearningFeatures?: string[];
     status?: UserAccessStatus;
     lastActiveAt?: string | null;
     createdAt?: string;
