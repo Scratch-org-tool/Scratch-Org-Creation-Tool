@@ -1,4 +1,5 @@
 import { api } from '@/services/api';
+import type { ExplainerFocus, ExplainerStoryboard } from '@sfcc/shared';
 import type {
   LearningAdminOverview,
   LearningAssignmentResult,
@@ -60,6 +61,17 @@ export function askTutor(input: {
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }) {
   return api<LearningTutorReply>('/learning/tutor', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function fetchExplainer(input: {
+  lessonId: string;
+  focus?: ExplainerFocus;
+  question?: string;
+}) {
+  return api<ExplainerStoryboard>('/learning/tutor/explainer', {
     method: 'POST',
     body: JSON.stringify(input),
   });

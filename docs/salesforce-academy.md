@@ -18,9 +18,17 @@ every lesson, an instant quiz after every module, and full progress visibility f
 - **Every lesson** includes learning objectives, structured explanations, a **real-world
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
-- **AI Mentor** — an interactive chat on every lesson page, grounded in that lesson's content.
-  It explains topics with real-world examples, answers follow-ups, and suggests next questions.
-  Powered by the same NVIDIA LLM integration as the platform copilot.
+- **AI Mentor** — a two-mode studio on every lesson page, grounded in that lesson's content:
+  - **Story mode (visual + voice)** — the mentor directs an animated, scene-by-scene explainer:
+    the LLM scripts a storyboard (narration + diagram spec per scene) which the app renders as
+    animated graphics (flows, comparisons, timelines, stacks, callouts) with **spoken narration**
+    via the browser's speech engine and always-on captions. One-click stories exist for the whole
+    lesson and for the real-world scenario ("Watch animated"), plus a free-form "explain anything
+    visually" prompt. Player controls: play/pause, scene scrubbing, voice on/off, narration speed.
+  - **Chat mode** — the classic Q&A tutor with real-world examples and follow-up suggestions;
+    every reply has a "Listen" button for voice playback.
+  Powered by the same NVIDIA LLM integration as the platform copilot; storyboards fall back to a
+  deterministic lesson-derived script when AI is unavailable, so story mode always works.
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
   (with a 130-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
@@ -70,6 +78,7 @@ All routes require authentication and the `learning` module (admins always have 
 | GET | `/api/learning/modules/:moduleId/attempts` | The user's attempt history for a module |
 | POST | `/api/learning/quiz/:attemptId/submit` | Score an attempt server-side; returns full review |
 | POST | `/api/learning/tutor` | Ask the AI mentor (lesson-grounded) |
+| POST | `/api/learning/tutor/explainer` | AI-scripted animated storyboard (`{lessonId, focus?, question?}`) |
 | GET | `/api/learning/admin/overview` | Admin: team progress report |
 | GET | `/api/learning/admin/learners/:userId` | Admin: one learner's full path breakdown |
 | POST | `/api/learning/admin/assignments` | Admin: assign paths to users (`{userIds, pathIds, note?, dueAt?}`) |
@@ -95,9 +104,23 @@ The Academy reuses the platform's NVIDIA NIM integration (`NVIDIA_API_KEY` etc. 
 |----------|---------|---------|
 | `LEARNING_QUIZ_AI_TIMEOUT_MS` | `25000` | Budget for AI quiz generation before static fallback |
 | `LEARNING_TUTOR_TIMEOUT_MS` | `30000` | Budget for AI mentor answers |
+| `LEARNING_EXPLAINER_TIMEOUT_MS` | `30000` | Budget for AI storyboard scripting before static fallback |
 
-Without a valid key everything still works: quizzes serve the curated bank and the mentor returns
-the platform's dev-mode response.
+Without a valid key everything still works: quizzes serve the curated bank, the mentor returns
+the platform's dev-mode response, and visual stories use the lesson-derived static storyboard.
+
+### Visual story pipeline
+
+1. `POST /learning/tutor/explainer` asks the LLM for a JSON storyboard (4–6 scenes; each scene =
+   spoken narration + a diagram spec choosing from `flow | compare | stack | timeline | callout |
+   grid` with icon/accent whitelists).
+2. The response is passed through `sanitizeStoryboard` (`@sfcc/shared`): unknown icons/kinds/
+   accents fall back to safe defaults, strings are length-clamped, and boards with fewer than 3
+   usable scenes are rejected in favor of the static lesson-derived storyboard.
+3. Storyboards are cached in-process per lesson/focus/question for 6 hours.
+4. The web player renders scenes with framer-motion and narrates them with the browser's
+   SpeechSynthesis API (no audio ever leaves the machine); when voice is off or unsupported,
+   scenes auto-advance on a reading-time estimate.
 
 ## Web routes
 

@@ -4,6 +4,7 @@ import { LearningController } from './learning.controller';
 import { LearningService } from './learning.service';
 import { LearningQuizService } from './learning-quiz.service';
 import { LearningTutorService } from './learning-tutor.service';
+import { LearningExplainerService } from './learning-explainer.service';
 import { LearningAdminService } from './learning-admin.service';
 
 @Module({
@@ -13,6 +14,7 @@ import { LearningAdminService } from './learning-admin.service';
     LearningService,
     LearningQuizService,
     LearningTutorService,
+    LearningExplainerService,
     LearningAdminService,
   ],
 })

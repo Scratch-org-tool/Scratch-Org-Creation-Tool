@@ -1,22 +1,42 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, CornerDownLeft, Sparkles, User } from 'lucide-react';
+import {
+  Bot,
+  Clapperboard,
+  CornerDownLeft,
+  MessageSquare,
+  Play,
+  Sparkles,
+  User,
+  Volume2,
+  VolumeX,
+  Wand2,
+} from 'lucide-react';
+import type { ExplainerFocus } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/utils/cn';
 import { askTutor } from './learning-api';
+import { useSpeech } from './use-speech';
 
 interface MentorMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
+type MentorMode = 'story' | 'chat';
+
 interface MentorPanelProps {
   lessonId?: string;
   moduleId?: string;
   /** Reset the conversation when the context changes. */
   contextKey: string;
+  /** Title of the lesson's real-world example (labels the scenario story). */
+  realWorldTitle?: string;
+  /** Launch the animated visual story player. */
+  onPlayStory?: (focus: ExplainerFocus, question?: string) => void;
   suggestions?: string[];
   className?: string;
 }
@@ -27,35 +47,81 @@ const DEFAULT_SUGGESTIONS = [
   'Quiz me with one quick question on this lesson.',
 ];
 
+function StoryCard({
+  icon: Icon,
+  title,
+  description,
+  cta,
+  onPlay,
+}: {
+  icon: typeof Clapperboard;
+  title: string;
+  description: string;
+  cta: string;
+  onPlay: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-secondary/20 p-3.5 transition-colors hover:border-violet-400/40">
+      <div className="flex items-start gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
+          <Icon className="size-[18px]" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold leading-tight">{title}</p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{description}</p>
+          <Button size="sm" className="mt-2.5 h-7 gap-1.5 text-xs" onClick={onPlay}>
+            <Play className="size-3" />
+            {cta}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
- * Interactive AI mentor: a compact chat grounded in the current lesson.
- * History is kept client-side and passed with each question.
+ * AI Mentor studio: "Story" mode plays AI-directed animated explainers with
+ * voice narration; "Chat" mode is the classic Q&A tutor (replies can be read
+ * aloud). Both are grounded in the current lesson.
  */
 export function MentorPanel({
   lessonId,
   moduleId,
   contextKey,
+  realWorldTitle,
+  onPlayStory,
   suggestions,
   className,
 }: MentorPanelProps) {
+  const storyAvailable = Boolean(onPlayStory && lessonId);
+  const [mode, setMode] = useState<MentorMode>(storyAvailable ? 'story' : 'chat');
   const [messages, setMessages] = useState<MentorMessage[]>([]);
   const [followUps, setFollowUps] = useState<string[]>(suggestions ?? DEFAULT_SUGGESTIONS);
   const [input, setInput] = useState('');
+  const [storyQuestion, setStoryQuestion] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [readingIndex, setReadingIndex] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const speech = useSpeech();
 
   useEffect(() => {
     setMessages([]);
     setInput('');
+    setStoryQuestion('');
     setError(null);
     setFollowUps(suggestions ?? DEFAULT_SUGGESTIONS);
+    setMode(storyAvailable ? 'story' : 'chat');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextKey]);
 
   useEffect(() => {
+    if (!speech.speaking) setReadingIndex(null);
+  }, [speech.speaking]);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, busy]);
+  }, [messages, busy, mode]);
 
   const send = useCallback(
     async (question: string) => {
@@ -86,6 +152,19 @@ export function MentorPanel({
     [busy, lessonId, moduleId, messages],
   );
 
+  const toggleRead = useCallback(
+    (index: number, text: string) => {
+      if (readingIndex === index) {
+        speech.cancel();
+        setReadingIndex(null);
+        return;
+      }
+      setReadingIndex(index);
+      speech.speak(text, { onEnd: () => setReadingIndex(null) });
+    },
+    [readingIndex, speech],
+  );
+
   return (
     <div
       className={cn(
@@ -93,133 +172,255 @@ export function MentorPanel({
         className,
       )}
     >
-      <div className="flex items-center gap-2 border-b border-border/60 bg-violet-500/10 px-4 py-3">
-        <div className="flex size-7 items-center justify-center rounded-lg bg-violet-500/20">
-          <Bot className="size-4 text-violet-300" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">AI Mentor</p>
-          <p className="text-[11px] text-muted-foreground">
-            Ask anything about this lesson — answers include real-world examples.
-          </p>
-        </div>
-      </div>
-
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto scrollbar-thin p-4 min-h-[180px]">
-        {messages.length === 0 && (
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">Try asking:</p>
-            {followUps.map((suggestion) => (
-              <button
-                key={suggestion}
-                type="button"
-                onClick={() => void send(suggestion)}
-                className="block w-full rounded-lg border border-border/60 bg-secondary/20 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:border-violet-400/40 hover:text-foreground"
-              >
-                <Sparkles className="mr-1.5 inline size-3 text-violet-300" />
-                {suggestion}
-              </button>
-            ))}
+      <div className="border-b border-border/60 bg-violet-500/10 px-4 pt-3">
+        <div className="flex items-center gap-2">
+          <div className="flex size-7 items-center justify-center rounded-lg bg-violet-500/20">
+            <Bot className="size-4 text-violet-300" />
           </div>
-        )}
-
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            className={cn('flex gap-2.5', message.role === 'user' && 'justify-end')}
-          >
-            {message.role === 'assistant' && (
-              <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-violet-500/20">
-                <Bot className="size-3.5 text-violet-300" />
-              </div>
-            )}
-            <div
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">AI Mentor</p>
+            <p className="text-[11px] text-muted-foreground">
+              Watch it explained — or ask anything about this lesson.
+            </p>
+          </div>
+        </div>
+        <div className="mt-2.5 flex gap-1">
+          {storyAvailable && (
+            <button
+              type="button"
+              onClick={() => setMode('story')}
+              aria-pressed={mode === 'story'}
               className={cn(
-                'max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-xs leading-relaxed',
-                message.role === 'user'
-                  ? 'bg-primary/15 text-foreground'
-                  : 'bg-secondary/40 text-foreground/90',
+                'inline-flex items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-1.5 text-xs font-medium transition-colors',
+                mode === 'story'
+                  ? 'border-violet-400 text-violet-200'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
               )}
             >
-              {message.content}
-            </div>
-            {message.role === 'user' && (
-              <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/15">
-                <User className="size-3.5 text-primary" />
-              </div>
+              <Clapperboard className="size-3.5" />
+              Story
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setMode('chat')}
+            aria-pressed={mode === 'chat'}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-1.5 text-xs font-medium transition-colors',
+              mode === 'chat'
+                ? 'border-violet-400 text-violet-200'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
-          </div>
-        ))}
-
-        {busy && (
-          <div className="flex items-center gap-2.5">
-            <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-violet-500/20">
-              <Bot className="size-3.5 text-violet-300" />
-            </div>
-            <div className="copilot-typing-dots">
-              <span className="copilot-typing-dot" />
-              <span className="copilot-typing-dot" />
-              <span className="copilot-typing-dot" />
-            </div>
-          </div>
-        )}
-
-        {messages.length > 0 && !busy && followUps.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {followUps.slice(0, 3).map((suggestion) => (
-              <button
-                key={suggestion}
-                type="button"
-                onClick={() => void send(suggestion)}
-                className="rounded-full border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-violet-400/40 hover:text-foreground"
-              >
-                {suggestion}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {error && (
-          <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-[11px] text-destructive">
-            {error}
-          </p>
-        )}
+          >
+            <MessageSquare className="size-3.5" />
+            Chat
+          </button>
+        </div>
       </div>
 
-      <form
-        className="border-t border-border/60 p-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send(input);
-        }}
-      >
-        <div className="flex items-end gap-2">
-          <Textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                void send(input);
-              }
-            }}
-            placeholder="Ask the mentor…"
-            rows={1}
-            className="min-h-9 max-h-28 resize-none text-xs"
-            disabled={busy}
-            aria-label="Ask the AI mentor a question"
+      {mode === 'story' && storyAvailable ? (
+        <div className="flex-1 space-y-3 overflow-y-auto scrollbar-thin p-4 min-h-[180px]">
+          <StoryCard
+            icon={Clapperboard}
+            title="Play this lesson as a story"
+            description="An animated, scene-by-scene walkthrough of the whole lesson — with voice narration and captions."
+            cta="Play lesson story"
+            onPlay={() => onPlayStory!('lesson')}
           />
-          <Button
-            type="submit"
-            size="icon"
-            className="size-9 shrink-0"
-            disabled={busy || input.trim().length === 0}
-            aria-label="Send question"
+          <StoryCard
+            icon={Sparkles}
+            title={realWorldTitle ? `Scenario: ${realWorldTitle}` : 'Real-world scenario'}
+            description="Watch the real-world case unfold: the problem, the fix, and the outcome — animated."
+            cta="Play scenario"
+            onPlay={() => onPlayStory!('real-world')}
+          />
+          <form
+            className="rounded-xl border border-dashed border-border/70 p-3.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const question = storyQuestion.trim();
+              if (!question) return;
+              onPlayStory!('lesson', question);
+              setStoryQuestion('');
+            }}
           >
-            <CornerDownLeft className="size-4" />
-          </Button>
+            <p className="flex items-center gap-1.5 text-xs font-semibold">
+              <Wand2 className="size-3.5 text-violet-300" />
+              Explain anything, visually
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Ask a question and the mentor will direct an animated answer.
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <Input
+                value={storyQuestion}
+                onChange={(event) => setStoryQuestion(event.target.value)}
+                placeholder="e.g. Why do governor limits exist?"
+                maxLength={500}
+                className="h-8 text-xs"
+              />
+              <Button
+                type="submit"
+                size="icon"
+                className="size-8 shrink-0"
+                disabled={storyQuestion.trim().length === 0}
+                aria-label="Play visual answer"
+              >
+                <Play className="size-3.5" />
+              </Button>
+            </div>
+          </form>
+          <p className="text-center text-[10px] text-muted-foreground">
+            Voice narration uses your browser&apos;s speech engine — no audio is sent anywhere.
+          </p>
         </div>
-      </form>
+      ) : (
+        <>
+          <div
+            ref={scrollRef}
+            className="flex-1 space-y-3 overflow-y-auto scrollbar-thin p-4 min-h-[180px]"
+          >
+            {messages.length === 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">Try asking:</p>
+                {followUps.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => void send(suggestion)}
+                    className="block w-full rounded-lg border border-border/60 bg-secondary/20 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:border-violet-400/40 hover:text-foreground"
+                  >
+                    <Sparkles className="mr-1.5 inline size-3 text-violet-300" />
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {messages.map((message, index) => (
+              <div
+                key={index}
+                className={cn('flex gap-2.5', message.role === 'user' && 'justify-end')}
+              >
+                {message.role === 'assistant' && (
+                  <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-violet-500/20">
+                    <Bot className="size-3.5 text-violet-300" />
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    'max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed',
+                    message.role === 'user'
+                      ? 'bg-primary/15 text-foreground'
+                      : 'bg-secondary/40 text-foreground/90',
+                  )}
+                >
+                  <span className="whitespace-pre-wrap">{message.content}</span>
+                  {message.role === 'assistant' && speech.supported && (
+                    <button
+                      type="button"
+                      onClick={() => toggleRead(index, message.content)}
+                      aria-label={readingIndex === index ? 'Stop reading aloud' : 'Read aloud'}
+                      className={cn(
+                        'mt-1.5 flex items-center gap-1 text-[10px] transition-colors',
+                        readingIndex === index
+                          ? 'text-violet-300'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {readingIndex === index ? (
+                        <>
+                          <VolumeX className="size-3" />
+                          Stop
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 className="size-3" />
+                          Listen
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+                {message.role === 'user' && (
+                  <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/15">
+                    <User className="size-3.5 text-primary" />
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {busy && (
+              <div className="flex items-center gap-2.5">
+                <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-violet-500/20">
+                  <Bot className="size-3.5 text-violet-300" />
+                </div>
+                <div className="copilot-typing-dots">
+                  <span className="copilot-typing-dot" />
+                  <span className="copilot-typing-dot" />
+                  <span className="copilot-typing-dot" />
+                </div>
+              </div>
+            )}
+
+            {messages.length > 0 && !busy && followUps.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {followUps.slice(0, 3).map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => void send(suggestion)}
+                    className="rounded-full border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-violet-400/40 hover:text-foreground"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {error && (
+              <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-[11px] text-destructive">
+                {error}
+              </p>
+            )}
+          </div>
+
+          <form
+            className="border-t border-border/60 p-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void send(input);
+            }}
+          >
+            <div className="flex items-end gap-2">
+              <Textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void send(input);
+                  }
+                }}
+                placeholder="Ask the mentor…"
+                rows={1}
+                className="min-h-9 max-h-28 resize-none text-xs"
+                disabled={busy}
+                aria-label="Ask the AI mentor a question"
+              />
+              <Button
+                type="submit"
+                size="icon"
+                className="size-9 shrink-0"
+                disabled={busy || input.trim().length === 0}
+                aria-label="Send question"
+              >
+                <CornerDownLeft className="size-4" />
+              </Button>
+            </div>
+          </form>
+        </>
+      )}
     </div>
   );
 }
