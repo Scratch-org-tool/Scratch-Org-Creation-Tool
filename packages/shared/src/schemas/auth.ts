@@ -123,6 +123,8 @@ export const meResponseSchema = z.object({
   displayName: z.string(),
   role: z.enum(['admin', 'user']),
   grantedModules: z.array(appModuleSchema),
+  revokedModules: z.array(appModuleSchema).optional(),
+  learningAssignedOnly: z.boolean().optional(),
   status: z.enum(['active', 'inactive']).optional(),
   lastActiveAt: z.string().nullable().optional(),
   createdAt: z.string().optional(),
@@ -140,6 +142,10 @@ export const updateUserAccessSchema = z.object({
   // Use the canonical module list so every grantable module (incl. `defects`)
   // stays in sync with APP_MODULES instead of a drifting hand-written subset.
   grantedModules: z.array(appModuleSchema).max(20).optional(),
+  /** Default modules the admin switched off for this user (revocable set only). */
+  revokedModules: z.array(appModuleSchema).max(20).optional(),
+  /** Restrict the Academy catalog to admin-assigned paths for this user. */
+  learningAssignedOnly: z.boolean().optional(),
 });
 
 export type UpdateUserAccessInput = z.infer<typeof updateUserAccessSchema>;

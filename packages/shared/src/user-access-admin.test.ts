@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { updateUserAccessSchema } from './schemas/auth.js';
-import { APP_MODULES } from './auth.js';
+import {
+  APP_MODULES,
+  DEFAULT_USER_MODULES,
+  REVOCABLE_DEFAULT_MODULES,
+  canAccessModule,
+  getEffectiveModules,
+  sanitizeRevokedModules,
+} from './auth.js';
 import {
   auditEventLabel,
   clampAuditLimit,
@@ -35,6 +42,74 @@ describe('updateUserAccessSchema', () => {
       }).success,
       false,
     );
+  });
+
+  it('accepts revokedModules and the learningAssignedOnly flag', () => {
+    assert.equal(
+      updateUserAccessSchema.safeParse({
+        revokedModules: ['data', 'defects'],
+        learningAssignedOnly: true,
+      }).success,
+      true,
+    );
+    assert.equal(
+      updateUserAccessSchema.safeParse({ revokedModules: ['nope'] }).success,
+      false,
+    );
+    assert.equal(
+      updateUserAccessSchema.safeParse({ learningAssignedOnly: 'yes' }).success,
+      false,
+    );
+  });
+});
+
+describe('revocable default modules', () => {
+  it('dashboard is never revocable; other defaults are', () => {
+    assert.equal((REVOCABLE_DEFAULT_MODULES as readonly string[]).includes('dashboard'), false);
+    for (const module of REVOCABLE_DEFAULT_MODULES) {
+      assert.equal((DEFAULT_USER_MODULES as readonly string[]).includes(module), true);
+    }
+  });
+
+  it('sanitizeRevokedModules keeps only revocable defaults and dedupes', () => {
+    assert.deepEqual(
+      sanitizeRevokedModules(['data', 'data', 'dashboard', 'deployment', 'nope']),
+      ['data'],
+    );
+    assert.deepEqual(sanitizeRevokedModules(undefined), []);
+  });
+
+  it('getEffectiveModules subtracts revoked defaults for users', () => {
+    const profile: Parameters<typeof getEffectiveModules>[0] = {
+      role: 'user',
+      grantedModules: ['learning'],
+      revokedModules: ['data', 'defects'],
+    };
+    const effective = getEffectiveModules(profile);
+    assert.equal(effective.includes('data'), false);
+    assert.equal(effective.includes('defects'), false);
+    assert.equal(effective.includes('dashboard'), true);
+    assert.equal(effective.includes('environment'), true);
+    assert.equal(effective.includes('learning'), true);
+    assert.equal(canAccessModule(profile, 'data'), false);
+  });
+
+  it('a stale grant of a default module cannot bypass a revocation', () => {
+    const effective = getEffectiveModules({
+      role: 'user',
+      grantedModules: ['data'],
+      revokedModules: ['data'],
+    });
+    assert.equal(effective.includes('data'), false);
+  });
+
+  it('admins ignore revocations entirely', () => {
+    const effective = getEffectiveModules({
+      role: 'admin',
+      grantedModules: [],
+      revokedModules: ['data', 'environment', 'defects'],
+    });
+    assert.deepEqual(effective, [...APP_MODULES]);
   });
 });
 
