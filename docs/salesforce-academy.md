@@ -1,20 +1,41 @@
 # Salesforce Academy (Learning Module)
 
-An admin-controlled, AI-powered Salesforce training program built into the platform. It takes a
-complete fresher to architect-level understanding through four guided paths, with an AI mentor on
-every lesson, an instant quiz after every module, and full progress visibility for administrators.
+An admin-controlled, AI-powered training program built into the platform. It takes a complete
+fresher to architect-level understanding across **four disciplines** — Salesforce, JavaScript, Java,
+and Release Management & DevOps — with an AI mentor on every lesson, an instant quiz after every
+module, and full progress visibility for administrators. Every track and capability is individually
+admin-controlled, so a learner only ever sees what an administrator has granted them.
 
 ## What learners get
 
-- **Four learning paths, beginner → expert** (13 modules, 42 lessons, ~42 hours of curriculum):
+- **Eight guided paths across four disciplines, beginner → expert** (21 modules, 66 lessons). The
+  catalog is grouped by discipline; within each discipline paths run beginner → expert.
+
+  **Salesforce** (5 paths):
   1. **Salesforce Foundations** (Beginner) — CRM concepts, the platform, navigation, data model,
      reports, collaboration. Designed so a new joiner needs zero prior knowledge.
   2. **Admin & Configuration Mastery** (Intermediate) — the security model (profiles, permission
      sets, OWD, sharing), Flow automation, validation/formulas, data loading, sandboxes and releases.
   3. **Platform Developer Track** (Advanced) — Apex, SOQL/SOSL, triggers, governor limits, testing,
      async Apex, Lightning Web Components, APIs and integration patterns.
-  4. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
+  4. **Salesforce Integration & API Mastery** (Advanced) — Apex callouts with Named Credentials,
+     Apex REST/SOAP services, Platform Events & Change Data Capture, integration patterns, OAuth &
+     External Credentials, and bulk-safe, resilient design (code-heavy).
+  5. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
      and identity architecture, Salesforce DX, scratch orgs, packaging, CI/CD, and governance.
+
+  **JavaScript** (1 path):
+  6. **JavaScript Engineering** (Beginner→) — values/types, functions & closures, objects/arrays,
+     promises & async/await, ES modules/classes/DOM, and how JavaScript powers Lightning Web
+     Components.
+
+  **Java** (1 path):
+  7. **Java Programming** (Beginner→) — syntax & types, OOP, collections & generics, exceptions,
+     streams & lambdas, and concurrency (with explicit Apex parallels throughout).
+
+  **Release Management & DevOps** (1 path):
+  8. **Release Management & DevOps** (Intermediate) — environment strategy, Salesforce DX, Git
+     branching, CI/CD pipelines, packaging, and governance — mapped onto this platform's modules.
 - **Every lesson** includes learning objectives, structured explanations, a **real-world
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
@@ -55,6 +76,19 @@ every lesson, an instant quiz after every module, and full progress visibility f
 
 - **Module gating** — `learning` is a locked module: standard users see the Academy only when an
   administrator grants it (Admin → User Access), exactly like other locked modules.
+- **Granular, admin-controlled feature access** — once the Academy module is granted, admins control
+  it feature by feature from the **Manage access** drawer (Admin → User Access → *Salesforce Academy
+  features*):
+  - **Training tracks**: `Salesforce`, `JavaScript`, `Java`, `Release Management & DevOps`. A track a
+    learner has not been granted is filtered out of the catalog and its lessons/quizzes return 403.
+  - **Capabilities**: `AI mentor & story mode`, `Video sessions`, `Quizzes & certification`. Each is
+    enforced server-side (mentor/explainer, video-session script, and quiz endpoints) and hidden in
+    the UI when not granted.
+  - **Defaults & compatibility**: when the module is granted but features are not customised, a safe
+    baseline applies (the **Salesforce** track + all capabilities), so existing learners are
+    unaffected. The newer tracks (JavaScript, Java, DevOps) are **opt-in** — hidden until an admin
+    turns them on. Admins always have every track and capability. To remove all Academy access, turn
+    off the Salesforce Academy module.
 - **Assignments** — from **Academy Progress** (`/learning/team`), admins assign one or more paths
   to one or more users with an optional note and due date. Assigning **automatically grants** the
   learning module to that user and sends them an in-app notification (email follows the platform's
@@ -69,18 +103,25 @@ every lesson, an instant quiz after every module, and full progress visibility f
 
 | Layer | Location |
 |-------|----------|
-| Shared contracts | `packages/shared/src/learning.ts` (types, Zod schemas, progress math) |
-| DB models | `LearningAssignment`, `LearningLessonProgress`, `LearningQuizAttempt` in `packages/db/prisma/schema.prisma` |
-| Curriculum content | `apps/api/src/modules/learning/curriculum/*.path.ts` (versioned in code) |
-| API module | `apps/api/src/modules/learning/` (NestJS) |
+| Shared contracts | `packages/shared/src/learning.ts` (types, Zod schemas, progress math, category + feature model + `resolveLearningFeatureAccess`) |
+| DB models | `LearningAssignment`, `LearningLessonProgress`, `LearningQuizAttempt` in `packages/db/prisma/schema.prisma`; per-user grants on `AppUser.learningFeatures` |
+| Curriculum content | `apps/api/src/modules/learning/curriculum/*.path.ts` — `foundations`, `admin`, `developer`, `architect`, `sf-integration`, `javascript`, `java`, `release-management` (versioned in code) |
+| API module | `apps/api/src/modules/learning/` (NestJS) — category + capability gating in `learning.controller.ts` and the services |
 | Web workspaces | `apps/web/src/modules/learning/` + routes under `apps/web/src/app/(app)/learning/` |
+| Admin feature controls | `apps/web/src/modules/admin/user-access/user-access-manage-drawer.tsx` (Salesforce Academy features section) |
+| Video production scripts | `docs/academy-training-video-scripts.md` — per-concept explanations, real-world examples, and 5-minute video scripts for the newer tracks |
 
 The curriculum is **code, not database content**: updating a lesson is a normal PR with review and
 history, and per-user progress (stored by stable lesson/module ids) survives content edits.
 
 ## API surface
 
-All routes require authentication and the `learning` module (admins always have it).
+All routes require authentication and the `learning` module (admins always have it). Beyond the
+module grant, routes are gated by the learner's granted **tracks** and **capabilities**: the catalog
+is filtered to granted tracks; lessons/quizzes 403 for an ungranted track; the AI mentor/explainer,
+video-session script, and quiz endpoints 403 without the matching capability. The catalog and lesson
+responses include a `features` object (`{ categories, mentor, video, quiz }`) so the UI hides what
+the learner cannot use.
 
 | Method | Route | Purpose |
 |--------|-------|---------|
