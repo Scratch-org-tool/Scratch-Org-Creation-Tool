@@ -35,11 +35,11 @@ These scripts are production inputs, not the upload mechanism. Keep authoring, r
 1. Use the lesson ID as the durable join key and the lesson title as the public video title. Do not rename an ID in the editing tool.
 2. Record the text under **Narration** word-for-word. Put each **On screen/editor** instruction on the visual timeline; it is not spoken.
 3. Reproduce code and configuration exactly as shown or as a focused excerpt. Use a prepared nonproduction environment for demonstrations, obscure credentials and customer data, and do not add menu paths that are not in the lesson.
-4. Export a caption file and a plain transcript from the final narration. Keep captions, transcript, and thumbnail beside the production master; the target upload API currently accepts the video file and optional public title, not sidecar assets.
-5. In the target admin workflow, open the exact lesson's **Video session** block and upload the rendered file. The lesson route supplies the stable lesson ID. Upload and deletion are admin-only; there is no per-video audience selector.
+4. Export a caption file and a plain transcript from the final narration. Keep captions, transcript, and thumbnail beside the production master; the upload API currently accepts the video file and optional public title, not sidecar assets.
+5. In the admin workflow, open the exact lesson's **Video session** block and upload the rendered file. The lesson route supplies the stable lesson ID. Upload and deletion are admin-only; there is no per-video audience selector.
 6. Grant the learner **Salesforce Academy** in **Admin → User Access**, then test playback as that learner. Academy module access controls list and stream access. Watching a video does not itself mark the lesson complete; the learner still uses the lesson's completion action.
 
-These instructions target the parallel admin-upload implementation. Until that branch is merged, the current Academy continues to show generated script sessions and exports.
+These instructions describe the built-in admin-upload implementation now used by the Academy.
 
 ## Modern Salesforce Platform
 
@@ -1203,7 +1203,7 @@ These instructions target the parallel admin-upload implementation. Until that b
 
 ## Final admin upload checklist
 
-Complete this checklist for every rendered lesson before publishing through the separate admin video-upload workflow:
+Complete this checklist for every rendered lesson before publishing through the built-in admin video-upload workflow:
 
 - [ ] **Title:** Matches the curriculum lesson title exactly; no editor-only suffix remains.
 - [ ] **Lesson ID:** Associated with the exact stable ID shown in the lesson heading and coverage matrix.
