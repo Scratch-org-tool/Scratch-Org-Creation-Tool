@@ -24,6 +24,7 @@ import { cn } from '@/utils/cn';
 import { AssignDrawer } from './assign-drawer';
 import { LEVEL_THEMES, formatDate, formatRelative, levelLabel } from './learning-ui';
 import { useTeamWorkspace } from './use-team-workspace';
+import { VideoSessionManager } from './video-session-manager';
 import type { LearningAdminLearnerRow } from './types';
 
 function LearnerPathList({
@@ -399,6 +400,8 @@ export function TeamWorkspace() {
               ))}
             </div>
           )}
+
+          <VideoSessionManager paths={paths} />
         </>
       )}
 

@@ -11,8 +11,9 @@
  *   - key takeaways and official resources,
  *   - a timecoded **5-minute video script** (word-for-word narration +
  *     on-screen direction + demo steps) ready for recording or for external
- *     AI video tools. Recorded videos are uploaded back onto the lesson page
- *     ("Video session" block) by an administrator.
+ *     AI video tools. Recorded videos are uploaded by an administrator from
+ *     Academy Progress → Lesson video sessions and play back on the lesson
+ *     page ("Video session" block).
  *
  * Run from the repo root (after `npm run build --workspace=@sfcc/shared`):
  *   npm run docs:training
@@ -405,7 +406,7 @@ function renderIndex(): string {
   lines.push(
     '1. Open the path doc and pick a lesson — each script is exactly five minutes at a ~145 words/min pace.',
     '2. Record it yourself (narration + screen capture per the demo steps), or paste the narration into an AI video tool (HeyGen, Synthesia, InVideo, CapCut…) and use the on-screen directions for the visual track.',
-    '3. As an administrator, open the lesson page in the Academy (`/learning/lessons/<lesson-id>`) and upload the finished video in the **Video session** block. Learners with Academy access stream it from there.',
+    '3. As an administrator, open **Academy Progress → Lesson video sessions** (`/learning/team`), pick the path, module, and lesson, and upload the finished video. Learners with Academy access stream it from the lesson\'s watch-only **Video session** tab.',
     '4. When curriculum content changes, re-run `npm run docs:training` so scripts and lessons never drift apart.',
     '',
   );
@@ -413,7 +414,7 @@ function renderIndex(): string {
   lines.push(
     '- The Academy is a locked module: users see it only after an admin grants `learning` (User Access → Manage).',
     '- Admins can additionally restrict any user to **assigned paths only** — unassigned trainings (including all the tracks documented here) stay completely invisible to that user until assigned from Academy Progress.',
-    '- Uploading and deleting lesson videos is admin-only; playback is authenticated and limited to users with Academy access.',
+    '- Uploading and deleting lesson videos is admin-only and lives on Academy Progress; the lesson page itself is watch-only. Playback is authenticated and limited to users with Academy access.',
     '',
   );
   return lines.join('\n');
