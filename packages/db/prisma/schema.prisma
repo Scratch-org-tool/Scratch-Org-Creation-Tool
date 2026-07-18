@@ -762,6 +762,17 @@ model NotificationSetting {
   updatedAt  DateTime @updatedAt
 }
 
+/// Global, admin-owned AI Copilot controls. A single "global" row decides
+/// whether the copilot voice assistant (microphone input + spoken answers)
+/// is available to users. Absent row => voice is off.
+model CopilotSetting {
+  id           String   @id @default("global")
+  voiceEnabled Boolean  @default(false)
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 /// Security audit trail. Metadata must never contain credentials, bearer
 /// tokens, passwords, raw IP addresses, or raw user-agent values.
 model AuthAuditEvent {

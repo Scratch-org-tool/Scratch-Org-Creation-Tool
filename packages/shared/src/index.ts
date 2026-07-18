@@ -25,6 +25,7 @@ export * from './deployment-workbench.js';
 export * from './copilot-stream.js';
 export * from './copilot-actions.js';
 export * from './copilot-app-guide.js';
+export * from './copilot-voice.js';
 export * from './password-strength.js';
 export * from './bottler-sales-office-config.js';
 export * from './data-seed-query-set.js';

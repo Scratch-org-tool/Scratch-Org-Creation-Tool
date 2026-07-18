@@ -2,8 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { Bot, Send, ChevronDown, ChevronUp, X, Square } from 'lucide-react';
-import { getQuickPromptsForPath } from '@sfcc/shared';
+import { Bot, Mic, Send, ChevronDown, ChevronUp, X, Square } from 'lucide-react';
+import {
+  COPILOT_VOICE_SILENCE_NOTICE,
+  buildCopilotVoiceGreeting,
+  copilotSpeechText,
+  getQuickPromptsForPath,
+  matchCopilotWakeWord,
+} from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
 import { CopilotThinkingBubble } from '@/components/ui/copilot-loader';
@@ -12,12 +18,17 @@ import { cn } from '@/utils/cn';
 import { useCopilotStore } from '@/store';
 import { streamCopilotChat } from '@/hooks/use-copilot-stream';
 import { useCopilotContext } from '@/hooks/use-copilot-context';
+import { useAuth } from '@/contexts/auth-context';
+import { useSpeech } from '@/modules/learning/use-speech';
 import { CopilotActionCard } from '@/modules/ai-copilot/copilot-action-handler';
+import { useVoiceInput } from '@/modules/ai-copilot/use-voice-copilot';
+import { useCopilotVoiceSettings } from '@/modules/ai-copilot/use-copilot-voice-settings';
 
 export function CopilotPanel() {
   const pathname = usePathname() ?? '/dashboard';
   const copilotContext = useCopilotContext();
   const quickPrompts = getQuickPromptsForPath(pathname);
+  const { profile, user } = useAuth();
 
   const {
     isOpen,
@@ -46,6 +57,27 @@ export function CopilotPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
+
+  // Voice assistant — only active when an administrator has enabled it.
+  const { voiceEnabled } = useCopilotVoiceSettings(isOpen);
+  const speech = useSpeech();
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const voiceModeRef = useRef(false);
+
+  const setVoiceModeState = (on: boolean) => {
+    voiceModeRef.current = on;
+    setVoiceMode(on);
+  };
+
+  const voice = useVoiceInput({
+    onUtterance: (transcript) => void handleVoiceUtterance(transcript),
+    onAutoStop: (reason) => {
+      setVoiceModeState(false);
+      if (reason === 'silence') setVoiceNotice(COPILOT_VOICE_SILENCE_NOTICE);
+    },
+  });
+  const showVoiceControls = voiceEnabled && voice.supported;
 
   const isBusy = isLoading || streamStatus === 'connecting' || streamStatus === 'streaming';
   const showThinkingBubble =
@@ -80,6 +112,18 @@ export function CopilotPanel() {
     return () => clearInterval(id);
   }, [isBusy, streamStartedAt]);
 
+  const stopVoice = voice.stop;
+  const cancelSpeech = speech.cancel;
+  useEffect(() => {
+    if (isOpen) return;
+    // Closing the panel must never leave the mic or the narrator running.
+    voiceModeRef.current = false;
+    setVoiceMode(false);
+    setVoiceNotice(null);
+    stopVoice();
+    cancelSpeech();
+  }, [isOpen, stopVoice, cancelSpeech]);
+
   const cancelStream = () => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -90,9 +134,35 @@ export function CopilotPanel() {
     setStreamStatus('idle');
   };
 
+  /** After a spoken turn ends, hand the mic back — unless voice mode is off. */
+  const resumeVoiceListening = () => {
+    if (!voiceModeRef.current) return;
+    voice.start();
+  };
+
+  /** In voice mode, read the copilot's answer aloud, then listen again. */
+  const speakReply = (content: string) => {
+    if (!voiceModeRef.current) return;
+    if (!speech.supported) {
+      resumeVoiceListening();
+      return;
+    }
+    const spoken = copilotSpeechText(content);
+    if (!spoken) {
+      resumeVoiceListening();
+      return;
+    }
+    speech.speak(spoken, { onEnd: resumeVoiceListening });
+  };
+
   const sendMessage = async (text: string) => {
     const msg = text.trim();
     if (!msg || isBusy) return;
+    if (voiceModeRef.current) {
+      // The mic must not stay open while the reply streams — it would
+      // transcribe our own text-to-speech audio.
+      voice.stop();
+    }
     setInput('');
     addMessage({ role: 'user', content: msg });
 
@@ -135,6 +205,7 @@ export function CopilotPanel() {
             isStreaming: false,
             action: event.action,
           });
+          speakReply(event.message.content);
         },
         onError: (message) => {
           updateMessage(assistantId, {
@@ -142,6 +213,7 @@ export function CopilotPanel() {
             isStreaming: false,
           });
           setStreamStatus('error');
+          resumeVoiceListening();
         },
       });
     } catch (err) {
@@ -156,6 +228,7 @@ export function CopilotPanel() {
         isStreaming: false,
       });
       setStreamStatus('error');
+      resumeVoiceListening();
     } finally {
       clearTimeout(timeout);
       abortRef.current = null;
@@ -166,6 +239,44 @@ export function CopilotPanel() {
   };
 
   const send = () => void sendMessage(input);
+
+  /**
+   * A finished spoken utterance. "Hey Copilot" / "Hey Assistant" alone gets a
+   * personal greeting (spoken and shown in the chat); anything else — with or
+   * without the wake word — is sent to the copilot and answered aloud.
+   */
+  const handleVoiceUtterance = async (transcript: string) => {
+    setVoiceNotice(null);
+    const wake = matchCopilotWakeWord(transcript);
+    if (wake && !wake.command) {
+      const greeting = buildCopilotVoiceGreeting(
+        profile?.displayName ?? user?.displayName,
+        copilotContext.pageTitle,
+      );
+      addMessage({ role: 'assistant', content: greeting });
+      if (speech.supported) {
+        speech.speak(greeting, { onEnd: resumeVoiceListening });
+      } else {
+        resumeVoiceListening();
+      }
+      return;
+    }
+    await sendMessage(wake ? wake.command : transcript);
+  };
+
+  const toggleVoiceMode = () => {
+    if (voiceMode) {
+      setVoiceModeState(false);
+      setVoiceNotice(null);
+      voice.stop();
+      speech.cancel();
+      return;
+    }
+    setVoiceNotice(null);
+    speech.cancel();
+    setVoiceModeState(true);
+    voice.start();
+  };
 
   return (
     <>
@@ -348,6 +459,35 @@ export function CopilotPanel() {
           </div>
 
           <div className="p-3 border-t border-border shrink-0 bg-card/95">
+            {showVoiceControls && (voiceMode || voiceNotice || voice.error) && (
+              <div
+                className="flex items-center gap-2 pb-2 text-xs"
+                role="status"
+                aria-live="polite"
+              >
+                {voice.listening ? (
+                  <>
+                    <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+                    </span>
+                    <span className="truncate text-muted-foreground">
+                      {voice.interimTranscript
+                        ? `“${voice.interimTranscript}”`
+                        : 'Listening… say “Hey Copilot” or ask a question'}
+                    </span>
+                  </>
+                ) : speech.speaking ? (
+                  <span className="text-muted-foreground">Speaking the answer aloud…</span>
+                ) : voice.error ? (
+                  <span className="text-red-400">{voice.error}</span>
+                ) : voiceNotice ? (
+                  <span className="text-muted-foreground">{voiceNotice}</span>
+                ) : (
+                  <span className="text-muted-foreground">Working on it…</span>
+                )}
+              </div>
+            )}
             <div className="flex gap-2">
               <Textarea
                 ref={inputRef}
@@ -364,6 +504,29 @@ export function CopilotPanel() {
                 disabled={!isOpen}
                 aria-label="Message AI Copilot"
               />
+              {showVoiceControls && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleVoiceMode}
+                  disabled={!isOpen}
+                  className={cn(
+                    'self-end shrink-0',
+                    voiceMode &&
+                      'border-red-500/60 bg-red-500/15 text-red-400 hover:bg-red-500/25 hover:text-red-300',
+                  )}
+                  aria-label={voiceMode ? 'Stop voice conversation' : 'Start voice conversation'}
+                  aria-pressed={voiceMode}
+                  title={
+                    voiceMode
+                      ? 'Stop listening'
+                      : 'Talk to the copilot — it listens, answers aloud, and stops when you go quiet'
+                  }
+                >
+                  <Mic className={cn('w-4 h-4', voice.listening && 'animate-pulse')} />
+                </Button>
+              )}
               <Button
                 onClick={() => void send()}
                 loading={isBusy}

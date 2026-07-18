@@ -5,7 +5,10 @@ const SECURITY_HEADERS: Record<string, string> = {
   'X-Frame-Options': 'DENY',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  // microphone=(self): the copilot voice assistant (admin-controlled) uses
+  // browser speech recognition on our own origin; embedded third parties
+  // still get no mic access.
+  'Permissions-Policy': 'camera=(), microphone=(self), geolocation=()',
   'X-DNS-Prefetch-Control': 'on',
   'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
 };
