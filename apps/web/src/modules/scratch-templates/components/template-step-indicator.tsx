@@ -2,21 +2,27 @@
 
 import { cn } from '@/utils/cn';
 import { CheckCircle2 } from 'lucide-react';
-import { TEMPLATE_WIZARD_STEPS } from '../types';
+import type { TemplateWizardStep } from '../types';
 
 /** Compact horizontal stepper for mobile / tablet. */
-export function TemplateStepIndicator({ current }: { current: number }) {
+export function TemplateStepIndicator({
+  steps,
+  current,
+}: {
+  steps: readonly TemplateWizardStep[];
+  current: number;
+}) {
   return (
     <div
       className="flex overflow-x-auto gap-2 pb-1 -mx-1 px-1 scrollbar-thin lg:hidden"
       aria-label="Template wizard progress"
     >
-      {TEMPLATE_WIZARD_STEPS.map((label, i) => {
+      {steps.map(({ id, label }, i) => {
         const done = i < current;
         const active = i === current;
         return (
           <div
-            key={label}
+            key={id}
             className={cn(
               'flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium',
               active && 'border-primary/40 bg-primary/10 text-primary',

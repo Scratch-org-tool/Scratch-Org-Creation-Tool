@@ -8,6 +8,7 @@ interface PipelineStepsSectionProps {
   value: PipelineSteps;
   onChange: (value: PipelineSteps) => void;
   availability?: Partial<Record<keyof PipelineSteps, boolean>>;
+  visibleSteps?: readonly (keyof PipelineSteps)[];
 }
 
 const STEPS = [
@@ -32,13 +33,14 @@ export function PipelineStepsSection({
   value,
   onChange,
   availability = {},
+  visibleSteps,
 }: PipelineStepsSectionProps) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
         Choose which post-deploy steps run automatically after custom settings load.
       </p>
-      {STEPS.map((s) => {
+      {STEPS.filter((step) => !visibleSteps || visibleSteps.includes(step.key)).map((s) => {
         const available = availability[s.key] !== false;
         return (
           <label

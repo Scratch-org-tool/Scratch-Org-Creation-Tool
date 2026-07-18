@@ -11,6 +11,7 @@ import {
   DEFAULT_AZURE_MANIFEST_PATH,
   migrateTemplateConfigToV2,
   querySectionSchema,
+  SYSTEM_SCRATCH_TEMPLATE_KEYS,
 } from '@sfcc/shared';
 import { DataSeedSection } from './components/data-seed-section';
 import { fileToBase64 } from './components/file-dropzone';
@@ -36,7 +37,7 @@ import type { PublicIntegrationConnection } from '@/modules/environment-center/i
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
 import {
   DEFAULT_TEMPLATE_CONFIG,
-  TEMPLATE_WIZARD_STEPS,
+  getTemplateWizardSteps,
   type TemplateConfigState,
 } from './types';
 import { hasValidCustomJson, setCustomSettingsEnabled } from './template-form-utils';
@@ -97,6 +98,7 @@ export function ScratchTemplateForm({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!templateId);
   const [isSystemTemplate, setIsSystemTemplate] = useState(false);
+  const [systemKey, setSystemKey] = useState<string | null>(null);
   const [draftHydrated, setDraftHydrated] = useState(!!templateId);
   const [userPlanState, setUserPlanState] = useState({ valid: false, checking: true });
   const handleUserPlanValidation = useCallback(
@@ -129,6 +131,16 @@ export function ScratchTemplateForm({
   );
   const userPlanReady =
     !hasConfiguredUsers || (userPlanState.valid && !userPlanState.checking);
+  const wizardSteps = useMemo(() => getTemplateWizardSteps(systemKey), [systemKey]);
+  const activeStep = wizardSteps[step] ?? wizardSteps[0]!;
+  const isScratchSourcePreset =
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT;
+  const isConfigPartnersPreset =
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS;
+
+  useEffect(() => {
+    setStep((current) => Math.min(current, wizardSteps.length - 1));
+  }, [wizardSteps.length]);
 
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
@@ -146,12 +158,14 @@ export function ScratchTemplateForm({
         name: string;
         description: string | null;
         isSystem: boolean;
+        systemKey: string | null;
         config: TemplateConfigState;
       }>(`/environment/scratch-templates/${templateId}`)
         .then((t) => {
           setName(t.name);
           setDescription(t.description ?? '');
           setIsSystemTemplate(t.isSystem);
+          setSystemKey(t.systemKey);
           try {
             setConfig(migrateForEditor(t.config));
           } catch (migrationError) {
@@ -349,21 +363,21 @@ export function ScratchTemplateForm({
   };
 
   const canNext =
-    step === 0
+    activeStep.id === 'general'
       ? name.trim().length > 0
-      : step === 3
-          ? hasValidCustomJson(config, customJson)
-          : step === 6 && config.dataSeed?.querySection
-            ? querySectionSchema.safeParse(config.dataSeed.querySection).success
-            : step === 7
-              ? userPlanReady
+      : activeStep.id === 'custom-settings'
+        ? hasValidCustomJson(config, customJson)
+        : activeStep.id === 'query-section' && config.dataSeed?.querySection
+          ? querySectionSchema.safeParse(config.dataSeed.querySection).success
+          : activeStep.id === 'partners-users'
+            ? userPlanReady
             : true;
 
   if (loading) {
     return <PageSkeleton variant="form" />;
   }
 
-  const wideStep = step >= 5;
+  const wideStep = ['data-seed', 'query-section', 'partners-users'].includes(activeStep.id);
 
   const stepFooter = (
     <div className="flex flex-wrap items-center gap-3 pt-6 mt-6 border-t border-border/60">
@@ -372,7 +386,7 @@ export function ScratchTemplateForm({
           Back
         </Button>
       )}
-      {step < TEMPLATE_WIZARD_STEPS.length - 1 ? (
+      {step < wizardSteps.length - 1 ? (
         <Button
           variant="outline"
           size="lg"
@@ -380,7 +394,7 @@ export function ScratchTemplateForm({
           onClick={() => setStep((s) => s + 1)}
           disabled={!canNext}
         >
-          Continue to {TEMPLATE_WIZARD_STEPS[step + 1]}
+          Continue to {wizardSteps[step + 1]?.label}
           <ChevronRight className="w-4 h-4 text-violet-400" />
         </Button>
       ) : (
@@ -408,27 +422,30 @@ export function ScratchTemplateForm({
       <TemplateFormPageHeader
         mode={templateId ? 'edit' : 'new'}
         isSystem={isSystemTemplate}
-        step={step}
+        systemKey={systemKey}
+        activeStep={activeStep}
+        stepNumber={step + 1}
+        totalSteps={wizardSteps.length}
         onCancel={onClose}
       />
 
-      <TemplateStepIndicator current={step} />
+      <TemplateStepIndicator steps={wizardSteps} current={step} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(200px,220px)_minmax(0,1fr)] xl:grid-cols-[minmax(200px,220px)_minmax(0,1fr)_minmax(240px,280px)] gap-6 items-start">
         <aside className="hidden lg:block sticky top-6 self-start">
           <GlassCard title="Pipeline steps" contentClassName="p-2 pt-0">
-            <TemplateStepSidebar current={step} onStepClick={setStep} />
+            <TemplateStepSidebar steps={wizardSteps} current={step} onStepClick={setStep} />
           </GlassCard>
         </aside>
 
         <div className={wideStep ? 'min-w-0 w-full' : 'min-w-0 w-full max-w-3xl xl:max-w-none'}>
           <GlassCard
-            title={TEMPLATE_WIZARD_STEPS[step]}
+            title={activeStep.label}
             description={undefined}
             className="min-w-0"
           >
             <div className={wideStep ? undefined : 'max-w-2xl'}>
-              {step === 0 && (
+              {activeStep.id === 'general' && (
                 <FormSection title="Details">
                   <div className="space-y-3">
                     <div>
@@ -454,7 +471,7 @@ export function ScratchTemplateForm({
                 </FormSection>
               )}
 
-              {step === 1 && (
+              {activeStep.id === 'scratch' && (
                 <FormSection title="Scratch org defaults">
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -576,12 +593,13 @@ export function ScratchTemplateForm({
                 </FormSection>
               )}
 
-              {step === 2 && (
-                <FormSection title="Source orgs">
+              {activeStep.id === 'source-orgs' && (
+                <FormSection title={activeStep.label}>
                   <SourceOrgsSection
                     orgs={orgs}
                     dataDeploymentOrgId={config.dataDeploymentOrgId ?? config.sourceOrgId}
                     customSettingsOrgId={config.customSettingsOrgId ?? config.sourceOrgId}
+                    showCustomSettings={!systemKey || isConfigPartnersPreset}
                     onChange={(patch) =>
                       setConfig({
                         ...config,
@@ -593,7 +611,7 @@ export function ScratchTemplateForm({
                 </FormSection>
               )}
 
-              {step === 3 && (
+              {activeStep.id === 'custom-settings' && (
                 <FormSection title="Custom settings (SFDMU)">
                   {config.customSettingsOrgId && (
                     <p className="text-xs text-muted-foreground mb-4">
@@ -621,20 +639,24 @@ export function ScratchTemplateForm({
                 </FormSection>
               )}
 
-              {step === 4 && (
-                <FormSection title="Permissions & org config">
+              {activeStep.id === 'permissions' && (
+                <FormSection title={activeStep.label}>
                   <div className="space-y-6">
-                    <PermissionSetsEditor value={permissionSetsText} onChange={setPermissionSetsText} />
-                    <OrgConfigSection
-                      value={config.orgConfig ?? DEFAULT_TEMPLATE_CONFIG.orgConfig!}
-                      onChange={(orgConfig) => setConfig({ ...config, orgConfig })}
-                    />
+                    {!isConfigPartnersPreset && (
+                      <PermissionSetsEditor value={permissionSetsText} onChange={setPermissionSetsText} />
+                    )}
+                    {!isScratchSourcePreset && (
+                      <OrgConfigSection
+                        value={config.orgConfig ?? DEFAULT_TEMPLATE_CONFIG.orgConfig!}
+                        onChange={(orgConfig) => setConfig({ ...config, orgConfig })}
+                      />
+                    )}
                   </div>
                 </FormSection>
               )}
 
-              {step === 5 && (
-                <FormSection title="Data seed">
+              {activeStep.id === 'data-seed' && (
+                <FormSection title={activeStep.label}>
                   <div className="space-y-6">
                     <label className="flex items-start gap-3 rounded-lg border border-border/60 p-3">
                       <input
@@ -663,9 +685,15 @@ export function ScratchTemplateForm({
                         }}
                       />
                       <div>
-                        <p className="text-sm font-medium">Enable data deployment</p>
+                        <p className="text-sm font-medium">
+                          {isConfigPartnersPreset
+                            ? 'Enable onboarding configuration seed'
+                            : 'Enable data deployment'}
+                        </p>
                         <p className="text-xs text-muted-foreground">
-                          Add built-in datasets, uploaded query JSON, or ordered V2 queries to this template.
+                          {isConfigPartnersPreset
+                            ? 'Seed onboarding configuration before Account Partner mapping.'
+                            : 'Add built-in datasets, uploaded query JSON, or ordered V2 queries to this template.'}
                         </p>
                       </div>
                     </label>
@@ -729,7 +757,7 @@ export function ScratchTemplateForm({
                 </FormSection>
               )}
 
-              {step === 6 && (
+              {activeStep.id === 'query-section' && (
                 <FormSection title="Named query section">
                   {config.dataSeed ? (
                     <QuerySectionEditor
@@ -770,7 +798,7 @@ export function ScratchTemplateForm({
                 </FormSection>
               )}
 
-              {step === 7 && (
+              {activeStep.id === 'partners-users' && (
                 <div className="space-y-6">
                   <FormSection title="Partner import">
                     <PartnerImportSection
@@ -792,14 +820,16 @@ export function ScratchTemplateForm({
                       }
                     />
                   </FormSection>
-                  <FormSection title="User provisioning">
-                    <UserProvisioningV2Section
-                      sourceOrgId={dataDeploymentOrgId}
-                      value={config.userProvisioning ?? DEFAULT_TEMPLATE_CONFIG.userProvisioning!}
-                      onChange={(userProvisioning) => setConfig({ ...config, userProvisioning })}
-                      onValidationChange={handleUserPlanValidation}
-                    />
-                  </FormSection>
+                  {!isConfigPartnersPreset && (
+                    <FormSection title="User provisioning">
+                      <UserProvisioningV2Section
+                        sourceOrgId={dataDeploymentOrgId}
+                        value={config.userProvisioning ?? DEFAULT_TEMPLATE_CONFIG.userProvisioning!}
+                        onChange={(userProvisioning) => setConfig({ ...config, userProvisioning })}
+                        onValidationChange={handleUserPlanValidation}
+                      />
+                    </FormSection>
+                  )}
                   <FormSection title="Automation">
                     <PipelineStepsSection
                       value={config.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps!}
@@ -809,12 +839,15 @@ export function ScratchTemplateForm({
                         autoRunPartners: config.partnerImport?.enabled === true,
                         autoRunUsers: hasConfiguredUsers,
                       }}
+                      visibleSteps={isConfigPartnersPreset
+                        ? ['autoRunDataSeed', 'autoRunPartners']
+                        : undefined}
                     />
                   </FormSection>
                 </div>
               )}
 
-              {step === 8 && (
+              {activeStep.id === 'review' && (
                 <>
                   {hasConfiguredUsers && !userPlanReady && (
                     <InlineAlert variant="error" title="Provisioning plan not validated">
@@ -830,6 +863,8 @@ export function ScratchTemplateForm({
                       permissionSets: parsePermissionSets(permissionSetsText),
                     }}
                     orgAliases={orgAliases}
+                    steps={wizardSteps}
+                    systemKey={systemKey}
                     onEditStep={setStep}
                   />
                 </>
@@ -843,7 +878,7 @@ export function ScratchTemplateForm({
         </div>
 
         <aside className="hidden xl:block sticky top-6 self-start">
-          <TemplateFormTips step={step} />
+          <TemplateFormTips step={activeStep} systemKey={systemKey} />
         </aside>
       </div>
     </div>
