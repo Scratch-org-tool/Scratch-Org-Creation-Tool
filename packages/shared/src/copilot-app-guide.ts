@@ -1,4 +1,4 @@
-import type { AppModule } from './auth.js';
+import { moduleForPath, type AppModule } from './auth.js';
 import type { CopilotAction } from './copilot-actions.js';
 
 export interface CopilotClientContext {
@@ -17,7 +17,14 @@ export interface AppGuideRoute {
   label: string;
   module: AppModule;
   description: string;
-  children?: Array<{ path: string; label: string; description: string }>;
+  accessibleModules?: AppModule[];
+  adminOnly?: boolean;
+  children?: Array<{
+    path: string;
+    label: string;
+    description: string;
+    module?: AppModule;
+  }>;
 }
 
 export interface AppGuideWorkflow {
@@ -25,6 +32,7 @@ export interface AppGuideWorkflow {
   title: string;
   keywords: string[];
   module: AppModule;
+  adminOnly?: boolean;
   steps: string[];
   relatedPaths: string[];
 }
@@ -74,15 +82,16 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     path: '/deployment-center',
     label: 'Deployment Center',
     module: 'deployment',
-    description: 'Hub for Git metadata deployment, Jenkins, org setup, data, and provisioning.',
+    accessibleModules: ['deployment', 'data', 'org-setup', 'provisioning'],
+    description: 'Hub for the deployment and operations tools enabled for this user.',
     children: [
-      { path: '/deployment-center/git', label: 'Git Metadata Deploy', description: 'Deploy from Azure DevOps, GitHub, or Bitbucket.' },
-      { path: '/deployment-center/jenkins', label: 'Jenkins', description: 'Jenkins pipeline integration for deployments.' },
-      { path: '/data-deploy', label: 'Data Deployment', description: 'Pick objects, compare source vs target records, and insert or upsert between orgs with history.' },
-      { path: '/data-center', label: 'Data Operations', description: 'CONA seed, query-driven Account Partner mapping, replication, and reusable query templates.' },
-      { path: '/org-setup', label: 'Org Setup', description: 'Assign permission sets and configure org setup steps.' },
-      { path: '/user-provisioning', label: 'User Provisioning', description: 'Bulk create or update Salesforce users.' },
-      { path: '/custom-settings-load', label: 'Custom Settings Load', description: 'Load custom settings data into target orgs.' },
+      { path: '/deployment-center/git', label: 'Git Metadata Deploy', description: 'Deploy from Azure DevOps, GitHub, or Bitbucket.', module: 'deployment' },
+      { path: '/deployment-center/jenkins', label: 'Jenkins', description: 'Jenkins pipeline integration for deployments.', module: 'deployment' },
+      { path: '/data-deploy', label: 'Data Deployment', description: 'Pick objects, compare source vs target records, and insert or upsert between orgs with history.', module: 'data' },
+      { path: '/data-center', label: 'Data Operations', description: 'CONA seed, query-driven Account Partner mapping, replication, and reusable query templates.', module: 'data' },
+      { path: '/org-setup', label: 'Org Setup', description: 'Assign permission sets and configure org setup steps.', module: 'org-setup' },
+      { path: '/user-provisioning', label: 'User Provisioning', description: 'Bulk create or update Salesforce users.', module: 'provisioning' },
+      { path: '/custom-settings-load', label: 'Custom Settings Load', description: 'Load custom settings data into target orgs.', module: 'data' },
     ],
   },
   {
@@ -107,6 +116,7 @@ export const APP_GUIDE_ROUTES: AppGuideRoute[] = [
     path: '/admin/users',
     label: 'User Access',
     module: 'dashboard',
+    adminOnly: true,
     description: 'Admin-only: grant module access (Deployment, Monitoring, Copilot, etc.) to users.',
   },
 ];
@@ -133,7 +143,7 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
       'Ensure a Dev Hub is connected under **Environment Center → Salesforce**.',
       'Go to **Environment → Create Scratch Org** (or sidebar **Environment** child link).',
       'Fill alias, duration (days), Dev Hub alias, scratch definition template, and optional packages.',
-      'Submit and track progress in **Monitoring**.',
+      'Submit and track progress in the creation workflow.',
     ],
     relatedPaths: ['/environment-center/create-scratch-org', '/environment-center'],
   },
@@ -184,7 +194,7 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
       'Open **Deployment** → **Data Center** (or **Data Center** from deployment hub).',
       'Choose source and target orgs, configure SOQL or query sets.',
       'For onboarding config replication, use the cfs_ob__Onboarding_Config__c workflow.',
-      'Start the job and monitor in **Monitoring**.',
+      'Start the job and follow its status in Data Center.',
     ],
     relatedPaths: ['/data-center', '/deployment-center'],
   },
@@ -218,11 +228,12 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
     title: 'Grant module access to users',
     keywords: ['permission', 'module grant', 'user access', 'copilot access', 'locked'],
     module: 'dashboard',
+    adminOnly: true,
     steps: [
       'Admin opens **User Access** (`/admin/users`).',
       'User must sign in once so an AppUser row exists, then click **Refresh**.',
-      'Grant modules: Deployment, Org Setup, Monitoring, **Copilot**, etc.',
-      'By default new users only have Dashboard, Environment, and Data.',
+      'Grant each required feature explicitly: Calendar, Environment, Data, Deployment, Org Setup, Provisioning, Monitoring, **Copilot**, Developer Board, or Academy.',
+      'New standard users receive only Dashboard until an administrator enables features.',
     ],
     relatedPaths: ['/admin/users'],
   },
@@ -337,9 +348,37 @@ export function getQuickPromptsForPath(pathname: string): string[] {
   return match?.prompts ?? ['What can I do in this application?', 'How do I get started?'];
 }
 
-export function matchGuideWorkflows(query: string, limit = 3): AppGuideWorkflow[] {
+type GuideAccessContext = Pick<CopilotClientContext, 'grantedModules' | 'role'>;
+
+function hasGuideModuleAccess(
+  module: AppModule,
+  context?: Partial<GuideAccessContext>,
+): boolean {
+  if (!context) return true;
+  if (context.role === 'admin') return true;
+  return context.grantedModules?.includes(module) ?? false;
+}
+
+function hasGuideRouteAccess(
+  route: AppGuideRoute,
+  context?: Partial<GuideAccessContext>,
+): boolean {
+  if (route.adminOnly) return context?.role === 'admin';
+  const modules = route.accessibleModules ?? [route.module];
+  return modules.some((module) => hasGuideModuleAccess(module, context));
+}
+
+export function matchGuideWorkflows(
+  query: string,
+  limit = 3,
+  context?: Partial<GuideAccessContext>,
+): AppGuideWorkflow[] {
   const lower = query.toLowerCase();
-  const scored = APP_GUIDE_WORKFLOWS.map((w) => {
+  const scored = APP_GUIDE_WORKFLOWS.filter(
+    (workflow) =>
+      (!workflow.adminOnly || context?.role === 'admin') &&
+      hasGuideModuleAccess(workflow.module, context),
+  ).map((w) => {
     let score = 0;
     for (const kw of w.keywords) {
       if (lower.includes(kw.toLowerCase())) score += 2;
@@ -355,10 +394,16 @@ export function matchGuideWorkflows(query: string, limit = 3): AppGuideWorkflow[
 }
 
 export function formatGuideForPrompt(query: string, context?: Partial<CopilotClientContext>): string {
-  const workflows = matchGuideWorkflows(query, 3);
-  const routeLines = APP_GUIDE_ROUTES.map((r) => {
-    const children = r.children?.map((c) => `  - ${c.label}: ${c.path} — ${c.description}`).join('\n');
-    return `- **${r.label}** (${r.path}, module: ${r.module}): ${r.description}${children ? `\n${children}` : ''}`;
+  const workflows = matchGuideWorkflows(query, 3, context);
+  const routeLines = APP_GUIDE_ROUTES.filter((route) =>
+    hasGuideRouteAccess(route, context),
+  ).map((route) => {
+    const children = route.children
+      ?.filter((child) => hasGuideModuleAccess(child.module ?? route.module, context))
+      .map((child) => `  - ${child.label}: ${child.path} — ${child.description}`)
+      .join('\n');
+    const access = route.adminOnly ? 'admin-only' : `module: ${route.module}`;
+    return `- **${route.label}** (${route.path}, ${access}): ${route.description}${children ? `\n${children}` : ''}`;
   }).join('\n');
 
   const workflowLines =
@@ -383,13 +428,19 @@ const NAV_INTENT = /\b(take\s+me\s+to|go\s+to|open|navigate\s+to|show\s+me|bring
 export function matchNavigationAction(
   query: string,
   grantedModules: AppModule[] = [],
+  role: CopilotClientContext['role'] = 'user',
 ): CopilotAction | undefined {
   if (!NAV_INTENT.test(query)) return undefined;
   for (const entry of NAV_KEYWORDS) {
     if (!entry.patterns.test(query)) continue;
-    const route = APP_GUIDE_ROUTES.find((r) => entry.action.href.startsWith(r.path));
-    const module = route?.module;
-    if (module && grantedModules.length > 0 && !grantedModules.includes(module)) continue;
+    const pathname = entry.action.href.split('?')[0]!;
+    const adminOnly = pathname === '/admin' || pathname.startsWith('/admin/');
+    if (adminOnly) {
+      if (role !== 'admin') continue;
+      return entry.action;
+    }
+    const module = moduleForPath(pathname);
+    if (!module || !grantedModules.includes(module)) continue;
     return entry.action;
   }
   return undefined;

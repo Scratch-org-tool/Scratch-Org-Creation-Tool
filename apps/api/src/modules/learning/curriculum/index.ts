@@ -26,6 +26,7 @@ export type {
  */
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
+  javascriptPath,
   adminPath,
   javascriptPath,
   javaPath,

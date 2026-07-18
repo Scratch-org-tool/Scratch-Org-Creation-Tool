@@ -1347,9 +1347,6 @@ model LearningLessonProgress {
   @@index([pathId, completedAt])
 }
 
-/// Server-scored quiz session. `questions` retains the full question set
-/// INCLUDING correct answers + explanations (never sent to the client while
-/// status = in_progress); `answers` stores the learner's submission for review.
 /// Admin-uploaded video attached to a lesson's Video session block. The file
 /// itself lives on disk under LEARNING_VIDEO_DIR; this row is the metadata.
 model LearningLessonVideo {
@@ -1366,6 +1363,9 @@ model LearningLessonVideo {
   @@index([lessonId, createdAt])
 }
 
+/// Server-scored quiz session. `questions` retains the full question set
+/// INCLUDING correct answers + explanations (never sent to the client while
+/// status = in_progress); `answers` stores the learner's submission for review.
 model LearningQuizAttempt {
   id             String    @id @default(uuid())
   userId         String

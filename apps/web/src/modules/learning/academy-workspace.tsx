@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -10,6 +11,7 @@ import {
   GraduationCap,
   Layers,
   PlayCircle,
+  Search,
   Sparkles,
   Target,
   Trophy,
@@ -17,6 +19,7 @@ import {
 } from 'lucide-react';
 import { GlassCard, InlineAlert, KpiCard, PageHeader } from '@/components/studio';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/contexts/auth-context';
 import { cn } from '@/utils/cn';
@@ -268,7 +271,7 @@ function AcademySkeleton() {
         ))}
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        {Array.from({ length: 4 }).map((_, i) => (
+        {Array.from({ length: 6 }).map((_, i) => (
           <Skeleton key={i} className="h-64 rounded-xl" />
         ))}
       </div>
@@ -280,12 +283,25 @@ export function AcademyWorkspace() {
   const { catalog, loading, error } = useAcademyWorkspace();
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
+  const [query, setQuery] = useState('');
+  const [level, setLevel] = useState<LearningLevel | 'all'>('all');
+  const visiblePaths = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return (catalog?.paths ?? []).filter((path) => {
+      if (level !== 'all' && path.level !== level) return false;
+      if (!term) return true;
+      return [path.title, path.tagline, path.description, ...path.skills]
+        .join(' ')
+        .toLowerCase()
+        .includes(term);
+    });
+  }, [catalog?.paths, level, query]);
 
   return (
     <div className="p-4 md:p-6 space-y-5">
       <PageHeader
         title="Salesforce Academy"
-        subtitle="A guided journey from fresher to architect — with an AI mentor at every step."
+        subtitle="Salesforce, JavaScript, Java, and release engineering — from fundamentals to architecture."
         actions={
           isAdmin ? (
             <Button asChild variant="outline" className="gap-2">
@@ -355,12 +371,44 @@ export function AcademyWorkspace() {
           )}
 
           <div>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Learning paths</h2>
-              <p className="text-xs text-muted-foreground">
-                Beginner → Expert · {catalog.stats.totalLessons} lessons ·{' '}
-                {catalog.stats.totalModules} module quizzes
-              </p>
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Learning paths</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Beginner → Expert · {catalog.stats.totalLessons} lessons ·{' '}
+                  {catalog.stats.totalModules} module quizzes
+                </p>
+              </div>
+              <div className="flex w-full flex-col gap-2 lg:w-auto lg:items-end">
+                <div className="relative w-full lg:w-72">
+                  <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search paths, skills, or topics…"
+                    aria-label="Search learning paths"
+                    className="h-9 pl-8 text-sm"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1" aria-label="Filter paths by level">
+                  {LEVEL_FILTERS.map((filter) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      aria-pressed={level === filter}
+                      onClick={() => setLevel(filter)}
+                      className={cn(
+                        'rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',
+                        level === filter
+                          ? 'border-primary/50 bg-primary/10 text-primary'
+                          : 'border-border/60 text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {filter === 'all' ? 'All levels' : levelLabel(filter)}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             {catalog.paths.length === 0 ? (
               <GlassCard>

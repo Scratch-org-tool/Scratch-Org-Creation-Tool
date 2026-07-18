@@ -23,6 +23,7 @@ import {
   type CurriculumModule,
   type CurriculumPath,
 } from './curriculum';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export interface UserLearningState {
   /** lessonId -> completedAt */
@@ -384,13 +385,52 @@ export class LearningService {
     });
 
     const isCompleteAfter = await this.isPathComplete(userId, path.id);
+    const pathJustCompleted = !wasCompleteBefore && isCompleteAfter;
+    if (pathJustCompleted) {
+      void this.notifyPathCompleted(userId, path.id, path.title);
+    }
 
     return {
       completed: true,
       completedAt: row.completedAt.toISOString(),
-      pathCompleted: !wasCompleteBefore && isCompleteAfter,
+      pathCompleted: pathJustCompleted,
       pathId: path.id,
     };
+  }
+
+  /** Notify once when either a lesson or quiz changes a path to complete. */
+  async notifyPathCompleted(userId: string, pathId: string, pathTitle: string) {
+    try {
+      await this.notifications.notify({
+        userId,
+        category: 'system',
+        level: 'success',
+        title: `Path completed: ${pathTitle}`,
+        body: 'Congratulations — every lesson is done and every module quiz is passed. Your badge is on the academy page.',
+        link: `/learning/paths/${pathId}`,
+      });
+      const assignment = await prisma.learningAssignment.findFirst({
+        where: { userId, pathId, status: 'active' },
+      });
+      if (assignment && assignment.assignedBy !== userId) {
+        const learner = await prisma.appUser.findUnique({
+          where: { id: userId },
+          select: { displayName: true },
+        });
+        await this.notifications.notify({
+          userId: assignment.assignedBy,
+          category: 'system',
+          level: 'success',
+          title: `${learner?.displayName ?? 'A learner'} completed "${pathTitle}"`,
+          body: 'The assigned Salesforce Academy path is fully complete. Review their scores in Team Progress.',
+          link: '/learning/team',
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `path completion notification failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   async isPathComplete(userId: string, pathId: string): Promise<boolean> {

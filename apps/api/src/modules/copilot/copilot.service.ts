@@ -197,6 +197,7 @@ export class CopilotService {
         const nav = this.appGuideService.detectNavigationAction(
           body.message,
           (mergedContext.grantedModules as AppModule[]) ?? [],
+          mergedContext.role === 'admin' ? 'admin' : 'user',
         );
         if (nav) action = nav as Record<string, unknown>;
       }

@@ -1,7 +1,7 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * Path 4 — Architect & DevOps Mastery (Expert).
+ * Path 8 — Architect & DevOps Mastery (Expert).
  * Large data volumes, enterprise sharing, integration and identity
  * architecture, and the source-driven DevOps discipline this very platform
  * exists to automate.

@@ -1,7 +1,7 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * Path 3 — Platform Developer Track (Advanced).
+ * Path 5 — Platform Developer Track (Advanced).
  * Apex, SOQL, testing, async processing, LWC, and integration — with the
  * bulkification and limits mindset that separates platform developers from
  * Java/C# developers writing Java/C# in Apex syntax.

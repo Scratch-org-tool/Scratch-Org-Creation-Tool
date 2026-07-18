@@ -15,6 +15,7 @@ import { IntegrationAdminService } from './integration-admin.service';
 
 @Controller('integrations/admin')
 @UseGuards(AuthGuard, RoleGuard)
+@RequireRole('admin')
 export class IntegrationAdminController {
   constructor(private readonly service: IntegrationAdminService) {}
 
