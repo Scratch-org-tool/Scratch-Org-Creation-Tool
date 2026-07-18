@@ -47,17 +47,30 @@ function emptyState() {
   db.learningQuizAttempt.findMany.mockResolvedValue([]);
   db.learningAssignment.findMany.mockResolvedValue([]);
   db.appUser.findMany.mockResolvedValue([]);
+  db.appUser.findUnique.mockResolvedValue({ role: 'user', learningAssignedOnly: false });
 }
 
 describe('curriculum integrity', () => {
-  it('contains 4 paths ordered beginner → expert', () => {
-    expect(CURRICULUM).toHaveLength(4);
+  it('contains 7 paths ordered beginner → expert', () => {
+    expect(CURRICULUM).toHaveLength(7);
     expect(CURRICULUM.map((p) => p.level)).toEqual([
       'beginner',
       'intermediate',
+      'intermediate',
+      'intermediate',
+      'advanced',
       'advanced',
       'expert',
     ]);
+  });
+
+  it('covers Salesforce, programming, and delivery categories', () => {
+    const categories = new Set(CURRICULUM.map((p) => p.category));
+    expect(categories).toEqual(new Set(['salesforce', 'programming', 'delivery']));
+    // The explicitly requested tracks all exist.
+    expect(CURRICULUM.map((p) => p.id)).toEqual(
+      expect.arrayContaining(['js-training', 'java-training', 'release-management']),
+    );
   });
 
   it('has globally unique lesson and module ids and non-trivial volume', () => {
@@ -67,8 +80,8 @@ describe('curriculum integrity', () => {
     );
     expect(new Set(moduleIds).size).toBe(moduleIds.length);
     expect(new Set(lessonIds).size).toBe(lessonIds.length);
-    expect(moduleIds.length).toBeGreaterThanOrEqual(12);
-    expect(lessonIds.length).toBeGreaterThanOrEqual(40);
+    expect(moduleIds.length).toBeGreaterThanOrEqual(21);
+    expect(lessonIds.length).toBeGreaterThanOrEqual(66);
     expect(totalLessonCount()).toBe(lessonIds.length);
   });
 
@@ -127,9 +140,10 @@ describe('LearningService catalog + progress', () => {
 
   it('returns zeroed progress for a fresh user', async () => {
     const catalog = await service.getCatalog(USER);
-    expect(catalog.paths).toHaveLength(4);
+    expect(catalog.paths).toHaveLength(7);
     expect(catalog.stats.lessonsCompleted).toBe(0);
     expect(catalog.stats.averageScorePercent).toBeNull();
+    expect(catalog.assignedOnly).toBe(false);
     // Fresh users should be pointed at the very first lesson of the beginner path.
     expect(catalog.continueTarget?.pathId).toBe(CURRICULUM[0]!.id);
     expect(catalog.continueTarget?.kind).toBe('lesson');
@@ -235,6 +249,79 @@ describe('LearningService catalog + progress', () => {
         where: { userId_lessonId: { userId: USER, lessonId: lesson.id } },
       }),
     );
+  });
+});
+
+describe('assigned-only catalog scope', () => {
+  let service: LearningService;
+  const assignedPath = CURRICULUM[1]!;
+  const hiddenPath = CURRICULUM[2]!;
+
+  function restrictedState() {
+    emptyState();
+    db.appUser.findUnique.mockResolvedValue({ role: 'user', learningAssignedOnly: true });
+    db.learningAssignment.findMany.mockResolvedValue([
+      {
+        id: 'as-restricted',
+        userId: USER,
+        pathId: assignedPath.id,
+        assignedBy: 'DPT_admin',
+        note: null,
+        dueAt: null,
+        status: 'active',
+        createdAt: new Date(),
+      },
+    ]);
+    db.appUser.findMany.mockResolvedValue([{ id: 'DPT_admin', displayName: 'Admin' }]);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    service = new LearningService();
+    restrictedState();
+  });
+
+  it('filters the catalog to assigned paths and scopes stats to them', async () => {
+    const catalog = await service.getCatalog(USER);
+    expect(catalog.assignedOnly).toBe(true);
+    expect(catalog.paths.map((p) => p.id)).toEqual([assignedPath.id]);
+    const expectedLessons = assignedPath.modules.reduce((sum, m) => sum + m.lessons.length, 0);
+    expect(catalog.stats.totalLessons).toBe(expectedLessons);
+    expect(catalog.stats.totalPaths).toBe(1);
+    expect(catalog.continueTarget?.pathId).toBe(assignedPath.id);
+  });
+
+  it('serves assigned paths and blocks unassigned ones with 403', async () => {
+    await expect(service.getPathDetail(USER, assignedPath.id)).resolves.toMatchObject({
+      id: assignedPath.id,
+    });
+    await expect(service.getPathDetail(USER, hiddenPath.id)).rejects.toThrow(
+      'has not been assigned',
+    );
+  });
+
+  it('blocks lesson reads, completion, and lesson-keyed AI surfaces for hidden paths', async () => {
+    const hiddenLesson = hiddenPath.modules[0]!.lessons[0]!;
+    db.learningLessonProgress.findUnique.mockResolvedValue(null);
+    await expect(service.getLessonView(USER, hiddenLesson.id)).rejects.toThrow(
+      'has not been assigned',
+    );
+    await expect(service.completeLesson(USER, hiddenLesson.id)).rejects.toThrow(
+      'has not been assigned',
+    );
+    await expect(service.assertLessonVisible(USER, hiddenLesson.id)).rejects.toThrow(
+      'has not been assigned',
+    );
+    // Assigned content stays fully accessible.
+    const assignedLesson = assignedPath.modules[0]!.lessons[0]!;
+    await expect(service.assertLessonVisible(USER, assignedLesson.id)).resolves.toBeUndefined();
+  });
+
+  it('never restricts admins, even with the flag set', async () => {
+    db.appUser.findUnique.mockResolvedValue({ role: 'admin', learningAssignedOnly: true });
+    const catalog = await service.getCatalog(USER);
+    expect(catalog.assignedOnly).toBe(false);
+    expect(catalog.paths).toHaveLength(CURRICULUM.length);
   });
 });
 
@@ -373,6 +460,14 @@ describe('LearningQuizService', () => {
     const attempt = await quizService.startQuiz(USER, module.id);
     expect(attempt.source).toBe('ai');
     expect(attempt.questions[0]!.prompt).toContain('Generated question');
+  });
+
+  it('blocks quiz starts for modules of unassigned paths when restricted', async () => {
+    db.appUser.findUnique.mockResolvedValue({ role: 'user', learningAssignedOnly: true });
+    db.learningAssignment.findMany.mockResolvedValue([]);
+    const module = CURRICULUM[0]!.modules[0]!;
+    await expect(quizService.startQuiz(USER, module.id)).rejects.toThrow('has not been assigned');
+    expect(db.learningQuizAttempt.create).not.toHaveBeenCalled();
   });
 
   it('resumes an in-progress attempt instead of generating a new quiz', async () => {

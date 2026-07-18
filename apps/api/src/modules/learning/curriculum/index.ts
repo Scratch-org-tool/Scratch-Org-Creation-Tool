@@ -9,6 +9,9 @@ import { foundationsPath } from './foundations.path';
 import { adminPath } from './admin.path';
 import { developerPath } from './developer.path';
 import { architectPath } from './architect.path';
+import { javascriptPath } from './javascript.path';
+import { javaPath } from './java.path';
+import { releaseManagementPath } from './release-management.path';
 
 export type {
   CurriculumLesson,
@@ -17,11 +20,17 @@ export type {
   CurriculumQuizQuestion,
 } from './curriculum.types';
 
-/** All paths, ordered beginner → expert. */
+/**
+ * All paths, ordered beginner → expert (stable within a level: Salesforce
+ * core first, then programming tracks, then delivery tracks).
+ */
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
   adminPath,
+  javascriptPath,
+  javaPath,
   developerPath,
+  releaseManagementPath,
   architectPath,
 ].sort((a, b) => LEARNING_LEVEL_RANK[a.level] - LEARNING_LEVEL_RANK[b.level]);
 

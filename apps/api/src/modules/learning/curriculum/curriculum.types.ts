@@ -1,6 +1,7 @@
 import type {
   LearningLessonSection,
   LearningLevel,
+  LearningPathCategory,
   LearningRealWorldExample,
   LearningResourceLink,
 } from '@sfcc/shared';
@@ -47,6 +48,7 @@ export interface CurriculumPath {
   tagline: string;
   description: string;
   level: LearningLevel;
+  category: LearningPathCategory;
   badge: string;
   estimatedHours: number;
   skills: string[];

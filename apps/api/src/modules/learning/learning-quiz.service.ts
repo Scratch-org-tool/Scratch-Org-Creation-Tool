@@ -122,6 +122,7 @@ export class LearningQuizService {
     const location = getModule(moduleId);
     if (!location) throw new NotFoundException('Learning module not found');
     const { path, module } = location;
+    await this.learningService.assertPathVisible(userId, path.id);
 
     const existing = await prisma.learningQuizAttempt.findFirst({
       where: { userId, moduleId, status: 'in_progress' },

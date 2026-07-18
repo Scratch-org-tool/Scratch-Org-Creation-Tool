@@ -566,7 +566,13 @@ export class AuthService {
   async updateUserAccess(
     requesterFirebaseUid: string,
     targetUserId: string,
-    body: { grantedModules?: AppModule[]; role?: UserRole; status?: UserAccessStatus },
+    body: {
+      grantedModules?: AppModule[];
+      revokedModules?: AppModule[];
+      learningAssignedOnly?: boolean;
+      role?: UserRole;
+      status?: UserAccessStatus;
+    },
     context: AuthAuditContext,
   ) {
     const requester = await this.assertAdmin(requesterFirebaseUid);
@@ -620,10 +626,15 @@ export class AuthService {
         roleChanged: body.role != null && body.role !== target.role,
         statusChanged:
           body.status != null && body.status !== (target.status ?? 'active'),
-        modulesChanged: body.grantedModules != null,
+        modulesChanged: body.grantedModules != null || body.revokedModules != null,
+        learningScopeChanged:
+          body.learningAssignedOnly != null &&
+          body.learningAssignedOnly !== (target.learningAssignedOnly ?? false),
         nextRole: updated.role,
         nextStatus: updated.status ?? 'active',
         moduleCount: updated.grantedModules.length,
+        revokedCount: updated.revokedModules?.length ?? 0,
+        learningAssignedOnly: updated.learningAssignedOnly ?? false,
       },
     );
 
@@ -733,6 +744,8 @@ export class AuthService {
     displayName: string;
     role: UserRole;
     grantedModules: AppModule[];
+    revokedModules?: AppModule[];
+    learningAssignedOnly?: boolean;
     status?: UserAccessStatus;
     lastActiveAt?: string | null;
     createdAt?: string;
@@ -750,6 +763,8 @@ export class AuthService {
     displayName: string;
     role: UserRole;
     grantedModules: AppModule[];
+    revokedModules?: AppModule[];
+    learningAssignedOnly?: boolean;
     status?: UserAccessStatus;
     lastActiveAt?: string | null;
     createdAt?: string;

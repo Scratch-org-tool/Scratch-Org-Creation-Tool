@@ -1,5 +1,6 @@
 import { prisma } from '@sfcc/db';
 import {
+  sanitizeRevokedModules,
   toAppUserId,
   toFirebaseUid,
   type AppModule,
@@ -14,6 +15,8 @@ function toProfile(user: {
   displayName: string;
   role: 'admin' | 'user';
   grantedModules: string[];
+  revokedModules: string[];
+  learningAssignedOnly: boolean;
   status: string;
   lastActiveAt: Date | null;
   createdAt: Date;
@@ -25,6 +28,8 @@ function toProfile(user: {
     displayName: user.displayName,
     role: user.role,
     grantedModules: user.grantedModules as AppModule[],
+    revokedModules: sanitizeRevokedModules(user.revokedModules),
+    learningAssignedOnly: user.learningAssignedOnly,
     status: (user.status === 'inactive' ? 'inactive' : 'active') as UserAccessStatus,
     lastActiveAt: user.lastActiveAt?.toISOString() ?? null,
     createdAt: user.createdAt.toISOString(),
@@ -100,6 +105,8 @@ export async function updateAppUser(
   userId: string,
   updates: {
     grantedModules?: AppModule[];
+    revokedModules?: AppModule[];
+    learningAssignedOnly?: boolean;
     role?: UserRole;
     displayName?: string;
     status?: UserAccessStatus;
@@ -109,6 +116,10 @@ export async function updateAppUser(
     where: { id: userId },
     data: {
       grantedModules: updates.grantedModules,
+      revokedModules: updates.revokedModules
+        ? sanitizeRevokedModules(updates.revokedModules)
+        : undefined,
+      learningAssignedOnly: updates.learningAssignedOnly,
       role: updates.role,
       displayName: updates.displayName,
       status: updates.status,

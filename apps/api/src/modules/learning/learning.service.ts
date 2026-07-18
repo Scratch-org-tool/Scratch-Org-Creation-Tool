@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
   averagePercent,
@@ -20,8 +20,6 @@ import {
   getLesson,
   getPath,
   moduleDurationMinutes,
-  totalLessonCount,
-  totalModuleCount,
   type CurriculumModule,
   type CurriculumPath,
 } from './curriculum';
@@ -37,6 +35,20 @@ export interface UserLearningState {
   /** pathId -> active assignment */
   assignmentsByPath: Map<string, LearningAssignmentView>;
 }
+
+/**
+ * Per-user catalog scope. When an administrator flags a user as
+ * "assigned paths only" (User Access → Manage), the Academy shows and serves
+ * exclusively the paths that user has an active assignment for.
+ */
+export interface LearningAccessScope {
+  assignedOnly: boolean;
+  /** Populated only when assignedOnly — active-assignment path ids. */
+  assignedPathIds: Set<string>;
+}
+
+const RESTRICTED_MESSAGE =
+  'This training path has not been assigned to you. Ask an administrator to assign it from Academy Progress.';
 
 interface AssignmentRow {
   id: string;
@@ -68,6 +80,44 @@ function toAssignmentView(
 
 @Injectable()
 export class LearningService {
+  /** Resolve the user's catalog scope. Admins always see everything. */
+  async getAccessScope(userId: string): Promise<LearningAccessScope> {
+    const user = await prisma.appUser.findUnique({
+      where: { id: userId },
+      select: { role: true, learningAssignedOnly: true },
+    });
+    if (!user || user.role === 'admin' || !user.learningAssignedOnly) {
+      return { assignedOnly: false, assignedPathIds: new Set() };
+    }
+    const assignments = await prisma.learningAssignment.findMany({
+      where: { userId, status: 'active' },
+      select: { pathId: true },
+    });
+    return {
+      assignedOnly: true,
+      assignedPathIds: new Set(assignments.map((a) => a.pathId)),
+    };
+  }
+
+  private isPathVisible(scope: LearningAccessScope, pathId: string): boolean {
+    return !scope.assignedOnly || scope.assignedPathIds.has(pathId);
+  }
+
+  /** Throw 403 when a restricted user reaches for an unassigned path. */
+  async assertPathVisible(userId: string, pathId: string): Promise<void> {
+    const scope = await this.getAccessScope(userId);
+    if (!this.isPathVisible(scope, pathId)) {
+      throw new ForbiddenException(RESTRICTED_MESSAGE);
+    }
+  }
+
+  /** Same gate keyed by lesson — used by tutor/story/video-script endpoints. */
+  async assertLessonVisible(userId: string, lessonId: string): Promise<void> {
+    const location = getLesson(lessonId);
+    if (!location) throw new NotFoundException('Lesson not found');
+    await this.assertPathVisible(userId, location.path.id);
+  }
+
   /** Load everything needed to overlay one user's progress onto the curriculum. */
   async loadUserState(userId: string): Promise<UserLearningState> {
     const [lessonRows, attemptRows, assignmentRows] = await Promise.all([
@@ -175,6 +225,7 @@ export class LearningService {
       tagline: path.tagline,
       description: path.description,
       level: path.level,
+      category: path.category,
       badge: path.badge,
       estimatedHours: path.estimatedHours,
       skills: path.skills,
@@ -187,23 +238,28 @@ export class LearningService {
     };
   }
 
+  /**
+   * Stats are computed over the paths the user can SEE, so a restricted
+   * learner's totals describe their assigned curriculum, not hidden content.
+   */
   private buildStats(paths: LearningPathSummary[], state: UserLearningState): LearningStats {
-    const allAttempts = [...state.quizAttemptsByModule.values()].flat();
-    const modulesCompleted = paths
-      .flatMap((p) => p.modules)
-      .filter((m) => m.completed).length;
+    const visibleModules = paths.flatMap((p) => p.modules);
+    const visibleModuleIds = new Set(visibleModules.map((m) => m.id));
+    const visibleAttempts = [...state.quizAttemptsByModule.entries()]
+      .filter(([moduleId]) => visibleModuleIds.has(moduleId))
+      .flatMap(([, attempts]) => attempts);
     return {
-      lessonsCompleted: state.lessonCompletions.size,
-      totalLessons: totalLessonCount(),
-      modulesCompleted,
-      totalModules: totalModuleCount(),
+      lessonsCompleted: visibleModules
+        .flatMap((m) => m.lessons)
+        .filter((l) => l.completed).length,
+      totalLessons: visibleModules.reduce((sum, m) => sum + m.lessons.length, 0),
+      modulesCompleted: visibleModules.filter((m) => m.completed).length,
+      totalModules: visibleModules.length,
       pathsCompleted: paths.filter((p) => p.completed).length,
       totalPaths: paths.length,
-      quizzesPassed: [...state.quizAttemptsByModule.values()].filter((attempts) =>
-        attempts.some((a) => a.passed),
-      ).length,
-      quizAttempts: allAttempts.length,
-      averageScorePercent: averagePercent(allAttempts.map((a) => a.scorePercent)),
+      quizzesPassed: visibleModules.filter((m) => m.quiz.passed).length,
+      quizAttempts: visibleAttempts.length,
+      averageScorePercent: averagePercent(visibleAttempts.map((a) => a.scorePercent)),
     };
   }
 
@@ -247,18 +303,25 @@ export class LearningService {
   }
 
   async getCatalog(userId: string): Promise<LearningCatalogResponse> {
-    const state = await this.loadUserState(userId);
-    const paths = CURRICULUM.map((path) => this.buildPathSummary(path, state));
+    const [state, scope] = await Promise.all([
+      this.loadUserState(userId),
+      this.getAccessScope(userId),
+    ]);
+    const paths = CURRICULUM.filter((path) => this.isPathVisible(scope, path.id)).map((path) =>
+      this.buildPathSummary(path, state),
+    );
     return {
       paths,
       stats: this.buildStats(paths, state),
       continueTarget: this.buildContinueTarget(paths),
+      assignedOnly: scope.assignedOnly,
     };
   }
 
   async getPathDetail(userId: string, pathId: string): Promise<LearningPathSummary> {
     const path = getPath(pathId);
     if (!path) throw new NotFoundException('Learning path not found');
+    await this.assertPathVisible(userId, pathId);
     const state = await this.loadUserState(userId);
     return this.buildPathSummary(path, state);
   }
@@ -266,6 +329,7 @@ export class LearningService {
   async getLessonView(userId: string, lessonId: string): Promise<LearningLessonResponse> {
     const location = getLesson(lessonId);
     if (!location) throw new NotFoundException('Lesson not found');
+    await this.assertPathVisible(userId, location.path.id);
     const { path, module, lesson, lessonIndex } = location;
 
     const progress = await prisma.learningLessonProgress.findUnique({
@@ -308,6 +372,7 @@ export class LearningService {
   ): Promise<{ completed: true; completedAt: string; pathCompleted: boolean; pathId: string }> {
     const location = getLesson(lessonId);
     if (!location) throw new NotFoundException('Lesson not found');
+    await this.assertPathVisible(userId, location.path.id);
     const { path, module } = location;
 
     const wasCompleteBefore = await this.isPathComplete(userId, path.id);

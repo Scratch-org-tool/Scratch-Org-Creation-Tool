@@ -67,7 +67,8 @@ export class LearningController {
 
   /** Complete end-to-end video session script for one lesson (AI-first, curriculum fallback). */
   @Get('lessons/:lessonId/video-script')
-  getVideoScript(@Param('lessonId') lessonId: string) {
+  async getVideoScript(@CurrentUser() userId: string, @Param('lessonId') lessonId: string) {
+    await this.learningService.assertLessonVisible(userId, lessonId);
     return this.videoScriptService.getScript(lessonId);
   }
 
@@ -95,53 +96,72 @@ export class LearningController {
   }
 
   @Post('tutor')
-  askTutor(@Body() body: unknown) {
+  async askTutor(@CurrentUser() userId: string, @Body() body: unknown) {
     const parsed = learningTutorAskSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
+    }
+    if (parsed.data.lessonId) {
+      await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     }
     return this.tutorService.ask(parsed.data);
   }
 
   /** AI-scripted animated storyboard (voice + graphics) for a lesson. */
   @Post('tutor/explainer')
-  getExplainer(@Body() body: unknown) {
+  async getExplainer(@CurrentUser() userId: string, @Body() body: unknown) {
     const parsed = learningExplainerRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     return this.explainerService.getStoryboard(parsed.data);
   }
 
   /** Generated motion clip (ComfyUI/LTX) for one scene; 204 means fall back to still art. */
   @Post('tutor/explainer/video')
-  async getExplainerVideo(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerVideo(
+    @CurrentUser() userId: string,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerVideoRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     const media = await this.explainerService.getSceneVideo(parsed.data);
     this.sendMedia(response, media, 'academy-scene-motion');
   }
 
   /** Generated still art (Stable Diffusion/FLUX) for one scene; 204 means use the diagram fallback. */
   @Post('tutor/explainer/image')
-  async getExplainerImage(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerImage(
+    @CurrentUser() userId: string,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerImageRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     const media = await this.explainerService.getSceneImage(parsed.data);
     this.sendMedia(response, media, 'academy-scene');
   }
 
   /** Selectable studio narration for one scene; 204 means use browser speech. */
   @Post('tutor/explainer/speech')
-  async getExplainerSpeech(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerSpeech(
+    @CurrentUser() userId: string,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerSpeechRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    await this.learningService.assertLessonVisible(userId, parsed.data.lessonId);
     const media = await this.explainerService.getSceneSpeech(parsed.data);
     this.sendMedia(response, media, 'academy-narration');
   }
