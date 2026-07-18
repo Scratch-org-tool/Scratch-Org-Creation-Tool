@@ -285,10 +285,7 @@ export function LessonWorkspace() {
               </div>
 
               {mode === 'video' ? (
-                <VideoSessionBlock
-                  lessonId={view.lesson.id}
-                  onPlayAnimated={() => playStory('lesson')}
-                />
+                <VideoSessionBlock lessonId={view.lesson.id} />
               ) : (
                 <>
                   <div className="rounded-xl border border-border/60 bg-card/60 p-4">
