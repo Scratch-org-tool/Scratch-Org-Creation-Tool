@@ -62,6 +62,7 @@ function createRegistry() {
     worker as never,
     worker as never,
     worker as never,
+    worker as never,
   );
   registry.onModuleInit();
   return {

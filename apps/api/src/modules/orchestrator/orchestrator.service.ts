@@ -56,12 +56,17 @@ export class OrchestratorService {
     queueName: string,
     jobType: string,
     payload: Record<string, unknown>,
-    options?: { parentRunId?: string; createdBy?: string },
+    options?: {
+      parentRunId?: string;
+      createdBy?: string;
+      /** Audit-safe payload stored in Postgres when the queue payload contains transient secrets or files. */
+      persistedPayload?: Record<string, unknown>;
+    },
   ) {
     const dbJob = await this.jobsService.create({
       queue: queueName,
       type: jobType,
-      payload,
+      payload: options?.persistedPayload ?? payload,
       parentRunId: options?.parentRunId,
       createdBy: options?.createdBy,
     });

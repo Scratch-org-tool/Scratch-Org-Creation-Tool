@@ -7,7 +7,7 @@ export function DataCenterPageHeader() {
   return (
     <DeploymentPageHeader
       title="Data Operations"
-      subtitle="CONA seed, Account Partner mapping, replication, and query templates — all in one workspace."
+      subtitle="Spreadsheet updates, CONA seed, Account Partner mapping, replication, and query templates."
       icon={Database}
       accentClass="to-green-500/10"
       showBreadcrumbs

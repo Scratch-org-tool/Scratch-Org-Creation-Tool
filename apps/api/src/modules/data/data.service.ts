@@ -15,6 +15,7 @@ import {
   OrgToOrgSoqlParseError,
   sfdmuExportSchema,
   type AccountPartnerMigrationInput,
+  type BulkDataUpdateConfig,
   type ConaSeedRunInput,
   type OrgToOrgDeployBatchResult,
   type OrgToOrgObjectDeployConfig,
@@ -991,6 +992,37 @@ export class DataService {
         recordLimit: input.recordLimit,
       },
       { createdBy: userId },
+    );
+    return { jobId: job.id, status: 'queued' };
+  }
+
+  async enqueueBulkDataUpdate(
+    input: {
+      config: BulkDataUpdateConfig;
+      workbookBase64: string;
+      fileName: string;
+      fileSize: number;
+    },
+    userId: string,
+  ) {
+    await this.requireOwnedOrg(input.config.targetOrgId, userId);
+    const job = await this.orchestrator.enqueueJob(
+      QUEUE_NAMES.BULK_DATA_UPDATE,
+      'bulk_data_update',
+      {
+        config: input.config,
+        workbookBase64: input.workbookBase64,
+        fileName: input.fileName,
+        userId,
+      },
+      {
+        createdBy: userId,
+        persistedPayload: {
+          config: input.config,
+          fileName: input.fileName,
+          fileSize: input.fileSize,
+        },
+      },
     );
     return { jobId: job.id, status: 'queued' };
   }
