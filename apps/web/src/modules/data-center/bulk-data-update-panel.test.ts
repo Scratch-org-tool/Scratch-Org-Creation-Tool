@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { suggestTargetField } from './bulk-data-update-panel';
+import { suggestTargetField } from './bulk-data-update-mapping';
 
 const fields = [
   {

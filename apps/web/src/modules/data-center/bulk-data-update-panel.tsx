@@ -23,6 +23,11 @@ import {
 import { FileDropzone } from '@/modules/scratch-templates/components/file-dropzone';
 import { useOrgs } from '@/hooks/use-orgs';
 import { api } from '@/services/api';
+import {
+  equivalentBulkUpdateHeading,
+  fieldAliases,
+  suggestTargetField,
+} from './bulk-data-update-mapping';
 
 const DEFAULT_OBJECT = 'cfs_ob__EmployeeMaster__c';
 const TERMINAL_STATUSES = ['completed', 'partial', 'failed', 'cancelled'];
@@ -105,41 +110,6 @@ interface JobData {
   status: string;
   error?: string | null;
   logs?: Array<{ line: string }>;
-}
-
-function normalizedName(value: string): string {
-  return value
-    .toLocaleLowerCase()
-    .replace(/^cfs_ob__/, '')
-    .replace(/__(c|r)$/, '')
-    .replace(/[^a-z0-9]/g, '');
-}
-
-function fieldAliases(field: FieldInfo): string[] {
-  const aliases = [field.name, field.label];
-  const apiName = field.name.toLocaleLowerCase();
-  if (apiName === 'cfs_ob__employeeno__c') {
-    aliases.push(
-      'Employee Number',
-      'Employee No',
-      'Employee Master Number',
-      'Employee Master No',
-      'Emp No',
-    );
-  } else if (apiName === 'name') {
-    aliases.push('Employee Name', 'Full Name');
-  } else if (apiName === 'cfs_ob__bottler__c') {
-    aliases.push('Bottler', 'Bottler Number', 'Bottler No');
-  } else if (apiName === 'cfs_ob__external_id__c') {
-    aliases.push('External ID', 'External Id');
-  }
-  return aliases;
-}
-
-export function suggestTargetField(header: string, fields: FieldInfo[]): string {
-  const normalizedHeader = normalizedName(header);
-  return fields.find((field) =>
-    fieldAliases(field).some((alias) => normalizedName(alias) === normalizedHeader))?.name ?? '';
 }
 
 function sheetFor(
@@ -253,7 +223,7 @@ export function BulkDataUpdatePanel() {
     const suggestedMatchColumn = recommendedFieldMeta
       ? selectedSheet.headers.find((header) =>
           fieldAliases(recommendedFieldMeta)
-            .some((alias) => normalizedName(alias) === normalizedName(header))) ?? ''
+            .some((alias) => equivalentBulkUpdateHeading(alias, header))) ?? ''
       : '';
     setMatchField(recommendedField);
     setMatchColumn(suggestedMatchColumn);

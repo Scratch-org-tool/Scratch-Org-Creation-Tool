@@ -105,7 +105,7 @@ interface PreparedContext {
   mappings: ResolvedMapping[];
 }
 
-interface PlannedChange {
+export interface PlannedChange {
   field: string;
   label: string;
   currentValue: string;
@@ -718,8 +718,9 @@ export class BulkDataUpdateService {
             ?? `Could not match target records by ${context.matchField.name}`,
           );
         }
-        recordsByChunk[chunkIndex] = (result.data?.result?.records ?? [])
-          as Array<Record<string, unknown>>;
+        recordsByChunk[chunkIndex] = (result.data?.result?.records ?? []) as Array<
+          Record<string, unknown>
+        >;
       }
     };
     await Promise.all(
