@@ -11,6 +11,7 @@ export const foundationsPath: CurriculumPath = {
   tagline: 'From zero to confident navigator — the fresher onboarding track.',
   description:
     'Start here if you are new to Salesforce or CRM in general. This path explains what Salesforce is, how the platform organizes information, and how real teams use it every day. You will finish able to navigate any org, read its data model, and build your first report.',
+  category: 'salesforce',
   level: 'beginner',
   badge: 'Foundations Graduate',
   estimatedHours: 6,

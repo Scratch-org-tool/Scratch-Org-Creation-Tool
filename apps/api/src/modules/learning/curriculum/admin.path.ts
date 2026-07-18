@@ -11,6 +11,7 @@ export const adminPath: CurriculumPath = {
   tagline: 'Security, automation, and data operations — the working admin\'s toolkit.',
   description:
     'Go beyond navigation into how Salesforce is actually governed: who sees what (the security model), how business processes are automated with Flow, and how data is loaded, cleaned, and released safely. This is the path that turns platform literacy into hands-on capability.',
+  category: 'salesforce',
   level: 'intermediate',
   badge: 'Certified-Ready Admin',
   estimatedHours: 10,

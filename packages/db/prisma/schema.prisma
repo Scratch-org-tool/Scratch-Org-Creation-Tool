@@ -712,6 +712,9 @@ model AppUser {
   displayName    String
   role           AppUserRole @default(user)
   grantedModules String[]    @default([])
+  /// Granular Salesforce Academy grants (`category:*` / `capability:*`). Only
+  /// meaningful alongside the `learning` module; empty means "use defaults".
+  learningFeatures String[]  @default([])
   status         String      @default("active")
   lastActiveAt   DateTime?
   /// Personal opt-in for outbound email alerts (work-item updates, job

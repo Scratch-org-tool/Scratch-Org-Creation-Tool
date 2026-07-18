@@ -37,10 +37,13 @@ import {
   extractJsonArray,
   normalizeAiQuestion,
 } from './learning-quiz.service';
+import { LEARNING_LEVEL_RANK, resolveLearningFeatureAccess } from '@sfcc/shared';
 import type { NvidiaService } from '../../integrations/nvidia/nvidia.service';
 import type { NotificationsService } from '../notifications/notifications.service';
 
 const USER = 'DPT_test-user';
+/** Full feature access (all tracks + capabilities), as an admin would resolve. */
+const ACCESS = resolveLearningFeatureAccess({ role: 'admin', grantedModules: [] });
 
 function emptyState() {
   db.learningLessonProgress.findMany.mockResolvedValue([]);
@@ -50,14 +53,40 @@ function emptyState() {
 }
 
 describe('curriculum integrity', () => {
-  it('contains 4 paths ordered beginner → expert', () => {
-    expect(CURRICULUM).toHaveLength(4);
-    expect(CURRICULUM.map((p) => p.level)).toEqual([
-      'beginner',
-      'intermediate',
-      'advanced',
-      'expert',
-    ]);
+  it('groups paths by discipline, each ordered beginner → expert', () => {
+    expect(CURRICULUM.length).toBeGreaterThanOrEqual(8);
+    // The first path is the beginner Salesforce foundations track.
+    expect(CURRICULUM[0]!.category).toBe('salesforce');
+    expect(CURRICULUM[0]!.level).toBe('beginner');
+
+    // Each discipline forms a single contiguous block (no interleaving).
+    const categories = CURRICULUM.map((p) => p.category);
+    const firstIndex = new Map<string, number>();
+    const lastIndex = new Map<string, number>();
+    categories.forEach((category, index) => {
+      if (!firstIndex.has(category)) firstIndex.set(category, index);
+      lastIndex.set(category, index);
+    });
+    for (const [category, first] of firstIndex) {
+      const span = categories.slice(first, lastIndex.get(category)! + 1);
+      expect(span.every((c) => c === category)).toBe(true);
+    }
+
+    // Within each discipline, levels are non-decreasing.
+    for (const category of new Set(categories)) {
+      const levels = CURRICULUM.filter((p) => p.category === category).map(
+        (p) => LEARNING_LEVEL_RANK[p.level],
+      );
+      expect(levels).toEqual([...levels].sort((a, b) => a - b));
+    }
+  });
+
+  it('covers every advertised discipline', () => {
+    const categories = new Set(CURRICULUM.map((p) => p.category));
+    expect(categories.has('salesforce')).toBe(true);
+    expect(categories.has('javascript')).toBe(true);
+    expect(categories.has('java')).toBe(true);
+    expect(categories.has('devops')).toBe(true);
   });
 
   it('has globally unique lesson and module ids and non-trivial volume', () => {
@@ -126,8 +155,9 @@ describe('LearningService catalog + progress', () => {
   });
 
   it('returns zeroed progress for a fresh user', async () => {
-    const catalog = await service.getCatalog(USER);
-    expect(catalog.paths).toHaveLength(4);
+    const catalog = await service.getCatalog(USER, ACCESS);
+    expect(catalog.paths).toHaveLength(CURRICULUM.length);
+    expect(catalog.features.categories).toContain('salesforce');
     expect(catalog.stats.lessonsCompleted).toBe(0);
     expect(catalog.stats.averageScorePercent).toBeNull();
     // Fresh users should be pointed at the very first lesson of the beginner path.
@@ -153,7 +183,7 @@ describe('LearningService catalog + progress', () => {
       },
     ]);
 
-    const catalog = await service.getCatalog(USER);
+    const catalog = await service.getCatalog(USER, ACCESS);
     const summary = catalog.paths.find((p) => p.id === path.id)!;
     const moduleMeta = summary.modules.find((m) => m.id === module.id)!;
 
@@ -175,7 +205,7 @@ describe('LearningService catalog + progress', () => {
       })),
     );
 
-    const catalog = await service.getCatalog(USER);
+    const catalog = await service.getCatalog(USER, ACCESS);
     expect(catalog.continueTarget).toEqual(
       expect.objectContaining({ moduleId: module.id, kind: 'quiz', lessonId: null }),
     );
@@ -197,7 +227,7 @@ describe('LearningService catalog + progress', () => {
     ]);
     db.appUser.findMany.mockResolvedValue([{ id: 'DPT_admin', displayName: 'Admin' }]);
 
-    const catalog = await service.getCatalog(USER);
+    const catalog = await service.getCatalog(USER, ACCESS);
     expect(catalog.continueTarget?.pathId).toBe(assignedPath.id);
     const summary = catalog.paths.find((p) => p.id === assignedPath.id)!;
     expect(summary.assignment?.assignedByName).toBe('Admin');
@@ -208,7 +238,7 @@ describe('LearningService catalog + progress', () => {
     const last = module.lessons[module.lessons.length - 1]!;
     db.learningLessonProgress.findUnique.mockResolvedValue(null);
 
-    const view = await service.getLessonView(USER, last.id);
+    const view = await service.getLessonView(USER, last.id, ACCESS);
     expect(view.lesson.sections.length).toBeGreaterThan(0);
     expect(view.nextLessonId).toBeNull();
     expect(view.quizNext).toBe(true);
@@ -216,7 +246,7 @@ describe('LearningService catalog + progress', () => {
   });
 
   it('rejects unknown lessons', async () => {
-    await expect(service.getLessonView(USER, 'ghost-lesson')).rejects.toThrow(
+    await expect(service.getLessonView(USER, 'ghost-lesson', ACCESS)).rejects.toThrow(
       'Lesson not found',
     );
   });
@@ -228,13 +258,53 @@ describe('LearningService catalog + progress', () => {
     });
     emptyState();
 
-    const result = await service.completeLesson(USER, lesson.id);
+    const result = await service.completeLesson(USER, lesson.id, ACCESS);
     expect(result.completed).toBe(true);
     expect(db.learningLessonProgress.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId_lessonId: { userId: USER, lessonId: lesson.id } },
       }),
     );
+  });
+});
+
+describe('LearningService feature gating (admin-controlled access)', () => {
+  let service: LearningService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    service = new LearningService();
+    emptyState();
+  });
+
+  const jsOnly = resolveLearningFeatureAccess({
+    role: 'user',
+    grantedModules: ['learning'],
+    learningFeatures: ['category:javascript', 'capability:quiz'],
+  });
+
+  it('hides tracks the learner has not been granted', async () => {
+    const catalog = await service.getCatalog(USER, jsOnly);
+    expect(catalog.paths.length).toBeGreaterThan(0);
+    expect(catalog.paths.every((p) => p.category === 'javascript')).toBe(true);
+    expect(catalog.features.categories).toEqual(['javascript']);
+    // Denominators reflect only the visible tracks.
+    expect(catalog.stats.totalPaths).toBe(catalog.paths.length);
+  });
+
+  it('forbids opening a lesson from a track the learner cannot access', async () => {
+    const sfLesson = CURRICULUM.find((p) => p.category === 'salesforce')!.modules[0]!.lessons[0]!;
+    db.learningLessonProgress.findUnique.mockResolvedValue(null);
+    await expect(service.getLessonView(USER, sfLesson.id, jsOnly)).rejects.toThrow(/not enabled/);
+  });
+
+  it('allows opening a lesson from a granted track and reflects capability flags', async () => {
+    const jsLesson = CURRICULUM.find((p) => p.category === 'javascript')!.modules[0]!.lessons[0]!;
+    db.learningLessonProgress.findUnique.mockResolvedValue(null);
+    const view = await service.getLessonView(USER, jsLesson.id, jsOnly);
+    expect(view.category).toBe('javascript');
+    expect(view.features.quiz).toBe(true);
+    expect(view.features.mentor).toBe(false);
   });
 });
 
@@ -342,7 +412,7 @@ describe('LearningQuizService', () => {
       }),
     );
 
-    const attempt = await quizService.startQuiz(USER, module.id);
+    const attempt = await quizService.startQuiz(USER, module.id, ACCESS);
     expect(attempt.source).toBe('static');
     expect(attempt.questions).toHaveLength(8);
     // Served questions must never leak answers.
@@ -370,9 +440,35 @@ describe('LearningQuizService', () => {
     );
 
     const module = CURRICULUM[0]!.modules[0]!;
-    const attempt = await quizService.startQuiz(USER, module.id);
+    const attempt = await quizService.startQuiz(USER, module.id, ACCESS);
     expect(attempt.source).toBe('ai');
     expect(attempt.questions[0]!.prompt).toContain('Generated question');
+  });
+
+  it('rejects quiz start when the track or quiz capability is not granted', async () => {
+    const sfModule = CURRICULUM.find((p) => p.category === 'salesforce')!.modules[0]!;
+    db.learningQuizAttempt.findFirst.mockResolvedValue(null);
+
+    // Granted the track but not the quiz capability.
+    const noQuiz = resolveLearningFeatureAccess({
+      role: 'user',
+      grantedModules: ['learning'],
+      learningFeatures: ['category:salesforce'],
+    });
+    await expect(quizService.startQuiz(USER, sfModule.id, noQuiz)).rejects.toThrow(
+      /Quizzes are not enabled/,
+    );
+
+    // Granted quizzes but the wrong track.
+    const wrongTrack = resolveLearningFeatureAccess({
+      role: 'user',
+      grantedModules: ['learning'],
+      learningFeatures: ['category:javascript', 'capability:quiz'],
+    });
+    await expect(quizService.startQuiz(USER, sfModule.id, wrongTrack)).rejects.toThrow(
+      /not enabled/,
+    );
+    expect(db.learningQuizAttempt.create).not.toHaveBeenCalled();
   });
 
   it('resumes an in-progress attempt instead of generating a new quiz', async () => {
@@ -388,7 +484,7 @@ describe('LearningQuizService', () => {
       startedAt: new Date(),
     });
 
-    const attempt = await quizService.startQuiz(USER, module.id);
+    const attempt = await quizService.startQuiz(USER, module.id, ACCESS);
     expect(attempt.id).toBe('attempt-existing');
     expect(nvidia.chat).not.toHaveBeenCalled();
     expect(db.learningQuizAttempt.create).not.toHaveBeenCalled();

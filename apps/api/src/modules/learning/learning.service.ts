@@ -1,14 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
   averagePercent,
+  hasLearningCategory,
   isModuleCompleted,
   isPathCompleted,
   moduleProgressPercent,
   pathProgressPercent,
+  LEARNING_CATEGORY_LABELS,
   type LearningAssignmentView,
   type LearningCatalogResponse,
   type LearningContinueTarget,
+  type LearningFeatureAccess,
   type LearningLessonResponse,
   type LearningModuleMeta,
   type LearningPathSummary,
@@ -18,10 +21,9 @@ import {
 import {
   CURRICULUM,
   getLesson,
+  getModule,
   getPath,
   moduleDurationMinutes,
-  totalLessonCount,
-  totalModuleCount,
   type CurriculumModule,
   type CurriculumPath,
 } from './curriculum';
@@ -174,6 +176,7 @@ export class LearningService {
       title: path.title,
       tagline: path.tagline,
       description: path.description,
+      category: path.category,
       level: path.level,
       badge: path.badge,
       estimatedHours: path.estimatedHours,
@@ -187,24 +190,49 @@ export class LearningService {
     };
   }
 
+  /**
+   * Stats are scoped to the paths the learner can actually see, so a user with
+   * only the Salesforce track granted never sees denominators (or completions)
+   * from tracks they cannot open.
+   */
   private buildStats(paths: LearningPathSummary[], state: UserLearningState): LearningStats {
-    const allAttempts = [...state.quizAttemptsByModule.values()].flat();
-    const modulesCompleted = paths
-      .flatMap((p) => p.modules)
-      .filter((m) => m.completed).length;
+    const modules = paths.flatMap((p) => p.modules);
+    const moduleIds = new Set(modules.map((m) => m.id));
+    const accessibleAttempts = [...state.quizAttemptsByModule.entries()]
+      .filter(([moduleId]) => moduleIds.has(moduleId))
+      .flatMap(([, attempts]) => attempts);
+
+    const lessonsCompleted = modules.reduce(
+      (sum, m) => sum + m.lessons.filter((l) => l.completed).length,
+      0,
+    );
+    const totalLessons = modules.reduce((sum, m) => sum + m.lessons.length, 0);
+
     return {
-      lessonsCompleted: state.lessonCompletions.size,
-      totalLessons: totalLessonCount(),
-      modulesCompleted,
-      totalModules: totalModuleCount(),
+      lessonsCompleted,
+      totalLessons,
+      modulesCompleted: modules.filter((m) => m.completed).length,
+      totalModules: modules.length,
       pathsCompleted: paths.filter((p) => p.completed).length,
       totalPaths: paths.length,
-      quizzesPassed: [...state.quizAttemptsByModule.values()].filter((attempts) =>
-        attempts.some((a) => a.passed),
-      ).length,
-      quizAttempts: allAttempts.length,
-      averageScorePercent: averagePercent(allAttempts.map((a) => a.scorePercent)),
+      quizzesPassed: modules.filter((m) => m.quiz.passed).length,
+      quizAttempts: accessibleAttempts.length,
+      averageScorePercent: averagePercent(accessibleAttempts.map((a) => a.scorePercent)),
     };
+  }
+
+  /** Throw a clear 403 if the learner has not been granted this path's track. */
+  private assertCategoryAccess(access: LearningFeatureAccess, path: CurriculumPath): void {
+    if (!hasLearningCategory(access, path.category)) {
+      throw new ForbiddenException(
+        `The ${LEARNING_CATEGORY_LABELS[path.category]} training track is not enabled for your account.`,
+      );
+    }
+  }
+
+  /** Only the paths whose discipline the learner is allowed to see. */
+  private accessiblePaths(access: LearningFeatureAccess): CurriculumPath[] {
+    return CURRICULUM.filter((path) => hasLearningCategory(access, path.category));
   }
 
   /**
@@ -246,27 +274,41 @@ export class LearningService {
     return null;
   }
 
-  async getCatalog(userId: string): Promise<LearningCatalogResponse> {
+  async getCatalog(
+    userId: string,
+    access: LearningFeatureAccess,
+  ): Promise<LearningCatalogResponse> {
     const state = await this.loadUserState(userId);
-    const paths = CURRICULUM.map((path) => this.buildPathSummary(path, state));
+    const paths = this.accessiblePaths(access).map((path) => this.buildPathSummary(path, state));
     return {
       paths,
       stats: this.buildStats(paths, state),
       continueTarget: this.buildContinueTarget(paths),
+      features: access,
     };
   }
 
-  async getPathDetail(userId: string, pathId: string): Promise<LearningPathSummary> {
+  async getPathDetail(
+    userId: string,
+    pathId: string,
+    access: LearningFeatureAccess,
+  ): Promise<LearningPathSummary> {
     const path = getPath(pathId);
     if (!path) throw new NotFoundException('Learning path not found');
+    this.assertCategoryAccess(access, path);
     const state = await this.loadUserState(userId);
     return this.buildPathSummary(path, state);
   }
 
-  async getLessonView(userId: string, lessonId: string): Promise<LearningLessonResponse> {
+  async getLessonView(
+    userId: string,
+    lessonId: string,
+    access: LearningFeatureAccess,
+  ): Promise<LearningLessonResponse> {
     const location = getLesson(lessonId);
     if (!location) throw new NotFoundException('Lesson not found');
     const { path, module, lesson, lessonIndex } = location;
+    this.assertCategoryAccess(access, path);
 
     const progress = await prisma.learningLessonProgress.findUnique({
       where: { userId_lessonId: { userId, lessonId } },
@@ -291,6 +333,7 @@ export class LearningService {
       },
       pathId: path.id,
       pathTitle: path.title,
+      category: path.category,
       moduleId: module.id,
       moduleTitle: module.title,
       completed: progress !== null,
@@ -298,6 +341,7 @@ export class LearningService {
       previousLessonId: previous?.id ?? null,
       nextLessonId: next?.id ?? null,
       quizNext: next === null,
+      features: access,
     };
   }
 
@@ -305,10 +349,12 @@ export class LearningService {
   async completeLesson(
     userId: string,
     lessonId: string,
+    access: LearningFeatureAccess,
   ): Promise<{ completed: true; completedAt: string; pathCompleted: boolean; pathId: string }> {
     const location = getLesson(lessonId);
     if (!location) throw new NotFoundException('Lesson not found');
     const { path, module } = location;
+    this.assertCategoryAccess(access, path);
 
     const wasCompleteBefore = await this.isPathComplete(userId, path.id);
 
@@ -346,7 +392,11 @@ export class LearningService {
   async listModuleAttempts(
     userId: string,
     moduleId: string,
+    access: LearningFeatureAccess,
   ): Promise<LearningQuizAttemptSummary[]> {
+    const location = getModule(moduleId);
+    if (!location) throw new NotFoundException('Module not found');
+    this.assertCategoryAccess(access, location.path);
     const rows = await prisma.learningQuizAttempt.findMany({
       where: { userId, moduleId, status: 'completed' },
       orderBy: { completedAt: 'desc' },

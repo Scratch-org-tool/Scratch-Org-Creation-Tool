@@ -38,6 +38,7 @@ import {
   type UpdateMeInput,
   getEffectiveModules,
   displayAccessRole,
+  isLearningFeature,
   toAppUserId,
   type AppModule,
   type UserAccessStatus,
@@ -566,7 +567,12 @@ export class AuthService {
   async updateUserAccess(
     requesterFirebaseUid: string,
     targetUserId: string,
-    body: { grantedModules?: AppModule[]; role?: UserRole; status?: UserAccessStatus },
+    body: {
+      grantedModules?: AppModule[];
+      learningFeatures?: string[];
+      role?: UserRole;
+      status?: UserAccessStatus;
+    },
     context: AuthAuditContext,
   ) {
     const requester = await this.assertAdmin(requesterFirebaseUid);
@@ -621,9 +627,11 @@ export class AuthService {
         statusChanged:
           body.status != null && body.status !== (target.status ?? 'active'),
         modulesChanged: body.grantedModules != null,
+        learningFeaturesChanged: body.learningFeatures != null,
         nextRole: updated.role,
         nextStatus: updated.status ?? 'active',
         moduleCount: updated.grantedModules.length,
+        learningFeatureCount: updated.learningFeatures?.length ?? 0,
       },
     );
 
@@ -733,6 +741,7 @@ export class AuthService {
     displayName: string;
     role: UserRole;
     grantedModules: AppModule[];
+    learningFeatures?: string[];
     status?: UserAccessStatus;
     lastActiveAt?: string | null;
     createdAt?: string;
@@ -740,6 +749,7 @@ export class AuthService {
   }): MeResponse {
     return {
       ...profile,
+      learningFeatures: (profile.learningFeatures ?? []).filter(isLearningFeature),
       effectiveModules: getEffectiveModules(profile),
     };
   }
@@ -750,6 +760,7 @@ export class AuthService {
     displayName: string;
     role: UserRole;
     grantedModules: AppModule[];
+    learningFeatures?: string[];
     status?: UserAccessStatus;
     lastActiveAt?: string | null;
     createdAt?: string;

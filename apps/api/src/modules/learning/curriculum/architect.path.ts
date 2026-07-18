@@ -12,6 +12,7 @@ export const architectPath: CurriculumPath = {
   tagline: 'Design for scale, integrate with intent, release with confidence.',
   description:
     'The expert path: how Salesforce behaves at millions of records and thousands of users, how to architect integrations and identity across an enterprise landscape, and how modern teams deliver change through source control, scratch orgs, and CI/CD pipelines. Think in trade-offs, document decisions, and design what the platform rewards.',
+  category: 'salesforce',
   level: 'expert',
   badge: 'Architect Mastery',
   estimatedHours: 12,

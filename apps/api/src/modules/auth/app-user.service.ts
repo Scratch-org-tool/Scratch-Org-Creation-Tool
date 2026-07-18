@@ -14,6 +14,7 @@ function toProfile(user: {
   displayName: string;
   role: 'admin' | 'user';
   grantedModules: string[];
+  learningFeatures: string[];
   status: string;
   lastActiveAt: Date | null;
   createdAt: Date;
@@ -25,6 +26,7 @@ function toProfile(user: {
     displayName: user.displayName,
     role: user.role,
     grantedModules: user.grantedModules as AppModule[],
+    learningFeatures: user.learningFeatures ?? [],
     status: (user.status === 'inactive' ? 'inactive' : 'active') as UserAccessStatus,
     lastActiveAt: user.lastActiveAt?.toISOString() ?? null,
     createdAt: user.createdAt.toISOString(),
@@ -100,6 +102,7 @@ export async function updateAppUser(
   userId: string,
   updates: {
     grantedModules?: AppModule[];
+    learningFeatures?: string[];
     role?: UserRole;
     displayName?: string;
     status?: UserAccessStatus;
@@ -109,6 +112,7 @@ export async function updateAppUser(
     where: { id: userId },
     data: {
       grantedModules: updates.grantedModules,
+      learningFeatures: updates.learningFeatures,
       role: updates.role,
       displayName: updates.displayName,
       status: updates.status,

@@ -48,6 +48,12 @@ export interface UserAccessProfile {
   displayName: string;
   role: UserRole;
   grantedModules: AppModule[];
+  /**
+   * Granular Salesforce Academy permissions (`category:*` / `capability:*`).
+   * Empty means "not customised" — see `resolveLearningFeatures` for how the
+   * default baseline is applied. Ignored unless the `learning` module is held.
+   */
+  learningFeatures?: string[];
   status?: UserAccessStatus;
   lastActiveAt?: string | null;
 }

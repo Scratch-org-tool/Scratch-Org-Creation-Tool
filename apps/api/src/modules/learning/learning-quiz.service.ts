@@ -1,10 +1,20 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { prisma, type Prisma } from '@sfcc/db';
 import {
+  LEARNING_CATEGORY_LABELS,
   LEARNING_QUIZ_PASS_PERCENT,
   LEARNING_QUIZ_QUESTION_COUNT,
   calculateQuizScorePercent,
+  hasLearningCapability,
+  hasLearningCategory,
   isQuizPassed,
+  type LearningFeatureAccess,
   type LearningQuizAnswerReview,
   type LearningQuizAttemptView,
   type LearningQuizResult,
@@ -118,10 +128,23 @@ export class LearningQuizService {
    * LLM with the static bank as guaranteed fallback; correct answers are
    * stored server-side only.
    */
-  async startQuiz(userId: string, moduleId: string): Promise<LearningQuizAttemptView> {
+  async startQuiz(
+    userId: string,
+    moduleId: string,
+    access: LearningFeatureAccess,
+  ): Promise<LearningQuizAttemptView> {
     const location = getModule(moduleId);
     if (!location) throw new NotFoundException('Learning module not found');
     const { path, module } = location;
+
+    if (!hasLearningCategory(access, path.category)) {
+      throw new ForbiddenException(
+        `The ${LEARNING_CATEGORY_LABELS[path.category]} training track is not enabled for your account.`,
+      );
+    }
+    if (!hasLearningCapability(access, 'quiz')) {
+      throw new ForbiddenException('Quizzes are not enabled for your account.');
+    }
 
     const existing = await prisma.learningQuizAttempt.findFirst({
       where: { userId, moduleId, status: 'in_progress' },

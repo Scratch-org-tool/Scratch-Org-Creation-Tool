@@ -1,4 +1,4 @@
-import { LEARNING_LEVEL_RANK } from '@sfcc/shared';
+import { LEARNING_CATEGORY_RANK, LEARNING_LEVEL_RANK } from '@sfcc/shared';
 import type {
   CurriculumLesson,
   CurriculumModule,
@@ -9,6 +9,10 @@ import { foundationsPath } from './foundations.path';
 import { adminPath } from './admin.path';
 import { developerPath } from './developer.path';
 import { architectPath } from './architect.path';
+import { sfIntegrationPath } from './sf-integration.path';
+import { javascriptPath } from './javascript.path';
+import { javaPath } from './java.path';
+import { releaseManagementPath } from './release-management.path';
 
 export type {
   CurriculumLesson,
@@ -17,13 +21,23 @@ export type {
   CurriculumQuizQuestion,
 } from './curriculum.types';
 
-/** All paths, ordered beginner → expert. */
+/**
+ * All paths, grouped by discipline (Salesforce → JavaScript → Java → DevOps)
+ * and, within each discipline, ordered beginner → expert.
+ */
 export const CURRICULUM: CurriculumPath[] = [
   foundationsPath,
   adminPath,
   developerPath,
   architectPath,
-].sort((a, b) => LEARNING_LEVEL_RANK[a.level] - LEARNING_LEVEL_RANK[b.level]);
+  sfIntegrationPath,
+  javascriptPath,
+  javaPath,
+  releaseManagementPath,
+].sort((a, b) => {
+  const byCategory = LEARNING_CATEGORY_RANK[a.category] - LEARNING_CATEGORY_RANK[b.category];
+  return byCategory !== 0 ? byCategory : LEARNING_LEVEL_RANK[a.level] - LEARNING_LEVEL_RANK[b.level];
+});
 
 export interface LessonLocation {
   path: CurriculumPath;

@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEFAULT_LEARNING_FEATURES,
+  LEARNING_FEATURES,
   LEARNING_QUIZ_PASS_PERCENT,
   averagePercent,
   calculateQuizScorePercent,
@@ -13,6 +15,8 @@ import {
   moduleProgressPercent,
   pathProgressPercent,
   quizStatusLabel,
+  resolveLearningFeatureAccess,
+  resolveLearningFeatures,
 } from './learning';
 
 describe('calculateQuizScorePercent', () => {
@@ -100,6 +104,54 @@ describe('quizStatusLabel', () => {
       quizStatusLabel({ ...base, attemptCount: 1, bestScorePercent: 88, passed: true }),
       'Passed · 88%',
     );
+  });
+});
+
+describe('learning feature access (admin gating)', () => {
+  it('gives admins every feature', () => {
+    const features = resolveLearningFeatures({ role: 'admin', grantedModules: [] });
+    assert.deepEqual(features, LEARNING_FEATURES);
+    const access = resolveLearningFeatureAccess({ role: 'admin', grantedModules: [] });
+    assert.deepEqual(access.categories, ['salesforce', 'javascript', 'java', 'devops']);
+    assert.equal(access.mentor && access.video && access.quiz, true);
+  });
+
+  it('gives nothing without the learning module', () => {
+    assert.deepEqual(resolveLearningFeatures({ role: 'user', grantedModules: ['data'] }), []);
+    assert.deepEqual(resolveLearningFeatures(null), []);
+    const access = resolveLearningFeatureAccess({ role: 'user', grantedModules: [] });
+    assert.deepEqual(access, { categories: [], mentor: false, video: false, quiz: false });
+  });
+
+  it('falls back to the default baseline when nothing is customised', () => {
+    const features = resolveLearningFeatures({ role: 'user', grantedModules: ['learning'] });
+    assert.deepEqual(features.slice().sort(), DEFAULT_LEARNING_FEATURES.slice().sort());
+    const access = resolveLearningFeatureAccess({ role: 'user', grantedModules: ['learning'] });
+    // Baseline: Salesforce track only; new tracks stay hidden until granted.
+    assert.deepEqual(access.categories, ['salesforce']);
+    assert.equal(access.mentor && access.video && access.quiz, true);
+  });
+
+  it('lets explicit grants unlock new tracks and drop capabilities', () => {
+    const access = resolveLearningFeatureAccess({
+      role: 'user',
+      grantedModules: ['learning'],
+      learningFeatures: ['category:javascript', 'category:java', 'capability:quiz'],
+    });
+    assert.deepEqual(access.categories, ['javascript', 'java']);
+    assert.equal(access.quiz, true);
+    assert.equal(access.mentor, false);
+    assert.equal(access.video, false);
+  });
+
+  it('ignores unknown feature keys', () => {
+    const access = resolveLearningFeatureAccess({
+      role: 'user',
+      grantedModules: ['learning'],
+      learningFeatures: ['category:python', 'capability:quiz'],
+    });
+    assert.deepEqual(access.categories, []);
+    assert.equal(access.quiz, true);
   });
 });
 

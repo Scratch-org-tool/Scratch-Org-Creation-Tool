@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { APP_MODULES } from '../auth.js';
+import { LEARNING_FEATURES, isLearningFeature } from '../learning.js';
 import { isDisplayNameValid, sanitizeDisplayName } from '../sanitize.js';
 import {
   AUTH_PASSWORD_TOO_WEAK,
@@ -117,12 +118,19 @@ export const logoutAllSchema = z.preprocess(
   z.object({}).strict(),
 );
 
+/** Any single grantable Academy feature key (`category:*` / `capability:*`). */
+const learningFeatureSchema = z
+  .string()
+  .max(64)
+  .refine(isLearningFeature, { message: 'Unknown Academy feature' });
+
 export const meResponseSchema = z.object({
   id: z.string(),
   email: emailSchema,
   displayName: z.string(),
   role: z.enum(['admin', 'user']),
   grantedModules: z.array(appModuleSchema),
+  learningFeatures: z.array(learningFeatureSchema).optional(),
   status: z.enum(['active', 'inactive']).optional(),
   lastActiveAt: z.string().nullable().optional(),
   createdAt: z.string().optional(),
@@ -140,6 +148,8 @@ export const updateUserAccessSchema = z.object({
   // Use the canonical module list so every grantable module (incl. `defects`)
   // stays in sync with APP_MODULES instead of a drifting hand-written subset.
   grantedModules: z.array(appModuleSchema).max(20).optional(),
+  // Granular Salesforce Academy grants (training tracks + capabilities).
+  learningFeatures: z.array(learningFeatureSchema).max(LEARNING_FEATURES.length).optional(),
 });
 
 export type UpdateUserAccessInput = z.infer<typeof updateUserAccessSchema>;

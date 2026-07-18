@@ -1,4 +1,5 @@
 import type {
+  LearningCategory,
   LearningLessonSection,
   LearningLevel,
   LearningRealWorldExample,
@@ -46,6 +47,8 @@ export interface CurriculumPath {
   title: string;
   tagline: string;
   description: string;
+  /** Discipline this path belongs to; drives catalog grouping + admin gating. */
+  category: LearningCategory;
   level: LearningLevel;
   badge: string;
   estimatedHours: number;

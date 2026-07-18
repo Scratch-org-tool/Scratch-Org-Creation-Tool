@@ -12,6 +12,7 @@ export const developerPath: CurriculumPath = {
   tagline: 'Apex, LWC, and integrations — engineered for governor limits.',
   description:
     'Learn to build on the platform the way it was designed to be used: bulkified Apex with real test coverage, Lightning Web Components on Lightning Data Service, and integrations that pick the right API for the job. Every lesson bakes in the limits-first mindset that production orgs demand.',
+  category: 'salesforce',
   level: 'advanced',
   badge: 'Platform Developer',
   estimatedHours: 14,

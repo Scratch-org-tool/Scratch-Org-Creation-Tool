@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { canAccessModule, type AppModule, type UserRole } from './auth.js';
 
 /**
  * Shared contracts for the Salesforce Academy learning module: curriculum
@@ -12,6 +13,161 @@ import { z } from 'zod';
 
 export const LEARNING_LEVELS = ['beginner', 'intermediate', 'advanced', 'expert'] as const;
 export type LearningLevel = (typeof LEARNING_LEVELS)[number];
+
+/* ------------------------------------------------------------------ */
+/* Training categories (disciplines) + admin feature access            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The Academy spans several disciplines. Every learning path belongs to one
+ * category so the catalog can be grouped, and so administrators can grant
+ * access one discipline at a time.
+ */
+export const LEARNING_CATEGORIES = ['salesforce', 'javascript', 'java', 'devops'] as const;
+export type LearningCategory = (typeof LEARNING_CATEGORIES)[number];
+
+export const LEARNING_CATEGORY_LABELS: Record<LearningCategory, string> = {
+  salesforce: 'Salesforce',
+  javascript: 'JavaScript',
+  java: 'Java',
+  devops: 'Release Management & DevOps',
+};
+
+export const LEARNING_CATEGORY_TAGLINES: Record<LearningCategory, string> = {
+  salesforce: 'Admin, development, and architecture on the Salesforce Platform.',
+  javascript: 'The language of the web — and of Lightning Web Components.',
+  java: 'Strongly-typed, object-oriented engineering fundamentals.',
+  devops: 'Ship Salesforce changes safely with source control, CI/CD, and governance.',
+};
+
+/** Display/sort order used to present the disciplines. */
+export const LEARNING_CATEGORY_RANK: Record<LearningCategory, number> = {
+  salesforce: 0,
+  javascript: 1,
+  java: 2,
+  devops: 3,
+};
+
+/**
+ * Academy capabilities that can be granted independently of the training
+ * tracks — e.g. a learner may read lessons but not have the AI mentor.
+ */
+export const LEARNING_CAPABILITIES = ['mentor', 'video', 'quiz'] as const;
+export type LearningCapability = (typeof LEARNING_CAPABILITIES)[number];
+
+export const LEARNING_CAPABILITY_LABELS: Record<LearningCapability, string> = {
+  mentor: 'AI mentor & story mode',
+  video: 'Video sessions',
+  quiz: 'Quizzes & certification',
+};
+
+export const LEARNING_CAPABILITY_DESCRIPTIONS: Record<LearningCapability, string> = {
+  mentor: 'Lesson-grounded AI tutor, chat answers, and animated story explainers.',
+  video: 'The Read / Video session switch and end-to-end production scripts.',
+  quiz: 'Module quizzes, scoring, retakes, and path completion badges.',
+};
+
+/**
+ * A single admin-controllable Academy permission. Every feature is either a
+ * training track (`category:*`) or an in-app capability (`capability:*`), so a
+ * feature the admin has not granted never reaches the learner.
+ */
+export type LearningFeature =
+  | `category:${LearningCategory}`
+  | `capability:${LearningCapability}`;
+
+export function categoryFeature(category: LearningCategory): LearningFeature {
+  return `category:${category}`;
+}
+
+export function capabilityFeature(capability: LearningCapability): LearningFeature {
+  return `capability:${capability}`;
+}
+
+/** Every grantable Academy feature, tracks first then capabilities. */
+export const LEARNING_FEATURES: LearningFeature[] = [
+  ...LEARNING_CATEGORIES.map(categoryFeature),
+  ...LEARNING_CAPABILITIES.map(capabilityFeature),
+];
+
+export function isLearningFeature(value: string): value is LearningFeature {
+  return (LEARNING_FEATURES as string[]).includes(value);
+}
+
+/**
+ * Baseline features implied by holding the `learning` module when an admin has
+ * not yet customised access. This preserves the original Salesforce Academy
+ * experience (Salesforce track + every capability) while keeping the newer
+ * tracks — JavaScript, Java, and Release Management — opt-in, so they stay
+ * hidden from a learner until an admin explicitly turns them on.
+ */
+export const DEFAULT_LEARNING_FEATURES: LearningFeature[] = [
+  categoryFeature('salesforce'),
+  capabilityFeature('mentor'),
+  capabilityFeature('video'),
+  capabilityFeature('quiz'),
+];
+
+/** Resolved, ready-to-check view of what a learner may see in the Academy. */
+export interface LearningFeatureAccess {
+  categories: LearningCategory[];
+  mentor: boolean;
+  video: boolean;
+  quiz: boolean;
+}
+
+type LearningAccessProfile =
+  | (Pick<UserAccessProfileLike, 'role' | 'grantedModules'> & {
+      learningFeatures?: string[] | null;
+    })
+  | null
+  | undefined;
+
+/** Minimal profile shape needed to resolve module + feature access. */
+interface UserAccessProfileLike {
+  role: UserRole;
+  grantedModules: AppModule[];
+}
+
+/**
+ * The set of Academy features a profile may use. Admins get everything; a user
+ * without the `learning` module gets nothing; otherwise the explicit grant list
+ * wins, falling back to {@link DEFAULT_LEARNING_FEATURES} when never configured.
+ */
+export function resolveLearningFeatures(profile: LearningAccessProfile): LearningFeature[] {
+  if (!profile) return [];
+  if (profile.role === 'admin') return [...LEARNING_FEATURES];
+  if (!canAccessModule(profile, 'learning')) return [];
+  const explicit = (profile.learningFeatures ?? []).filter(isLearningFeature);
+  const base = explicit.length > 0 ? explicit : DEFAULT_LEARNING_FEATURES;
+  const set = new Set<LearningFeature>(base);
+  return LEARNING_FEATURES.filter((feature) => set.has(feature));
+}
+
+/** Structured feature access (categories + capability booleans) for a profile. */
+export function resolveLearningFeatureAccess(profile: LearningAccessProfile): LearningFeatureAccess {
+  const set = new Set(resolveLearningFeatures(profile));
+  return {
+    categories: LEARNING_CATEGORIES.filter((category) => set.has(categoryFeature(category))),
+    mentor: set.has(capabilityFeature('mentor')),
+    video: set.has(capabilityFeature('video')),
+    quiz: set.has(capabilityFeature('quiz')),
+  };
+}
+
+export function hasLearningCategory(
+  access: LearningFeatureAccess,
+  category: LearningCategory,
+): boolean {
+  return access.categories.includes(category);
+}
+
+export function hasLearningCapability(
+  access: LearningFeatureAccess,
+  capability: LearningCapability,
+): boolean {
+  return access[capability];
+}
 
 export const LEARNING_LEVEL_LABELS: Record<LearningLevel, string> = {
   beginner: 'Beginner',
@@ -151,6 +307,7 @@ export interface LearningPathSummary {
   title: string;
   tagline: string;
   description: string;
+  category: LearningCategory;
   level: LearningLevel;
   /** Certificate-style badge awarded on completion, e.g. "Foundations Badge". */
   badge: string;
@@ -192,12 +349,15 @@ export interface LearningCatalogResponse {
   paths: LearningPathSummary[];
   stats: LearningStats;
   continueTarget: LearningContinueTarget | null;
+  /** Which tracks + capabilities the current learner is allowed to use. */
+  features: LearningFeatureAccess;
 }
 
 export interface LearningLessonResponse {
   lesson: LearningLessonContent;
   pathId: string;
   pathTitle: string;
+  category: LearningCategory;
   moduleId: string;
   moduleTitle: string;
   completed: boolean;
@@ -206,6 +366,8 @@ export interface LearningLessonResponse {
   nextLessonId: string | null;
   /** True when this is the module's final lesson — the quiz comes next. */
   quizNext: boolean;
+  /** Capability grants that gate the mentor panel, video session, and quiz. */
+  features: LearningFeatureAccess;
 }
 
 /* ------------------------------------------------------------------ */

@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -10,6 +11,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  LEARNING_CATEGORY_LABELS,
+  hasLearningCapability,
+  hasLearningCategory,
   learningAssignmentCreateSchema,
   learningExplainerImageRequestSchema,
   learningExplainerRequestSchema,
@@ -17,18 +21,29 @@ import {
   learningExplainerVideoRequestSchema,
   learningQuizSubmitSchema,
   learningTutorAskSchema,
+  resolveLearningFeatureAccess,
+  type LearningCapability,
+  type LearningFeatureAccess,
+  type UserAccessProfile,
 } from '@sfcc/shared';
 import type { Response } from 'express';
 import { AuthGuard } from '../../common/auth.guard';
-import { CurrentUser } from '../../common/current-user.decorator';
+import { CurrentUser, CurrentUserProfile } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { RoleGuard, RequireRole } from '../../common/role.guard';
+import { getLesson } from './curriculum';
 import { LearningService } from './learning.service';
 import { LearningQuizService } from './learning-quiz.service';
 import { LearningTutorService } from './learning-tutor.service';
 import { LearningExplainerService } from './learning-explainer.service';
 import { LearningVideoScriptService } from './learning-video-script.service';
 import { LearningAdminService } from './learning-admin.service';
+
+const CAPABILITY_LABELS: Record<LearningCapability, string> = {
+  mentor: 'The AI mentor',
+  video: 'Video sessions',
+  quiz: 'Quizzes',
+};
 
 @Controller('learning')
 @UseGuards(AuthGuard, ModuleGuard, RoleGuard)
@@ -43,42 +58,91 @@ export class LearningController {
     private readonly adminService: LearningAdminService,
   ) {}
 
+  private access(profile: UserAccessProfile): LearningFeatureAccess {
+    return resolveLearningFeatureAccess(profile);
+  }
+
+  private assertCapability(access: LearningFeatureAccess, capability: LearningCapability): void {
+    if (!hasLearningCapability(access, capability)) {
+      throw new ForbiddenException(
+        `${CAPABILITY_LABELS[capability]} is not enabled for your account.`,
+      );
+    }
+  }
+
+  /** Reject cross-track access for endpoints that ground on a specific lesson. */
+  private assertLessonCategory(access: LearningFeatureAccess, lessonId?: string): void {
+    if (!lessonId) return;
+    const location = getLesson(lessonId);
+    if (location && !hasLearningCategory(access, location.path.category)) {
+      throw new ForbiddenException(
+        `The ${LEARNING_CATEGORY_LABELS[location.path.category]} training track is not enabled for your account.`,
+      );
+    }
+  }
+
   /* ------------------------- learner endpoints ------------------------- */
 
   @Get('catalog')
-  getCatalog(@CurrentUser() userId: string) {
-    return this.learningService.getCatalog(userId);
+  getCatalog(@CurrentUser() userId: string, @CurrentUserProfile() profile: UserAccessProfile) {
+    return this.learningService.getCatalog(userId, this.access(profile));
   }
 
   @Get('paths/:pathId')
-  getPath(@CurrentUser() userId: string, @Param('pathId') pathId: string) {
-    return this.learningService.getPathDetail(userId, pathId);
+  getPath(
+    @CurrentUser() userId: string,
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Param('pathId') pathId: string,
+  ) {
+    return this.learningService.getPathDetail(userId, pathId, this.access(profile));
   }
 
   @Get('lessons/:lessonId')
-  getLesson(@CurrentUser() userId: string, @Param('lessonId') lessonId: string) {
-    return this.learningService.getLessonView(userId, lessonId);
+  getLesson(
+    @CurrentUser() userId: string,
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.learningService.getLessonView(userId, lessonId, this.access(profile));
   }
 
   @Post('lessons/:lessonId/complete')
-  completeLesson(@CurrentUser() userId: string, @Param('lessonId') lessonId: string) {
-    return this.learningService.completeLesson(userId, lessonId);
+  completeLesson(
+    @CurrentUser() userId: string,
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.learningService.completeLesson(userId, lessonId, this.access(profile));
   }
 
   /** Complete end-to-end video session script for one lesson (AI-first, curriculum fallback). */
   @Get('lessons/:lessonId/video-script')
-  getVideoScript(@Param('lessonId') lessonId: string) {
+  getVideoScript(
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Param('lessonId') lessonId: string,
+  ) {
+    const access = this.access(profile);
+    this.assertCapability(access, 'video');
+    this.assertLessonCategory(access, lessonId);
     return this.videoScriptService.getScript(lessonId);
   }
 
   @Post('modules/:moduleId/quiz')
-  startQuiz(@CurrentUser() userId: string, @Param('moduleId') moduleId: string) {
-    return this.quizService.startQuiz(userId, moduleId);
+  startQuiz(
+    @CurrentUser() userId: string,
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Param('moduleId') moduleId: string,
+  ) {
+    return this.quizService.startQuiz(userId, moduleId, this.access(profile));
   }
 
   @Get('modules/:moduleId/attempts')
-  listAttempts(@CurrentUser() userId: string, @Param('moduleId') moduleId: string) {
-    return this.learningService.listModuleAttempts(userId, moduleId);
+  listAttempts(
+    @CurrentUser() userId: string,
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Param('moduleId') moduleId: string,
+  ) {
+    return this.learningService.listModuleAttempts(userId, moduleId, this.access(profile));
   }
 
   @Post('quiz/:attemptId/submit')
@@ -95,53 +159,80 @@ export class LearningController {
   }
 
   @Post('tutor')
-  askTutor(@Body() body: unknown) {
+  askTutor(@CurrentUserProfile() profile: UserAccessProfile, @Body() body: unknown) {
     const parsed = learningTutorAskSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    const access = this.access(profile);
+    this.assertCapability(access, 'mentor');
+    this.assertLessonCategory(access, parsed.data.lessonId);
     return this.tutorService.ask(parsed.data);
   }
 
   /** AI-scripted animated storyboard (voice + graphics) for a lesson. */
   @Post('tutor/explainer')
-  getExplainer(@Body() body: unknown) {
+  getExplainer(@CurrentUserProfile() profile: UserAccessProfile, @Body() body: unknown) {
     const parsed = learningExplainerRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    const access = this.access(profile);
+    this.assertCapability(access, 'mentor');
+    this.assertLessonCategory(access, parsed.data.lessonId);
     return this.explainerService.getStoryboard(parsed.data);
   }
 
   /** Generated motion clip (ComfyUI/LTX) for one scene; 204 means fall back to still art. */
   @Post('tutor/explainer/video')
-  async getExplainerVideo(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerVideo(
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerVideoRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    const access = this.access(profile);
+    this.assertCapability(access, 'mentor');
+    this.assertLessonCategory(access, parsed.data.lessonId);
     const media = await this.explainerService.getSceneVideo(parsed.data);
     this.sendMedia(response, media, 'academy-scene-motion');
   }
 
   /** Generated still art (Stable Diffusion/FLUX) for one scene; 204 means use the diagram fallback. */
   @Post('tutor/explainer/image')
-  async getExplainerImage(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerImage(
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerImageRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    const access = this.access(profile);
+    this.assertCapability(access, 'mentor');
+    this.assertLessonCategory(access, parsed.data.lessonId);
     const media = await this.explainerService.getSceneImage(parsed.data);
     this.sendMedia(response, media, 'academy-scene');
   }
 
   /** Selectable studio narration for one scene; 204 means use browser speech. */
   @Post('tutor/explainer/speech')
-  async getExplainerSpeech(@Body() body: unknown, @Res() response: Response) {
+  async getExplainerSpeech(
+    @CurrentUserProfile() profile: UserAccessProfile,
+    @Body() body: unknown,
+    @Res() response: Response,
+  ) {
     const parsed = learningExplainerSpeechRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
+    const access = this.access(profile);
+    this.assertCapability(access, 'mentor');
+    this.assertLessonCategory(access, parsed.data.lessonId);
     const media = await this.explainerService.getSceneSpeech(parsed.data);
     this.sendMedia(response, media, 'academy-narration');
   }
