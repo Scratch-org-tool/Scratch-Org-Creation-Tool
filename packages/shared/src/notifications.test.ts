@@ -82,6 +82,7 @@ describe('queueToNotificationCategory', () => {
   it('maps queues to categories', () => {
     assert.equal(queueToNotificationCategory(QUEUE_NAMES.METADATA_DEPLOY), 'deployment');
     assert.equal(queueToNotificationCategory(QUEUE_NAMES.DATA_DEPLOY), 'data');
+    assert.equal(queueToNotificationCategory(QUEUE_NAMES.BULK_DATA_UPDATE), 'data');
     assert.equal(queueToNotificationCategory(QUEUE_NAMES.SCRATCH_ORG_CREATE), 'environment');
     assert.equal(queueToNotificationCategory(QUEUE_NAMES.USER_PROVISION), 'provisioning');
     assert.equal(queueToNotificationCategory('anything-else'), 'system');

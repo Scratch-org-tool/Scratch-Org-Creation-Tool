@@ -7,6 +7,7 @@ import { UserProvisionWorker } from '../../workers/user-provision.worker';
 import { OrgSetupWorker } from '../../workers/org-setup.worker';
 import { ConaSeedWorker } from '../../workers/cona-seed.worker';
 import { AccountPartnerImportWorker } from '../../workers/account-partner-import.worker';
+import { BulkDataUpdateWorker } from '../../workers/bulk-data-update.worker';
 import { AiAnalysisWorker } from '../../workers/ai-analysis.worker';
 import { JobsModule } from '../jobs/jobs.module';
 import { AgentsModule } from '../agents/agents.module';
@@ -30,6 +31,7 @@ import { AzureService } from '../../integrations/azure/azure.service';
     OrgSetupWorker,
     ConaSeedWorker,
     AccountPartnerImportWorker,
+    BulkDataUpdateWorker,
     AiAnalysisWorker,
     AzureIntegrationService,
     AzureService,
@@ -43,6 +45,7 @@ import { AzureService } from '../../integrations/azure/azure.service';
     OrgSetupWorker,
     ConaSeedWorker,
     AccountPartnerImportWorker,
+    BulkDataUpdateWorker,
     AiAnalysisWorker,
   ],
 })

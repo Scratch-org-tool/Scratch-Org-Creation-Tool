@@ -5,6 +5,7 @@ export const QUEUE_NAMES = {
   DATA_DEPLOY: 'data-deploy',
   CONA_SEED: 'cona-seed',
   ACCOUNT_PARTNER_IMPORT: 'account-partner-import',
+  BULK_DATA_UPDATE: 'bulk-data-update',
   USER_PROVISION: 'user-provision',
   ORG_SETUP: 'org-setup',
   AI_ANALYSIS: 'ai-analysis',

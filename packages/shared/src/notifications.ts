@@ -167,6 +167,7 @@ export function queueToNotificationCategory(queue: string): NotificationCategory
     case QUEUE_NAMES.DATA_DEPLOY:
     case QUEUE_NAMES.CONA_SEED:
     case QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT:
+    case QUEUE_NAMES.BULK_DATA_UPDATE:
       return 'data';
     case QUEUE_NAMES.SCRATCH_ORG_CREATE:
     case QUEUE_NAMES.ORG_SETUP:

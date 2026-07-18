@@ -10,6 +10,7 @@ import { UserProvisionWorker } from '../../workers/user-provision.worker';
 import { OrgSetupWorker } from '../../workers/org-setup.worker';
 import { ConaSeedWorker } from '../../workers/cona-seed.worker';
 import { AccountPartnerImportWorker } from '../../workers/account-partner-import.worker';
+import { BulkDataUpdateWorker } from '../../workers/bulk-data-update.worker';
 import { AiAnalysisWorker } from '../../workers/ai-analysis.worker';
 import { StreamService } from '../stream/stream.service';
 import { JobsService } from '../jobs/jobs.service';
@@ -40,6 +41,7 @@ export class WorkerRegistry implements OnModuleInit {
     private readonly orgSetupWorker: OrgSetupWorker,
     private readonly conaSeedWorker: ConaSeedWorker,
     private readonly accountPartnerImportWorker: AccountPartnerImportWorker,
+    private readonly bulkDataUpdateWorker: BulkDataUpdateWorker,
     private readonly aiAnalysisWorker: AiAnalysisWorker,
   ) {}
 
@@ -430,6 +432,7 @@ export class WorkerRegistry implements OnModuleInit {
     );
     this.queueService.registerWorker(QUEUE_NAMES.CONA_SEED, wrap((j) => this.conaSeedWorker.process(j)));
     this.queueService.registerWorker(QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT, wrap((j) => this.accountPartnerImportWorker.process(j)));
+    this.queueService.registerWorker(QUEUE_NAMES.BULK_DATA_UPDATE, wrap((j) => this.bulkDataUpdateWorker.process(j)));
     this.queueService.registerWorker(QUEUE_NAMES.AI_ANALYSIS, wrap((j) => this.aiAnalysisWorker.process(j)));
   }
 }

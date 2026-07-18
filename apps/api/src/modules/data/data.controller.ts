@@ -8,8 +8,12 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { prisma } from '@sfcc/db';
 import { DataService } from './data.service';
 import { QuerySetService } from './query-set.service';
@@ -22,6 +26,7 @@ import { OrgToOrgBrowseService } from './org-to-org-browse.service';
 import { DataPreflightService } from './data-preflight.service';
 import { QuerySectionRuntimeService } from './query-section-runtime.service';
 import { DataRollbackService } from './data-rollback.service';
+import { BulkDataUpdateService } from './bulk-data-update.service';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
@@ -36,6 +41,11 @@ import {
   querySetCompileSchema,
   recordTypeMappingsSchema,
 } from '@sfcc/shared';
+
+const BULK_DATA_UPDATE_UPLOAD_OPTIONS = {
+  storage: memoryStorage(),
+  limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+};
 
 @Controller('data')
 @UseGuards(AuthGuard, ModuleGuard)
@@ -53,6 +63,7 @@ export class DataController {
     private readonly querySectionRuntime: QuerySectionRuntimeService,
     private readonly dataRollback: DataRollbackService,
     private readonly customTemplates: CustomTemplateService,
+    private readonly bulkDataUpdate: BulkDataUpdateService,
   ) {}
 
   @Get('custom-settings/template')
@@ -359,6 +370,63 @@ export class DataController {
   @Post('org-to-org/deploy-batch')
   deployOrgToOrgBatch(@Body() body: unknown, @CurrentUser() userId: string) {
     return this.dataService.deployOrgToOrgBatch(body, userId);
+  }
+
+  @Get('bulk-update/objects')
+  listBulkUpdateObjects(
+    @Query('orgId') orgId: string,
+    @Query('search') search: string | undefined,
+    @CurrentUser() userId: string,
+  ) {
+    return this.orgToOrgBrowseService.listObjects(orgId, userId, search);
+  }
+
+  @Get('bulk-update/object-meta')
+  getBulkUpdateObjectMeta(
+    @Query('orgId') orgId: string,
+    @Query('objectName') objectName: string,
+    @CurrentUser() userId: string,
+  ) {
+    return this.bulkDataUpdate.getObjectMeta(orgId, objectName, userId);
+  }
+
+  @Post('bulk-update/inspect')
+  @UseInterceptors(FileInterceptor('file', BULK_DATA_UPDATE_UPLOAD_OPTIONS))
+  inspectBulkUpdateWorkbook(
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) throw new BadRequestException('A multipart file field named "file" is required');
+    return this.bulkDataUpdate.inspectWorkbook(file.buffer, file.originalname);
+  }
+
+  @Post('bulk-update/preview')
+  @UseInterceptors(FileInterceptor('file', BULK_DATA_UPDATE_UPLOAD_OPTIONS))
+  previewBulkUpdate(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() userId: string,
+  ) {
+    if (!file) throw new BadRequestException('A multipart file field named "file" is required');
+    const config = this.bulkDataUpdate.parseConfig(body);
+    return this.bulkDataUpdate.preview(file.buffer, file.originalname, config, userId);
+  }
+
+  @Post('bulk-update/run')
+  @UseInterceptors(FileInterceptor('file', BULK_DATA_UPDATE_UPLOAD_OPTIONS))
+  async runBulkUpdate(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() userId: string,
+  ) {
+    if (!file) throw new BadRequestException('A multipart file field named "file" is required');
+    const config = this.bulkDataUpdate.parseConfig(body);
+    await this.bulkDataUpdate.validateUpload(file.buffer, file.originalname, config, userId);
+    return this.dataService.enqueueBulkDataUpdate({
+      config,
+      workbookBase64: file.buffer.toString('base64'),
+      fileName: file.originalname,
+      fileSize: file.size,
+    }, userId);
   }
 
   @Post('deploy')
