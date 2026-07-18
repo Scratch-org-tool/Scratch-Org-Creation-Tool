@@ -14,8 +14,10 @@ import {
   FileQuestion,
   Lightbulb,
   ListChecks,
+  PlayCircle,
   Target,
 } from 'lucide-react';
+import type { ExplainerFocus } from '@sfcc/shared';
 import { InlineAlert } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -26,6 +28,7 @@ import {
   parseBody,
   resourceSourceLabel,
 } from './learning-ui';
+import { ExplainerDialog, type ExplainerRequestState } from './explainer-dialog';
 import { MentorPanel } from './mentor-panel';
 import type { LearningLessonResponse, LearningLessonSection } from './types';
 
@@ -73,12 +76,29 @@ function SectionBlock({ section }: { section: LearningLessonSection }) {
   );
 }
 
-function RealWorldPanel({ data }: { data: LearningLessonResponse['lesson']['realWorld'] }) {
+function RealWorldPanel({
+  data,
+  onWatch,
+}: {
+  data: LearningLessonResponse['lesson']['realWorld'];
+  onWatch: () => void;
+}) {
   return (
     <div className="overflow-hidden rounded-xl border border-amber-400/25">
-      <div className="flex items-center gap-2 bg-amber-500/10 px-4 py-2.5">
-        <Briefcase className="size-4 text-amber-300" />
-        <p className="text-sm font-semibold">Real-world example: {data.title}</p>
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 px-4 py-2.5">
+        <p className="flex items-center gap-2 text-sm font-semibold">
+          <Briefcase className="size-4 text-amber-300" />
+          Real-world example: {data.title}
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1.5 border-amber-400/40 text-xs text-amber-200 hover:bg-amber-500/10"
+          onClick={onWatch}
+        >
+          <PlayCircle className="size-3.5" />
+          Watch animated
+        </Button>
       </div>
       <div className="space-y-3 p-4 text-sm leading-relaxed">
         <div>
@@ -108,6 +128,15 @@ export function LessonWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
   const [justCompletedPath, setJustCompletedPath] = useState(false);
+  const [explainerRequest, setExplainerRequest] = useState<ExplainerRequestState | null>(null);
+
+  const playStory = useCallback(
+    (focus: ExplainerFocus, question?: string) => {
+      if (!lessonId) return;
+      setExplainerRequest({ lessonId, focus, question });
+    },
+    [lessonId],
+  );
 
   const load = useCallback(async () => {
     if (!lessonId) return;
@@ -231,7 +260,10 @@ export function LessonWorkspace() {
                 ))}
               </div>
 
-              <RealWorldPanel data={view.lesson.realWorld} />
+              <RealWorldPanel
+                data={view.lesson.realWorld}
+                onWatch={() => playStory('real-world')}
+              />
 
               <div className="rounded-xl border border-border/60 bg-card/60 p-4">
                 <p className="flex items-center gap-2 text-sm font-semibold">
@@ -334,10 +366,14 @@ export function LessonWorkspace() {
               <MentorPanel
                 lessonId={view.lesson.id}
                 contextKey={view.lesson.id}
+                realWorldTitle={view.lesson.realWorld.title}
+                onPlayStory={playStory}
                 className="lg:max-h-[calc(100vh-6rem)] min-h-[420px]"
               />
             </aside>
           </div>
+
+          <ExplainerDialog request={explainerRequest} onClose={() => setExplainerRequest(null)} />
         </>
       )}
     </div>

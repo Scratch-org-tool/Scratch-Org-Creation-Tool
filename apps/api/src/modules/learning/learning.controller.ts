@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import {
   learningAssignmentCreateSchema,
+  learningExplainerRequestSchema,
   learningQuizSubmitSchema,
   learningTutorAskSchema,
 } from '@sfcc/shared';
@@ -20,6 +21,7 @@ import { RoleGuard, RequireRole } from '../../common/role.guard';
 import { LearningService } from './learning.service';
 import { LearningQuizService } from './learning-quiz.service';
 import { LearningTutorService } from './learning-tutor.service';
+import { LearningExplainerService } from './learning-explainer.service';
 import { LearningAdminService } from './learning-admin.service';
 
 @Controller('learning')
@@ -30,6 +32,7 @@ export class LearningController {
     private readonly learningService: LearningService,
     private readonly quizService: LearningQuizService,
     private readonly tutorService: LearningTutorService,
+    private readonly explainerService: LearningExplainerService,
     private readonly adminService: LearningAdminService,
   ) {}
 
@@ -85,6 +88,16 @@ export class LearningController {
       throw new BadRequestException(parsed.error.flatten().fieldErrors);
     }
     return this.tutorService.ask(parsed.data);
+  }
+
+  /** AI-scripted animated storyboard (voice + graphics) for a lesson. */
+  @Post('tutor/explainer')
+  getExplainer(@Body() body: unknown) {
+    const parsed = learningExplainerRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.flatten().fieldErrors);
+    }
+    return this.explainerService.getStoryboard(parsed.data);
   }
 
   /* -------------------------- admin endpoints -------------------------- */
