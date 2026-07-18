@@ -52,4 +52,26 @@ describe('BulkThrottleService scheduler fencing', () => {
     await expect(first).resolves.toBe('first');
     await expect(service.withSchedulerLock('batch', async () => 'next')).resolves.toBe('next');
   });
+
+  it('bounds how long synchronous callers wait for a bulk slot', async () => {
+    vi.useFakeTimers();
+    const redis = {
+      zremrangebyscore: vi.fn(async () => 0),
+      zcard: vi.fn(async () => 2),
+      zadd: vi.fn(),
+      zrank: vi.fn(),
+      zrem: vi.fn(),
+    };
+    const service = new BulkThrottleService({
+      getConnection: () => redis,
+    } as never);
+
+    const acquisition = service.acquire('target', { maxWaitMs: 1_000 });
+    const assertion = expect(acquisition).rejects.toThrow(
+      'Bulk API throttle timeout for org target',
+    );
+    await vi.advanceTimersByTimeAsync(1_001);
+    await assertion;
+    expect(redis.zadd).not.toHaveBeenCalled();
+  });
 });

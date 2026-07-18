@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as XLSX from 'xlsx';
@@ -31,7 +31,9 @@ const TARGET_BULK_INDEX_MIN_ROW_BUDGET = 10_000;
 const TARGET_BULK_INDEX_MAX_ROW_RATIO = 4;
 const TARGET_BULK_INDEX_MAX_ROWS = 250_000;
 const TARGET_BULK_INDEX_MAX_CELLS = 5_000_000;
+const TARGET_BULK_INDEX_MAX_BYTES = 64 * 1024 * 1024;
 const TARGET_BULK_QUERY_WAIT_MINUTES = 15;
+const TARGET_BULK_SLOT_WAIT_MS = 2_000;
 const PREVIEW_RECORD_LIMIT = 50;
 const EMPLOYEE_MASTER_OBJECT = 'cfs_ob__EmployeeMaster__c';
 const EMPLOYEE_NUMBER_FIELD = 'cfs_ob__EmployeeNo__c';
@@ -88,6 +90,7 @@ interface DescribedField {
   calculated?: boolean;
   compoundFieldName?: string;
   length?: number;
+  caseSensitive?: boolean;
 }
 
 interface WorkbookRow {
@@ -352,33 +355,33 @@ export class BulkDataUpdateService {
     const includeRows = options.includeRows ?? true;
     const worksheet = workbook.Sheets[sheetName];
     if (!worksheet) throw new BadRequestException(`Workbook sheet was not found: ${sheetName}`);
-    const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-      header: 1,
-      defval: '',
-      blankrows: false,
-      raw: false,
-    }) as unknown[][];
-    const headerIndex = matrix.findIndex((row) => row.some((value) => this.cellValue(value) !== ''));
+    if (!Array.isArray(worksheet)) {
+      throw new BadRequestException(`Workbook sheet "${sheetName}" could not be read in dense mode`);
+    }
+    const denseRows = worksheet as unknown as Array<
+      Array<XLSX.CellObject | undefined> | undefined
+    >;
+    const populatedRowIndexes = Object.keys(worksheet)
+      .filter((key) => /^\d+$/.test(key))
+      .map(Number)
+      .sort((left, right) => left - right);
+    const headerIndex = populatedRowIndexes.find((rowIndex) =>
+      denseRows[rowIndex]?.some((cell) => this.worksheetCellValue(cell) !== '')) ?? -1;
     if (headerIndex < 0) {
       if (allowEmpty) return { name: sheetName, headers: [], rowCount: 0, rows: [] };
       throw new BadRequestException(`Workbook sheet "${sheetName}" is empty`);
-    }
-
-    if (matrix.length - headerIndex - 1 > MAX_WORKBOOK_ROWS) {
-      throw new BadRequestException(
-        `Workbook sheet "${sheetName}" exceeds the ${MAX_WORKBOOK_ROWS.toLocaleString()} row limit`,
-      );
     }
 
     let lastUsedColumn = -1;
     let rowCount = 0;
     const dataColumns = new Set<number>();
     const dataRowIndexes: number[] = [];
-    for (let rowIndex = 0; rowIndex < matrix.length; rowIndex += 1) {
-      const row = matrix[rowIndex] ?? [];
+    for (const rowIndex of populatedRowIndexes) {
+      if (rowIndex < headerIndex) continue;
+      const row = denseRows[rowIndex] ?? [];
       let rowHasData = false;
       for (let columnIndex = 0; columnIndex < row.length; columnIndex += 1) {
-        if (this.cellValue(row[columnIndex]) === '') continue;
+        if (this.worksheetCellValue(row[columnIndex]) === '') continue;
         lastUsedColumn = Math.max(lastUsedColumn, columnIndex);
         if (rowIndex > headerIndex) {
           rowHasData = true;
@@ -387,6 +390,11 @@ export class BulkDataUpdateService {
       }
       if (rowIndex > headerIndex && rowHasData) {
         rowCount += 1;
+        if (rowCount > MAX_WORKBOOK_ROWS) {
+          throw new BadRequestException(
+            `Workbook sheet "${sheetName}" exceeds the ${MAX_WORKBOOK_ROWS.toLocaleString()} row limit`,
+          );
+        }
         if (includeRows) dataRowIndexes.push(rowIndex);
       }
     }
@@ -396,12 +404,12 @@ export class BulkDataUpdateService {
       );
     }
 
-    const headerRow = matrix[headerIndex] ?? [];
+    const headerRow = denseRows[headerIndex] ?? [];
     const headers: string[] = [];
     const headerByColumn = new Map<number, string>();
     const seenHeaders = new Set<string>();
     for (let index = 0; index <= lastUsedColumn; index += 1) {
-      const header = this.cellValue(headerRow[index]);
+      const header = this.worksheetCellValue(headerRow[index]);
       if (!header) {
         if (dataColumns.has(index)) {
           throw new BadRequestException(
@@ -437,10 +445,10 @@ export class BulkDataUpdateService {
       !selectedColumns || selectedColumns.has(header.toLocaleLowerCase()));
     const rows: WorkbookRow[] = [];
     for (const rowIndex of dataRowIndexes) {
-      const row = matrix[rowIndex] ?? [];
+      const row = denseRows[rowIndex] ?? [];
       const values: Record<string, string> = {};
       for (const [column, header] of rowColumns) {
-        values[header] = this.cellValue(row[column]);
+        values[header] = this.worksheetCellValue(row[column]);
       }
       rows.push({ rowNumber: rowIndex + 1, values });
     }
@@ -453,6 +461,11 @@ export class BulkDataUpdateService {
   private cellValue(value: unknown): string {
     if (value == null) return '';
     return String(value).trim();
+  }
+
+  private worksheetCellValue(cell: XLSX.CellObject | undefined): string {
+    if (!cell || cell.v == null) return '';
+    return this.cellValue(XLSX.utils.format_cell(cell));
   }
 
   private async prepareContext(
@@ -850,6 +863,13 @@ export class BulkDataUpdateService {
     onLog?: LogCallback,
   ): Promise<Array<Record<string, unknown>> | undefined> {
     if (matchValues.length < TARGET_BULK_INDEX_MIN_KEYS) return undefined;
+    if (
+      context.matchField.name !== 'Id'
+      && !context.matchField.externalId
+      && !context.matchField.idLookup
+    ) {
+      return undefined;
+    }
 
     const predicate = this.targetMatchPredicate(context);
     const countResult = await this.sfCli.query(
@@ -887,7 +907,10 @@ export class BulkDataUpdateService {
     const csvPath = join(workDir, 'target-records.csv');
     let slot: Awaited<ReturnType<BulkThrottleService['acquire']>> | undefined;
     try {
-      slot = await this.bulkThrottle.acquire(context.alias);
+      slot = await this.bulkThrottle.acquire(
+        context.alias,
+        { maxWaitMs: TARGET_BULK_SLOT_WAIT_MS },
+      );
       const result = await this.sfCli.exportBulk(
         `SELECT ${selectedFields.join(', ')} FROM ${context.objectName} WHERE ${predicate}`,
         context.alias,
@@ -897,6 +920,12 @@ export class BulkDataUpdateService {
       );
       if (!result.success) {
         await onLog?.('Bulk match indexing was unavailable; using selective query batches instead.');
+        return undefined;
+      }
+      if ((await stat(csvPath)).size > TARGET_BULK_INDEX_MAX_BYTES) {
+        await onLog?.(
+          'Bulk match index exceeded the safe memory budget; using selective query batches instead.',
+        );
         return undefined;
       }
       return parseBulkCsv(await readFile(csvPath, 'utf8'))
@@ -1048,6 +1077,7 @@ export class BulkDataUpdateService {
         ? String(Number(trimmed))
         : '';
     }
+    if (field.caseSensitive) return trimmed;
     if (/^\d+$/.test(trimmed)) {
       return trimmed.replace(/^0+/, '') || '0';
     }

@@ -431,7 +431,89 @@ describe('BulkDataUpdateService', () => {
     );
     expect(mocks.sfCli.exportBulk).toHaveBeenCalledOnce();
     expect(mocks.sfCli.queryAll).not.toHaveBeenCalled();
-    expect(acquire).toHaveBeenCalledWith('target');
+    expect(acquire).toHaveBeenCalledWith('target', { maxWaitMs: 2_000 });
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('preserves case-sensitive external IDs in the bulk match index', async () => {
+    const rowCount = 2_000;
+    const sourceRows = Array.from({ length: rowCount }, (_, index) => [
+      `CASE-${index}`,
+      `Updated Employee ${index}`,
+    ]);
+    mocks.sfCli.describeSObject.mockResolvedValue({
+      success: true,
+      data: {
+        result: {
+          name: objectName,
+          label: 'Employee Master',
+          fields: [
+            {
+              name: 'Id',
+              type: 'id',
+              filterable: true,
+              updateable: false,
+            },
+            {
+              name: employeeNumberField,
+              label: 'Employee Number',
+              type: 'string',
+              externalId: true,
+              caseSensitive: true,
+              filterable: true,
+              updateable: true,
+              length: 40,
+            },
+            {
+              name: 'Name',
+              label: 'Employee Name',
+              type: 'string',
+              filterable: true,
+              updateable: true,
+              length: 80,
+            },
+          ],
+        },
+      },
+    });
+    mocks.sfCli.query.mockResolvedValue({
+      success: true,
+      data: { result: { records: [], totalSize: rowCount } },
+    });
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      _soql: string,
+      _alias: string,
+      outputPath: string,
+    ) => {
+      const targetRows = sourceRows.map(([employeeNumber], index) =>
+        `a01${String(index).padStart(15, '0')},${employeeNumber.toLocaleLowerCase()},Original`);
+      await writeFile(
+        outputPath,
+        `Id,${employeeNumberField},Name\n${targetRows.join('\n')}\n`,
+        'utf8',
+      );
+      return { success: true };
+    });
+
+    const preview = await service().preview(
+      workbook([
+        ['Employee Number', 'Employee Name'],
+        ...sourceRows,
+      ]),
+      'employees.xlsx',
+      {
+        ...config,
+        columnMappings: [{ sourceColumn: 'Employee Name', targetField: 'Name' }],
+      },
+      userId,
+    );
+
+    expect(preview.stats).toEqual(expect.objectContaining({
+      matchedRows: 0,
+      recordsToUpdate: 0,
+      unmatchedRows: rowCount,
+    }));
+    expect(mocks.sfCli.exportBulk).toHaveBeenCalledOnce();
+    expect(mocks.sfCli.queryAll).not.toHaveBeenCalled();
   });
 });

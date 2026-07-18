@@ -1453,6 +1453,7 @@ export class SfCliClient extends EventEmitter {
         nillable?: boolean;
         calculated?: boolean;
         compoundFieldName?: string;
+        caseSensitive?: boolean;
         defaultedOnCreate?: boolean;
         custom?: boolean;
         length?: number;

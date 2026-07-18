@@ -11,6 +11,11 @@ export interface BulkThrottleSlot {
   release: () => Promise<void>;
 }
 
+export interface BulkThrottleAcquireOptions {
+  /** Bound synchronous callers such as previews; workers use the default retry window. */
+  maxWaitMs?: number;
+}
+
 export interface SchedulerLease {
   assertOwned: () => Promise<void>;
 }
@@ -34,12 +39,18 @@ export class BulkThrottleService {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CONCURRENT;
   }
 
-  async acquire(orgAlias: string): Promise<BulkThrottleSlot> {
+  async acquire(
+    orgAlias: string,
+    options: BulkThrottleAcquireOptions = {},
+  ): Promise<BulkThrottleSlot> {
     const redis = this.queueService.getConnection();
     const key = this.key(orgAlias);
     const member = randomUUID();
     const max = this.maxConcurrent();
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const deadline = options.maxWaitMs === undefined
+      ? undefined
+      : Date.now() + Math.max(0, options.maxWaitMs);
 
     for (let attempt = 0; attempt < 600; attempt += 1) {
       const now = Date.now();
@@ -55,7 +66,14 @@ export class BulkThrottleService {
         }
         await redis.zrem(key, member);
       }
-      await sleep(Math.min(5000, 500 + attempt * 50));
+      const delay = Math.min(5000, 500 + attempt * 50);
+      if (deadline !== undefined) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await sleep(Math.min(delay, remaining));
+      } else {
+        await sleep(delay);
+      }
     }
     throw new Error(`Bulk API throttle timeout for org ${orgAlias}`);
   }
