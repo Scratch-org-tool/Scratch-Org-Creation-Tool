@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { FileSpreadsheet, Users } from 'lucide-react';
+import { FileSpreadsheet, UserCog, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label, Select, Textarea } from '@/components/ui/input';
 import { FormSection, GlassCard, InlineAlert } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import { ConaUserProvisioningForm } from './cona-user-provisioning-form';
+import { LifecycleUserGeneratorForm } from './lifecycle-user-generator-form';
 import { ProvisioningPageHeader } from './provisioning-page-header';
 import { api } from '@/services/api';
 import { useOrgs } from '@/hooks/use-orgs';
@@ -20,7 +21,7 @@ const SAMPLE_CSV = `firstName,lastName,email,username,profile,permissionSets
 John,Doe,john.doe@example.com,john.doe@example.com.scratch,Standard User,Admin
 Jane,Smith,jane.smith@example.com,jane.smith@example.com.scratch,Standard User,Admin`;
 
-type Tab = 'cona' | 'csv';
+type Tab = 'cona' | 'lifecycle' | 'csv';
 
 function TabButton({
   active,
@@ -118,6 +119,10 @@ export function ProvisioningWorkspace() {
           <Users className="w-4 h-4" />
           CONA users
         </TabButton>
+        <TabButton active={tab === 'lifecycle'} onClick={() => setTab('lifecycle')}>
+          <UserCog className="w-4 h-4" />
+          Lifecycle roles
+        </TabButton>
         <TabButton active={tab === 'csv'} onClick={() => setTab('csv')}>
           <FileSpreadsheet className="w-4 h-4" />
           CSV bulk
@@ -127,6 +132,13 @@ export function ProvisioningWorkspace() {
       {tab === 'cona' ? (
         <GlassCard title="CONA onboarding users" description="Discover picklists and provision users with roles and modules.">
           <ConaUserProvisioningForm embedded />
+        </GlassCard>
+      ) : tab === 'lifecycle' ? (
+        <GlassCard
+          title="Lifecycle role users"
+          description="Generate one user per Onboarding Role for a bottler, with modules, locations, and permission sets."
+        >
+          <LifecycleUserGeneratorForm embedded />
         </GlassCard>
       ) : (
         <GlassCard title="CSV bulk upload" description="Import users from a CSV file with profiles and permission sets.">

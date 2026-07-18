@@ -1,7 +1,7 @@
 'use client';
 
 import { Suspense, useMemo } from 'react';
-import { DatabaseZap, FileSpreadsheet, Settings, Users } from 'lucide-react';
+import { DatabaseZap, FileSpreadsheet, Settings, UserCog, Users } from 'lucide-react';
 import { PageSkeleton, TabbedWorkspaceShell, type WorkspaceTab } from '@/components/studio';
 import { useAuth } from '@/contexts/auth-context';
 import { canAccessModule } from '@/lib/auth-utils';
@@ -11,6 +11,7 @@ import { LoadOrgConfigPanel } from './load-org-config-panel';
 import { UsersCsvPanel } from './users-csv-panel';
 import { useOrgSetupWorkspace } from './use-org-setup-workspace';
 import { ConaUserProvisioningForm } from '@/modules/provisioning/cona-user-provisioning-form';
+import { LifecycleUserGeneratorForm } from '@/modules/provisioning/lifecycle-user-generator-form';
 import type { OrgSetupTab } from './types';
 
 const ALL_TABS: (WorkspaceTab & { module: 'org-setup' | 'provisioning' })[] = [
@@ -37,6 +38,14 @@ const ALL_TABS: (WorkspaceTab & { module: 'org-setup' | 'provisioning' })[] = [
     module: 'provisioning',
     title: 'CONA onboarding users',
     description: 'Discover picklists and provision users with roles and modules.',
+  },
+  {
+    id: 'users-lifecycle',
+    label: 'Lifecycle roles',
+    icon: UserCog,
+    module: 'provisioning',
+    title: 'Lifecycle role users',
+    description: 'Generate one user per Onboarding Role for a bottler, with modules, locations, and permission sets.',
   },
   {
     id: 'users-csv',
@@ -81,6 +90,9 @@ function OrgSetupWorkspaceInner() {
       </div>
       <div hidden={activeTab !== 'users-cona'}>
         <ConaUserProvisioningForm embedded />
+      </div>
+      <div hidden={activeTab !== 'users-lifecycle'}>
+        <LifecycleUserGeneratorForm embedded />
       </div>
       <div hidden={activeTab !== 'users-csv'}>
         <UsersCsvPanel w={w} />
