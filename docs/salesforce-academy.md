@@ -1,12 +1,17 @@
 # Salesforce Academy (Learning Module)
 
-An admin-controlled, AI-powered Salesforce training program built into the platform. It takes a
-complete fresher to architect-level understanding through four guided paths, with an AI mentor on
-every lesson, an instant quiz after every module, and full progress visibility for administrators.
+An admin-controlled, AI-powered training program built into the platform. It takes a complete
+fresher to architect-level understanding through seven guided paths — the Salesforce core
+curriculum plus programming (JavaScript, Java) and delivery (release management) tracks — with an
+AI mentor on every lesson, an instant quiz after every module, and full progress visibility for
+administrators.
 
 ## What learners get
 
-- **Four learning paths, beginner → expert** (13 modules, 42 lessons, ~42 hours of curriculum):
+- **Seven learning paths in three catalog groups** (22 modules, 69 lessons, ~55 hours of
+  curriculum):
+
+  *Salesforce core curriculum*
   1. **Salesforce Foundations** (Beginner) — CRM concepts, the platform, navigation, data model,
      reports, collaboration. Designed so a new joiner needs zero prior knowledge.
   2. **Admin & Configuration Mastery** (Intermediate) — the security model (profiles, permission
@@ -15,6 +20,22 @@ every lesson, an instant quiz after every module, and full progress visibility f
      async Apex, Lightning Web Components, APIs and integration patterns.
   4. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
      and identity architecture, Salesforce DX, scratch orgs, packaging, CI/CD, and governance.
+
+  *Programming & platform skills*
+  5. **JavaScript Mastery** (Intermediate) — language fundamentals, modern ES6+ syntax, async
+     programming with promises/await, the DOM and events, fetch + REST APIs, and the exact
+     patterns Lightning Web Components are built on. Full code samples in every module.
+  6. **Java Programming** (Intermediate) — the JVM platform, types and control flow, OO design
+     with interfaces and collections/generics/streams, exceptions, HTTP + JSON against the
+     Salesforce REST API, and Maven/JUnit builds — the language of the middleware next to
+     every org (and the one Apex grew from).
+
+  *Delivery & release management*
+  7. **Release Management & DevOps** (Advanced) — branching and environment strategy, release
+     cadence/calendars/freeze windows, CI/CD quality gates with validate-only deploys, test
+     strategy and static analysis, deployment/rollback mechanics, release planning with
+     approvals and notes, go-live runbooks and hypercare, and DORA release-health metrics —
+     mapped onto this platform's Releases, Drift, and Calendar modules.
 - **Every lesson** includes learning objectives, structured explanations, a **real-world
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
@@ -42,19 +63,29 @@ every lesson, an instant quiz after every module, and full progress visibility f
   on-screen/animation direction. One click plays it as an in-app animated session (story player);
   exports (Copy, `.md` production script, narration-only `.txt`) feed external AI video tools
   (HeyGen, Synthesia, InVideo, CapCut…). AI-scripted with a deterministic curriculum-derived
-  fallback, so all 42 topics always have a script. See `docs/academy-video-sessions-plan.md`.
+  fallback, so all 69 topics always have a script. See `docs/academy-video-sessions-plan.md`.
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
-  (with a 130-question curated bank as automatic fallback when AI is unavailable). Scoring happens
+  (with a 220-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and
   every question gets an explanation plus a coaching summary of focus areas. Pass mark: 70%.
 - **Progress capture** — every lesson completion and quiz attempt (score, pass/fail, source,
   timestamps) is persisted. Module completion = all lessons read + quiz passed; path completion
   earns a named badge.
+- **Production docs for every lesson** — `docs/training/` holds one generated document per path
+  with, for every lesson: the full concept explanation, the real-world example, key takeaways,
+  resources, and a timecoded **5-minute video script** (word-for-word narration, on-screen
+  direction, demo steps) ready for recording or external AI video tools. Regenerate with
+  `npm run docs:training` whenever curriculum changes.
 
 ## What admins get
 
 - **Module gating** — `learning` is a locked module: standard users see the Academy only when an
   administrator grants it (Admin → User Access), exactly like other locked modules.
+- **Catalog scope per user** — in User Access → Manage, admins can flip a learner to
+  **assigned paths only**. The catalog, lessons, quizzes, AI mentor, stories, and video scripts
+  of unassigned paths are then completely invisible to that user (enforced server-side with 403s,
+  not just hidden in the UI) until an admin assigns the path. Stats and progress totals reflect
+  only the visible curriculum.
 - **Assignments** — from **Academy Progress** (`/learning/team`), admins assign one or more paths
   to one or more users with an optional note and due date. Assigning **automatically grants** the
   learning module to that user and sends them an in-app notification (email follows the platform's

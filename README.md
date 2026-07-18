@@ -325,23 +325,27 @@ cmd /c "npm run start --workspace=@sfcc/web"
 | Role | Default access |
 |------|----------------|
 | **Admin** | All modules + **User Access** (`/admin/users`) |
-| **User** | Dashboard, Environment Center, Data Center |
+| **User** | Dashboard, Environment Center, Data Center, Developer Board |
 
-Admins can grant additional modules per user: Deployment, Org Setup, Provisioning, Monitoring, Copilot.
+Every feature is controlled per user from **User Access → Manage**:
+
+- **Advanced modules** (Deployment, Org Setup, Provisioning, Monitoring, Copilot, Salesforce Academy) are **off until granted** — invisible to the user until an admin enables them.
+- **Core modules** (Environment Center, Data Center, Developer Board) are on by default but **revocable per user**. Dashboard is always on (it is the landing page and locked-route redirect target).
+- **Academy content scope** — when a user has the Academy, admins can restrict them to **assigned training paths only**; unassigned paths are completely invisible (enforced server-side) until assigned from Academy Progress.
 
 ### User Access (`/admin/users`)
 
 Admin workspace with four tabs:
 
-- **Users** — stat cards (total, active, admins, inactive, new-this-week), search + role/status filters, CSV export (with spreadsheet formula-injection hardening), and a **Manage** drawer for role, module grants, and active/inactive status.
+- **Users** — stat cards (total, active, admins, inactive, new-this-week), search + role/status filters, CSV export (with spreadsheet formula-injection hardening), and a **Manage** drawer for role, active/inactive status, per-module switches (grants for advanced modules, revocations for core modules), and the Academy content scope toggle.
 - **Roles** — read-only overview of the derived role model (Super Admin, Integration, Developer, Viewer) with live per-role counts.
-- **Permissions** — a module × role matrix showing what each role can access (admins always get every module).
+- **Permissions** — a module × role matrix showing defaults, per-user control (grantable / revocable / always on), and admin access.
 - **Activity Logs** — a paginated, security-relevant audit feed (access changes, session revocations, password activity).
 
 APIs:
 
 - `GET /auth/users/overview` — stats + enriched user list (single AppUser query).
-- `PATCH /auth/users/:id/access` — `{ role?, grantedModules?, status? }`. Admins **cannot** change their own access here, and the **last active admin** is protected from demotion/deactivation. Every change (and denial) is written to the audit trail with the acting admin and a PII-free diff.
+- `PATCH /auth/users/:id/access` — `{ role?, grantedModules?, revokedModules?, learningAssignedOnly?, status? }`. Admins **cannot** change their own access here, and the **last active admin** is protected from demotion/deactivation. Every change (and denial) is written to the audit trail with the acting admin and a PII-free diff.
 - `GET /auth/audit-events?limit&offset` — admin-only, paginated audit feed. `ipHash`/`userAgentHash` are never returned.
 
 Users appear after they log in at least once (row created in `AppUser`).
@@ -436,7 +440,7 @@ If you open the web app directly on port **3000** from another device, set `NEXT
 | Org & Users | `/org-setup` | Tabbed: baseline setup, load org config, CONA users, CSV provisioning |
 | Monitoring | `/monitoring` | Job stats, filterable jobs table, status detail on row select |
 | AI Copilot | Sidebar button | Streaming NVIDIA-powered assistant (see [AI Copilot](#ai-copilot)) |
-| Salesforce Academy | `/learning` | Admin-assignable Salesforce training: 4 paths (beginner→architect), AI mentor per lesson, instant AI quizzes, progress tracking (see `docs/salesforce-academy.md`) |
+| Salesforce Academy | `/learning` | Admin-assignable training: 7 paths in 3 groups — Salesforce core (beginner→architect), programming (JavaScript, Java), delivery (Release Management & DevOps) — AI mentor per lesson, instant AI quizzes, progress tracking, per-lesson 5-minute video scripts in `docs/training/` (see `docs/salesforce-academy.md`) |
 | Academy Progress | `/learning/team` | Admin: assign training paths, track per-learner lessons/quiz scores/completions |
 | User Access | `/admin/users` | Admin user and permission management |
 | Notifications | `/admin/notifications` | Master switch, categories, email channel, Slack/Teams webhooks |
@@ -561,6 +565,7 @@ npm run db:push          # Push schema to database
 npm run db:migrate       # Run Prisma migrations
 npm run docker:up        # Start Postgres + Redis
 npm run docker:down      # Stop Postgres + Redis
+npm run docs:training    # Regenerate docs/training (lesson docs + 5-min video scripts)
 npm run smoke-test       # Basic API smoke test
 ```
 
