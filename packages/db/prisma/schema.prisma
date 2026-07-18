@@ -1236,6 +1236,8 @@ model ScratchPipelineTemplate {
   name        String
   description String?
   isSystem    Boolean  @default(false)
+  systemKey   String?  @unique
+  sortOrder   Int      @default(0)
   createdById String?
   config      Json
   createdAt   DateTime @default(now())

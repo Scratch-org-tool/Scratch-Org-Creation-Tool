@@ -23,8 +23,9 @@ export function SourceOrgsSection({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Choose which authorized orgs supply data for deployment and custom settings. Data seed and
-        partner import use the data deployment org; SFDMU custom settings use the custom settings org.
+        Optionally store authorized source-org defaults. Leave either field empty to select it when
+        the template is launched. Data queries and partners use the data deployment org; SFDMU
+        custom settings use the custom settings org.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
         <div>
@@ -34,7 +35,7 @@ export function SourceOrgsSection({
             value={dataDeploymentOrgId ?? ''}
             onChange={(e) => onChange({ dataDeploymentOrgId: e.target.value || undefined })}
           >
-            <option value="">Select org…</option>
+            <option value="">Select at launch</option>
             {orgs.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.alias}
@@ -49,7 +50,7 @@ export function SourceOrgsSection({
             value={customSettingsOrgId ?? ''}
             onChange={(e) => onChange({ customSettingsOrgId: e.target.value || undefined })}
           >
-            <option value="">Select org…</option>
+            <option value="">Select at launch</option>
             {orgs.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.alias}

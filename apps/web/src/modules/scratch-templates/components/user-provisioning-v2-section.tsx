@@ -159,8 +159,18 @@ export function UserProvisioningV2Section({
   const mappings = value.roleBottlerMappings ?? [];
   const teams = value.teams ?? [];
   const generators = value.userGenerators ?? [];
+  const hasConfiguredUsers = Boolean(
+    value.users?.length || value.slots?.length || value.userGenerators?.length,
+  );
 
   useEffect(() => {
+    if (!hasConfiguredUsers) {
+      setPlanPreview(null);
+      setPlanError(null);
+      setPlanChecking(false);
+      onValidationChange?.({ valid: true, checking: false });
+      return;
+    }
     if (!sourceOrgId) {
       setPlanPreview(null);
       setPlanError('Select a Data Deployment Org to validate the provisioning plan.');
@@ -202,7 +212,7 @@ export function UserProvisioningV2Section({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [onValidationChange, previewSeed, sourceOrgId, value]);
+  }, [hasConfiguredUsers, onValidationChange, previewSeed, sourceOrgId, value]);
 
   const generatedPreview = planPreview?.users ?? [];
   const profiles = discovery?.profiles ?? [];

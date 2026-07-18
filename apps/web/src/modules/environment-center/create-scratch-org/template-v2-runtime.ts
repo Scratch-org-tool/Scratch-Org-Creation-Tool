@@ -45,6 +45,35 @@ export function buildTemplateV2Preview(
   },
 ): ResolvedTemplateV2Preview {
   const errors: string[] = [];
+  const dataSourceOrgId = config.dataDeploymentOrgId ?? config.sourceOrgId;
+  const customSettingsOrgId = config.customSettingsOrgId ?? config.sourceOrgId;
+  const hasConfiguredUsers = Boolean(
+    config.userProvisioning?.users?.length
+    || config.userProvisioning?.slots?.length
+    || config.userProvisioning?.userGenerators?.length,
+  );
+
+  if (config.customSettings?.enabled === true && !customSettingsOrgId) {
+    errors.push('Select a Custom Settings Org for this template.');
+  }
+  if (
+    config.pipelineSteps?.autoRunDataSeed
+    && config.dataSeed
+    && !dataSourceOrgId
+  ) {
+    errors.push('Select a Data Deployment Org for the automatic data deployment.');
+  }
+  if (
+    config.pipelineSteps?.autoRunPartners
+    && config.partnerImport?.enabled
+    && config.partnerImport.mode !== 'excel'
+    && !dataSourceOrgId
+  ) {
+    errors.push('Select a Data Deployment Org for Account Partner mapping.');
+  }
+  if (config.pipelineSteps?.autoRunUsers && hasConfiguredUsers && !dataSourceOrgId) {
+    errors.push('Select a Data Deployment Org for automatic user provisioning.');
+  }
 
   let queries: CompiledQuerySectionPlan | undefined;
   if (config.dataSeed?.querySection) {

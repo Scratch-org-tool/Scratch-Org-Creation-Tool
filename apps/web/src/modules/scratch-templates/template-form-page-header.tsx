@@ -20,12 +20,23 @@ export const TEMPLATE_STEP_DESCRIPTIONS: Record<number, string> = {
 
 interface TemplateFormPageHeaderProps {
   mode: 'new' | 'edit';
+  isSystem?: boolean;
   step: number;
   onCancel: () => void;
 }
 
-export function TemplateFormPageHeader({ mode, step, onCancel }: TemplateFormPageHeaderProps) {
+export function TemplateFormPageHeader({
+  mode,
+  isSystem = false,
+  step,
+  onCancel,
+}: TemplateFormPageHeaderProps) {
   const stepLabel = TEMPLATE_WIZARD_STEPS[step] ?? 'General';
+  const title = mode === 'new'
+    ? 'New template'
+    : isSystem
+      ? 'Edit default template'
+      : 'Edit template';
 
   return (
     <div
@@ -43,7 +54,7 @@ export function TemplateFormPageHeader({ mode, step, onCancel }: TemplateFormPag
           items={[
             { href: '/environment-center', label: 'Environment' },
             { href: '/scratch-templates', label: 'Templates' },
-            { href: '/scratch-templates', label: mode === 'edit' ? 'Edit template' : 'New template' },
+            { href: '/scratch-templates', label: title },
           ]}
         />
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -52,7 +63,7 @@ export function TemplateFormPageHeader({ mode, step, onCancel }: TemplateFormPag
               Step {step + 1} of {TEMPLATE_WIZARD_STEPS.length} · {stepLabel}
             </p>
             <h1 className="text-2xl font-bold tracking-tight mt-1">
-              {mode === 'edit' ? 'Edit template' : 'New template'}
+              {title}
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
               {TEMPLATE_STEP_DESCRIPTIONS[step]}

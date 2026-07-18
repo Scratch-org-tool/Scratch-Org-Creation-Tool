@@ -349,7 +349,7 @@ export function ScratchOrgForm({
               <option value="">Manual configuration (form below)</option>
               {templates.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name}{t.isSystem ? ' (system)' : ''}
+                  {t.name}{t.isSystem ? ' (default)' : ''}
                 </option>
               ))}
             </Select>
@@ -359,7 +359,7 @@ export function ScratchOrgForm({
               <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm space-y-1">
                 <p className="font-medium">From template: {templateMeta!.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  Scratch defaults, permissions, custom settings, data seed, and users come from this template.
+                  Scratch defaults and its configured deployment stages come from this template.
                   {mode === 'create_new'
                     ? 'Set alias, Dev Hub, and metadata source below for this run.'
                     : 'Select the existing target and metadata source for this run.'}

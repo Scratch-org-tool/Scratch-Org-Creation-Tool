@@ -61,9 +61,17 @@ function withCanonicalGitSource(config: TemplateConfigState): TemplateConfigStat
 }
 
 function migrateForEditor(config: TemplateConfigState): TemplateConfigState {
+  const migrated = migrateTemplateConfigToV2(config);
   return withCanonicalGitSource({
-    ...DEFAULT_TEMPLATE_CONFIG,
-    ...migrateTemplateConfigToV2(config),
+    ...migrated,
+    version: 2,
+    template: migrated.template ?? DEFAULT_TEMPLATE_CONFIG.template,
+    duration: migrated.duration ?? DEFAULT_TEMPLATE_CONFIG.duration,
+    installPackage: migrated.installPackage ?? DEFAULT_TEMPLATE_CONFIG.installPackage,
+    permissionSets: migrated.permissionSets ?? [],
+    orgConfig: migrated.orgConfig ?? DEFAULT_TEMPLATE_CONFIG.orgConfig,
+    customSettings: migrated.customSettings ?? DEFAULT_TEMPLATE_CONFIG.customSettings,
+    pipelineSteps: migrated.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps,
   });
 }
 
@@ -88,6 +96,7 @@ export function ScratchTemplateForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!templateId);
+  const [isSystemTemplate, setIsSystemTemplate] = useState(false);
   const [draftHydrated, setDraftHydrated] = useState(!!templateId);
   const [userPlanState, setUserPlanState] = useState({ valid: false, checking: true });
   const handleUserPlanValidation = useCallback(
@@ -113,6 +122,13 @@ export function ScratchTemplateForm({
   }, [templateId, draftHydrated, name, description, config, permissionSetsText, customJson]);
 
   const dataDeploymentOrgId = config.dataDeploymentOrgId ?? config.sourceOrgId;
+  const hasConfiguredUsers = Boolean(
+    config.userProvisioning?.users?.length
+    || config.userProvisioning?.slots?.length
+    || config.userProvisioning?.userGenerators?.length,
+  );
+  const userPlanReady =
+    !hasConfiguredUsers || (userPlanState.valid && !userPlanState.checking);
 
   useEffect(() => {
     void fetchOrgsList().then(setOrgs).catch(console.error);
@@ -129,15 +145,26 @@ export function ScratchTemplateForm({
       api<{
         name: string;
         description: string | null;
+        isSystem: boolean;
         config: TemplateConfigState;
       }>(`/environment/scratch-templates/${templateId}`)
         .then((t) => {
           setName(t.name);
           setDescription(t.description ?? '');
+          setIsSystemTemplate(t.isSystem);
           try {
             setConfig(migrateForEditor(t.config));
           } catch (migrationError) {
-            setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...t.config, version: 2 }));
+            setConfig(withCanonicalGitSource({
+              ...t.config,
+              version: 2,
+              template: t.config.template ?? DEFAULT_TEMPLATE_CONFIG.template,
+              duration: t.config.duration ?? DEFAULT_TEMPLATE_CONFIG.duration,
+              installPackage: t.config.installPackage ?? DEFAULT_TEMPLATE_CONFIG.installPackage,
+              orgConfig: t.config.orgConfig ?? DEFAULT_TEMPLATE_CONFIG.orgConfig,
+              customSettings: t.config.customSettings ?? DEFAULT_TEMPLATE_CONFIG.customSettings,
+              pipelineSteps: t.config.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps,
+            }));
             setError(migrationError instanceof Error ? migrationError.message : 'Legacy migration needs attention');
           }
           setPermissionSetsText(formatPermissionSets(t.config.permissionSets));
@@ -170,7 +197,16 @@ export function ScratchTemplateForm({
           try {
             setConfig(migrateForEditor(draft.config));
           } catch {
-            setConfig(withCanonicalGitSource({ ...DEFAULT_TEMPLATE_CONFIG, ...draft.config, version: 2 }));
+            setConfig(withCanonicalGitSource({
+              ...draft.config,
+              version: 2,
+              template: draft.config.template ?? DEFAULT_TEMPLATE_CONFIG.template,
+              duration: draft.config.duration ?? DEFAULT_TEMPLATE_CONFIG.duration,
+              installPackage: draft.config.installPackage ?? DEFAULT_TEMPLATE_CONFIG.installPackage,
+              orgConfig: draft.config.orgConfig ?? DEFAULT_TEMPLATE_CONFIG.orgConfig,
+              customSettings: draft.config.customSettings ?? DEFAULT_TEMPLATE_CONFIG.customSettings,
+              pipelineSteps: draft.config.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps,
+            }));
           }
         }
         if (draft.permissionSetsText !== undefined) setPermissionSetsText(draft.permissionSetsText);
@@ -215,7 +251,7 @@ export function ScratchTemplateForm({
       if (!hasValidCustomJson(config, customJson)) {
         throw new Error('Custom settings mode requires valid JSON before this V2 template can be saved.');
       }
-      if (userPlanState.checking || !userPlanState.valid) {
+      if (hasConfiguredUsers && !userPlanReady) {
         throw new Error('Resolve provisioning profile, mapping, permission-set, and metadata errors before saving.');
       }
       let exportConfig: unknown;
@@ -268,16 +304,18 @@ export function ScratchTemplateForm({
           customSettingsOrgId: config.customSettings?.enabled === false
             ? undefined
             : (config.customSettingsOrgId || config.sourceOrgId || undefined),
-          dataSeed: {
-            ...config.dataSeed,
-            datasets: config.dataSeed?.datasets ?? DEFAULT_TEMPLATE_CONFIG.dataSeed?.datasets,
-            mode: config.dataSeed?.mode ?? 'hybrid',
-            querySet: config.dataSeed?.querySet,
-            querySection: config.dataSeed?.querySection
-              ? querySectionSchema.parse(config.dataSeed.querySection)
-              : undefined,
-          },
-          accountSeedRows: config.accountSeedRows,
+          dataSeed: config.dataSeed
+            ? {
+                ...config.dataSeed,
+                datasets: config.dataSeed.datasets ?? [],
+                mode: config.dataSeed.mode ?? 'hybrid',
+                querySet: config.dataSeed.querySet,
+                querySection: config.dataSeed.querySection
+                  ? querySectionSchema.parse(config.dataSeed.querySection)
+                  : undefined,
+              }
+            : undefined,
+          accountSeedRows: config.dataSeed ? config.accountSeedRows : undefined,
           partnerImport:
             config.partnerImport?.enabled
               ? {
@@ -313,18 +351,12 @@ export function ScratchTemplateForm({
   const canNext =
     step === 0
       ? name.trim().length > 0
-      : step === 2
-        ? Boolean(config.dataDeploymentOrgId ?? config.sourceOrgId) &&
-          (
-            config.customSettings?.enabled === false
-            || Boolean(config.customSettingsOrgId ?? config.sourceOrgId)
-          )
-        : step === 3
+      : step === 3
           ? hasValidCustomJson(config, customJson)
           : step === 6 && config.dataSeed?.querySection
             ? querySectionSchema.safeParse(config.dataSeed.querySection).success
             : step === 7
-              ? userPlanState.valid && !userPlanState.checking
+              ? userPlanReady
             : true;
 
   if (loading) {
@@ -361,12 +393,11 @@ export function ScratchTemplateForm({
           disabled={
             !name.trim()
             || !hasValidCustomJson(config, customJson)
-            || userPlanState.checking
-            || !userPlanState.valid
+            || !userPlanReady
           }
         >
           <Check className="w-4 h-4 text-violet-400" />
-          Save template
+          {isSystemTemplate ? 'Save default template' : 'Save template'}
         </Button>
       )}
     </div>
@@ -376,6 +407,7 @@ export function ScratchTemplateForm({
     <div className="p-4 md:p-6 space-y-6 min-h-0">
       <TemplateFormPageHeader
         mode={templateId ? 'edit' : 'new'}
+        isSystem={isSystemTemplate}
         step={step}
         onCancel={onClose}
       />
@@ -604,86 +636,137 @@ export function ScratchTemplateForm({
               {step === 5 && (
                 <FormSection title="Data seed">
                   <div className="space-y-6">
-                    <p className="text-sm text-muted-foreground">
-                      Data deployment org:{' '}
-                      {dataDeploymentOrgId
-                        ? orgAliases[dataDeploymentOrgId] ?? dataDeploymentOrgId
-                        : '— select on Source orgs step'}
-                    </p>
-                    <DataSeedSection
-                      mode={config.dataSeed?.mode ?? 'hybrid'}
-                      datasets={config.dataSeed?.datasets ?? []}
-                      accountRows={config.accountSeedRows ?? []}
-                      querySet={config.dataSeed?.querySet}
-                      queryJsonFile={queryJsonFile}
-                      onModeChange={(mode) =>
-                        setConfig({
-                          ...config,
-                          dataSeed: {
-                            ...config.dataSeed,
-                            datasets: config.dataSeed?.datasets ?? DEFAULT_TEMPLATE_CONFIG.dataSeed?.datasets ?? [],
-                            mode,
-                            querySet: config.dataSeed?.querySet,
-                          },
-                        })
-                      }
-                      onDatasetsChange={(datasets) =>
-                        setConfig({
-                          ...config,
-                          dataSeed: {
-                            ...config.dataSeed,
-                            datasets,
-                            mode: config.dataSeed?.mode ?? 'hybrid',
-                            querySet: config.dataSeed?.querySet,
-                          },
-                        })
-                      }
-                      onAccountRowsChange={(accountSeedRows) => setConfig({ ...config, accountSeedRows })}
-                      onQuerySetChange={(querySet) =>
-                        setConfig({
-                          ...config,
-                          dataSeed: {
-                            ...config.dataSeed,
-                            datasets: config.dataSeed?.datasets ?? [],
-                            mode: config.dataSeed?.mode ?? 'hybrid',
-                            querySet,
-                          },
-                        })
-                      }
-                      onQueryJsonFileChange={setQueryJsonFile}
-                    />
+                    <label className="flex items-start gap-3 rounded-lg border border-border/60 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={Boolean(config.dataSeed)}
+                        onChange={(event) => {
+                          if (event.target.checked) {
+                            setConfig({
+                              ...config,
+                              dataSeed: DEFAULT_TEMPLATE_CONFIG.dataSeed,
+                              accountSeedRows:
+                                config.accountSeedRows ?? DEFAULT_TEMPLATE_CONFIG.accountSeedRows,
+                            });
+                            return;
+                          }
+                          setConfig({
+                            ...config,
+                            dataSeed: undefined,
+                            accountSeedRows: undefined,
+                            pipelineSteps: {
+                              ...(config.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps!),
+                              autoRunDataSeed: false,
+                            },
+                          });
+                        }}
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Enable data deployment</p>
+                        <p className="text-xs text-muted-foreground">
+                          Add built-in datasets, uploaded query JSON, or ordered V2 queries to this template.
+                        </p>
+                      </div>
+                    </label>
+                    {config.dataSeed ? (
+                      <>
+                        <p className="text-sm text-muted-foreground">
+                          Data deployment org:{' '}
+                          {dataDeploymentOrgId
+                            ? orgAliases[dataDeploymentOrgId] ?? dataDeploymentOrgId
+                            : 'selected when this template is launched'}
+                        </p>
+                        <DataSeedSection
+                          mode={config.dataSeed.mode ?? 'hybrid'}
+                          datasets={config.dataSeed.datasets ?? []}
+                          accountRows={config.accountSeedRows ?? []}
+                          querySet={config.dataSeed.querySet}
+                          queryJsonFile={queryJsonFile}
+                          onModeChange={(mode) =>
+                            setConfig({
+                              ...config,
+                              dataSeed: {
+                                ...config.dataSeed!,
+                                datasets: config.dataSeed?.datasets ?? [],
+                                mode,
+                                querySet: config.dataSeed?.querySet,
+                              },
+                            })
+                          }
+                          onDatasetsChange={(datasets) =>
+                            setConfig({
+                              ...config,
+                              dataSeed: {
+                                ...config.dataSeed!,
+                                datasets,
+                                mode: config.dataSeed?.mode ?? 'hybrid',
+                                querySet: config.dataSeed?.querySet,
+                              },
+                            })
+                          }
+                          onAccountRowsChange={(accountSeedRows) => setConfig({ ...config, accountSeedRows })}
+                          onQuerySetChange={(querySet) =>
+                            setConfig({
+                              ...config,
+                              dataSeed: {
+                                ...config.dataSeed!,
+                                datasets: config.dataSeed?.datasets ?? [],
+                                mode: config.dataSeed?.mode ?? 'hybrid',
+                                querySet,
+                              },
+                            })
+                          }
+                          onQueryJsonFileChange={setQueryJsonFile}
+                        />
+                      </>
+                    ) : (
+                      <InlineAlert>
+                        This preset stops after source deployment. Enable data deployment to configure queries or seed datasets.
+                      </InlineAlert>
+                    )}
                   </div>
                 </FormSection>
               )}
 
               {step === 6 && (
                 <FormSection title="Named query section">
-                  <QuerySectionEditor
-                    value={config.dataSeed?.querySection}
-                    sourceOrgId={dataDeploymentOrgId}
-                    salesOfficesByBottler={config.partnerImport?.salesOfficeConfig
-                      ? {
-                          [config.partnerImport.salesOfficeConfig.bottler]:
-                            config.partnerImport.salesOfficeConfig.offices,
-                        }
-                      : undefined}
-                    legacySummary={
-                      config.dataSeed?.querySet || config.accountSeedRows?.length
-                        ? `${config.dataSeed?.querySet?.queries.length ?? 0} query JSON entries and ${config.accountSeedRows?.length ?? 0} account rows were migrated into named V2 queries.`
-                        : undefined
-                    }
-                    onChange={(querySection) =>
-                      setConfig({
-                        ...config,
-                        dataSeed: {
-                          ...config.dataSeed,
-                          datasets: config.dataSeed?.datasets ?? [],
-                          mode: querySection ? 'query_section' : (config.dataSeed?.mode ?? 'hybrid'),
-                          querySection,
-                        },
-                      })
-                    }
-                  />
+                  {config.dataSeed ? (
+                    <QuerySectionEditor
+                      value={config.dataSeed.querySection}
+                      sourceOrgId={dataDeploymentOrgId}
+                      salesOfficesByBottler={config.partnerImport?.salesOfficeConfig
+                        ? {
+                            [config.partnerImport.salesOfficeConfig.bottler]:
+                              config.partnerImport.salesOfficeConfig.offices,
+                          }
+                        : undefined}
+                      legacySummary={
+                        config.dataSeed.querySet || config.accountSeedRows?.length
+                          ? `${config.dataSeed.querySet?.queries.length ?? 0} query JSON entries and ${config.accountSeedRows?.length ?? 0} account rows were migrated into named V2 queries.`
+                          : undefined
+                      }
+                      onChange={(querySection) =>
+                        setConfig({
+                          ...config,
+                          dataSeed: {
+                            ...config.dataSeed!,
+                            datasets: config.dataSeed?.datasets ?? [],
+                            mode: querySection
+                              ? 'query_section'
+                              : config.dataSeed?.mode === 'query_section'
+                                ? 'hybrid'
+                                : (config.dataSeed?.mode ?? 'hybrid'),
+                            querySection,
+                          },
+                        })
+                      }
+                    />
+                  ) : (
+                    <InlineAlert>
+                      Enable data deployment on the previous step before adding ordered queries.
+                    </InlineAlert>
+                  )}
                 </FormSection>
               )}
 
@@ -695,7 +778,18 @@ export function ScratchTemplateForm({
                       excelFile={partnerFile}
                       onExcelFileChange={setPartnerFile}
                       storedFileName={storedPartnerName}
-                      onChange={(partnerImport) => setConfig({ ...config, partnerImport })}
+                      onChange={(partnerImport) =>
+                        setConfig({
+                          ...config,
+                          partnerImport,
+                          pipelineSteps: partnerImport.enabled
+                            ? config.pipelineSteps
+                            : {
+                                ...(config.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps!),
+                                autoRunPartners: false,
+                              },
+                        })
+                      }
                     />
                   </FormSection>
                   <FormSection title="User provisioning">
@@ -710,6 +804,11 @@ export function ScratchTemplateForm({
                     <PipelineStepsSection
                       value={config.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps!}
                       onChange={(pipelineSteps) => setConfig({ ...config, pipelineSteps })}
+                      availability={{
+                        autoRunDataSeed: Boolean(config.dataSeed),
+                        autoRunPartners: config.partnerImport?.enabled === true,
+                        autoRunUsers: hasConfiguredUsers,
+                      }}
                     />
                   </FormSection>
                 </div>
@@ -717,7 +816,7 @@ export function ScratchTemplateForm({
 
               {step === 8 && (
                 <>
-                  {(userPlanState.checking || !userPlanState.valid) && (
+                  {hasConfiguredUsers && !userPlanReady && (
                     <InlineAlert variant="error" title="Provisioning plan not validated">
                       Return to Partners &amp; users and resolve all profile, mapping,
                       permission-set, and metadata validation errors before saving.
