@@ -15,6 +15,8 @@ import {
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 
 const SYSTEM_TEMPLATE_NAME = 'CONA Full Setup';
+const SYSTEM_TEMPLATE_DESCRIPTION =
+  'Default CONA scratch pipeline: metadata, org config, bundled custom settings, and data seed. User provisioning runs when concrete users are configured.';
 
 @Injectable()
 export class ScratchTemplatesService implements OnModuleInit {
@@ -30,10 +32,32 @@ export class ScratchTemplatesService implements OnModuleInit {
       const cfg = existing.config as Record<string, unknown>;
       const azure = cfg.azureDeploy as { repo?: string; branch?: string; manifestPath?: string } | undefined;
       const git = cfg.gitSource as Partial<GitSourceConfig> | undefined;
-      if (azure?.repo || azure?.branch || !git?.provider) {
+      const provisioning = cfg.userProvisioning as {
+        users?: unknown[];
+        slots?: unknown[];
+        userGenerators?: unknown[];
+      } | undefined;
+      const hasUsers = Boolean(
+        provisioning?.users?.length
+        || provisioning?.slots?.length
+        || provisioning?.userGenerators?.length,
+      );
+      const steps = cfg.pipelineSteps as {
+        autoRunDataSeed?: boolean;
+        autoRunPartners?: boolean;
+        autoRunUsers?: boolean;
+      } | undefined;
+      if (
+        azure?.repo
+        || azure?.branch
+        || !git?.provider
+        || (!hasUsers && steps?.autoRunUsers === true)
+        || existing.description !== SYSTEM_TEMPLATE_DESCRIPTION
+      ) {
         await prisma.scratchPipelineTemplate.update({
           where: { id: existing.id },
           data: {
+            description: SYSTEM_TEMPLATE_DESCRIPTION,
             config: sanitizeTemplateConfigForStorage({
               ...cfg,
               azureDeploy: azure?.manifestPath ? { manifestPath: azure.manifestPath } : undefined,
@@ -41,6 +65,10 @@ export class ScratchTemplatesService implements OnModuleInit {
                 ...git,
                 provider: git?.provider ?? 'azure_devops',
                 manifestPath: git?.manifestPath ?? azure?.manifestPath,
+              },
+              pipelineSteps: {
+                ...steps,
+                ...(!hasUsers ? { autoRunUsers: false } : {}),
               },
             } as Parameters<typeof sanitizeTemplateConfigForStorage>[0]) as Prisma.InputJsonValue,
           },
@@ -52,7 +80,7 @@ export class ScratchTemplatesService implements OnModuleInit {
     await prisma.scratchPipelineTemplate.create({
       data: {
         name: SYSTEM_TEMPLATE_NAME,
-        description: 'Default CONA scratch pipeline: Azure deploy, org config, bundled custom settings, data seed, and users.',
+        description: SYSTEM_TEMPLATE_DESCRIPTION,
         isSystem: true,
         createdById: null,
         config: {
@@ -105,7 +133,7 @@ export class ScratchTemplatesService implements OnModuleInit {
           pipelineSteps: {
             autoRunDataSeed: true,
             autoRunPartners: false,
-            autoRunUsers: true,
+            autoRunUsers: false,
           },
         } as Prisma.InputJsonValue,
       },
@@ -247,6 +275,7 @@ export class ScratchTemplatesService implements OnModuleInit {
       || tmpl.userProvisioning?.slots?.length
       || tmpl.userProvisioning?.userGenerators?.length,
     );
+    const installPackage = overrides.installPackage ?? tmpl.installPackage;
     return {
       ...tmpl,
       mode: overrides.mode ?? 'create_new',
@@ -255,7 +284,7 @@ export class ScratchTemplatesService implements OnModuleInit {
       existingOrgConnectionId: overrides.existingOrgConnectionId,
       existingOrgOptions: overrides.existingOrgOptions,
       duration: overrides.duration ?? tmpl.duration,
-      installPackage: overrides.installPackage ?? tmpl.installPackage,
+      installPackage,
       description: overrides.description,
       sourceOrgId: dataDeploymentOrgId,
       dataDeploymentOrgId,
@@ -271,7 +300,7 @@ export class ScratchTemplatesService implements OnModuleInit {
             manifestPath: gitSource.manifestPath,
           }
         : undefined,
-      skipSteps: [],
+      skipSteps: installPackage ? [] : ['installPackages'],
       pipelineSteps: {
         ...tmpl.pipelineSteps,
         ...(hasUsers ? {} : { autoRunUsers: false }),

@@ -35,6 +35,16 @@ const target = {
   expiresAt: new Date('2099-08-01T00:00:00Z'),
   createdBy: 'owner',
 };
+const devHub = {
+  ...target,
+  id: '22222222-2222-4222-8222-222222222222',
+  alias: 'devhub',
+  username: 'devhub@example.com',
+  orgId: '00Ddevhub',
+  type: 'prod',
+  isDevHub: true,
+  expiresAt: null,
+};
 const liveOrg = {
   alias: target.alias,
   username: target.username,
@@ -193,6 +203,124 @@ describe('ExistingScratchOrgService eligibility', () => {
     const result = await createService().eligibility(config, 'owner');
     expect(result.eligible).toBe(false);
     expect(result.conflictRunId).toBe('run-active');
+  });
+
+  it('blocks create-new launches before queueing when enabled data steps lack sources', async () => {
+    db.orgConnection.findUnique.mockImplementation(({ where }: {
+      where: { alias?: string; id?: string };
+    }) =>
+      Promise.resolve(where.alias === 'devhub' ? devHub : target));
+    const createConfig = {
+      ...config,
+      mode: 'create_new',
+      alias: 'new-scratch',
+      devHubAlias: 'devhub',
+      existingOrgConnectionId: undefined,
+      customSettings: { enabled: true, mode: 'bundled' },
+      pipelineSteps: {
+        autoRunDataSeed: true,
+        autoRunPartners: false,
+        autoRunUsers: false,
+      },
+    } as const;
+    const result = await createService({
+      resolveLaunch: vi.fn().mockResolvedValue(createConfig),
+    }).eligibility(createConfig, 'owner');
+
+    expect(result.eligible).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('custom settings source org'),
+      expect.stringContaining('data deployment source org'),
+    ]));
+  });
+
+  it('requires configured create-new source orgs to remain active', async () => {
+    db.orgConnection.findUnique.mockImplementation(({ where }: {
+      where: { alias?: string; id?: string };
+    }) =>
+      Promise.resolve(where.alias === 'devhub'
+        ? devHub
+        : { ...target, status: 'revoked' }));
+    const createConfig = {
+      ...config,
+      mode: 'create_new',
+      alias: 'new-scratch',
+      devHubAlias: 'devhub',
+      existingOrgConnectionId: undefined,
+      customSettings: { enabled: true, mode: 'bundled' },
+      customSettingsOrgId: targetId,
+      pipelineSteps: {
+        autoRunDataSeed: false,
+        autoRunPartners: false,
+        autoRunUsers: false,
+      },
+    } as const;
+    const result = await createService({
+      resolveLaunch: vi.fn().mockResolvedValue(createConfig),
+    }).eligibility(createConfig, 'owner');
+
+    expect(result.eligible).toBe(false);
+    expect(result.errors).toContain('Source org "existing" is not active');
+  });
+
+  it('requires an active caller-owned Dev Hub before create-new launch', async () => {
+    db.orgConnection.findUnique.mockResolvedValue(null);
+    const createConfig = {
+      ...config,
+      mode: 'create_new',
+      alias: 'new-scratch',
+      devHubAlias: 'missing-hub',
+      existingOrgConnectionId: undefined,
+      customSettings: { enabled: false },
+      pipelineSteps: {
+        autoRunDataSeed: false,
+        autoRunPartners: false,
+        autoRunUsers: false,
+      },
+    } as const;
+    const result = await createService({
+      resolveLaunch: vi.fn().mockResolvedValue(createConfig),
+    }).eligibility(createConfig, 'owner');
+
+    expect(result.eligible).toBe(false);
+    expect(result.errors).toContain('Dev Hub "missing-hub" was not found');
+  });
+
+  it('performs live CLI authentication checks for create-new Dev Hubs and sources', async () => {
+    db.orgConnection.findUnique.mockImplementation(({ where }: {
+      where: { alias?: string; id?: string };
+    }) => Promise.resolve(where.alias === 'devhub' ? devHub : target));
+    const displayOrg = vi.fn().mockImplementation((alias: string) => Promise.resolve(
+      alias === devHub.username
+        ? { success: true, data: { result: { alias: 'devhub' } } }
+        : { success: false, error: 'source token expired' },
+    ));
+    const createConfig = {
+      ...config,
+      mode: 'create_new',
+      alias: 'new-scratch',
+      devHubAlias: 'devhub',
+      existingOrgConnectionId: undefined,
+      customSettings: { enabled: true, mode: 'bundled' },
+      customSettingsOrgId: targetId,
+      pipelineSteps: {
+        autoRunDataSeed: false,
+        autoRunPartners: false,
+        autoRunUsers: false,
+      },
+    } as const;
+
+    const result = await createService({
+      resolveLaunch: vi.fn().mockResolvedValue(createConfig),
+      sfCli: { displayOrg },
+    }).eligibility(createConfig, 'owner');
+
+    expect(result.eligible).toBe(false);
+    expect(displayOrg).toHaveBeenCalledWith(devHub.username);
+    expect(displayOrg).toHaveBeenCalledWith(target.username);
+    expect(result.errors).toContain(
+      'Salesforce org "existing" is not authenticated in Salesforce CLI',
+    );
   });
 });
 

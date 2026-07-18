@@ -17,7 +17,7 @@ const db = vi.hoisted(() => ({
     findUnique: vi.fn(),
     update: vi.fn(),
   },
-  provisionedUser: { updateMany: vi.fn() },
+  provisionedUser: { updateMany: vi.fn(), findMany: vi.fn() },
   deployment: { update: vi.fn() },
 }));
 
@@ -176,6 +176,40 @@ describe('PipelineOrchestratorService provider-neutral resume', () => {
     await expect(service.getRun('run-1', 'other-user')).rejects.toThrow('not found');
     await expect(service.resumeRun('run-1', {}, 'other-user')).rejects.toThrow('not found');
     expect(db.automationRun.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('cleans an orphaned queued action before retrying its failed checkpoint', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      checkpoint: {
+        ...legacyRun().checkpoint,
+        failedUserAction: 'load_data_seed',
+      },
+    });
+    db.job.findFirst.mockResolvedValue({ id: 'orphan-job', queue: 'cona-seed' });
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockResolvedValue(true);
+    const updateStatus = vi.fn().mockResolvedValue({});
+    const service = createService({
+      processRegistry: { cancel },
+      queueService: { removeJob },
+      jobsService: { updateStatus },
+    });
+    const runUserActions = vi.fn().mockResolvedValue({ jobs: [{ id: 'retry-job' }] });
+    Object.assign(service as object, { runUserActions });
+
+    await service.resumeRun('run-1', {}, 'owner-1');
+
+    expect(cancel).toHaveBeenCalledWith('orphan-job');
+    expect(removeJob).toHaveBeenCalledWith('cona-seed', 'orphan-job');
+    expect(updateStatus).toHaveBeenCalledWith(
+      'orphan-job',
+      'failed',
+      'Superseded by a resumed post-deploy action',
+    );
+    expect(runUserActions).toHaveBeenCalledWith('run-1', {
+      actions: ['load_data_seed'],
+    });
   });
 });
 
@@ -629,6 +663,48 @@ describe('PipelineOrchestratorService legacy create mode', () => {
       { attempts: 1 },
     );
   });
+
+  it('fails the run and removes an ambiguously queued scratch-creation job', async () => {
+    vi.clearAllMocks();
+    db.automationRun.create.mockResolvedValue({ id: 'run-create' });
+    db.automationRun.update.mockResolvedValue({});
+    db.job.create.mockResolvedValue({ id: 'scratch-job' });
+    db.job.update.mockResolvedValue({});
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockResolvedValue(true);
+    const service = createService({
+      processRegistry: { cancel },
+      queueService: {
+        addJob: vi.fn().mockRejectedValue(new Error('Redis unavailable')),
+        removeJob,
+      },
+    });
+
+    await expect(service.startPipeline({
+      mode: 'create_new',
+      alias: 'new-scratch',
+      devHubAlias: 'dev-hub',
+      duration: 30,
+      definitionFile: 'config/project-scratch-def.json',
+      template: 'config/project-scratch-def.json',
+      skipSteps: [],
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+    }, 'owner-1')).rejects.toThrow('Scratch org queueing failed');
+
+    expect(cancel).toHaveBeenCalledWith('scratch-job');
+    expect(removeJob).toHaveBeenCalledWith('scratch-org-create', 'scratch-job');
+    expect(db.job.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: 'scratch-job' },
+      data: expect.objectContaining({ status: 'cancelled' }),
+    }));
+    expect(db.automationRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: 'run-create' },
+      data: expect.objectContaining({
+        status: 'failed',
+        failedStep: 'scratch_org_create',
+      }),
+    }));
+  });
 });
 
 describe('PipelineOrchestratorService custom-settings transition', () => {
@@ -671,6 +747,268 @@ describe('PipelineOrchestratorService custom-settings transition', () => {
   });
 });
 
+describe('PipelineOrchestratorService manual post-deploy integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.automationRun.update.mockResolvedValue({});
+  });
+
+  it('completes into an actionable state when configured steps are manual', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'running',
+      config: {
+        alias: 'scratch',
+        devHubAlias: 'devhub',
+        gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: { mode: 'hybrid', datasets: ['Accounts'] },
+        pipelineSteps: {
+          autoRunDataSeed: false,
+          autoRunPartners: false,
+          autoRunUsers: false,
+        },
+      },
+      checkpoint: {
+        completedSteps: ['scratch_org_create', 'git_metadata_deploy'],
+        resumeFrom: 'load_org_config',
+        targetOrgConnectionId: 'target-1',
+      },
+    });
+
+    await createService().handleJobSucceeded('run-1', 'pipeline_load_org_config');
+
+    expect(db.automationRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: 'run-1' },
+      data: expect.objectContaining({
+        status: 'awaiting_input',
+        checkpoint: expect.objectContaining({ awaitingUserActions: true }),
+      }),
+    }));
+  });
+
+  it('rejects manual actions on terminal runs that are not awaiting input', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'completed',
+      checkpoint: {
+        targetOrgConnectionId: 'target-1',
+        awaitingUserActions: false,
+      },
+    });
+
+    await expect(createService().runUserActions(
+      'run-1',
+      { actions: ['load_data_seed'] },
+      'owner-1',
+    )).rejects.toThrow('awaiting actions');
+  });
+
+  it('atomically rejects a second manual submission after another request claims the run', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'awaiting_input',
+      config: {
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: { mode: 'hybrid', datasets: ['Accounts'] },
+        pipelineSteps: {
+          autoRunDataSeed: false,
+          autoRunPartners: false,
+          autoRunUsers: false,
+        },
+      },
+      checkpoint: {
+        targetOrgConnectionId: 'target-1',
+        awaitingUserActions: true,
+      },
+    });
+    db.automationRun.updateMany.mockResolvedValue({ count: 0 });
+    const create = vi.fn();
+
+    await expect(createService({ jobsService: { create } }).runUserActions(
+      'run-1',
+      { actions: ['load_data_seed'] },
+      'owner-1',
+    )).rejects.toThrow('no longer awaiting actions');
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('fails and compensates an orphaned manual job when BullMQ queueing fails', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'awaiting_input',
+      config: {
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: { mode: 'hybrid', datasets: ['Accounts'] },
+        pipelineSteps: {
+          autoRunDataSeed: false,
+          autoRunPartners: false,
+          autoRunUsers: false,
+        },
+      },
+      checkpoint: {
+        targetOrgConnectionId: 'target-1',
+        awaitingUserActions: true,
+      },
+    });
+    db.automationRun.updateMany.mockResolvedValue({ count: 1 });
+    const create = vi.fn().mockResolvedValue({ id: 'seed-job' });
+    const updateStatus = vi.fn().mockResolvedValue({});
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const removeJob = vi.fn().mockResolvedValue(true);
+    const service = createService({
+      jobsService: { create, updateStatus },
+      processRegistry: { cancel },
+      queueService: {
+        addJob: vi.fn().mockRejectedValue(new Error('Redis unavailable')),
+        removeJob,
+      },
+    });
+
+    await expect(service.runUserActions(
+      'run-1',
+      { actions: ['load_data_seed'] },
+      'owner-1',
+    )).rejects.toThrow('Redis unavailable');
+
+    expect(cancel).toHaveBeenCalledWith('seed-job');
+    expect(removeJob).toHaveBeenCalledWith('cona-seed', 'seed-job');
+    expect(updateStatus).toHaveBeenCalledWith(
+      'seed-job',
+      'failed',
+      'Queueing failed: Redis unavailable',
+    );
+    expect(db.automationRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: 'run-1' },
+      data: expect.objectContaining({
+        status: 'paused',
+        failedStep: 'load_data_seed',
+        checkpoint: expect.objectContaining({
+          failedUserAction: 'load_data_seed',
+          requestedUserActions: ['load_data_seed'],
+        }),
+      }),
+    }));
+  });
+
+  it('does not allow a mode override to duplicate query-section partner loading', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'running',
+      config: {
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: {
+          mode: 'query_section',
+          querySection: { accountPartnerPlan: { enabled: true } },
+        },
+        partnerImport: {
+          enabled: true,
+          mode: 'query_section',
+          bottler: '5000',
+          perOffice: 20,
+          matchOrgDistribution: true,
+        },
+      },
+      checkpoint: { targetOrgConnectionId: 'target-1' },
+    });
+    const create = vi.fn();
+
+    await expect(createService({ jobsService: { create } }).runUserActions(
+      'run-1',
+      {
+        actions: ['load_account_partners'],
+        partnerMode: 'org_to_org',
+      },
+    )).rejects.toThrow('already handled by the configured query section');
+
+    expect(create).not.toHaveBeenCalled();
+    expect(db.automationRun.update).not.toHaveBeenCalled();
+  });
+
+  it('preserves legacy automatic data and user defaults when pipelineSteps is absent', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'running',
+      config: {
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: { mode: 'hybrid', datasets: ['Accounts'] },
+        userProvisioning: {
+          users: [{
+            firstName: 'Legacy',
+            lastName: 'User',
+            email: 'legacy@example.com',
+            role: 'Rep',
+            bottler: '5000',
+          }],
+        },
+      },
+      checkpoint: {
+        completedSteps: ['load_org_config'],
+        targetOrgConnectionId: 'target-1',
+      },
+    });
+    const service = createService();
+    const runUserActions = vi.fn().mockResolvedValue({ jobs: [] });
+    Object.assign(service as object, { runUserActions });
+
+    await service.handleJobSucceeded('run-1', 'pipeline_load_org_config');
+
+    expect(runUserActions).toHaveBeenCalledWith('run-1', {
+      actions: ['load_data_seed'],
+      partnerExcelBase64: undefined,
+      partnerSheet: undefined,
+    });
+  });
+
+  it('keeps remaining manual actions available after an automatic action is partial', async () => {
+    db.automationRun.findUnique.mockResolvedValue({
+      ...legacyRun(),
+      status: 'running',
+      config: {
+        dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+        dataSeed: { mode: 'hybrid', datasets: ['Accounts'] },
+        pipelineSteps: {
+          autoRunDataSeed: true,
+          autoRunPartners: false,
+          autoRunUsers: false,
+        },
+        userProvisioning: {
+          users: [{
+            firstName: 'Manual',
+            lastName: 'User',
+            email: 'manual@example.com',
+            role: 'Rep',
+            bottler: '5000',
+          }],
+        },
+      },
+      checkpoint: {
+        completedSteps: ['load_org_config'],
+        targetOrgConnectionId: 'target-1',
+        requestedUserActions: ['load_data_seed'],
+      },
+    });
+
+    await createService().handleJobSucceeded(
+      'run-1',
+      'cona_seed',
+      { successCount: 9, failCount: 1 },
+    );
+
+    expect(db.automationRun.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: 'run-1' },
+      data: expect.objectContaining({
+        status: 'awaiting_input',
+        checkpoint: expect.objectContaining({
+          awaitingUserActions: true,
+          partialUserActions: ['load_data_seed'],
+        }),
+      }),
+    }));
+  });
+});
+
 describe('PipelineOrchestratorService V2 job ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -709,6 +1047,7 @@ describe('PipelineOrchestratorService V2 job ownership', () => {
         completedSteps: [],
         resumeFrom: 'load_org_config',
         targetOrgConnectionId: 'target-1',
+        awaitingUserActions: true,
       },
     });
     const create = vi.fn().mockResolvedValue({ id: 'seed-job' });
@@ -718,12 +1057,16 @@ describe('PipelineOrchestratorService V2 job ownership', () => {
       queueService: { addJob },
     });
 
-    await service.runUserActions('run-1', { actions: ['load_data_seed'] }, 'owner-1');
+    await service.runUserActions('run-1', {
+      actions: ['load_data_seed'],
+      datasets: ['Accounts'],
+    }, 'owner-1');
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       type: 'cona_seed',
       parentRunId: 'run-1',
       createdBy: 'owner-1',
+      payload: expect.objectContaining({ datasets: ['Accounts'] }),
     }));
   });
 });
@@ -798,7 +1141,7 @@ describe('PipelineOrchestratorService provisioning retry checkpoints', () => {
       queueService: { addJob },
     });
 
-    await service.runUserActions('run-1', { actions: ['provision_users'] }, 'owner-1');
+    await service.runUserActions('run-1', { actions: ['provision_users'] });
 
     expect(db.provisioningBatch.create).not.toHaveBeenCalled();
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -847,7 +1190,7 @@ describe('PipelineOrchestratorService provisioning retry checkpoints', () => {
       queueService: { addJob },
     });
 
-    await service.runUserActions('run-new', { actions: ['provision_users'] }, 'owner-1');
+    await service.runUserActions('run-new', { actions: ['provision_users'] });
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
     const checkpoint = db.automationRun.update.mock.calls[0][0].data.checkpoint;

@@ -92,6 +92,35 @@ describe('ScratchTemplatesService authoritative launch merge', () => {
     expect(result.customSettingsOrgId).toBe(runtimeSettingsSource);
   });
 
+  it('turns a disabled package setting into an executable worker skip', async () => {
+    const service = new ScratchTemplatesService();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      id: templateId,
+      name: 'No package',
+      config: {
+        version: 2,
+        installPackage: false,
+        gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+        customSettings: { enabled: false },
+        pipelineSteps: {
+          autoRunDataSeed: false,
+          autoRunPartners: false,
+          autoRunUsers: false,
+        },
+      },
+    } as never);
+
+    const result = await service.resolveLaunch({
+      templateId,
+      alias: 'no-package',
+      devHubAlias: 'devhub',
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+    }, 'owner');
+
+    expect(result.installPackage).toBe(false);
+    expect(result.skipSteps).toContain('installPackages');
+  });
+
   it('validates and applies runtime email pools after server-side V2 migration', async () => {
     const service = new ScratchTemplatesService();
     vi.spyOn(service, 'get').mockResolvedValue({

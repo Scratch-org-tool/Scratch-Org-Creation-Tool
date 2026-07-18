@@ -99,6 +99,25 @@ describe('MetadataDeployQueueService SCM payloads', () => {
     );
   });
 
+  it('preserves template permission sets in the immutable worker payload', async () => {
+    await service.enqueue({
+      orgAlias: 'target@example.com',
+      automationRunId: 'run-1',
+      assignPermissionSet: true,
+      permissionSets: ['Onboarding_Admin_Extension', 'Lifecycle_Super_User'],
+      gitSource: {
+        provider: 'github',
+        repo: 'metadata',
+        branch: 'main',
+      },
+    });
+
+    expect(addJob.mock.calls[0][2]).toEqual(expect.objectContaining({
+      assignPermissionSet: true,
+      permissionSets: ['Onboarding_Admin_Extension', 'Lifecycle_Super_User'],
+    }));
+  });
+
   it('does not persist or enqueue when the connection is inactive', async () => {
     requireActive.mockRejectedValue(new Error('SCM connection is not active'));
 

@@ -21,6 +21,7 @@ export interface MetadataDeployEnqueueInput {
   automationRunId?: string;
   assignPermissionSet?: boolean;
   assignPermissionSetOnly?: boolean;
+  permissionSets?: string[];
   testLevel?: string;
   tests?: string[];
   validateOnly?: boolean;
@@ -155,6 +156,7 @@ export class MetadataDeployQueueService {
       deploymentId: input.deploymentId,
       assignPermissionSet: input.assignPermissionSet ?? false,
       assignPermissionSetOnly: input.assignPermissionSetOnly ?? false,
+      permissionSets: input.permissionSets,
       sourceOrgId: input.sourceOrgId,
       sourceOrgAlias: input.sourceOrgAlias,
       deployMode: input.deployMode,
