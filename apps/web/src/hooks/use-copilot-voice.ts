@@ -254,12 +254,18 @@ export function useCopilotVoice(options: UseCopilotVoiceOptions): CopilotVoiceCo
 
   const clearError = useCallback(() => setError(null), []);
 
+  // `stopAll` closes over the per-render recognition/synth objects, so its
+  // identity changes every render. Reach it through a ref from effects so the
+  // unmount cleanup only fires on real unmount (not on every render).
+  const stopAllRef = useRef(stopAll);
+  stopAllRef.current = stopAll;
+
   // Stop everything if the admin disables voice or the feature becomes unusable.
   useEffect(() => {
-    if (!available || !supported) stopAll();
-  }, [available, supported, stopAll]);
+    if (!available || !supported) stopAllRef.current();
+  }, [available, supported]);
 
-  useEffect(() => () => stopAll(), [stopAll]);
+  useEffect(() => () => stopAllRef.current(), []);
 
   return {
     supported,
