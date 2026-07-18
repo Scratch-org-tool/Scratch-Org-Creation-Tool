@@ -13,6 +13,7 @@ export type {
   LearningLevel,
   LearningModuleMeta,
   LearningModuleQuizState,
+  LearningPathCategory,
   LearningPathSummary,
   LearningQuizAnswerReview,
   LearningQuizAttemptSummary,
