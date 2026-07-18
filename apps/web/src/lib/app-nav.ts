@@ -8,6 +8,7 @@ import {
   GitCompare,
   GraduationCap,
   LayoutDashboard,
+  Mic,
   Rocket,
   ScrollText,
   Shield,
@@ -105,6 +106,7 @@ export interface AdminNavItem {
 export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { href: '/admin/users', label: 'User Access', icon: Shield },
   { href: '/admin/notifications', label: 'Notifications', icon: Bell },
+  { href: '/admin/copilot-voice', label: 'Copilot Voice', icon: Mic },
   { href: '/admin/audit', label: 'Audit Report', icon: ScrollText },
   { href: '/learning/team', label: 'Academy Progress', icon: GraduationCap },
 ];
