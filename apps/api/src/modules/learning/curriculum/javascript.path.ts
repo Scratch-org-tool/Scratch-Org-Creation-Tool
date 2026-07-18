@@ -1,7 +1,8 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * JavaScript Engineering — a beginner path from language mechanics to
+ * Path 2 — JavaScript Engineering (Beginner).
+ * A path from language mechanics to
  * production-quality Lightning Web Components.
  */
 export const javascriptPath: CurriculumPath = {
@@ -11,7 +12,7 @@ export const javascriptPath: CurriculumPath = {
   description:
     'Build a dependable JavaScript foundation before applying it to Salesforce. This path moves from values, functions, modules, and data structures through asynchronous APIs, secure and accessible browser work, TypeScript contracts, Jest testing, and an end-to-end Lightning Web Component capstone.',
   level: 'beginner',
-  badge: 'JavaScript Engineering',
+  badge: 'JavaScript Practitioner',
   estimatedHours: 12,
   skills: [
     'Modern JavaScript',

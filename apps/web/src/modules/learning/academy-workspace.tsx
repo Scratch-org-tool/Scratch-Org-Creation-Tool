@@ -64,7 +64,7 @@ function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
             AI-powered training
           </div>
           <h2 className="mt-2 text-2xl md:text-3xl font-bold">
-            Master Salesforce, from first login to architect
+            Build Salesforce expertise and modern engineering skills
           </h2>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
             {catalog.paths.length} guided paths spanning Salesforce, JavaScript, Java, and release
@@ -258,7 +258,7 @@ function AcademySkeleton() {
         ))}
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        {Array.from({ length: 4 }).map((_, i) => (
+        {Array.from({ length: 6 }).map((_, i) => (
           <Skeleton key={i} className="h-64 rounded-xl" />
         ))}
       </div>
@@ -355,8 +355,8 @@ export function AcademyWorkspace() {
               <div>
                 <h2 className="text-lg font-semibold">Learning paths</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                Beginner → Expert · {catalog.stats.totalLessons} lessons ·{' '}
-                {catalog.stats.totalModules} module quizzes
+                  Beginner → Expert · {catalog.stats.totalLessons} lessons ·{' '}
+                  {catalog.stats.totalModules} module quizzes
                 </p>
               </div>
               <div className="flex w-full flex-col gap-2 lg:w-auto lg:items-end">

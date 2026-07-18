@@ -1,7 +1,7 @@
 import type { CurriculumPath } from "./curriculum.types";
 
 /**
- * Path 5 — Modern Salesforce Platform (Intermediate).
+ * Path 4 — Modern Salesforce Platform (Intermediate).
  * Connects the core CRM clouds to OmniStudio, Data Cloud, modern Flow, and
  * Agentforce while treating trust, governance, and operations as architecture.
  */

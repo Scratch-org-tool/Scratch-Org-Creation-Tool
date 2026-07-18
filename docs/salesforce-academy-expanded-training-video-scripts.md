@@ -35,11 +35,11 @@ These scripts are production inputs, not the upload mechanism. Keep authoring, r
 1. Use the lesson ID as the durable join key and the lesson title as the public video title. Do not rename an ID in the editing tool.
 2. Record the text under **Narration** word-for-word. Put each **On screen/editor** instruction on the visual timeline; it is not spoken.
 3. Reproduce code and configuration exactly as shown or as a focused excerpt. Use a prepared nonproduction environment for demonstrations, obscure credentials and customer data, and do not add menu paths that are not in the lesson.
-4. Export a caption file and a plain transcript from the final narration. If an editor changes spoken wording, update the transcript before upload.
-5. Render the approved master, then hand it to the separate admin upload workflow. In that workflow, associate the asset with the exact lesson ID, set the intended learner permissions, and preserve the final title, captions, transcript, and thumbnail as one release set.
-6. After upload, play the published asset as an authorized learner. Check the opening frame, code legibility, captions, audio synchronization, seeking, and the final frame. The upload checklist at the end is the release gate.
+4. Export a caption file and a plain transcript from the final narration. Keep captions, transcript, and thumbnail beside the production master; the target upload API currently accepts the video file and optional public title, not sidecar assets.
+5. In the target admin workflow, open the exact lesson's **Video session** block and upload the rendered file. The lesson route supplies the stable lesson ID. Upload and deletion are admin-only; there is no per-video audience selector.
+6. Grant the learner **Salesforce Academy** in **Admin → User Access**, then test playback as that learner. Academy module access controls list and stream access. Watching a video does not itself mark the lesson complete; the learner still uses the lesson's completion action.
 
-The document deliberately does not name an upload menu: the existing Academy documentation defines script export and playback, while administration is a separate workflow whose UI may evolve.
+These instructions target the parallel admin-upload implementation. Until that branch is merged, the current Academy continues to show generated script sessions and exports.
 
 ## Modern Salesforce Platform
 
@@ -1209,12 +1209,12 @@ Complete this checklist for every rendered lesson before publishing through the 
 - [ ] **Lesson ID:** Associated with the exact stable ID shown in the lesson heading and coverage matrix.
 - [ ] **Duration:** Final master is 5:00; segment boundaries and transitions align with the six timecodes.
 - [ ] **Narration:** The approved word-for-word narration is the audible track; editor directions are not spoken.
-- [ ] **Captions and transcript:** Captions are synchronized and proofread; the downloadable transcript matches final audio.
+- [ ] **Captions and transcript:** Captions are synchronized and proofread; sidecar files are retained with the master even though the current upload form does not accept them.
 - [ ] **Code/config/demo:** Text is legible, credentials and customer data are absent, and the demonstration matches the curriculum.
-- [ ] **Thumbnail:** Uses the lesson title or an approved concise variant, is readable at small size, and contains no unsupported UI claim.
-- [ ] **Permissions:** Intended learner audience can play the asset; unintended audiences cannot.
+- [ ] **Thumbnail:** An approved thumbnail is retained with the production package for a future asset field; the current upload form does not accept one.
+- [ ] **Permissions:** The test learner has an explicit `learning` grant; a user without that grant cannot list or stream the video.
 - [ ] **Lesson association:** The player opens from the intended lesson and no other lesson is accidentally mapped to the asset.
-- [ ] **Playback check:** As an authorized learner, test start, seek, captions, audio synchronization, code readability, final frame, and completion behavior.
+- [ ] **Playback check:** As an authorized learner, test start, seek, audio synchronization, code readability, and final frame; verify separately that the lesson completion action still works.
 - [ ] **Release record:** Preserve the final master, thumbnail, captions, transcript, title, lesson ID, and approval together.
 
 ## Coverage matrix

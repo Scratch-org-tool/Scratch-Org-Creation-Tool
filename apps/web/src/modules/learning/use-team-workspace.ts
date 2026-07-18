@@ -97,8 +97,10 @@ export function useTeamWorkspace() {
       try {
         await revokeAssignment(assignmentId);
         await load();
+        return true;
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to revoke the assignment');
+        return false;
       } finally {
         setRevokingId(null);
       }

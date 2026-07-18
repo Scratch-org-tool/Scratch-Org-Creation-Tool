@@ -43,6 +43,12 @@ import type { NotificationsService } from '../notifications/notifications.servic
 
 const USER = 'DPT_test-user';
 
+function notificationService(): NotificationsService {
+  return {
+    notify: vi.fn().mockResolvedValue(null),
+  } as unknown as NotificationsService;
+}
+
 function emptyState() {
   db.learningLessonProgress.findMany.mockResolvedValue([]);
   db.learningQuizAttempt.findMany.mockResolvedValue([]);
@@ -73,16 +79,35 @@ describe('curriculum integrity', () => {
     );
   });
 
-  it('has globally unique lesson and module ids and non-trivial volume', () => {
+  it('pins the advertised catalog counts and globally unique ids', () => {
     const moduleIds = CURRICULUM.flatMap((p) => p.modules.map((m) => m.id));
     const lessonIds = CURRICULUM.flatMap((p) =>
       p.modules.flatMap((m) => m.lessons.map((l) => l.id)),
     );
+    const questionIds = CURRICULUM.flatMap((p) =>
+      p.modules.flatMap((m) => m.quizBank.map((q) => q.id)),
+    );
     expect(new Set(moduleIds).size).toBe(moduleIds.length);
     expect(new Set(lessonIds).size).toBe(lessonIds.length);
-    expect(moduleIds.length).toBeGreaterThanOrEqual(12);
-    expect(lessonIds.length).toBeGreaterThanOrEqual(40);
+    expect(new Set(questionIds).size).toBe(questionIds.length);
+    expect(moduleIds).toHaveLength(25);
+    expect(lessonIds).toHaveLength(66);
+    expect(questionIds).toHaveLength(228);
     expect(totalLessonCount()).toBe(lessonIds.length);
+  });
+
+  it('keeps every expanded path at three modules and six scripted lessons', () => {
+    const expandedPathIds = [
+      'sf-modern-platform',
+      'javascript-engineering',
+      'java-integration-engineering',
+      'salesforce-release-management',
+    ];
+    for (const pathId of expandedPathIds) {
+      const path = getPath(pathId)!;
+      expect(path.modules).toHaveLength(3);
+      expect(path.modules.flatMap((module) => module.lessons)).toHaveLength(6);
+    }
   });
 
   it('gives every module a quiz bank of at least 8 valid questions', () => {
@@ -134,7 +159,7 @@ describe('LearningService catalog + progress', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new LearningService();
+    service = new LearningService(notificationService());
     emptyState();
   });
 
@@ -374,11 +399,12 @@ describe('LearningQuizService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    learningService = new LearningService();
+    learningService = new LearningService(
+      notifications as unknown as NotificationsService,
+    );
     quizService = new LearningQuizService(
       nvidia as unknown as NvidiaService,
       learningService,
-      notifications as unknown as NotificationsService,
     );
     emptyState();
   });
@@ -490,6 +516,30 @@ describe('LearningQuizService', () => {
     );
   });
 
+  it('does not report or notify path completion again on a quiz retake', async () => {
+    const module = CURRICULUM[0]!.modules[0]!;
+    const question = module.quizBank[0]!;
+    db.learningQuizAttempt.findUnique.mockResolvedValue({
+      id: 'attempt-retake',
+      userId: USER,
+      moduleId: module.id,
+      pathId: CURRICULUM[0]!.id,
+      status: 'in_progress',
+      questions: [question],
+      totalQuestions: 1,
+    });
+    db.learningQuizAttempt.update.mockResolvedValue({});
+    vi.spyOn(learningService, 'isPathComplete').mockResolvedValue(true);
+    const notifyCompleted = vi.spyOn(learningService, 'notifyPathCompleted');
+
+    const result = await quizService.submitQuiz(USER, 'attempt-retake', {
+      answers: [{ questionId: question.id, selectedIndex: question.correctIndex }],
+    });
+
+    expect(result.pathCompleted).toBe(false);
+    expect(notifyCompleted).not.toHaveBeenCalled();
+  });
+
   it('rejects double submission and foreign attempts', async () => {
     db.learningQuizAttempt.findUnique.mockResolvedValue({
       id: 'attempt-4',
@@ -540,7 +590,7 @@ describe('LearningAdminService access control', () => {
       },
     ]);
     const service = new LearningAdminService(
-      new LearningService(),
+      new LearningService(notificationService()),
       { notify: vi.fn() } as unknown as NotificationsService,
     );
 
@@ -575,7 +625,7 @@ describe('LearningAdminService access control', () => {
     });
     const notify = vi.fn().mockResolvedValue(null);
     const service = new LearningAdminService(
-      new LearningService(),
+      new LearningService(notificationService()),
       { notify } as unknown as NotificationsService,
     );
 

@@ -284,9 +284,9 @@ export function TeamWorkspace() {
           title={`Revoke “${pendingRevoke.pathTitle}”?`}
           message="The assignment will disappear from the learner's assigned list. Their completed lessons and quiz history will be preserved."
           confirmLabel="Revoke assignment"
-          onConfirm={() => {
+          onConfirm={async () => {
             const assignmentId = pendingRevoke.assignmentId;
-            void revoke(assignmentId).finally(() => setPendingRevoke(null));
+            if (await revoke(assignmentId)) setPendingRevoke(null);
           }}
           onCancel={() => setPendingRevoke(null)}
           loading={revokingId === pendingRevoke.assignmentId}

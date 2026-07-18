@@ -1,7 +1,7 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * Advanced Salesforce Release Management.
+ * Path 7 — Salesforce Release Management (Advanced).
  * Strategy, metadata and packaging, environments, delivery controls, operating
  * models, and recovery practices for source-driven Salesforce teams.
  */
@@ -782,8 +782,8 @@ export const releaseManagementPath: CurriculumPath = {
           ],
           resources: [
             {
-              title: 'Salesforce Architects: Record-Triggered Automation Decision Guide',
-              url: 'https://architect.salesforce.com/docs/architect/decision-guides/guide/record-triggered',
+              title: 'Salesforce Well-Architected: Resilient Releases',
+              url: 'https://architect.salesforce.com/docs/architect/well-architected/guide/resilient',
               source: 'architect',
             },
             {

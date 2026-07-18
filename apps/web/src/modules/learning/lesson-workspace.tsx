@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -41,13 +41,25 @@ type LessonMode = 'read' | 'video';
 function SectionBlock({ section }: { section: LearningLessonSection }) {
   const blocks = parseBody(section.body);
   const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+    },
+    [],
+  );
 
   const copyCode = async () => {
     if (!section.code || !navigator.clipboard) return;
     try {
       await navigator.clipboard.writeText(section.code.snippet);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
+      if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+      resetTimer.current = window.setTimeout(() => {
+        resetTimer.current = null;
+        setCopied(false);
+      }, 1800);
     } catch {
       setCopied(false);
     }

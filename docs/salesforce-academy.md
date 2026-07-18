@@ -1,8 +1,9 @@
 # Salesforce Academy (Learning Module)
 
-An admin-controlled, AI-powered Salesforce training program built into the platform. It takes a
-complete fresher to architect-level understanding through eight guided paths, with an AI mentor on
-every lesson, an instant quiz after every module, and full progress visibility for administrators.
+An admin-controlled, AI-powered Salesforce and engineering training program built into the
+platform. It takes a complete fresher to architect-level understanding through eight guided paths,
+with an AI mentor on every lesson, an instant quiz after every module, and full progress visibility
+for administrators.
 
 ## What learners get
 
@@ -23,6 +24,8 @@ every lesson, an instant quiz after every module, and full progress visibility f
      environments, CI/CD gates, runbooks, recovery, hotfixes, and delivery improvement.
   8. **Architect & DevOps Mastery** (Expert) — large data volumes, enterprise sharing, integration
      and identity architecture, Salesforce DX, scratch orgs, packaging, CI/CD, and governance.
+  The ~84-hour estimate includes lesson study, demonstrations, hands-on practice, mentor work,
+  quizzes, and review—not only the authored reading time.
 - **Every lesson** includes learning objectives, structured explanations, a **real-world
   scenario → solution → outcome** case study, code samples where relevant, key takeaways, and
   **official Trailhead / Salesforce Developers / Architect resource links**.
@@ -43,17 +46,14 @@ every lesson, an instant quiz after every module, and full progress visibility f
   Story scripts use the same NVIDIA integration as the platform copilot; all generated media comes
   from self-hosted open-source engines (no per-request vendor cost, nothing leaves your network).
   Storyboards fall back to a question-aware, lesson-derived script when NVIDIA is unavailable.
-- **Video sessions** — every lesson page has a `Read | Video session` switch. The video session
-  is the complete production script of that topic, end to end: a timecoded cold open, concept
-  segments, **hands-on demo segments with numbered click-paths** (how to create, how to execute),
-  the real-world story, recap, and next-step CTA — each with word-for-word narration and
-  on-screen/animation direction. One click plays it as an in-app animated session (story player);
-  exports (Copy, `.md` production script, narration-only `.txt`) feed external AI video tools
-  (HeyGen, Synthesia, InVideo, CapCut…). AI-scripted with a deterministic curriculum-derived
-  fallback, so all 66 topics always have a script. The 24 new topics also have reviewed,
-  time-coded five-minute production scripts in
-  `docs/salesforce-academy-expanded-training-video-scripts.md`. See
-  `docs/academy-video-sessions-plan.md`.
+- **Video production and sessions** — the current lesson page has a `Read | Video session` switch
+  backed by an AI-generated, curriculum-derived production script with a deterministic fallback.
+  The 24 new lessons also have reviewed, time-coded five-minute narration and editor directions in
+  `docs/salesforce-academy-expanded-training-video-scripts.md`. Those scripts are production
+  inputs for the parallel admin-upload workflow: upload and deletion stay admin-only, playback
+  requires the learner's explicit `learning` grant, and the stable lesson ID is the asset join key.
+  Until that upload branch is merged, the existing script playback and export behavior remains the
+  runtime implementation.
 - **Module quizzes with instant scoring** — 8 questions per module, generated fresh by the LLM
   (with a 228-question curated bank as automatic fallback when AI is unavailable). Scoring happens
   **server-side** (answers never reach the browser before submission), results are instant, and

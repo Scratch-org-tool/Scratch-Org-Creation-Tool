@@ -1,7 +1,7 @@
 import type { CurriculumPath } from './curriculum.types';
 
 /**
- * Java Integration Engineering (Advanced).
+ * Path 6 — Java Integration Engineering (Advanced).
  * Modern Java engineering for teams building secure, observable, and
  * production-grade integrations with Salesforce.
  */

@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
   averagePercent,
@@ -71,7 +71,7 @@ function toAssignmentView(
 export class LearningService {
   private readonly logger = new Logger(LearningService.name);
 
-  constructor(@Optional() private readonly notifications?: NotificationsService) {}
+  constructor(private readonly notifications: NotificationsService) {}
 
   /** Load everything needed to overlay one user's progress onto the curriculum. */
   async loadUserState(userId: string): Promise<UserLearningState> {
@@ -337,9 +337,8 @@ export class LearningService {
     };
   }
 
-  /** Cover the completion order where the final unit is a lesson, not a quiz. */
-  private async notifyPathCompleted(userId: string, pathId: string, pathTitle: string) {
-    if (!this.notifications) return;
+  /** Notify once when either a lesson or quiz changes a path to complete. */
+  async notifyPathCompleted(userId: string, pathId: string, pathTitle: string) {
     try {
       await this.notifications.notify({
         userId,
