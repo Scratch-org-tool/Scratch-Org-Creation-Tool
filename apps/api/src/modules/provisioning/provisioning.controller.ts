@@ -19,6 +19,11 @@ export class ProvisioningController {
     return this.provisioningService.listBatches(userId);
   }
 
+  @Get('batches/:batchId')
+  getBatch(@Param('batchId') batchId: string, @CurrentUser() userId: string) {
+    return this.provisioningService.getBatch(batchId, userId);
+  }
+
   @Get('orgs/:orgId/discover')
   discoverOrgUsers(@Param('orgId') orgId: string, @CurrentUser() userId: string) {
     return this.orgUserMetadata.discover(orgId, userId);

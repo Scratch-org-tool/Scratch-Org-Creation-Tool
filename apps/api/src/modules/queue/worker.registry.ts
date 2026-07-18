@@ -269,7 +269,7 @@ export class WorkerRegistry implements OnModuleInit {
             }
             const terminalStatus = result?.cancelled
               ? 'cancelled'
-              : job.name === 'cona_user_provision' && result?.partial
+              : ['cona_user_provision', 'lifecycle_user_provision'].includes(job.name) && result?.partial
                 ? 'partial'
                 : 'completed';
             if (current?.status !== terminalStatus) {

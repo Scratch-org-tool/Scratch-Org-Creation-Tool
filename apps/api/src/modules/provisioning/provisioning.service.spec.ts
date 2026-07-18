@@ -195,4 +195,18 @@ describe('ProvisioningService lifecycle users', () => {
     expect(prismaMock.provisioningBatch.create).not.toHaveBeenCalled();
     expect(enqueueJob).not.toHaveBeenCalled();
   });
+
+  it('returns a batch with users to its owner only', async () => {
+    const batchPrisma = prisma as unknown as {
+      provisioningBatch: { findUnique: ReturnType<typeof vi.fn> };
+    };
+    batchPrisma.provisioningBatch.findUnique = vi.fn().mockResolvedValue({
+      id: 'batch-1',
+      createdBy: 'owner',
+      users: [{ username: 'requestor.reyes@lifecycle.scratch', status: 'completed' }],
+    });
+    const svc = lifecycleService(vi.fn());
+    await expect(svc.getBatch('batch-1', 'owner')).resolves.toMatchObject({ id: 'batch-1' });
+    await expect(svc.getBatch('batch-1', 'intruder')).rejects.toThrow('Batch not found');
+  });
 });
