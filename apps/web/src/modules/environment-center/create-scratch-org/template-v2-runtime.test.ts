@@ -32,4 +32,35 @@ describe('Template V2 provisioning preview severity', () => {
     expect(preview.errors).toEqual(['Unknown profile']);
     expect(preview.warnings).toEqual(['Metadata was incomplete']);
   });
+
+  it('requires a source org for automatic query deployment', () => {
+    const preview = buildTemplateV2Preview({
+      version: 2,
+      customSettings: { enabled: false, mode: 'bundled' },
+      dataSeed: { datasets: [], mode: 'query_section' },
+      pipelineSteps: {
+        autoRunDataSeed: true,
+        autoRunPartners: false,
+        autoRunUsers: false,
+      },
+    } as ScratchPipelineTemplateConfig);
+
+    expect(preview.errors).toContain(
+      'Select a Data Deployment Org for the automatic data deployment.',
+    );
+  });
+
+  it('allows the scratch and source-only preset without a data source org', () => {
+    const preview = buildTemplateV2Preview({
+      version: 2,
+      customSettings: { enabled: false, mode: 'bundled' },
+      pipelineSteps: {
+        autoRunDataSeed: false,
+        autoRunPartners: false,
+        autoRunUsers: false,
+      },
+    } as ScratchPipelineTemplateConfig);
+
+    expect(preview.errors).toEqual([]);
+  });
 });

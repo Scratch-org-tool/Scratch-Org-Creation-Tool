@@ -1,11 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { prisma, Prisma } from '@sfcc/db';
 import {
-  DEFAULT_AZURE_MANIFEST_PATH,
   normalizeGitSourceConfig,
   type GitSourceConfig,
   migrateTemplateConfig,
   migrateTemplateConfigToV2,
+  SYSTEM_SCRATCH_TEMPLATE_PRESETS,
   scratchOrgPipelineSchema,
   sanitizeTemplateConfigForStorage,
   scratchTemplateCreateSchema,
@@ -14,129 +14,41 @@ import {
 } from '@sfcc/shared';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 
-const SYSTEM_TEMPLATE_NAME = 'CONA Full Setup';
-const SYSTEM_TEMPLATE_DESCRIPTION =
-  'Default CONA scratch pipeline: metadata, org config, bundled custom settings, and data seed. User provisioning runs when concrete users are configured.';
-
 @Injectable()
 export class ScratchTemplatesService implements OnModuleInit {
   async onModuleInit() {
-    await this.ensureSystemTemplate();
+    await this.ensureSystemTemplates();
   }
 
-  private async ensureSystemTemplate() {
-    const existing = await prisma.scratchPipelineTemplate.findFirst({
-      where: { isSystem: true },
-    });
-    if (existing) {
-      const cfg = existing.config as Record<string, unknown>;
-      const azure = cfg.azureDeploy as { repo?: string; branch?: string; manifestPath?: string } | undefined;
-      const git = cfg.gitSource as Partial<GitSourceConfig> | undefined;
-      const provisioning = cfg.userProvisioning as {
-        users?: unknown[];
-        slots?: unknown[];
-        userGenerators?: unknown[];
-      } | undefined;
-      const hasUsers = Boolean(
-        provisioning?.users?.length
-        || provisioning?.slots?.length
-        || provisioning?.userGenerators?.length,
-      );
-      const steps = cfg.pipelineSteps as {
-        autoRunDataSeed?: boolean;
-        autoRunPartners?: boolean;
-        autoRunUsers?: boolean;
-      } | undefined;
-      if (
-        azure?.repo
-        || azure?.branch
-        || !git?.provider
-        || (!hasUsers && steps?.autoRunUsers === true)
-        || existing.description !== SYSTEM_TEMPLATE_DESCRIPTION
-      ) {
-        await prisma.scratchPipelineTemplate.update({
-          where: { id: existing.id },
-          data: {
-            description: SYSTEM_TEMPLATE_DESCRIPTION,
-            config: sanitizeTemplateConfigForStorage({
-              ...cfg,
-              azureDeploy: azure?.manifestPath ? { manifestPath: azure.manifestPath } : undefined,
-              gitSource: {
-                ...git,
-                provider: git?.provider ?? 'azure_devops',
-                manifestPath: git?.manifestPath ?? azure?.manifestPath,
-              },
-              pipelineSteps: {
-                ...steps,
-                ...(!hasUsers ? { autoRunUsers: false } : {}),
-              },
-            } as Parameters<typeof sanitizeTemplateConfigForStorage>[0]) as Prisma.InputJsonValue,
+  private async ensureSystemTemplates() {
+    await prisma.$transaction(async (transaction) => {
+      // Remove rows created by the former check-then-insert bootstrap. Their
+      // null key identifies them without touching user-owned templates.
+      await transaction.scratchPipelineTemplate.deleteMany({
+        where: { isSystem: true, systemKey: null },
+      });
+
+      for (const preset of SYSTEM_SCRATCH_TEMPLATE_PRESETS) {
+        await transaction.scratchPipelineTemplate.upsert({
+          where: { systemKey: preset.key },
+          create: {
+            name: preset.name,
+            description: preset.description,
+            isSystem: true,
+            systemKey: preset.key,
+            sortOrder: preset.sortOrder,
+            createdById: null,
+            config: sanitizeTemplateConfigForStorage(preset.config) as Prisma.InputJsonValue,
+          },
+          // System defaults are editable. Startup only repairs immutable
+          // identity/order fields and never overwrites an administrator edit.
+          update: {
+            isSystem: true,
+            sortOrder: preset.sortOrder,
+            createdById: null,
           },
         });
       }
-      return;
-    }
-
-    await prisma.scratchPipelineTemplate.create({
-      data: {
-        name: SYSTEM_TEMPLATE_NAME,
-        description: SYSTEM_TEMPLATE_DESCRIPTION,
-        isSystem: true,
-        createdById: null,
-        config: {
-          template: 'config/project-scratch-def.json',
-          duration: 7,
-          installPackage: true,
-          azureDeploy: { manifestPath: DEFAULT_AZURE_MANIFEST_PATH },
-          gitSource: {
-            provider: 'azure_devops',
-            manifestPath: DEFAULT_AZURE_MANIFEST_PATH,
-          },
-          permissionSets: [],
-          orgConfig: {
-            upsertQueueIds: true,
-            upsertDomainFields: true,
-            upsertRequestId: true,
-          },
-          customSettings: { enabled: true, mode: 'bundled' },
-          dataSeed: {
-            datasets: ['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts'],
-            mode: 'hybrid',
-          },
-          partnerImport: {
-            enabled: false,
-            mode: 'org_to_org_matched',
-            bottler: '5000',
-            perOffice: 20,
-            matchOrgDistribution: true,
-            salesOfficeConfig: {
-              bottler: '5000',
-              label: 'Northeast',
-              perOfficePartnerLimit: 20,
-              roles: ['ZR'],
-              offices: ['S003', 'S008', 'S010'],
-            },
-          },
-          userProvisioning: {
-            templates: [
-              {
-                id: 'onboarding-admin',
-                label: 'Onboarding Admin',
-                bottler: '5000',
-                role: 'Master Data',
-                modules: ['Onboarding'],
-                locations: ['Northeast'],
-              },
-            ],
-            slots: [],
-          },
-          pipelineSteps: {
-            autoRunDataSeed: true,
-            autoRunPartners: false,
-            autoRunUsers: false,
-          },
-        } as Prisma.InputJsonValue,
-      },
     });
   }
 
@@ -145,7 +57,7 @@ export class ScratchTemplatesService implements OnModuleInit {
       where: {
         OR: [{ isSystem: true }, { createdById: userId }],
       },
-      orderBy: [{ isSystem: 'desc' }, { updatedAt: 'desc' }],
+      orderBy: [{ isSystem: 'desc' }, { sortOrder: 'asc' }, { updatedAt: 'desc' }],
     });
   }
 
@@ -189,8 +101,10 @@ export class ScratchTemplatesService implements OnModuleInit {
 
   async update(id: string, body: unknown, userId: string) {
     const template = await prisma.scratchPipelineTemplate.findUnique({ where: { id } });
-    if (!template || template.isSystem) throw new NotFoundException('Template not found');
-    assertResourceOwner({ createdBy: template.createdById ?? '' }, userId, 'Template');
+    if (!template) throw new NotFoundException('Template not found');
+    if (!template.isSystem) {
+      assertResourceOwner({ createdBy: template.createdById ?? '' }, userId, 'Template');
+    }
 
     const input = scratchTemplateUpdateSchema.parse(body);
     const config = input.config ? this.normalizeConfig(input.config) : undefined;
@@ -308,6 +222,33 @@ export class ScratchTemplatesService implements OnModuleInit {
     };
   }
 
+  private validateAutomaticSources(config: ReturnType<ScratchTemplatesService['mergeTemplateWithLaunch']>) {
+    const dataSourceOrgId = config.dataDeploymentOrgId ?? config.sourceOrgId;
+    const customSettingsOrgId = config.customSettingsOrgId ?? config.sourceOrgId;
+    if (config.customSettings?.enabled === true && !customSettingsOrgId) {
+      throw new BadRequestException('A custom settings source org is required');
+    }
+    if (config.pipelineSteps?.autoRunDataSeed && config.dataSeed && !dataSourceOrgId) {
+      throw new BadRequestException('A data deployment source org is required for automatic data deployment');
+    }
+    if (
+      config.pipelineSteps?.autoRunPartners
+      && config.partnerImport?.enabled === true
+      && config.partnerImport.mode !== 'excel'
+      && !dataSourceOrgId
+    ) {
+      throw new BadRequestException('A data deployment source org is required for Account Partner mapping');
+    }
+    const hasUsers = Boolean(
+      config.userProvisioning?.users?.length
+      || config.userProvisioning?.slots?.length
+      || config.userProvisioning?.userGenerators?.length,
+    );
+    if (config.pipelineSteps?.autoRunUsers && hasUsers && !dataSourceOrgId) {
+      throw new BadRequestException('A data deployment source org is required for automatic user provisioning');
+    }
+  }
+
   /** Build the immutable run snapshot from the stored template, never client template fields. */
   async resolveLaunch(body: Record<string, unknown>, userId: string) {
     const templateId = typeof body.templateId === 'string' ? body.templateId : undefined;
@@ -351,6 +292,7 @@ export class ScratchTemplatesService implements OnModuleInit {
         description: body.description as string | undefined,
       },
     );
+    this.validateAutomaticSources(merged);
     return scratchOrgPipelineSchema.parse(merged);
   }
 

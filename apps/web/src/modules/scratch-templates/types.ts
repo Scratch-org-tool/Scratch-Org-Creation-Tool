@@ -1,4 +1,8 @@
-import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
+import {
+  SYSTEM_SCRATCH_TEMPLATE_KEYS,
+  type ScratchPipelineTemplateConfig,
+  type SystemScratchTemplateKey,
+} from '@sfcc/shared';
 
 export type TemplateConfigState = ScratchPipelineTemplateConfig & {
   permissionSetsText?: string;
@@ -28,6 +32,37 @@ export type ConaUserRow = {
   locations: string[];
   templateId?: string;
 };
+
+export interface SystemTemplatePresentation {
+  number: number;
+  stage: string;
+  summary: string;
+}
+
+const SYSTEM_TEMPLATE_PRESENTATION: Record<SystemScratchTemplateKey, SystemTemplatePresentation> = {
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT]: {
+    number: 1,
+    stage: 'Scratch & source',
+    summary: 'Scratch org creation and source-control metadata deployment',
+  },
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES]: {
+    number: 2,
+    stage: 'Data deployment',
+    summary: 'Ordered, query-driven data deployment',
+  },
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS]: {
+    number: 3,
+    stage: 'Seed & map',
+    summary: 'Onboarding config seed and Account Partner mapping',
+  },
+};
+
+export function getSystemTemplatePresentation(
+  systemKey?: string | null,
+): SystemTemplatePresentation | undefined {
+  if (!systemKey) return undefined;
+  return SYSTEM_TEMPLATE_PRESENTATION[systemKey as SystemScratchTemplateKey];
+}
 
 export const DEFAULT_TEMPLATE_CONFIG: TemplateConfigState = {
   version: 2,
@@ -63,7 +98,7 @@ export const DEFAULT_TEMPLATE_CONFIG: TemplateConfigState = {
   pipelineSteps: {
     autoRunDataSeed: true,
     autoRunPartners: false,
-    autoRunUsers: true,
+    autoRunUsers: false,
   },
   userProvisioning: {
     discoveryPolicy: 'best_effort',
@@ -86,6 +121,11 @@ export const DEFAULT_TEMPLATE_CONFIG: TemplateConfigState = {
 
 export function configToSummaryChips(config: ScratchPipelineTemplateConfig): string[] {
   const chips: string[] = [];
+  if (config.gitSource?.provider === 'azure_devops' || config.azureDeploy) {
+    chips.push('Azure DevOps deploy');
+  } else if (config.gitSource?.provider) {
+    chips.push('Source deploy');
+  }
   if (config.customSettings?.enabled !== false) {
     chips.push(config.customSettings?.mode === 'custom' ? 'Custom SFDMU' : 'Bundled SFDMU');
   }
@@ -102,9 +142,9 @@ export function configToSummaryChips(config: ScratchPipelineTemplateConfig): str
     ? generated + (config.userProvisioning?.users?.length ?? 0)
     : (config.userProvisioning?.slots?.length || config.userProvisioning?.users?.length || 0);
   if (users > 0) chips.push(`${users} user${users === 1 ? '' : 's'}`);
-  if (config.pipelineSteps?.autoRunDataSeed) chips.push('Auto seed');
-  if (config.pipelineSteps?.autoRunPartners) chips.push('Auto partners');
-  if (config.pipelineSteps?.autoRunUsers) chips.push('Auto users');
+  if (config.pipelineSteps?.autoRunDataSeed && config.dataSeed) chips.push('Auto seed');
+  if (config.pipelineSteps?.autoRunPartners && config.partnerImport?.enabled) chips.push('Auto partners');
+  if (config.pipelineSteps?.autoRunUsers && users > 0) chips.push('Auto users');
   if (config.installPackage) chips.push('Error logger pkg');
   return chips;
 }

@@ -11,7 +11,7 @@ export function TemplatesPageHeader({ actions }: TemplatesPageHeaderProps) {
   return (
     <DeploymentPageHeader
       title="Templates"
-      subtitle="Private pipeline presets: scratch org, Azure deploy, custom settings JSON, data seed, users."
+      subtitle="Configure three progressive scratch-org presets, then create private templates for team-specific pipelines."
       icon={FileStack}
       accentClass="to-violet-500/10"
       showBreadcrumbs

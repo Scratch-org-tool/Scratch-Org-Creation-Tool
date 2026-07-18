@@ -1,13 +1,32 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@sfcc/db', () => ({ prisma: {}, Prisma: {} }));
+const prismaMock = vi.hoisted(() => ({
+  $transaction: vi.fn(),
+  scratchPipelineTemplate: {
+    deleteMany: vi.fn(),
+    upsert: vi.fn(),
+    findUnique: vi.fn(),
+    update: vi.fn(),
+  },
+}));
+
+vi.mock('@sfcc/db', () => ({ prisma: prismaMock, Prisma: {} }));
 
 import { ScratchTemplatesService } from './scratch-templates.service';
+import {
+  scratchPipelineTemplateConfigSchema,
+  SYSTEM_SCRATCH_TEMPLATE_PRESETS,
+} from '@sfcc/shared';
 
 const templateId = '11111111-1111-4111-8111-111111111111';
 const templateSource = '22222222-2222-4222-8222-222222222222';
 const runtimeDataSource = '33333333-3333-4333-8333-333333333333';
 const runtimeSettingsSource = '44444444-4444-4444-8444-444444444444';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  prismaMock.$transaction.mockImplementation(async (callback) => callback(prismaMock));
+});
 
 describe('ScratchTemplatesService authoritative launch merge', () => {
   it('uses the stored template and lets runtime org and git selections override defaults', async () => {
@@ -191,5 +210,109 @@ describe('ScratchTemplatesService authoritative launch merge', () => {
         ensureRequiredPackage: true,
       },
     }));
+  });
+
+  it('blocks an automatic data preset until a runtime source org is selected', async () => {
+    const service = new ScratchTemplatesService();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      id: templateId,
+      name: 'Data Deployment Queries',
+      config: {
+        version: 2,
+        gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+        customSettings: { enabled: false, mode: 'bundled' },
+        dataSeed: { mode: 'automatic', datasets: ['Products'] },
+        pipelineSteps: {
+          autoRunDataSeed: true,
+          autoRunPartners: false,
+          autoRunUsers: false,
+        },
+      },
+    } as never);
+
+    await expect(service.resolveLaunch({
+      templateId,
+      alias: 'missing-source',
+      devHubAlias: 'devhub',
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+    }, 'owner')).rejects.toThrow('data deployment source org is required');
+  });
+});
+
+describe('ScratchTemplatesService system presets', () => {
+  it('defines exactly three valid progressive configurations', () => {
+    expect(SYSTEM_SCRATCH_TEMPLATE_PRESETS).toHaveLength(3);
+    expect(
+      SYSTEM_SCRATCH_TEMPLATE_PRESETS.map((preset) =>
+        scratchPipelineTemplateConfigSchema.safeParse(preset.config).success),
+    ).toEqual([true, true, true]);
+  });
+
+  it('removes legacy duplicate defaults and upserts the three keyed presets in order', async () => {
+    prismaMock.scratchPipelineTemplate.deleteMany.mockResolvedValue({ count: 3 });
+    prismaMock.scratchPipelineTemplate.upsert.mockResolvedValue({});
+
+    await new ScratchTemplatesService().onModuleInit();
+
+    expect(prismaMock.scratchPipelineTemplate.deleteMany).toHaveBeenCalledWith({
+      where: { isSystem: true, systemKey: null },
+    });
+    expect(prismaMock.scratchPipelineTemplate.upsert).toHaveBeenCalledTimes(3);
+    expect(
+      prismaMock.scratchPipelineTemplate.upsert.mock.calls.map(([request]) => ({
+        key: request.create.systemKey,
+        order: request.create.sortOrder,
+      })),
+    ).toEqual(
+      SYSTEM_SCRATCH_TEMPLATE_PRESETS.map((preset) => ({
+        key: preset.key,
+        order: preset.sortOrder,
+      })),
+    );
+  });
+
+  it('does not overwrite edited default content during a later bootstrap', async () => {
+    prismaMock.scratchPipelineTemplate.deleteMany.mockResolvedValue({ count: 0 });
+    prismaMock.scratchPipelineTemplate.upsert.mockResolvedValue({});
+
+    await new ScratchTemplatesService().onModuleInit();
+
+    for (const [request] of prismaMock.scratchPipelineTemplate.upsert.mock.calls) {
+      expect(request.update).not.toHaveProperty('name');
+      expect(request.update).not.toHaveProperty('description');
+      expect(request.update).not.toHaveProperty('config');
+    }
+  });
+
+  it('allows a system default to be edited while retaining its system identity', async () => {
+    prismaMock.scratchPipelineTemplate.findUnique.mockResolvedValue({
+      id: templateId,
+      name: 'Scratch Org & Source Deployment',
+      description: null,
+      isSystem: true,
+      systemKey: 'scratch-source-deployment',
+      sortOrder: 1,
+      createdById: null,
+      config: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    prismaMock.scratchPipelineTemplate.update.mockResolvedValue({
+      id: templateId,
+      name: 'Edited foundation',
+    });
+
+    await new ScratchTemplatesService().update(
+      templateId,
+      { name: 'Edited foundation' },
+      'environment-user',
+    );
+
+    expect(prismaMock.scratchPipelineTemplate.update).toHaveBeenCalledWith({
+      where: { id: templateId },
+      data: {
+        name: 'Edited foundation',
+      },
+    });
   });
 });
