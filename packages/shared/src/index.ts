@@ -16,6 +16,7 @@ export * from './org-to-org-data.js';
 export * from './org-to-org-metadata.js';
 export * from './notifications.js';
 export * from './scheduling.js';
+export * from './scratch-org-renewal.js';
 export * from './drift.js';
 export * from './data-deploy-chunks.js';
 export * from './data-runtime.js';

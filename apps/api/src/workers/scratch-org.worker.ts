@@ -252,6 +252,7 @@ export class ScratchOrgWorker {
             instanceUrl: scratchOrg.instanceUrl ?? 'https://test.salesforce.com',
             loginUrl: scratchOrg.loginUrl ?? undefined,
             status: 'active',
+            expiresAt: scratchOrg.expirationDate ?? undefined,
             createdBy: ownerUserId,
           },
           update: {
@@ -260,6 +261,7 @@ export class ScratchOrgWorker {
             instanceUrl: scratchOrg.instanceUrl ?? undefined,
             loginUrl: scratchOrg.loginUrl ?? undefined,
             status: 'active',
+            expiresAt: scratchOrg.expirationDate ?? undefined,
             createdBy: ownerUserId,
           },
         });

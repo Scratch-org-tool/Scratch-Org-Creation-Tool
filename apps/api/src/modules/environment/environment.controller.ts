@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { EnvironmentService } from './environment.service';
+import { ScratchOrgRenewalService } from './scratch-org-renewal.service';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
@@ -10,7 +11,10 @@ import type { ScmProvider } from '@sfcc/shared';
 @UseGuards(AuthGuard, ModuleGuard, RoleGuard)
 @RequireModule('environment')
 export class EnvironmentController {
-  constructor(private readonly environmentService: EnvironmentService) {}
+  constructor(
+    private readonly environmentService: EnvironmentService,
+    private readonly scratchOrgRenewals: ScratchOrgRenewalService,
+  ) {}
 
   @Get('connected-orgs')
   listConnectedOrgs(@CurrentUser() userId: string) {
@@ -203,6 +207,49 @@ export class EnvironmentController {
   @RequireRole('admin')
   deleteScmBinding(@Param('id') id: string) {
     return this.environmentService.deleteProjectBinding(id);
+  }
+
+  @Get('scratch-org-renewals')
+  listScratchOrgRenewals(@CurrentUser() userId: string) {
+    return this.scratchOrgRenewals.list(userId);
+  }
+
+  @Post('scratch-org-renewals')
+  createScratchOrgRenewal(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.scratchOrgRenewals.create(body, userId);
+  }
+
+  @Post('scratch-org-renewals/preview')
+  previewScratchOrgRenewal(@Body() body: unknown, @CurrentUser() userId: string) {
+    return this.scratchOrgRenewals.preview(body, userId);
+  }
+
+  @Patch('scratch-org-renewals/:id')
+  updateScratchOrgRenewal(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentUser() userId: string,
+  ) {
+    return this.scratchOrgRenewals.update(id, body, userId);
+  }
+
+  @Delete('scratch-org-renewals/:id')
+  deleteScratchOrgRenewal(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.scratchOrgRenewals.remove(id, userId);
+  }
+
+  @Post('scratch-org-renewals/:id/run-now')
+  runScratchOrgRenewalNow(@Param('id') id: string, @CurrentUser() userId: string) {
+    return this.scratchOrgRenewals.runNow(id, userId);
+  }
+
+  @Get('scratch-org-renewals/:id/runs')
+  listScratchOrgRenewalRuns(
+    @Param('id') id: string,
+    @CurrentUser() userId: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.scratchOrgRenewals.listRuns(id, userId, limit ? parseInt(limit, 10) : 20);
   }
 
   @Post('scratch-org/pipeline')
