@@ -13,7 +13,7 @@ import {
   userProvisioningConfigSchema,
 } from '@sfcc/shared';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
-import { assertOrgOwned, userOwnedWhere } from '../../common/user-tenancy.util';
+import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
 import { OrgUserMetadataService } from './org-user-metadata.service';
 import {
   ProvisioningProfileValidationError,
@@ -242,6 +242,16 @@ export class ProvisioningService {
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
+  }
+
+  /** Single batch with per-user statuses, for provisioning progress polling. */
+  async getBatch(batchId: string, userId: string) {
+    const batch = await prisma.provisioningBatch.findUnique({
+      where: { id: batchId },
+      include: { users: { orderBy: [{ createdAt: 'asc' }, { username: 'asc' }] } },
+    });
+    assertResourceOwner(batch, userId, 'Batch');
+    return batch;
   }
 
   parseCsv(csv: string) {
