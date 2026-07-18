@@ -99,6 +99,8 @@ export function contentTypeForFile(name: string, headerType?: string | null): st
 
 export class GradioSpaceClient {
   private readonly logger = new Logger(GradioSpaceClient.name);
+  /** Cookies issued by the Space (session affinity on HF's proxy). */
+  private cookies = '';
 
   constructor(
     private readonly base: string,
@@ -109,7 +111,18 @@ export class GradioSpaceClient {
     const headers: Record<string, string> = {};
     if (json) headers['Content-Type'] = 'application/json';
     if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    if (this.cookies) headers.Cookie = this.cookies;
     return headers;
+  }
+
+  private rememberCookies(response: Response): void {
+    const setCookie = response.headers.get('set-cookie');
+    if (!setCookie) return;
+    const pairs = setCookie
+      .split(/,(?=\s*\w+=)/)
+      .map((cookie) => cookie.split(';')[0]!.trim())
+      .filter(Boolean);
+    if (pairs.length > 0) this.cookies = pairs.join('; ');
   }
 
   /** Queue a Space function and wait for its terminal SSE event. */
@@ -120,6 +133,7 @@ export class GradioSpaceClient {
       { method: 'POST', headers: this.headers(true), body: JSON.stringify({ data }) },
       Math.min(timeoutMs, 20_000),
     );
+    this.rememberCookies(queueResponse);
     if (!queueResponse.ok) {
       throw new Error(`Space queue failed: HTTP ${queueResponse.status}`);
     }
@@ -166,11 +180,21 @@ export class GradioSpaceClient {
   ): Promise<{ buffer: Buffer; contentType: string }> {
     const url = fileRefToUrl(this.base, ref);
     if (!url) throw new Error('Space output has no downloadable location');
-    const response = await this.fetchWithTimeout(
+    let response = await this.fetchWithTimeout(
       url,
       { method: 'GET', headers: this.headers() },
       timeoutMs,
     );
+    if (!response.ok && response.status !== 404) {
+      // HF's edge occasionally 403s a fresh output file; one short retry wins.
+      this.logger.warn(`Space download got HTTP ${response.status} for ${url.slice(0, 140)} — retrying once`);
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      response = await this.fetchWithTimeout(
+        url,
+        { method: 'GET', headers: this.headers() },
+        timeoutMs,
+      );
+    }
     if (!response.ok) throw new Error(`Space download failed: HTTP ${response.status}`);
     return {
       buffer: Buffer.from(await response.arrayBuffer()),
