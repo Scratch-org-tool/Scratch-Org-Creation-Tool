@@ -1,4 +1,4 @@
-import { Activity, ArrowLeftRight, Cloud, Database, Rocket } from 'lucide-react';
+import { Activity, ArrowLeftRight, CalendarClock, Cloud, Database, Rocket } from 'lucide-react';
 import type { QuickActionItem } from '@/components/studio';
 
 export const DASHBOARD_QUICK_ACTIONS: QuickActionItem[] = [
@@ -17,6 +17,14 @@ export const DASHBOARD_QUICK_ACTIONS: QuickActionItem[] = [
     icon: Cloud,
     border: 'border-l-purple-500',
     iconBg: 'bg-purple-500/10 text-purple-400',
+  },
+  {
+    label: 'Scratch Org Automation',
+    description: 'Schedule renewals, run them now, and inspect history',
+    href: '/environment-center/automation',
+    icon: CalendarClock,
+    border: 'border-l-cyan-500',
+    iconBg: 'bg-cyan-500/10 text-cyan-400',
   },
   {
     label: 'Data Import',

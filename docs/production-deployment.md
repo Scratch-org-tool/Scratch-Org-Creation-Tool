@@ -71,7 +71,9 @@ analysis engines are available. At startup the API verifies these versions and
 self-repairs a missing plugin; inspect cached readiness at
 authenticated `GET /api/health/plugins`. Org authentications persist in the `sf_auth` /
 `sf_auth2` volumes, so re-authenticating after a container restart is not
-required. To authenticate an org from inside the container:
+required. The image also includes the scratch definition, bundled custom
+settings export, manifest, and Salesforce DX project skeleton under
+`SF_PROJECT_ROOT=/repo`. To authenticate an org from inside the container:
 
 ```bash
 docker compose -f docker-compose.prod.yml exec api sf org login web --instance-url https://login.salesforce.com

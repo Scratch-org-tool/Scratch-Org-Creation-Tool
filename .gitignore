@@ -34,9 +34,6 @@ logs/
 *.log
 npm-debug.log*
 
-# Prisma
-packages/db/prisma/migrations/**/migration_lock.toml
-
 # Firebase
 firebase-debug.log
 .firebase/

@@ -23,6 +23,19 @@ export function gitSourceConnectionId(connection: {
   return connection?.id;
 }
 
+/**
+ * Azure connection namespaces identify the organization, while Git source
+ * namespaces identify a project. Keeping the organization in this field makes
+ * repository requests accidentally filter by a non-existent project.
+ */
+export function gitSourceNamespace(connection: {
+  provider: string;
+  namespace?: string | null;
+} | undefined): string {
+  if (!connection || connection.provider === 'azure_devops') return '';
+  return connection.namespace ?? '';
+}
+
 export function gitSourceFromLegacy(
   value?: Partial<GitSourceConfig> & {
     azureProject?: string;

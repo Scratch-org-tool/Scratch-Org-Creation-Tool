@@ -12,8 +12,8 @@ import { ScratchTemplatesModule } from '../scratch-templates/scratch-templates.m
 import { DataCoreModule } from '../data/data-core.module';
 import { AzureService } from '../../integrations/azure/azure.service';
 import { AzureIntegrationService } from '../integrations/azure-integration.service';
-import { ExistingScratchOrgService } from './existing-scratch-org.service';
 import { ScratchOrgRenewalModule } from './scratch-org-renewal.module';
+import { ScratchOrgEligibilityModule } from './scratch-org-eligibility.module';
 
 @Module({
   imports: [
@@ -26,12 +26,12 @@ import { ScratchOrgRenewalModule } from './scratch-org-renewal.module';
     OrgsModule,
     ScratchTemplatesModule,
     DataCoreModule,
+    ScratchOrgEligibilityModule,
     ScratchOrgRenewalModule,
   ],
   controllers: [EnvironmentController],
   providers: [
     EnvironmentService,
-    ExistingScratchOrgService,
     AzureIntegrationService,
     AzureService,
   ],

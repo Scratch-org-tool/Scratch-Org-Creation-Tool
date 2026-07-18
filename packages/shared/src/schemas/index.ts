@@ -215,6 +215,11 @@ const scratchOrgPipelineCommonSchema = scratchOrgCreateSchema.omit({
   devHubAlias: true,
 }).extend({
   version: z.union([z.literal(1), z.literal(2)]).optional(),
+  /**
+   * Retained in the immutable run snapshot for UI/audit fidelity. Execution
+   * uses skipSteps, which the template resolver derives from this flag.
+   */
+  installPackage: z.boolean().optional(),
   azureDeploy: azureDeployConfigSchema.optional(),
   gitSource: gitSourceConfigSchema.optional(),
   automationRunId: z.string().uuid().optional(),
@@ -244,7 +249,7 @@ const scratchOrgPipelineCommonSchema = scratchOrgCreateSchema.omit({
   }).optional(),
   customSettings: customSettingsConfigSchema.optional(),
   pipelineSteps: pipelineStepsConfigSchema.optional(),
-  permissionSets: z.array(z.string()).optional(),
+  permissionSets: z.array(z.string().trim().min(1)).max(100).optional(),
   templateId: z.string().uuid().optional(),
 });
 
@@ -350,7 +355,14 @@ export const scratchTemplateCreateSchema = z.object({
 export const scratchTemplateUpdateSchema = scratchTemplateCreateSchema.partial();
 
 export const pipelineRunActionsSchema = z.object({
-  actions: z.array(z.enum(['provision_users', 'load_data_seed', 'load_account_partners'])).min(1),
+  actions: z
+    .array(z.enum(['provision_users', 'load_data_seed', 'load_account_partners']))
+    .length(1, 'Queue one post-deploy action at a time'),
+  datasets: z.array(
+    z.enum(['OnboardingConfig', 'Products', 'VisitPlans', 'Accounts']),
+  ).min(1).max(4).optional(),
+  partnerMode: z.enum(['excel', 'org_to_org', 'org_to_org_matched']).optional(),
+  partnerBottler: z.enum(['5000', '4900', '4600', 'all']).optional(),
   partnerExcelBase64: z.string().optional(),
   partnerSheet: z.string().optional(),
 });

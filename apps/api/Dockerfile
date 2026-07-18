@@ -68,10 +68,18 @@ COPY --from=builder /repo/packages ./packages
 COPY --from=builder /repo/apps/api/package.json ./apps/api/package.json
 COPY --from=builder /repo/apps/api/dist ./apps/api/dist
 
+# Scratch-org definitions and bundled SFDMU assets are runtime inputs, not
+# compiled application files.
+COPY config ./config
+COPY manifest ./manifest
+COPY force-app ./force-app
+COPY sfdx-project.json ./sfdx-project.json
+
 # Prisma migrations for `npx prisma migrate deploy` at release time.
 COPY --from=builder /repo/packages/db/prisma ./packages/db/prisma
 
-ENV API_PORT=3001
+ENV API_PORT=3001 \
+    SF_PROJECT_ROOT=/repo
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

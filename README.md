@@ -197,7 +197,7 @@ Login and signup are **proxied through the API** (`POST /api/auth/login`, `/api/
 | `SF_CODE_ANALYZER_PLUGIN_VERSION` | Optional | Tested Code Analyzer version (default `5.14.0`) |
 | `SF_PLUGIN_INSTALL_TIMEOUT_MS` | Optional | Plugin registry/install timeout (default `600000`) |
 | `SF_ALLOW_UNSIGNED_SFDMU` | Optional | Keep `false`; explicit trust escape hatch for private/offline registries |
-| `SF_PROJECT_ROOT` | Yes | Absolute path to this repo |
+| `SF_PROJECT_ROOT` | Optional | Absolute path to this repo; auto-detected for standard local and Docker layouts |
 | `DATA_DEPLOY_CHUNK_SIZE` | Optional | Records per chunk for large deploys (default `25000`) |
 | `DATA_DEPLOY_CONCURRENCY` | Optional | Parallel data-deploy workers (default `2`) |
 | `SFDMU_RUN_CONCURRENCY` | Optional | Parallel SFDMU workers (default `2`) |

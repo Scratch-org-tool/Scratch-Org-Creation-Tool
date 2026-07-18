@@ -95,11 +95,17 @@ function createService() {
     }),
   };
   const notifications = { notify: vi.fn().mockResolvedValue(null) };
+  const eligibility = {
+    requireEligible: vi.fn().mockImplementation(
+      (launch: Record<string, unknown>) => Promise.resolve({ config: launch }),
+    ),
+  };
   const service = new ScratchOrgRenewalService(
     orchestrator as never,
     notifications as never,
+    eligibility as never,
   );
-  return { service, orchestrator, notifications };
+  return { service, orchestrator, notifications, eligibility };
 }
 
 beforeEach(() => {
@@ -207,7 +213,11 @@ describe('ScratchOrgRenewalService.create', () => {
 
 describe('ScratchOrgRenewalService.runScheduledRenewal', () => {
   it('claims a due rule and starts the replacement pipeline with a fresh -r2 alias', async () => {
-    const rule = renewal();
+    const rule = renewal({
+      configSnapshot: pipelineConfig({
+        templateId: '11111111-1111-4111-8111-111111111111',
+      }),
+    });
     db.scratchOrgRenewal.findUnique.mockImplementation(
       ({ where }: { where: { id?: string; scratchOrgAlias?: string } }) =>
         Promise.resolve(where.id === 'renewal-1' ? rule : null),
@@ -216,11 +226,19 @@ describe('ScratchOrgRenewalService.runScheduledRenewal', () => {
     db.scratchOrgRenewalRun.create.mockResolvedValue({ id: 'rr-1' });
     db.scratchOrgRenewalRun.update.mockResolvedValue({});
     db.scratchOrgRenewal.update.mockResolvedValue({});
-    const { service, orchestrator } = createService();
+    const { service, orchestrator, eligibility } = createService();
 
     const result = await service.runScheduledRenewal('renewal-1', NOW);
 
     expect(result.claimed).toBe(true);
+    expect(eligibility.requireEligible).toHaveBeenCalledWith(
+      expect.not.objectContaining({ templateId: expect.anything() }),
+      'user-1',
+    );
+    expect(eligibility.requireEligible.mock.calls[0][0]).toEqual(expect.objectContaining({
+      alias: 'demo-org-r2',
+      mode: 'create_new',
+    }));
     expect(orchestrator.startPipeline).toHaveBeenCalledTimes(1);
     const [launch, owner] = orchestrator.startPipeline.mock.calls[0];
     expect(owner).toBe('user-1');
@@ -320,6 +338,30 @@ describe('ScratchOrgRenewalService.runScheduledRenewal', () => {
       expect.objectContaining({ category: 'environment', level: 'error', userId: 'user-1' }),
     );
   });
+
+  it('runs the shared live eligibility gate before starting a renewal pipeline', async () => {
+    const rule = renewal();
+    db.scratchOrgRenewal.findUnique.mockImplementation(
+      ({ where }: { where: { id?: string; scratchOrgAlias?: string } }) =>
+        Promise.resolve(where.id === 'renewal-1' ? rule : null),
+    );
+    db.scratchOrgRenewal.updateMany.mockResolvedValue({ count: 1 });
+    db.scratchOrgRenewalRun.create.mockResolvedValue({ id: 'rr-1' });
+    db.scratchOrgRenewalRun.update.mockResolvedValue({});
+    db.scratchOrgRenewal.update.mockResolvedValue({});
+    const { service, orchestrator, eligibility } = createService();
+    eligibility.requireEligible.mockRejectedValue(new Error('Dev Hub CLI authentication expired'));
+
+    await expect(service.runScheduledRenewal('renewal-1', NOW)).resolves.toEqual({
+      claimed: true,
+    });
+
+    expect(eligibility.requireEligible).toHaveBeenCalledTimes(1);
+    expect(orchestrator.startPipeline).not.toHaveBeenCalled();
+    expect(db.scratchOrgRenewal.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ lastRunStatus: 'failed' }),
+    }));
+  });
 });
 
 describe('ScratchOrgRenewalService.finalizeActiveRuns', () => {
@@ -364,6 +406,34 @@ describe('ScratchOrgRenewalService.finalizeActiveRuns', () => {
 
     expect(finalized).toBe(0);
     expect(db.scratchOrgRenewal.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps awaiting-input renewals active and notifies the owner once', async () => {
+    db.scratchOrgRenewal.findMany.mockResolvedValue([
+      renewal({
+        activeAutomationRunId: 'pipeline-run-1',
+        activeRunAlias: 'demo-org-r2',
+        lastRunStatus: 'started',
+      }),
+    ]);
+    db.automationRun.findUnique.mockResolvedValue({
+      status: 'awaiting_input',
+      lastError: null,
+    });
+    db.scratchOrgRenewal.update.mockResolvedValue({});
+    const { service, notifications } = createService();
+
+    const finalized = await service.finalizeActiveRuns(NOW);
+
+    expect(finalized).toBe(0);
+    expect(db.scratchOrgRenewal.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'renewal-1' },
+      data: { lastRunStatus: 'awaiting_input', lastError: null },
+    }));
+    expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+      level: 'warning',
+      userId: 'user-1',
+    }));
   });
 
   it('notifies once when the replacement pipeline pauses, and keeps watching', async () => {

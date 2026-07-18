@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
+import { ScratchOrgEligibilityModule } from './scratch-org-eligibility.module';
 import { ScratchOrgRenewalService } from './scratch-org-renewal.service';
 
 /**
@@ -9,7 +10,7 @@ import { ScratchOrgRenewalService } from './scratch-org-renewal.service';
  * pulling the full EnvironmentModule into the scheduler.
  */
 @Module({
-  imports: [OrchestratorModule],
+  imports: [OrchestratorModule, ScratchOrgEligibilityModule],
   providers: [ScratchOrgRenewalService],
   exports: [ScratchOrgRenewalService],
 })

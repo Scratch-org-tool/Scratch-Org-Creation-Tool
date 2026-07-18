@@ -249,7 +249,9 @@ function JobPanelContent({
           run={w.run}
           automationRunId={w.automationRunId}
           sourceOrgId={w.form.dataDeploymentOrgId || w.form.sourceOrgId || undefined}
-          onRefresh={() => w.automationRunId && void w.refreshRun(w.automationRunId)}
+          onRefresh={async () => {
+            if (w.automationRunId) await w.refreshRun(w.automationRunId);
+          }}
         />
       }
     />
@@ -465,6 +467,16 @@ export function CreateScratchOrgWorkspace() {
         )}
         {w.mobileView === 'success' && w.credentials && (
           <GlassCard>
+            {(w.run?.status === 'partial'
+              || Boolean(w.run?.checkpoint?.partialUserActions?.length)) && (
+              <InlineAlert
+                variant="warning"
+                title="Scratch org created with partial results"
+                className="mb-4"
+              >
+                Review the execution logs before using this org.
+              </InlineAlert>
+            )}
             <ScratchOrgSuccessBanner
               variant="full"
               alias={w.credentials.alias}

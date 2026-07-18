@@ -27,7 +27,14 @@ interface OrgConnectionRow {
   expiresAt?: string | null;
 }
 
-const ACTIVE_RUN_STATUSES = new Set(['pending', 'queued', 'planning', 'running', 'paused']);
+const ACTIVE_RUN_STATUSES = new Set([
+  'pending',
+  'queued',
+  'planning',
+  'running',
+  'paused',
+  'awaiting_input',
+]);
 
 export function buildExistingScratchOrgCandidates(
   scratchOrgs: ScratchOrgRow[],

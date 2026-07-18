@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GitSourceConfig, Repository, ScmProvider } from '@sfcc/shared';
 import { api } from '@/services/api';
 import type { PublicIntegrationConnection } from '@/modules/environment-center/integrations/types';
-import { gitSourceConnectionId } from './provider-config';
+import { gitSourceConnectionId, gitSourceNamespace } from './provider-config';
 
 interface ConnectionsResponse {
   scm: PublicIntegrationConnection[];
@@ -26,6 +26,32 @@ export interface UseGitMetadataSourceOptions {
   defaultManifestPath: string;
 }
 
+export function gitBranchRequestKey(source: GitMetadataSourceState): string | null {
+  if (!source.provider || !source.connectionId || !source.repo) return null;
+  return [
+    source.provider,
+    source.connectionId,
+    source.project,
+    source.repositoryId,
+    source.repo,
+  ].join('\u0000');
+}
+
+export function isValidatedBranchSelection(
+  source: GitMetadataSourceState,
+  branches: readonly string[],
+  validatedKey: string | null,
+  loadingBranches: boolean,
+): boolean {
+  const currentKey = gitBranchRequestKey(source);
+  return Boolean(
+    currentKey
+    && !loadingBranches
+    && validatedKey === currentKey
+    && branches.includes(source.branch),
+  );
+}
+
 export function useGitMetadataSource({
   initial,
   defaultManifestPath,
@@ -34,8 +60,11 @@ export function useGitMetadataSource({
   const [source, setSource] = useState<GitMetadataSourceState>({
     provider: initial?.provider ?? '',
     connectionId: initial?.connectionId ?? '',
-    namespace: initial?.namespace ?? '',
-    project: initial?.project ?? '',
+    namespace: initial?.provider === 'azure_devops' ? '' : initial?.namespace ?? '',
+    project:
+      initial?.project
+      ?? (initial?.provider === 'azure_devops' ? initial.namespace : undefined)
+      ?? '',
     repositoryId: initial?.repositoryId ?? '',
     repo: initial?.repo ?? '',
     branch: initial?.branch ?? '',
@@ -46,6 +75,7 @@ export function useGitMetadataSource({
   const [loading, setLoading] = useState(true);
   const [loadingRepositories, setLoadingRepositories] = useState(false);
   const [loadingBranches, setLoadingBranches] = useState(false);
+  const [validatedBranchKey, setValidatedBranchKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const repositoryRequest = useRef(0);
   const branchRequest = useRef(0);
@@ -68,7 +98,7 @@ export function useGitMetadataSource({
             ...current,
             provider: selected.provider as ScmProvider,
             connectionId: selected.id,
-            namespace: current.namespace || selected.namespace || '',
+            namespace: current.namespace || gitSourceNamespace(selected),
           };
         });
       })
@@ -86,18 +116,21 @@ export function useGitMetadataSource({
   }, []);
 
   const loadRepositories = useCallback(async (next: GitMetadataSourceState) => {
+    const request = ++repositoryRequest.current;
     if (!next.provider || !next.connectionId) {
       setRepositories([]);
+      setLoadingRepositories(false);
       return;
     }
-    const request = ++repositoryRequest.current;
     setLoadingRepositories(true);
     setError(null);
     const connection = connections.find((candidate) => candidate.id === next.connectionId);
     const effectiveConnectionId = gitSourceConnectionId(connection);
     const params = new URLSearchParams({ provider: next.provider });
     if (effectiveConnectionId) params.set('connectionId', effectiveConnectionId);
-    if (next.namespace) params.set('namespace', next.namespace);
+    if (next.namespace && next.provider !== 'azure_devops') {
+      params.set('namespace', next.namespace);
+    }
     if (next.project) params.set('project', next.project);
     try {
       const list = await api<Repository[]>(`/deployments/repos?${params}`);
@@ -107,6 +140,10 @@ export function useGitMetadataSource({
         list.find((repository) => repository.id === next.repositoryId) ??
         list.find((repository) => repository.name === next.repo || repository.fullName === next.repo) ??
         list[0];
+      const selectedRepo =
+        next.provider === 'azure_devops'
+          ? selected?.name
+          : selected?.fullName || selected?.name;
       setSource((current) => {
         if (
           current.provider !== next.provider ||
@@ -118,8 +155,16 @@ export function useGitMetadataSource({
           ? {
               ...current,
               repositoryId: selected.id,
-              repo: selected.fullName || selected.name,
-              branch: current.repo === (selected.fullName || selected.name) ? current.branch : '',
+              repo: selectedRepo ?? '',
+              branch: current.repo === selectedRepo ? current.branch : '',
+              namespace:
+                next.provider === 'azure_devops'
+                  ? current.namespace
+                  : selected.namespace || current.namespace,
+              project:
+                next.provider === 'azure_devops'
+                  ? selected.namespace || current.project
+                  : current.project,
             }
           : { ...current, repositoryId: '', repo: '', branch: '' };
       });
@@ -146,11 +191,14 @@ export function useGitMetadataSource({
   ]);
 
   const loadBranches = useCallback(async (next: GitMetadataSourceState) => {
-    if (!next.provider || !next.connectionId || !next.repo) {
+    const request = ++branchRequest.current;
+    const validationKey = gitBranchRequestKey(next);
+    setValidatedBranchKey(null);
+    if (!validationKey) {
       setBranches([]);
+      setLoadingBranches(false);
       return;
     }
-    const request = ++branchRequest.current;
     setLoadingBranches(true);
     setError(null);
     const connection = connections.find((candidate) => candidate.id === next.connectionId);
@@ -160,13 +208,16 @@ export function useGitMetadataSource({
       repo: next.repo,
     });
     if (effectiveConnectionId) params.set('connectionId', effectiveConnectionId);
-    if (next.namespace) params.set('namespace', next.namespace);
+    if (next.namespace && next.provider !== 'azure_devops') {
+      params.set('namespace', next.namespace);
+    }
     if (next.project) params.set('project', next.project);
     if (next.repositoryId) params.set('repositoryId', next.repositoryId);
     try {
       const list = await api<string[]>(`/deployments/branches?${params}`);
       if (request !== branchRequest.current) return;
       setBranches(list);
+      setValidatedBranchKey(validationKey);
       setSource((current) => {
         if (current.repo !== next.repo || current.connectionId !== next.connectionId) return current;
         return { ...current, branch: list.includes(current.branch) ? current.branch : list[0] ?? '' };
@@ -174,6 +225,7 @@ export function useGitMetadataSource({
     } catch (cause) {
       if (request === branchRequest.current) {
         setBranches([]);
+        setValidatedBranchKey(null);
         setError(cause instanceof Error ? cause.message : 'Could not load branches.');
       }
     } finally {
@@ -201,7 +253,7 @@ export function useGitMetadataSource({
       ...current,
       provider,
       connectionId: selected?.id ?? '',
-      namespace: selected?.namespace ?? '',
+      namespace: gitSourceNamespace(selected),
       project: '',
       repositoryId: '',
       repo: '',
@@ -217,7 +269,7 @@ export function useGitMetadataSource({
       ...current,
       provider: (selected?.provider as ScmProvider | undefined) ?? current.provider,
       connectionId,
-      namespace: selected?.namespace ?? '',
+      namespace: gitSourceNamespace(selected),
       project: '',
       repositoryId: '',
       repo: '',
@@ -228,12 +280,23 @@ export function useGitMetadataSource({
   const selectRepository = useCallback((repositoryId: string) => {
     const repository = repositories.find((item) => item.id === repositoryId);
     setBranches([]);
+    setValidatedBranchKey(null);
     setSource((current) => ({
       ...current,
       repositoryId,
-      repo: repository?.fullName || repository?.name || '',
+      repo:
+        current.provider === 'azure_devops'
+          ? repository?.name ?? ''
+          : repository?.fullName || repository?.name || '',
       branch: repository?.defaultBranch ?? '',
-      namespace: repository?.namespace || current.namespace,
+      namespace:
+        current.provider === 'azure_devops'
+          ? current.namespace
+          : repository?.namespace || current.namespace,
+      project:
+        current.provider === 'azure_devops'
+          ? repository?.namespace || current.project
+          : current.project,
     }));
   }, [repositories]);
 
@@ -244,6 +307,12 @@ export function useGitMetadataSource({
 
   const gitSource = useMemo<GitSourceConfig | null>(() => {
     if (!source.provider || !source.connectionId || !source.repo || !source.branch) return null;
+    if (!isValidatedBranchSelection(
+      source,
+      branches,
+      validatedBranchKey,
+      loadingBranches,
+    )) return null;
     const connection = connections.find((candidate) => candidate.id === source.connectionId);
     return {
       provider: source.provider,
@@ -255,7 +324,7 @@ export function useGitMetadataSource({
       branch: source.branch,
       manifestPath: source.manifestPath || undefined,
     };
-  }, [connections, source]);
+  }, [branches, connections, loadingBranches, source, validatedBranchKey]);
 
   return {
     source,
@@ -267,12 +336,19 @@ export function useGitMetadataSource({
     loading,
     loadingRepositories,
     loadingBranches,
+    branchSelectionValid: isValidatedBranchSelection(
+      source,
+      branches,
+      validatedBranchKey,
+      loadingBranches,
+    ),
     error,
     setError,
     selectProvider,
     selectConnection,
     selectRepository,
     reloadRepositories: () => loadRepositories(source),
+    reloadBranches: () => loadBranches(source),
     gitSource,
     connected: connectedProviders.length > 0,
   };

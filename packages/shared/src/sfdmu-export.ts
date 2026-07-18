@@ -78,7 +78,7 @@ const scratchPipelineTemplateConfigBaseSchema = z.object({
   installPackage: z.boolean().default(true),
   azureDeploy: scratchPipelineTemplateAzureSchema,
   gitSource: gitSourceConfigSchema.partial().optional(),
-  permissionSets: z.array(z.string()).optional(),
+  permissionSets: z.array(z.string().trim().min(1)).max(100).optional(),
   orgConfig: z.object({
     upsertQueueIds: z.boolean().default(true),
     upsertDomainFields: z.boolean().default(true),

@@ -26,6 +26,7 @@ enum JobStatus {
   planning
   running
   paused
+  awaiting_input
   completed
   partial
   failed

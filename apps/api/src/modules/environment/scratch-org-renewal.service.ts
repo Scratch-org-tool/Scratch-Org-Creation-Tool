@@ -19,6 +19,7 @@ import { ZodError } from 'zod';
 import { PipelineOrchestratorService } from '../orchestrator/pipeline-orchestrator.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
+import { ExistingScratchOrgService } from './existing-scratch-org.service';
 
 /** Salesforce CLI alias limit enforced by scratchOrgCreateSchema. */
 const ALIAS_MAX_LENGTH = 40;
@@ -57,6 +58,7 @@ export class ScratchOrgRenewalService {
   constructor(
     private readonly pipelineOrchestrator: PipelineOrchestratorService,
     private readonly notifications: NotificationsService,
+    private readonly scratchOrgEligibility: ExistingScratchOrgService,
   ) {}
 
   async list(userId: string) {
@@ -337,6 +339,26 @@ export class ScratchOrgRenewalService {
       return false;
     }
 
+    if (run.status === 'awaiting_input') {
+      // Manual post-deploy steps remain part of the replacement recipe. Keep
+      // the renewal and target lock active until the owner finishes them.
+      if (renewal.lastRunStatus !== 'awaiting_input') {
+        await prisma.scratchOrgRenewal.update({
+          where: { id: renewal.id },
+          data: { lastRunStatus: 'awaiting_input', lastError: null },
+        });
+        await this.notifyOwner(
+          renewal,
+          'warning',
+          `Scratch org renewal is awaiting input: ${renewal.name}`,
+          `The replacement org "${renewal.activeRunAlias ?? 'scratch org'}" was created, `
+          + 'but its configured manual post-deploy actions still need to be run from '
+          + 'the Create Scratch Org workspace.',
+        );
+      }
+      return false;
+    }
+
     if (run.status === 'paused') {
       // Recoverable — the owner can resume the pipeline. Notify on the first
       // transition only, then keep watching.
@@ -525,15 +547,26 @@ export class ScratchOrgRenewalService {
         },
       });
       const newAlias = await this.generateRenewalAlias(renewal.scratchOrgAlias);
-      const launch = scratchOrgPipelineSchema.parse({
+      const snapshot = {
         ...(renewal.configSnapshot as unknown as Record<string, unknown>),
+      };
+      delete snapshot.templateId;
+      const launch = scratchOrgPipelineSchema.parse({
+        ...snapshot,
         mode: 'create_new',
         alias: newAlias,
         automationRunId: undefined,
         existingOrgConnectionId: undefined,
       }) as CreateNewPipelineConfig;
 
-      const started = await this.pipelineOrchestrator.startPipeline(launch, renewal.createdBy);
+      const eligibility = await this.scratchOrgEligibility.requireEligible(
+        launch as unknown as Record<string, unknown>,
+        renewal.createdBy,
+      );
+      const started = await this.pipelineOrchestrator.startPipeline(
+        eligibility.config as CreateNewPipelineConfig,
+        renewal.createdBy,
+      );
 
       await prisma.scratchOrgRenewalRun.update({
         where: { id: runRow.id },
@@ -597,6 +630,10 @@ export class ScratchOrgRenewalService {
     delete normalized.existingOrgConnectionId;
     delete normalized.existingOrgOptions;
     delete normalized.automationRunId;
+    // The renewal snapshot is immutable execution input. Re-resolving a
+    // template id here could silently switch a scheduled renewal to a newer
+    // template revision.
+    delete normalized.templateId;
 
     const devHubAlias =
       (typeof normalized.devHubAlias === 'string' && normalized.devHubAlias)

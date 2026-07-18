@@ -8,6 +8,7 @@ import {
 } from '@sfcc/sf-cli';
 import type { JobProcessRegistryService } from '../jobs/job-process-registry.service';
 import { JobCancelledError } from './scratch-org-job.service';
+import { resolveSfProjectRoot } from '../../common/sf-project-root.util';
 
 export interface ScratchOrgPreparationTarget {
   alias: string;
@@ -32,7 +33,7 @@ interface PreparationExecution {
 @Injectable()
 export class ScratchOrgPreparationService {
   private readonly sfCli = createSfCliClient({
-    cwd: process.env.SF_PROJECT_ROOT ?? process.cwd(),
+    cwd: resolveSfProjectRoot(),
   });
 
   private targetName(target: ScratchOrgPreparationTarget): string {
@@ -43,7 +44,7 @@ export class ScratchOrgPreparationService {
     const result = await this.sfCli.displayOrg(this.targetName(target));
     if (!result.success) {
       throw new Error(
-        `Scratch org "${target.alias}" is not authenticated in Salesforce CLI`,
+        `Salesforce org "${target.alias}" is not authenticated in Salesforce CLI`,
       );
     }
   }

@@ -120,13 +120,26 @@ export interface AutomationRunView {
     customSettingsOrgId?: string;
     dataSeed?: {
       datasets?: string[];
+      mode?: 'automatic' | 'query_json' | 'hybrid' | 'query_section';
       querySection?: {
         queries?: Array<{ id: string; name: string; order: number; stage: number }>;
         accountPartnerPlan?: unknown;
       };
     };
+    partnerImport?: {
+      enabled?: boolean;
+      mode?: 'excel' | 'org_to_org' | 'org_to_org_matched' | 'query_section';
+      bottler?: '5000' | '4900' | '4600' | 'all';
+      excelPath?: string;
+    };
+    pipelineSteps?: {
+      autoRunDataSeed?: boolean;
+      autoRunPartners?: boolean;
+      autoRunUsers?: boolean;
+    };
     userProvisioning?: {
       users?: unknown[];
+      slots?: unknown[];
       userGenerators?: Array<{ id: string; count: number; role: string }>;
     };
   };
@@ -138,6 +151,8 @@ export interface AutomationRunView {
     launchMode?: ScratchOrgLaunchMode;
     skippedSteps?: string[];
     userActionsCompleted?: string[];
+    requestedUserActions?: string[];
+    partialUserActions?: string[];
   };
   jobs?: Array<{
     id: string;
@@ -190,7 +205,10 @@ export function getStepStates(
   const permDone = completed.includes('assign_permission_set');
   const orgConfigDone = completed.includes('load_org_config');
   const customSettingsDone = completed.includes('load_custom_settings');
-  const runComplete = run?.status === 'completed';
+  const runComplete =
+    run?.status === 'completed'
+    || run?.status === 'partial'
+    || run?.status === 'awaiting_input';
   const runPaused = run?.status === 'paused';
   const failedUiLabel = runPaused && run?.failedStep
     ? PIPELINE_STEP_LABEL_BY_ID[run.failedStep]

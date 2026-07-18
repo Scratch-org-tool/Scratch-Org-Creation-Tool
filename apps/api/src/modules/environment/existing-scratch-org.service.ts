@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import {
+  getCustomSettingsOrgId,
+  getDataDeploymentOrgId,
   scratchOrgAdoptSchema,
   type ScratchOrgPipelineInput,
 } from '@sfcc/shared';
@@ -19,6 +21,7 @@ export interface ExistingOrgEligibilityStep {
   step:
     | 'template'
     | 'target'
+    | 'dev_hub'
     | 'authentication'
     | 'required_package'
     | 'provider'
@@ -34,6 +37,7 @@ const ACTIVE_RUN_STATUSES = [
   'planning',
   'running',
   'paused',
+  'awaiting_input',
 ] as const;
 
 @Injectable()
@@ -63,9 +67,16 @@ export class ExistingScratchOrgService {
         status: 'skipped',
         messages: ['Existing scratch-org checks do not apply to create_new mode'],
       });
+      await this.validateDevHub(config, userId, steps);
       await this.validateProviderAndSources(config, userId, steps);
       return this.result(config, undefined, steps);
     }
+
+    steps.push({
+      step: 'dev_hub',
+      status: 'skipped',
+      messages: ['Existing scratch-org mode does not create through a Dev Hub'],
+    });
 
     let target;
     const targetErrors: string[] = [];
@@ -330,24 +341,72 @@ export class ExistingScratchOrgService {
       });
     }
 
+    const customSettingsSourceId = getCustomSettingsOrgId({
+      customSettingsOrgId: config.customSettingsOrgId,
+      sourceOrgId: config.sourceOrgId,
+      dataDeploymentOrgId: config.dataDeploymentOrgId,
+    });
+    const dataDeploymentSourceId = getDataDeploymentOrgId({
+      dataDeploymentOrgId: config.dataDeploymentOrgId,
+      customSettingsOrgId: config.customSettingsOrgId,
+      sourceOrgId: config.sourceOrgId,
+    });
+    const customSettingsRequired = config.customSettings?.enabled === true;
+    const dataSeedRequired = config.pipelineSteps?.autoRunDataSeed === true;
+    const partnerSourceRequired =
+      config.pipelineSteps?.autoRunPartners === true
+      && config.partnerImport?.enabled === true
+      && config.partnerImport.mode !== 'excel'
+      && !(
+        config.dataSeed?.mode === 'query_section'
+        && config.dataSeed.querySection?.accountPartnerPlan
+      );
+    const errors: string[] = [];
+    if (customSettingsRequired && !customSettingsSourceId) {
+      errors.push(
+        'Custom settings are enabled, but no custom settings source org is configured',
+      );
+    }
+    if (dataSeedRequired && !dataDeploymentSourceId) {
+      errors.push(
+        'Automatic data seed is enabled, but no data deployment source org is configured',
+      );
+    }
+    if (partnerSourceRequired && !dataDeploymentSourceId) {
+      errors.push(
+        'Automatic account partner import requires a data deployment source org',
+      );
+    }
+
     const sourceIds = [...new Set([
       config.dataDeploymentOrgId,
       config.customSettingsOrgId,
       config.sourceOrgId,
+      customSettingsSourceId,
+      dataDeploymentSourceId,
     ].filter((value): value is string => Boolean(value)))];
-    const errors: string[] = [];
     for (const id of sourceIds) {
       const source = await prisma.orgConnection.findUnique({ where: { id } });
       if (!source || source.createdBy !== userId) {
         errors.push(`Source org ${id} was not found`);
         continue;
       }
-      if (config.mode === 'configure_existing') {
-        if (source.status !== 'active') errors.push(`Source org "${source.alias}" is not active`);
-        if (source.expiresAt && source.expiresAt <= new Date()) {
-          errors.push(`Source org "${source.alias}" has expired`);
+      let usable = true;
+      if (source.status !== 'active') {
+        errors.push(`Source org "${source.alias}" is not active`);
+        usable = false;
+      }
+      if (source.expiresAt && source.expiresAt <= new Date()) {
+        errors.push(`Source org "${source.alias}" has expired`);
+        usable = false;
+      }
+      if (targetId === id) errors.push(`Source org "${source.alias}" cannot also be the target`);
+      if (usable) {
+        try {
+          await this.preparation.verifyAuthentication(source);
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error));
         }
-        if (targetId === id) errors.push(`Source org "${source.alias}" cannot also be the target`);
       }
     }
     steps.push({
@@ -356,8 +415,42 @@ export class ExistingScratchOrgService {
       messages: errors.length
         ? errors
         : sourceIds.length
-          ? ['All configured source orgs are active and caller-owned']
-          : ['No source orgs are required by this launch'],
+          ? ['All configured source orgs are active, authenticated, and caller-owned']
+          : ['No source orgs are required by the configured template steps'],
+    });
+  }
+
+  private async validateDevHub(
+    config: Extract<ScratchOrgPipelineInput, { mode: 'create_new' }>,
+    userId: string,
+    steps: ExistingOrgEligibilityStep[],
+  ) {
+    const devHub = await prisma.orgConnection.findUnique({
+      where: { alias: config.devHubAlias },
+    });
+    const errors: string[] = [];
+    if (!devHub || devHub.createdBy !== userId) {
+      errors.push(`Dev Hub "${config.devHubAlias}" was not found`);
+    } else {
+      if (!devHub.isDevHub) errors.push(`Org "${config.devHubAlias}" is not a Dev Hub`);
+      if (devHub.status !== 'active') errors.push(`Dev Hub "${config.devHubAlias}" is not active`);
+      if (devHub.expiresAt && devHub.expiresAt <= new Date()) {
+        errors.push(`Dev Hub "${config.devHubAlias}" authentication has expired`);
+      }
+      if (!errors.length) {
+        try {
+          await this.preparation.verifyAuthentication(devHub);
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+    steps.push({
+      step: 'dev_hub',
+      status: errors.length ? 'error' : 'required',
+      messages: errors.length
+        ? errors
+        : [`Dev Hub "${config.devHubAlias}" is active, authenticated, and caller-owned`],
     });
   }
 

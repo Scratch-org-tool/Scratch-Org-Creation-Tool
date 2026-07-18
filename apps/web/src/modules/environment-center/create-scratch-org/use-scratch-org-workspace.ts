@@ -427,8 +427,25 @@ export function useScratchOrgWorkspace() {
         return;
       }
 
-      if (r.status === 'completed') {
-        const terminalKey = `${runId}:completed`;
+      if (r.status === 'awaiting_input') {
+        setDesktopStep(2);
+        setMobileView('progress');
+        syncRunIdInUrl(runId);
+        if (opts?.fromRestore) {
+          setRestoredBanner(
+            `Restored pipeline RUN-${runId.slice(0, 8).toUpperCase()} — awaiting post-deploy actions`,
+          );
+        }
+        persistSnapshot({
+          automationRunId: runId,
+          desktopStep: 2,
+          mobileView: 'progress',
+        });
+        return;
+      }
+
+      if (r.status === 'completed' || r.status === 'partial') {
+        const terminalKey = `${runId}:${r.status}`;
         if (terminalHandledRef.current === terminalKey) return;
 
         setDesktopStep(2);
@@ -467,6 +484,11 @@ export function useScratchOrgWorkspace() {
           if (!isMountedRef.current) return;
           setCredentials(creds);
           setMobileView('success');
+          if (r.status === 'partial') {
+            setRestoredBanner(
+              'Scratch org creation completed, but one or more post-deploy actions reported partial results. Review the logs before using the org.',
+            );
+          }
           terminalHandledRef.current = terminalKey;
         } catch {
           if (isMountedRef.current) {
@@ -474,7 +496,9 @@ export function useScratchOrgWorkspace() {
               setCredentials({ alias });
               setMobileView('success');
               setRestoredBanner(
-                `Configuration completed for ${alias}. Generate or reset its password if credentials are unavailable.`,
+                r.status === 'partial'
+                  ? `Configuration completed for ${alias} with partial post-deploy results. Review the logs before using the org.`
+                  : `Configuration completed for ${alias}. Generate or reset its password if credentials are unavailable.`,
               );
               terminalHandledRef.current = terminalKey;
             } else {
@@ -747,7 +771,7 @@ export function useScratchOrgWorkspace() {
 
   useEffect(() => {
     if (!automationRunId) return;
-    if (!['running', 'paused'].includes(run?.status ?? '')) return;
+    if (!['running', 'paused', 'awaiting_input'].includes(run?.status ?? '')) return;
     persistSnapshot();
   }, [automationRunId, desktopStep, mobileView, run?.status, persistSnapshot]);
 
@@ -761,7 +785,11 @@ export function useScratchOrgWorkspace() {
 
   const progressPercent = useMemo(() => {
     const completed = run?.checkpoint?.completedSteps?.length ?? 0;
-    if (run?.status === 'completed') return 100;
+    if (
+      run?.status === 'completed'
+      || run?.status === 'partial'
+      || run?.status === 'awaiting_input'
+    ) return 100;
     if (isRunning) {
       const base = Math.round((completed / AUTO_PIPELINE_STEPS) * 100);
       return Math.min(95, base + (scratchJob?.status === 'running' ? 5 : 0));
@@ -771,7 +799,10 @@ export function useScratchOrgWorkspace() {
 
   useEffect(() => {
     if (!automationRunId) return;
-    if (run?.status && ['completed', 'cancelled', 'failed'].includes(run.status)) {
+    if (
+      run?.status
+      && ['awaiting_input', 'completed', 'partial', 'cancelled', 'failed'].includes(run.status)
+    ) {
       void hydrateRunState(run, { alias: formRef.current.alias });
       return;
     }
@@ -780,7 +811,10 @@ export function useScratchOrgWorkspace() {
       try {
         const r = await refreshRun(automationRunId);
         if (!isMountedRef.current) return;
-        if (['completed', 'cancelled', 'failed', 'paused'].includes(r.status)) {
+        if (
+          ['awaiting_input', 'completed', 'partial', 'cancelled', 'failed', 'paused']
+            .includes(r.status)
+        ) {
           await hydrateRunState(r, { alias: formRef.current.alias });
         }
       } catch {
@@ -804,9 +838,11 @@ export function useScratchOrgWorkspace() {
     onRunStatus: (payload) => {
       if (
         payload.status === 'paused' ||
+        payload.status === 'awaiting_input' ||
         payload.status === 'cancelled' ||
         payload.status === 'failed' ||
-        payload.status === 'completed'
+        payload.status === 'completed' ||
+        payload.status === 'partial'
       ) {
         if (automationRunId && isMountedRef.current) {
           void refreshRun(automationRunId).then((r) =>

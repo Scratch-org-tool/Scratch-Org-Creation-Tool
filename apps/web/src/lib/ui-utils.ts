@@ -36,6 +36,8 @@ export function statusBadgeClass(status: string): string {
 export function statusLabel(status: string): string {
   const s = status.toLowerCase();
   if (s === 'completed') return 'Success';
+  if (s === 'partial') return 'Partial';
+  if (s === 'awaiting_input') return 'Awaiting input';
   if (s === 'failed' || s === 'paused') return 'Failed';
   if (s === 'running') return 'Running';
   if (s === 'cancelled') return 'Cancelled';

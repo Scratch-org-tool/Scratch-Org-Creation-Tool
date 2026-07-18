@@ -72,6 +72,7 @@ export class MetadataDeployWorker {
       deploymentId,
       assignPermissionSet,
       assignPermissionSetOnly,
+      permissionSets,
       sourceOrgId,
       sourceOrgAlias,
       deployMode,
@@ -97,6 +98,7 @@ export class MetadataDeployWorker {
       deploymentId?: string;
       assignPermissionSet?: boolean;
       assignPermissionSetOnly?: boolean;
+      permissionSets?: string[];
       sourceOrgId?: string;
       sourceOrgAlias?: string;
       deployMode?: 'git' | 'azure' | 'org_to_org' | 'local_workspace';
@@ -385,19 +387,30 @@ export class MetadataDeployWorker {
 
     if (automationRunId && (assignPermissionSet || assignPermissionSetOnly)) {
       if (await isCancelled()) throw new JobCancelledError();
-      await log('stdout', 'Assigning Permission Set...');
+      const names = [...new Set([
+        SCRATCH_PERMISSION_SET,
+        ...(permissionSets ?? []),
+      ].map((name) => name.trim()).filter(Boolean))];
+      await log(
+        'stdout',
+        `Assigning ${names.length} permission set${names.length === 1 ? '' : 's'}...`,
+      );
       const sfCli = createSfCliClient();
-      const permResult = await sfCli.assignPermissionSet(orgAlias, SCRATCH_PERMISSION_SET);
-      if (permResult.stdout) await log('stdout', permResult.stdout);
-      if (permResult.stderr) await log('stderr', permResult.stderr);
-      if (!permResult.success) {
-        throw new PipelineStepError(
-          permResult.error ?? 'Permission set assignment failed',
-          'assign_permission_set',
-        );
+      for (const name of names) {
+        if (await isCancelled()) throw new JobCancelledError();
+        await log('stdout', `Assigning permission set ${name}...`);
+        const permResult = await sfCli.assignPermissionSet(orgAlias, name);
+        if (permResult.stdout) await log('stdout', permResult.stdout);
+        if (permResult.stderr) await log('stderr', permResult.stderr);
+        if (!permResult.success) {
+          throw new PipelineStepError(
+            permResult.error ?? `Permission set assignment failed for ${name}`,
+            'assign_permission_set',
+          );
+        }
+        await log('stdout', `Assigned permission set ${name}`);
       }
-      await log('stdout', 'Permission Assigned');
-      return { assignPermissionSetCompleted: true };
+      return { assignPermissionSetCompleted: true, assignedPermissionSets: names };
     }
 
     if (chainDataDeploy && dataDeployConfig?.length && sourceOrgId && deploymentId) {
