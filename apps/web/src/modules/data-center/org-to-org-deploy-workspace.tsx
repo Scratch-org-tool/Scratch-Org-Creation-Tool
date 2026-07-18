@@ -1,16 +1,24 @@
 'use client';
 
 import { Suspense, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeftRight, History, Rocket } from 'lucide-react';
 import {
   DeploymentPageHeader,
+  LazyTabPanel,
   PageSkeleton,
   TabbedWorkspaceShell,
   type WorkspaceTab,
 } from '@/components/studio';
 import { OrgToOrgDeployPanel } from './org-to-org-deploy-panel';
-import { OrgToOrgHistoryPanel } from './org-to-org-history-panel';
+
+// History is code-split and only loaded once its tab is opened, so the main
+// deployment flow ships less JavaScript and skips the history fetch/polling.
+const OrgToOrgHistoryPanel = dynamic(
+  () => import('./org-to-org-history-panel').then((m) => m.OrgToOrgHistoryPanel),
+  { ssr: false, loading: () => <PageSkeleton /> },
+);
 
 type DataDeployView = 'new' | 'history';
 
@@ -67,12 +75,12 @@ function OrgToOrgDeployWorkspaceInner() {
       activeTab={view}
       onTabChange={setView}
     >
-      <div hidden={view !== 'new'}>
+      <LazyTabPanel active={view === 'new'}>
         <OrgToOrgDeployPanel />
-      </div>
-      <div hidden={view !== 'history'}>
+      </LazyTabPanel>
+      <LazyTabPanel active={view === 'history'}>
         <OrgToOrgHistoryPanel />
-      </div>
+      </LazyTabPanel>
     </TabbedWorkspaceShell>
   );
 }

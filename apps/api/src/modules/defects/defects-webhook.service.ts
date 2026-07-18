@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -43,7 +44,14 @@ export class DefectsWebhookService {
   verifySecret(provided: string | undefined): boolean {
     const secret = process.env.DEFECTS_WEBHOOK_SECRET;
     if (!secret || !provided) return false;
-    return provided === secret;
+    // Hash both sides so the comparison is constant-time regardless of length.
+    try {
+      const a = createHash('sha256').update(provided).digest();
+      const b = createHash('sha256').update(secret).digest();
+      return timingSafeEqual(a, b);
+    } catch {
+      return false;
+    }
   }
 
   /** Normalize an ADO service-hook payload or the simplified custom shape. */

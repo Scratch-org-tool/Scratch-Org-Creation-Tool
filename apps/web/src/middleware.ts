@@ -7,6 +7,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
   'X-DNS-Prefetch-Control': 'on',
+  'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
 };
 
 export function middleware(request: NextRequest) {
@@ -17,17 +18,28 @@ export function middleware(request: NextRequest) {
   }
 
   if (process.env.NODE_ENV === 'production') {
+    // 'unsafe-eval' is intentionally absent: production bundles never eval,
+    // and allowing it would hand injected scripts a straight code path.
     response.headers.set(
       'Content-Security-Policy',
       [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com",
+        "script-src 'self' 'unsafe-inline' https://apis.google.com https://www.gstatic.com",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob: https:",
         "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com",
         "frame-src 'self' blob: https://*.firebaseapp.com",
         "font-src 'self' data:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        'upgrade-insecure-requests',
       ].join('; '),
+    );
+    response.headers.set(
+      'Strict-Transport-Security',
+      'max-age=63072000; includeSubDomains',
     );
   }
 

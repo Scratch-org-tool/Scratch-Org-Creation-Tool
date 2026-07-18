@@ -11,6 +11,8 @@ import {
   buildListSoql,
   buildDeploySoql,
   buildFilterSoql,
+  ensureIdInSoqlSelect,
+  extractRecordId,
   normalizeSObjectList,
   resolveSoql,
   defaultDeployFieldSelection,
@@ -328,6 +330,79 @@ describe('orgToOrgDeployBatchSchema', () => {
         strategy: 'upsert',
         objects: [{ objectName: 'Account', filters: [] }],
       }),
+    );
+  });
+});
+
+describe('extractRecordId', () => {
+  it('reads Id regardless of SELECT casing', () => {
+    assert.equal(extractRecordId({ Id: '001000000000001AAA' }), '001000000000001AAA');
+    assert.equal(extractRecordId({ id: '001000000000001AAA' }), '001000000000001AAA');
+    assert.equal(extractRecordId({ ID: '001000000000001AAA' }), '001000000000001AAA');
+  });
+
+  it('falls back to the REST attributes url when Id was not selected', () => {
+    assert.equal(
+      extractRecordId({
+        Name: 'Acme',
+        attributes: {
+          type: 'Account',
+          url: '/services/data/v62.0/sobjects/Account/001000000000001AAA',
+        },
+      }),
+      '001000000000001AAA',
+    );
+  });
+
+  it('returns an empty string when no id can be resolved', () => {
+    assert.equal(extractRecordId({ Name: 'Acme' }), '');
+    assert.equal(extractRecordId({ Name: 'Acme', attributes: { url: '/not/an/id' } }), '');
+    assert.equal(extractRecordId(null), '');
+    assert.equal(extractRecordId('001000000000001AAA'), '');
+  });
+
+  it('trims whitespace around the Id value', () => {
+    assert.equal(extractRecordId({ Id: ' 001000000000001AAA ' }), '001000000000001AAA');
+  });
+});
+
+describe('ensureIdInSoqlSelect', () => {
+  it('injects Id into a SELECT list that lacks it', () => {
+    assert.equal(
+      ensureIdInSoqlSelect('SELECT Name FROM Account'),
+      'SELECT Id, Name FROM Account',
+    );
+  });
+
+  it('keeps queries that already select Id in any casing', () => {
+    assert.equal(
+      ensureIdInSoqlSelect('SELECT id, Name FROM Account'),
+      'SELECT id, Name FROM Account',
+    );
+    assert.equal(
+      ensureIdInSoqlSelect('SELECT Id FROM Account'),
+      'SELECT Id FROM Account',
+    );
+  });
+
+  it('does not mistake a relationship Id column for the record Id', () => {
+    assert.equal(
+      ensureIdInSoqlSelect('SELECT Account.Id, Name FROM Contact'),
+      'SELECT Id, Account.Id, Name FROM Contact',
+    );
+  });
+
+  it('ignores Id fields inside relationship subqueries', () => {
+    assert.equal(
+      ensureIdInSoqlSelect('SELECT Name, (SELECT Id FROM Contacts) FROM Account'),
+      'SELECT Id, Name, (SELECT Id FROM Contacts) FROM Account',
+    );
+  });
+
+  it('preserves WHERE clauses and strips trailing semicolons', () => {
+    assert.equal(
+      ensureIdInSoqlSelect("SELECT Name FROM Account WHERE Industry = 'Tech';"),
+      "SELECT Id, Name FROM Account WHERE Industry = 'Tech'",
     );
   });
 });
