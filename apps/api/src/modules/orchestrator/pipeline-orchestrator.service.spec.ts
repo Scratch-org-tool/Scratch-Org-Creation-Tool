@@ -790,7 +790,7 @@ describe('PipelineOrchestratorService manual post-deploy integration', () => {
   it('rejects manual actions on terminal runs that are not awaiting input', async () => {
     db.automationRun.findUnique.mockResolvedValue({
       ...legacyRun(),
-      status: 'running',
+      status: 'completed',
       checkpoint: {
         targetOrgConnectionId: 'target-1',
         awaitingUserActions: false,
@@ -1017,7 +1017,7 @@ describe('PipelineOrchestratorService V2 job ownership', () => {
   it('sets the automation owner on query-section seed jobs', async () => {
     db.automationRun.findUnique.mockResolvedValue({
       ...legacyRun(),
-      status: 'completed',
+      status: 'running',
       config: {
         version: 2,
         dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
