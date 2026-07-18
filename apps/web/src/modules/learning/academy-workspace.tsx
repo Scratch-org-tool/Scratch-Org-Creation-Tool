@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -10,6 +11,7 @@ import {
   GraduationCap,
   Layers,
   PlayCircle,
+  Search,
   Sparkles,
   Target,
   Trophy,
@@ -17,13 +19,16 @@ import {
 } from 'lucide-react';
 import { GlassCard, InlineAlert, KpiCard, PageHeader } from '@/components/studio';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/contexts/auth-context';
 import { cn } from '@/utils/cn';
 import { LEVEL_THEMES, formatDate, formatDuration, levelLabel } from './learning-ui';
 import { ProgressRing } from './progress-ring';
 import { useAcademyWorkspace } from './use-academy-workspace';
-import type { LearningCatalogResponse, LearningPathSummary } from './types';
+import type { LearningCatalogResponse, LearningLevel, LearningPathSummary } from './types';
+
+const LEVEL_FILTERS = ['all', 'beginner', 'intermediate', 'advanced', 'expert'] as const;
 
 function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
   const { stats, continueTarget } = catalog;
@@ -62,9 +67,9 @@ function HeroPanel({ catalog }: { catalog: LearningCatalogResponse }) {
             Master Salesforce, from first login to architect
           </h2>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-            Four guided paths with real-world examples, curated Trailhead resources, an AI mentor
-            for every lesson, and instant quizzes after each module. Every completion and score is
-            captured on your profile.
+            {catalog.paths.length} guided paths spanning Salesforce, JavaScript, Java, and release
+            engineering — with real-world examples, code, an AI mentor, and instant module quizzes.
+            Every completion and score is captured on your profile.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             {continueHref && continueTarget ? (
@@ -265,12 +270,25 @@ export function AcademyWorkspace() {
   const { catalog, loading, error } = useAcademyWorkspace();
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
+  const [query, setQuery] = useState('');
+  const [level, setLevel] = useState<LearningLevel | 'all'>('all');
+  const visiblePaths = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return (catalog?.paths ?? []).filter((path) => {
+      if (level !== 'all' && path.level !== level) return false;
+      if (!term) return true;
+      return [path.title, path.tagline, path.description, ...path.skills]
+        .join(' ')
+        .toLowerCase()
+        .includes(term);
+    });
+  }, [catalog?.paths, level, query]);
 
   return (
     <div className="p-4 md:p-6 space-y-5">
       <PageHeader
         title="Salesforce Academy"
-        subtitle="A guided journey from fresher to architect — with an AI mentor at every step."
+        subtitle="Salesforce, JavaScript, Java, and release engineering — from fundamentals to architecture."
         actions={
           isAdmin ? (
             <Button asChild variant="outline" className="gap-2">
@@ -333,18 +351,65 @@ export function AcademyWorkspace() {
           <AssignmentRail paths={catalog.paths} />
 
           <div>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Learning paths</h2>
-              <p className="text-xs text-muted-foreground">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Learning paths</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">
                 Beginner → Expert · {catalog.stats.totalLessons} lessons ·{' '}
                 {catalog.stats.totalModules} module quizzes
-              </p>
+                </p>
+              </div>
+              <div className="flex w-full flex-col gap-2 lg:w-auto lg:items-end">
+                <div className="relative w-full lg:w-72">
+                  <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search paths, skills, or topics…"
+                    aria-label="Search learning paths"
+                    className="h-9 pl-8 text-sm"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1" aria-label="Filter paths by level">
+                  {LEVEL_FILTERS.map((filter) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      aria-pressed={level === filter}
+                      onClick={() => setLevel(filter)}
+                      className={cn(
+                        'rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',
+                        level === filter
+                          ? 'border-primary/50 bg-primary/10 text-primary'
+                          : 'border-border/60 text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {filter === 'all' ? 'All levels' : levelLabel(filter)}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              {catalog.paths.map((path) => (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {visiblePaths.map((path) => (
                 <PathCard key={path.id} path={path} />
               ))}
             </div>
+            {visiblePaths.length === 0 && (
+              <div className="rounded-xl border border-dashed border-border/70 px-4 py-10 text-center">
+                <p className="text-sm font-medium">No learning paths match these filters.</p>
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-primary underline-offset-2 hover:underline"
+                  onClick={() => {
+                    setQuery('');
+                    setLevel('all');
+                  }}
+                >
+                  Clear search and level
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}

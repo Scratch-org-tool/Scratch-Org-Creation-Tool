@@ -15,7 +15,7 @@ in-app where possible.
 
 ## 2. What a Video Session is
 
-One **production-ready script per lesson** (42 lessons × 4 paths — every topic in the platform),
+One **production-ready script per lesson** (66 lessons × 8 paths — every topic in the platform),
 structured the way video tools expect:
 
 - **Segments with timecodes**, each one of: `intro` (hook + what you'll build/learn), `concept`

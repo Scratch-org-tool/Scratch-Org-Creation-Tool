@@ -50,14 +50,26 @@ function emptyState() {
 }
 
 describe('curriculum integrity', () => {
-  it('contains 4 paths ordered beginner → expert', () => {
-    expect(CURRICULUM).toHaveLength(4);
+  it('contains the complete 8-path catalog ordered beginner → expert', () => {
+    expect(CURRICULUM).toHaveLength(8);
     expect(CURRICULUM.map((p) => p.level)).toEqual([
       'beginner',
+      'beginner',
       'intermediate',
+      'intermediate',
+      'advanced',
+      'advanced',
       'advanced',
       'expert',
     ]);
+    expect(CURRICULUM.map((p) => p.id)).toEqual(
+      expect.arrayContaining([
+        'sf-modern-platform',
+        'javascript-engineering',
+        'java-integration-engineering',
+        'salesforce-release-management',
+      ]),
+    );
   });
 
   it('has globally unique lesson and module ids and non-trivial volume', () => {
@@ -127,7 +139,7 @@ describe('LearningService catalog + progress', () => {
 
   it('returns zeroed progress for a fresh user', async () => {
     const catalog = await service.getCatalog(USER);
-    expect(catalog.paths).toHaveLength(4);
+    expect(catalog.paths).toHaveLength(8);
     expect(catalog.stats.lessonsCompleted).toBe(0);
     expect(catalog.stats.averageScorePercent).toBeNull();
     // Fresh users should be pointed at the very first lesson of the beginner path.
