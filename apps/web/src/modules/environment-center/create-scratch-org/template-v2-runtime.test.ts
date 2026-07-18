@@ -36,6 +36,9 @@ describe('Template V2 provisioning preview severity', () => {
   it('requires a source org for automatic query deployment', () => {
     const preview = buildTemplateV2Preview({
       version: 2,
+      template: 'config/project-scratch-def.json',
+      duration: 7,
+      installPackage: true,
       customSettings: { enabled: false, mode: 'bundled' },
       dataSeed: { datasets: [], mode: 'query_section' },
       pipelineSteps: {
@@ -53,6 +56,9 @@ describe('Template V2 provisioning preview severity', () => {
   it('allows the scratch and source-only preset without a data source org', () => {
     const preview = buildTemplateV2Preview({
       version: 2,
+      template: 'config/project-scratch-def.json',
+      duration: 7,
+      installPackage: true,
       customSettings: { enabled: false, mode: 'bundled' },
       pipelineSteps: {
         autoRunDataSeed: false,
