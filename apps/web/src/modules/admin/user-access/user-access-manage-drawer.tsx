@@ -9,7 +9,12 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Switch } from '@/components/ui/switch';
-import { LOCKED_MODULES, MODULE_LABELS, type AppModule } from '@/lib/auth-utils';
+import {
+  LOCKED_MODULES,
+  MODULE_DESCRIPTIONS,
+  MODULE_LABELS,
+  type AppModule,
+} from '@/lib/auth-utils';
 import { cn } from '@/utils/cn';
 import type { ManageDraft, UserAccessRow } from './types';
 
@@ -36,6 +41,10 @@ export function UserAccessManageDrawer({
   onSave,
   isSelf,
 }: UserAccessManageDrawerProps) {
+  const selectedFeatureCount = draft
+    ? LOCKED_MODULES.filter((module) => draft.grantedModules.includes(module)).length
+    : 0;
+
   return (
     <Sheet open={Boolean(user && draft)} onOpenChange={(open) => !open && !saving && onClose()}>
       {user && draft && (
@@ -92,20 +101,62 @@ export function UserAccessManageDrawer({
 
           {draft.role !== 'admin' && (
             <div>
-              <p className="text-sm font-medium mb-2">Module access</p>
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Feature access</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Only selected features appear for this user. Dashboard remains available.
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full bg-secondary/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {selectedFeatureCount}/{LOCKED_MODULES.length}
+                </span>
+              </div>
+              <div className="mb-2 flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  disabled={saving || selectedFeatureCount === LOCKED_MODULES.length}
+                  onClick={() =>
+                    onDraftChange({ ...draft, grantedModules: [...LOCKED_MODULES] })
+                  }
+                >
+                  Grant all
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  disabled={saving || selectedFeatureCount === 0}
+                  onClick={() => onDraftChange({ ...draft, grantedModules: [] })}
+                >
+                  Clear all
+                </Button>
+              </div>
               <div className="space-y-2">
                 {LOCKED_MODULES.map((module) => (
                   <label
                     key={module}
-                    className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2 text-sm cursor-pointer hover:bg-secondary/30"
+                    className={cn(
+                      'flex cursor-pointer items-start justify-between gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors hover:bg-secondary/30',
+                      draft.grantedModules.includes(module)
+                        ? 'border-primary/40 bg-primary/5'
+                        : 'border-border/60',
+                    )}
                   >
-                    <span>{MODULE_LABELS[module]}</span>
+                    <span className="min-w-0">
+                      <span className="block font-medium">{MODULE_LABELS[module]}</span>
+                      <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
+                        {MODULE_DESCRIPTIONS[module]}
+                      </span>
+                    </span>
                     <input
                       type="checkbox"
                       checked={draft.grantedModules.includes(module)}
                       disabled={saving}
                       onChange={() => onToggleModule(module)}
-                      className="h-4 w-4"
+                      className="mt-0.5 h-4 w-4 shrink-0"
                     />
                   </label>
                 ))}

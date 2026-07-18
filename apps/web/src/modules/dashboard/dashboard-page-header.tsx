@@ -15,6 +15,7 @@ interface DashboardPageHeaderProps {
   onDaysChange: (days: DashboardDays) => void;
   onRefresh: () => void;
   refreshing?: boolean;
+  canCreatePipeline?: boolean;
 }
 
 export function DashboardPageHeader({
@@ -24,6 +25,7 @@ export function DashboardPageHeader({
   onDaysChange,
   onRefresh,
   refreshing,
+  canCreatePipeline = false,
 }: DashboardPageHeaderProps) {
   const welcome = displayName ? `Welcome back, ${displayName}` : 'Welcome back';
   const roleLabel = role ? role.replace(/_/g, ' ') : null;
@@ -52,16 +54,18 @@ export function DashboardPageHeader({
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh
           </Button>
-          <Link
-            href="/environment-center/create-scratch-org"
-            className={cn(
-              'inline-flex items-center justify-center rounded-md font-medium transition-colors',
-              'bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3 text-xs',
-            )}
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            New Pipeline
-          </Link>
+          {canCreatePipeline && (
+            <Link
+              href="/environment-center/create-scratch-org"
+              className={cn(
+                'inline-flex items-center justify-center rounded-md font-medium transition-colors',
+                'bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3 text-xs',
+              )}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              New Pipeline
+            </Link>
+          )}
         </>
       }
     />

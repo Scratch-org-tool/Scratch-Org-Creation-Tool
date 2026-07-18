@@ -87,7 +87,7 @@ The Dashboard gives a summary view: total jobs, running jobs, completed vs faile
     tier: 'app_guide',
     content: `# User access and roles
 
-Administrators manage users from the User Access page. Each user has a role (Admin or User) and a set of granted modules. Regular users always have Dashboard, Environment Center, and Data Center; Deployment Center, Org Setup, Provisioning, Monitoring, and AI Copilot must be granted explicitly by an admin.
+Administrators manage users from the User Access page. Each user has a role (Admin or User) and a set of granted modules. Regular users receive only the Dashboard by default. Release Calendar, Environment Center, Data Center, Deployment Center, Org Setup, Provisioning, Monitoring, AI Copilot, Developer Board, and Salesforce Academy must each be granted explicitly by an admin.
 
 Inactive users are blocked from signing in entirely. The AI Copilot is admin-only by default; an admin can grant a user copilot access, which unlocks application usage help only (no internal or technical details).`,
   },

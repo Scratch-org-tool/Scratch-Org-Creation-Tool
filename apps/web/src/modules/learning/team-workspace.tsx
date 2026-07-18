@@ -17,7 +17,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { GlassCard, InlineAlert, KpiCard, PageHeader } from '@/components/studio';
+import { ConfirmBanner, GlassCard, InlineAlert, KpiCard, PageHeader } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/utils/cn';
@@ -32,7 +32,7 @@ function LearnerPathList({
   revokingId,
 }: {
   learner: LearningAdminLearnerRow;
-  onRevoke: (assignmentId: string) => void;
+  onRevoke: (assignmentId: string, pathTitle: string) => void;
   revokingId: string | null;
 }) {
   return (
@@ -89,7 +89,7 @@ function LearnerPathList({
                 size="sm"
                 className="gap-1 text-[11px] text-muted-foreground hover:text-destructive shrink-0"
                 loading={revokingId === path.assignmentId}
-                onClick={() => onRevoke(path.assignmentId!)}
+                onClick={() => onRevoke(path.assignmentId!, path.title)}
               >
                 <X className="size-3" />
                 Revoke
@@ -114,7 +114,7 @@ function LearnerRow({
   expanded: boolean;
   onToggle: () => void;
   onAssign: () => void;
-  onRevoke: (assignmentId: string) => void;
+  onRevoke: (assignmentId: string, pathTitle: string) => void;
   revokingId: string | null;
 }) {
   const overall =
@@ -189,10 +189,19 @@ function LearnerRow({
       {expanded && (
         <>
           <div className="flex items-center justify-end border-t border-border/60 bg-secondary/10 px-4 pt-2">
-            <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onAssign}>
-              <Plus className="size-3" />
-              Assign training
-            </Button>
+            {learner.hasLearningAccess ? (
+              <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onAssign}>
+                <Plus className="size-3" />
+                Assign training
+              </Button>
+            ) : (
+              <Button asChild variant="outline" size="sm" className="gap-1.5 text-xs">
+                <Link href="/admin/users">
+                  <UserCheck className="size-3" />
+                  Grant Academy access
+                </Link>
+              </Button>
+            )}
           </div>
           <LearnerPathList learner={learner} onRevoke={onRevoke} revokingId={revokingId} />
         </>
@@ -224,6 +233,10 @@ export function TeamWorkspace() {
     engagementRate,
   } = useTeamWorkspace();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [pendingRevoke, setPendingRevoke] = useState<{
+    assignmentId: string;
+    pathTitle: string;
+  } | null>(null);
 
   if (!profileLoading && !isAdmin) {
     return (
@@ -265,6 +278,19 @@ export function TeamWorkspace() {
         <InlineAlert variant="success" onDismiss={() => setNotice(null)}>
           {notice}
         </InlineAlert>
+      )}
+      {pendingRevoke && (
+        <ConfirmBanner
+          title={`Revoke “${pendingRevoke.pathTitle}”?`}
+          message="The assignment will disappear from the learner's assigned list. Their completed lessons and quiz history will be preserved."
+          confirmLabel="Revoke assignment"
+          onConfirm={() => {
+            const assignmentId = pendingRevoke.assignmentId;
+            void revoke(assignmentId).finally(() => setPendingRevoke(null));
+          }}
+          onCancel={() => setPendingRevoke(null)}
+          loading={revokingId === pendingRevoke.assignmentId}
+        />
       )}
 
       {loading || !overview ? (
@@ -345,7 +371,7 @@ export function TeamWorkspace() {
                 </h2>
                 <p className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
                   <UserCheck className="size-3" />
-                  Assigning grants Academy access automatically
+                  Assignments require an explicit User Access grant
                 </p>
               </div>
               {overview.learners.map((learner) => (
@@ -357,7 +383,9 @@ export function TeamWorkspace() {
                     setExpandedId((current) => (current === learner.userId ? null : learner.userId))
                   }
                   onAssign={() => openDrawer(learner.userId)}
-                  onRevoke={(assignmentId) => void revoke(assignmentId)}
+                  onRevoke={(assignmentId, pathTitle) =>
+                    setPendingRevoke({ assignmentId, pathTitle })
+                  }
                   revokingId={revokingId}
                 />
               ))}

@@ -40,9 +40,16 @@ export function ModuleRouteGuard({ children }: { children: React.ReactNode }) {
     pathname.startsWith('/user-provisioning/');
   const customSettingsPath =
     pathname === '/custom-settings-load' || pathname.startsWith('/custom-settings-load/');
+  const adminOnlyPath =
+    pathname === '/admin' ||
+    pathname.startsWith('/admin/') ||
+    pathname === '/learning/team' ||
+    pathname.startsWith('/learning/team/');
   const authorized = !profile
     ? false
-    : orgUsersPath
+    : adminOnlyPath
+      ? profile.role === 'admin'
+      : orgUsersPath
       ? canAccessModule(profile, 'org-setup') || canAccessModule(profile, 'provisioning')
       : customSettingsPath
         ? canAccessModule(profile, 'data')

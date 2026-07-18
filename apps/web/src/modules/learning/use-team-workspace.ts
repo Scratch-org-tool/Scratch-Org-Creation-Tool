@@ -75,7 +75,9 @@ export function useTeamWorkspace() {
         userIds: draft.userIds,
         pathIds: draft.pathIds,
         note: draft.note.trim() || undefined,
-        dueAt: draft.dueAt ? new Date(`${draft.dueAt}T23:59:59`).toISOString() : undefined,
+        // Due dates are calendar dates, not browser-local instants. Keep the
+        // selected date stable for learners in every time zone.
+        dueAt: draft.dueAt ? `${draft.dueAt}T23:59:59.999Z` : undefined,
       });
       setDrawerOpen(false);
       setNotice(

@@ -221,8 +221,8 @@ export const APP_GUIDE_WORKFLOWS: AppGuideWorkflow[] = [
     steps: [
       'Admin opens **User Access** (`/admin/users`).',
       'User must sign in once so an AppUser row exists, then click **Refresh**.',
-      'Grant modules: Deployment, Org Setup, Monitoring, **Copilot**, etc.',
-      'By default new users only have Dashboard, Environment, and Data.',
+      'Grant each required feature explicitly: Calendar, Environment, Data, Deployment, Org Setup, Provisioning, Monitoring, **Copilot**, Developer Board, or Academy.',
+      'New standard users receive only Dashboard until an administrator enables features.',
     ],
     relatedPaths: ['/admin/users'],
   },

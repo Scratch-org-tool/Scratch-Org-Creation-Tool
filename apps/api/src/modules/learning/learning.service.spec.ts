@@ -37,6 +37,7 @@ import {
   extractJsonArray,
   normalizeAiQuestion,
 } from './learning-quiz.service';
+import { LearningAdminService } from './learning-admin.service';
 import type { NvidiaService } from '../../integrations/nvidia/nvidia.service';
 import type { NotificationsService } from '../notifications/notifications.service';
 
@@ -475,5 +476,74 @@ describe('LearningQuizService', () => {
         answers: [{ questionId: 'x', selectedIndex: 0 }],
       }),
     ).rejects.toThrow('already submitted');
+  });
+});
+
+describe('LearningAdminService access control', () => {
+  const input = {
+    userIds: [USER],
+    pathIds: [CURRICULUM[0]!.id],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('requires Academy permission to be granted in User Access before assignment', async () => {
+    db.appUser.findMany.mockResolvedValue([
+      {
+        id: USER,
+        role: 'user',
+        status: 'active',
+        grantedModules: [],
+        displayName: 'Test Learner',
+      },
+    ]);
+    const service = new LearningAdminService(
+      new LearningService(),
+      { notify: vi.fn() } as unknown as NotificationsService,
+    );
+
+    await expect(service.createAssignments('DPT_admin', input)).rejects.toThrow(
+      'Grant Salesforce Academy in Admin → User Access',
+    );
+    expect(db.appUser.update).not.toHaveBeenCalled();
+    expect(db.learningAssignment.create).not.toHaveBeenCalled();
+  });
+
+  it('creates an assignment after an explicit Academy grant', async () => {
+    db.appUser.findMany.mockResolvedValue([
+      {
+        id: USER,
+        role: 'user',
+        status: 'active',
+        grantedModules: ['learning'],
+        displayName: 'Test Learner',
+      },
+    ]);
+    db.appUser.findUnique.mockResolvedValue({ displayName: 'Admin User' });
+    db.learningAssignment.findUnique.mockResolvedValue(null);
+    db.learningAssignment.create.mockResolvedValue({
+      id: 'assignment-1',
+      userId: USER,
+      pathId: input.pathIds[0],
+      assignedBy: 'DPT_admin',
+      note: null,
+      dueAt: null,
+      status: 'active',
+      createdAt: new Date(),
+    });
+    const notify = vi.fn().mockResolvedValue(null);
+    const service = new LearningAdminService(
+      new LearningService(),
+      { notify } as unknown as NotificationsService,
+    );
+
+    const result = await service.createAssignments('DPT_admin', input);
+
+    expect(result.created).toHaveLength(1);
+    expect(db.appUser.update).not.toHaveBeenCalled();
+    expect(db.learningAssignment.create).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledOnce());
   });
 });

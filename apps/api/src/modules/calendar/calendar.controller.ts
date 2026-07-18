@@ -11,14 +11,15 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
+import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { RequireRole, RoleGuard } from '../../common/role.guard';
 import { CalendarService } from './calendar.service';
 import { FreezeWindowService } from './freeze-window.service';
 
-/** Calendar events + freeze windows. Reading is open to any authenticated
- * user (every module surfaces dates); freeze management is admin-only. */
+/** Calendar access is explicitly granted per user; freeze management remains admin-only. */
 @Controller('calendar')
-@UseGuards(AuthGuard, RoleGuard)
+@UseGuards(AuthGuard, ModuleGuard, RoleGuard)
+@RequireModule('calendar')
 export class CalendarController {
   constructor(
     private readonly calendar: CalendarService,

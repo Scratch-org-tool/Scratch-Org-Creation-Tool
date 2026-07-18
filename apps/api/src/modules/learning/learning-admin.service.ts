@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { prisma } from '@sfcc/db';
@@ -55,18 +54,12 @@ function later(a: Date | null, b: Date | null): Date | null {
 
 @Injectable()
 export class LearningAdminService {
-  private readonly logger = new Logger(LearningAdminService.name);
-
   constructor(
     private readonly learningService: LearningService,
     private readonly notifications: NotificationsService,
   ) {}
 
-  /**
-   * Assign one or more paths to one or more users. Assigning implies access:
-   * non-admin users without the learning module are granted it so the
-   * assignment is actionable immediately.
-   */
+  /** Assign paths only after User Access has explicitly enabled Academy. */
   async createAssignments(
     adminId: string,
     input: LearningAssignmentCreateInput,
@@ -79,12 +72,43 @@ export class LearningAdminService {
 
     const users = await prisma.appUser.findMany({
       where: { id: { in: input.userIds } },
-      select: { id: true, role: true, grantedModules: true, displayName: true },
+      select: {
+        id: true,
+        role: true,
+        status: true,
+        grantedModules: true,
+        displayName: true,
+      },
     });
     const usersById = new Map(users.map((u) => [u.id, u]));
     const missing = input.userIds.filter((id) => !usersById.has(id));
     if (missing.length > 0) {
       throw new BadRequestException(`Unknown user(s): ${missing.join(', ')}`);
+    }
+    const inactive = users.filter((user) => user.status === 'inactive');
+    if (inactive.length > 0) {
+      throw new BadRequestException(
+        `Training cannot be assigned to inactive user(s): ${inactive
+          .map((user) => user.displayName)
+          .join(', ')}`,
+      );
+    }
+    const withoutAccess = users.filter(
+      (user) =>
+        !canAccessModule(
+          {
+            role: user.role as UserRole,
+            grantedModules: user.grantedModules as AppModule[],
+          },
+          'learning',
+        ),
+    );
+    if (withoutAccess.length > 0) {
+      throw new BadRequestException(
+        `Grant Salesforce Academy in Admin → User Access before assigning training to: ${withoutAccess
+          .map((user) => user.displayName)
+          .join(', ')}`,
+      );
     }
 
     const admin = await prisma.appUser.findUnique({
@@ -97,9 +121,6 @@ export class LearningAdminService {
     const dueAt = input.dueAt ? new Date(input.dueAt) : null;
 
     for (const userId of input.userIds) {
-      const user = usersById.get(userId)!;
-      await this.ensureLearningAccess(userId, user.role as UserRole, user.grantedModules);
-
       for (const pathId of input.pathIds) {
         const existing = await prisma.learningAssignment.findUnique({
           where: { userId_pathId: { userId, pathId } },
@@ -149,7 +170,7 @@ export class LearningAdminService {
             category: 'system',
             level: 'info',
             title: `New training assigned: ${path.title}`,
-            body: `${admin?.displayName ?? 'An administrator'} assigned you the "${path.title}" path in the Salesforce Academy${dueAt ? ` — due ${dueAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}.${input.note ? ` Note: ${input.note}` : ''}`,
+            body: `${admin?.displayName ?? 'An administrator'} assigned you the "${path.title}" path in the Salesforce Academy${dueAt ? ` — due ${dueAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}` : ''}.${input.note ? ` Note: ${input.note}` : ''}`,
             link: `/learning/paths/${pathId}`,
           })
           .catch(() => undefined);
@@ -157,27 +178,6 @@ export class LearningAdminService {
     }
 
     return { created, skippedExisting };
-  }
-
-  /** Assignment implies access: grant the learning module to non-admins. */
-  private async ensureLearningAccess(
-    userId: string,
-    role: UserRole,
-    grantedModules: string[],
-  ): Promise<void> {
-    if (role === 'admin') return;
-    const profile = { role, grantedModules: grantedModules as AppModule[] };
-    if (canAccessModule(profile, 'learning')) return;
-    try {
-      await prisma.appUser.update({
-        where: { id: userId },
-        data: { grantedModules: [...grantedModules, 'learning'] },
-      });
-    } catch (error) {
-      this.logger.warn(
-        `failed to auto-grant learning module to ${userId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
   }
 
   async revokeAssignment(assignmentId: string): Promise<{ revoked: true }> {

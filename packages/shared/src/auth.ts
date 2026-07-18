@@ -16,6 +16,7 @@ export function toFirebaseUid(appUserId: string): string {
 
 export const APP_MODULES = [
   'dashboard',
+  'calendar',
   'environment',
   'data',
   'deployment',
@@ -27,14 +28,22 @@ export const APP_MODULES = [
   'learning',
 ] as const;
 
-export const DEFAULT_USER_MODULES = ['dashboard', 'environment', 'data', 'defects'] as const;
+/**
+ * The dashboard is the authenticated landing shell. Every product feature is
+ * opt-in and must be granted by an administrator.
+ */
+export const DEFAULT_USER_MODULES = ['dashboard'] as const;
 
 export const LOCKED_MODULES = [
+  'calendar',
+  'environment',
+  'data',
   'deployment',
   'org-setup',
   'provisioning',
   'monitoring',
   'copilot',
+  'defects',
   'learning',
 ] as const;
 
@@ -115,6 +124,7 @@ export function resolveCopilotTiers(
 
 export const MODULE_LABELS: Record<AppModule, string> = {
   dashboard: 'Dashboard',
+  calendar: 'Release Calendar',
   environment: 'Environment Center',
   data: 'Data Center',
   deployment: 'Deployment Center',
@@ -126,11 +136,25 @@ export const MODULE_LABELS: Record<AppModule, string> = {
   learning: 'Salesforce Academy',
 };
 
+export const MODULE_DESCRIPTIONS: Record<AppModule, string> = {
+  dashboard: 'Authenticated landing page and personal platform summary.',
+  calendar: 'Release events, deployment windows, and freeze-window visibility.',
+  environment: 'Salesforce org connections, source control, scratch orgs, and sandbox refresh.',
+  data: 'Data movement, org-to-org deployment, seeding, and custom settings.',
+  deployment: 'Metadata workbench, releases, CI/CD, quality, and drift operations.',
+  'org-setup': 'Org configuration and post-provisioning setup workflows.',
+  provisioning: 'Create and manage Salesforce user-provisioning batches.',
+  monitoring: 'Operational metrics, job health, and platform diagnostics.',
+  copilot: 'AI assistance grounded in the permitted application guide.',
+  defects: 'Developer Board defects, Apex quality, chat, and work-item workflows.',
+  learning: 'Salesforce Academy lessons, quizzes, mentor, videos, and assigned training.',
+};
+
 export const ROUTE_MODULE_MAP: Record<string, AppModule | null> = {
   // Explicitly registered authenticated-only routes are available regardless
   // of module grants. Authentication and active status remain server/guarded.
   '/account': null,
-  '/calendar': null,
+  '/calendar': 'calendar',
   '/dashboard': 'dashboard',
   '/environment-center': 'environment',
   '/scratch-templates': 'environment',
