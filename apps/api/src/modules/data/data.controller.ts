@@ -36,6 +36,7 @@ import {
   accountPartnerMigrationSchema,
   BULK_DATA_UPDATE_MAX_FILE_BYTES,
   conaSeedRunSchema,
+  formatZodIssues,
   partnerImportLoadSchema,
   partnerImportProcessSchema,
   partnerTransferSchema,
@@ -47,6 +48,22 @@ const BULK_DATA_UPDATE_UPLOAD_OPTIONS = {
   storage: memoryStorage(),
   limits: { files: 1, fileSize: BULK_DATA_UPDATE_MAX_FILE_BYTES },
 };
+
+function parseConaSeedRun(body: unknown) {
+  const parsed = conaSeedRunSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new BadRequestException(formatZodIssues(parsed.error));
+  }
+  return parsed.data;
+}
+
+function parseAccountSeedPreview(body: unknown) {
+  const parsed = accountSeedPreviewSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new BadRequestException(formatZodIssues(parsed.error));
+  }
+  return parsed.data;
+}
 
 @Controller('data')
 @UseGuards(AuthGuard, ModuleGuard)
@@ -442,14 +459,20 @@ export class DataController {
 
   @Post('account-seed/preview')
   async previewAccountSeed(@Body() body: unknown, @CurrentUser() userId: string) {
-    const input = accountSeedPreviewSchema.parse(body);
+    const input = parseAccountSeedPreview(body);
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
-    return this.conaSeedService.previewAccountSeed(input.sourceOrgId, input.rows);
+    try {
+      return await this.conaSeedService.previewAccountSeed(input.sourceOrgId, input.rows);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Account seed preview failed',
+      );
+    }
   }
 
   @Post('seed/preview')
   async previewSeed(@Body() body: unknown, @CurrentUser() userId: string) {
-    const input = conaSeedRunSchema.parse(body);
+    const input = parseConaSeedRun(body);
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
     try {
@@ -472,7 +495,7 @@ export class DataController {
 
   @Post('seed/run')
   async runSeed(@Body() body: unknown, @CurrentUser() userId: string) {
-    const input = conaSeedRunSchema.parse(body);
+    const input = parseConaSeedRun(body);
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
     if (input.accountQueryMode === 'manual' && input.manualAccountQueries) {

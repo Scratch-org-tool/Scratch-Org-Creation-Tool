@@ -19,7 +19,7 @@ import {
   accountPartnerValueAt,
   buildAccountPartnerMigrationRows,
   escapeSoqlLiteral,
-  normalizeAccountPartnerAccountKey,
+  indexAccountPartnerTargetAccounts,
   parseBulkCsv,
   resolveAccountPartnerMigrationSoql,
   serializeBulkCsv,
@@ -45,11 +45,12 @@ const PARTNER_FIELDS = [
   'cfs_ob__PartnerRole__c',
   'cfs_ob__Bottler__c',
   'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c',
+  'cfs_ob__Account__r.AccountNumber',
   'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c',
 ] as const;
 
 const ACCOUNT_TRANSFER_FIELDS = [
-  'cfs_ob__u_CustomerNumber__c', 'Name', 'AccountNumber', 'cfs_ob__Bottler__c',
+  'AccountNumber', 'Name', 'AccountNumber', 'cfs_ob__Bottler__c',
   'cfs_ob__u_SalesOffice__c', 'cfs_ob__u_CustomerAccountGroup__c', 'cfs_ob__u_DistributionChannel__c',
   'cfs_ob__u_ActiveCustomer__c', 'cfs_ob__MarkforDeletion__c', 'cfs_ob__SuppressionReason__c',
   'cfs_ob__Business_Type__c', 'cfs_ob__BusinessTypeExtension__c', 'cfs_ob__u_SalesGroup__c', 'cfs_ob__Classic_Foods__c',
@@ -175,7 +176,7 @@ export class AccountPartnerImportService {
         'cfs_ob__AccountPartnerExternalId__c': apExt.slice(0, 255),
         'cfs_ob__PartnerRole__c': partnerRole,
         'cfs_ob__Bottler__c': options.bottler,
-        'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c': cust,
+        'cfs_ob__Account__r.AccountNumber': cust,
         'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c': empNo,
       });
     }
@@ -419,7 +420,7 @@ export class AccountPartnerImportService {
         'cfs_ob__AccountPartnerExternalId__c': apExt.slice(0, 255),
         'cfs_ob__PartnerRole__c': partnerRole,
         'cfs_ob__Bottler__c': bottler,
-        'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c': cust,
+        'cfs_ob__Account__r.AccountNumber': cust,
         'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c': empNo,
       });
     }
@@ -454,7 +455,7 @@ export class AccountPartnerImportService {
     const partnerCsv = join(workDir, 'partners.csv');
 
     const accountSoql =
-      `SELECT ${ACCOUNT_TRANSFER_FIELDS.join(', ')} FROM Account WHERE ${filter} AND cfs_ob__u_CustomerNumber__c != null`;
+      `SELECT ${ACCOUNT_TRANSFER_FIELDS.join(', ')} FROM Account WHERE ${filter} AND AccountNumber != null`;
     const employeeSoql =
       `SELECT ${EMPLOYEE_FIELDS.join(', ')} FROM cfs_ob__EmployeeMaster__c WHERE ${filter} AND cfs_ob__EmployeeNo__c != null`;
     const partnerSoql =
@@ -464,7 +465,7 @@ export class AccountPartnerImportService {
     await this.sfCli.exportBulk(employeeSoql, source.alias, employeeCsv, 10, { cwd: workDir });
     await this.sfCli.exportBulk(partnerSoql, source.alias, partnerCsv, 10, { cwd: workDir });
 
-    await this.sfCli.upsertBulk('Account', accountCsv, 'cfs_ob__u_CustomerNumber__c', target.alias, 15, { cwd: workDir });
+    await this.sfCli.upsertBulk('Account', accountCsv, 'AccountNumber', target.alias, 15, { cwd: workDir });
     await this.sfCli.upsertBulk('cfs_ob__EmployeeMaster__c', employeeCsv, 'cfs_ob__EmployeeNo__c', target.alias, 15, { cwd: workDir });
     await this.sfCli.upsertBulk('cfs_ob__AccountPartner__c', partnerCsv, 'cfs_ob__AccountPartnerExternalId__c', target.alias, 15, { cwd: workDir });
 
@@ -506,9 +507,9 @@ export class AccountPartnerImportService {
       ] = await Promise.all([
         this.fetchSourcePartnerRecords(source.alias, query, exportPath, sourceWorkDir),
         this.sfCli.exportBulk(
-          'SELECT Id, Name, cfs_ob__u_CustomerNumber__c FROM Account '
+          'SELECT Id, Name, cfs_ob__u_CustomerNumber__c, AccountNumber FROM Account '
           + `WHERE cfs_ob__Bottler__c = '${safeBottler}' `
-          + 'AND cfs_ob__u_CustomerNumber__c != null',
+          + 'AND (cfs_ob__u_CustomerNumber__c != null OR AccountNumber != null)',
           target.alias,
           targetAccountPath,
           15,
@@ -551,23 +552,7 @@ export class AccountPartnerImportService {
       const targetPartnerRecords = parseBulkCsv(
         await readFile(targetPartnerPath, 'utf8'),
       );
-      const targetAccounts = new Map<string, AccountPartnerTargetReference>();
-      const ambiguousAccountKeys = new Set<string>();
-      for (const record of targetAccountRecords) {
-        const key = accountPartnerValueAt(record, 'cfs_ob__u_CustomerNumber__c');
-        const id = accountPartnerValueAt(record, 'Id');
-        const name = accountPartnerValueAt(record, 'Name');
-        const normalized = normalizeAccountPartnerAccountKey(key);
-        if (!id) continue;
-        if (!normalized || ambiguousAccountKeys.has(normalized)) continue;
-        const existing = targetAccounts.get(normalized);
-        if (existing && existing.id !== id) {
-          targetAccounts.delete(normalized);
-          ambiguousAccountKeys.add(normalized);
-        } else {
-          targetAccounts.set(normalized, { id, key, name });
-        }
-      }
+      const targetAccounts = indexAccountPartnerTargetAccounts(targetAccountRecords);
       const targetEmployees = new Map<string, AccountPartnerTargetReference>();
       const ambiguousEmployeeKeys = new Set<string>();
       for (const record of targetEmployeeRecords) {
@@ -715,6 +700,11 @@ export class AccountPartnerImportService {
       'cfs_ob__u_CustomerNumber__c',
     );
     assertQueryKey(
+      fields(accountResult),
+      'Account',
+      'AccountNumber',
+    );
+    assertQueryKey(
       fields(employeeResult),
       EMPLOYEE_MASTER_OBJECT,
       'cfs_ob__EmployeeNo__c',
@@ -753,7 +743,10 @@ export class AccountPartnerImportService {
       const direct = String(r['cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c'] ?? '').trim();
       return direct || null;
     }
-    for (const field of ['cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c', 'cfs_ob__Account__r.AccountNumber']) {
+    for (const field of [
+      'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c',
+      'cfs_ob__Account__r.AccountNumber',
+    ]) {
       const key = normalizeAccountKey(r[field]);
       if (key && lookup[key]) return lookup[key];
     }
@@ -763,18 +756,18 @@ export class AccountPartnerImportService {
   private async queryOrgDistributionAccounts(alias: string, bottler: string) {
     const safeBottler = escapeSoqlLiteral(bottler);
     const soql =
-      `SELECT cfs_ob__u_CustomerNumber__c FROM Account ` +
+      `SELECT AccountNumber FROM Account ` +
       `WHERE cfs_ob__Bottler__c = '${safeBottler}' ` +
       `AND cfs_ob__u_DistributionChannel__c != null ` +
-      `AND cfs_ob__u_CustomerNumber__c != null`;
+      `AND AccountNumber != null`;
     const result = await this.sfCli.query(
       alias,
       soql,
     );
     const lookup: Record<string, string> = {};
-    const records = (result.data as { result?: { records?: Array<{ cfs_ob__u_CustomerNumber__c: string }> } })?.result?.records ?? [];
+    const records = (result.data as { result?: { records?: Array<{ AccountNumber: string }> } })?.result?.records ?? [];
     for (const rec of records) {
-      const key = normalizeAccountKey(rec.cfs_ob__u_CustomerNumber__c);
+      const key = normalizeAccountKey(rec.AccountNumber);
       if (key) lookup[key] = key;
     }
     return lookup;

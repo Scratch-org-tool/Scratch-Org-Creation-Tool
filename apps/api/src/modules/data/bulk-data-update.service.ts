@@ -988,9 +988,10 @@ export class BulkDataUpdateService {
     const csvPath = join(workDir, 'target-records.csv');
     let slot: Awaited<ReturnType<BulkThrottleService['acquire']>> | undefined;
     try {
-      slot = bulkSlotWaitMs === undefined
-        ? await this.bulkThrottle.acquire(context.alias)
-        : await this.bulkThrottle.acquire(context.alias, { maxWaitMs: bulkSlotWaitMs });
+      slot = await this.bulkThrottle.acquire(
+        context.alias,
+        { maxWaitMs: TARGET_BULK_SLOT_WAIT_MS },
+      );
       const result = await this.sfCli.exportBulk(
         soql,
         context.alias,

@@ -32,6 +32,7 @@ import {
   resolveManualOnboardingSeedQuery,
 } from './onboarding-seed-query.builder';
 import { RecordTypeMapperService } from './record-type-mapper.service';
+import { describeSfCliAccessError, resolveSfCliTarget } from '../../common/sf-cli-org.util';
 
 type SeedDataset = 'OnboardingConfig' | 'Products' | 'VisitPlans' | 'Accounts';
 type DataSeedMode = 'automatic' | 'query_json' | 'hybrid';
@@ -70,12 +71,11 @@ export class ConaSeedService {
   }
 
   async previewAccountSeed(sourceOrgId: string, rows: AccountSeedRow[]) {
-    const org = await this.resolveOrg(sourceOrgId);
+    const org = await this.resolveOrg(sourceOrgId, 'Source org');
     const results = [];
     for (const row of rows) {
       const soql = buildAccountCountSoql(row);
-      const result = await this.sfCli.query(org.alias, soql);
-      const count = (result.data?.result as { totalSize?: number })?.totalSize ?? 0;
+      const count = await this.queryDatasetCount(org.alias, soql, `Accounts:${row.accountGroup}`);
       results.push({ ...row, availableCount: count, soql: buildAccountSeedSoql(row) });
     }
     return { rows: results };
@@ -91,7 +91,7 @@ export class ConaSeedService {
     manualOnboardingQueries?: ConaManualSeedQuery[],
     targetOrgId?: string,
   ) {
-    const org = await this.resolveOrg(sourceOrgId);
+    const org = await this.resolveOrg(sourceOrgId, 'Source org');
     const bottlers = [...new Set((accountSeedRows ?? []).map((r) => r.bottler))];
     const defaultBottler = bottlers[0] ?? '5000';
     const checks: Array<{
@@ -127,8 +127,11 @@ export class ConaSeedService {
       recordTypeMappings: Record<string, string>;
     }> = [];
     if (datasets.includes('OnboardingConfig') && onboardingQueryMode === 'automatic') {
-      const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM ${ONBOARDING_OBJECT} WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
-      const count = (r.data?.result as { totalSize?: number })?.totalSize ?? 0;
+      const count = await this.queryDatasetCount(
+        org.alias,
+        `SELECT COUNT() FROM ${ONBOARDING_OBJECT} WHERE cfs_ob__Bottler__c = '${safeBottler}'`,
+        'OnboardingConfig',
+      );
       checks.push({ dataset: 'OnboardingConfig', count, ok: count > 0 });
     }
     if (
@@ -139,7 +142,7 @@ export class ConaSeedService {
       if (!targetOrgId) {
         throw new Error('Target org is required to validate manual OnboardingConfig fields');
       }
-      const target = await this.resolveOrg(targetOrgId);
+      const target = await this.resolveOrg(targetOrgId, 'Target org');
       for (const query of manualOnboardingQueries) {
         const resolved = resolveManualOnboardingSeedQuery(query);
         const prepared = await this.prepareManualOnboardingBulkQuery(
@@ -182,7 +185,13 @@ export class ConaSeedService {
           ONBOARDING_OBJECT,
           undefined,
           requiredRecordTypeIds,
-        );
+        ).catch((error: unknown) => {
+          throw new Error(
+            `Manual query "${prepared.label}" RecordType mapping failed: ${
+              error instanceof Error ? error.message : 'unknown mapping error'
+            }`,
+          );
+        });
         const availableCount = (result.data?.result as { totalSize?: number })?.totalSize ?? 0;
         const selectedCount = Math.min(availableCount, prepared.limit);
         checks.push({
@@ -201,13 +210,19 @@ export class ConaSeedService {
       }
     }
     if (datasets.includes('Products')) {
-      const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM cfs_ob__u_Product__c WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
-      const count = (r.data?.result as { totalSize?: number })?.totalSize ?? 0;
+      const count = await this.queryDatasetCount(
+        org.alias,
+        `SELECT COUNT() FROM cfs_ob__u_Product__c WHERE cfs_ob__Bottler__c = '${safeBottler}'`,
+        'Products',
+      );
       checks.push({ dataset: 'Products', count, ok: count > 0 });
     }
     if (datasets.includes('VisitPlans')) {
-      const r = await this.sfCli.query(org.alias, `SELECT COUNT() FROM cfs_ob__u_VisitPlan__c WHERE cfs_ob__Bottler__c = '${safeBottler}'`);
-      const count = (r.data?.result as { totalSize?: number })?.totalSize ?? 0;
+      const count = await this.queryDatasetCount(
+        org.alias,
+        `SELECT COUNT() FROM cfs_ob__u_VisitPlan__c WHERE cfs_ob__Bottler__c = '${safeBottler}'`,
+        'VisitPlans',
+      );
       checks.push({ dataset: 'VisitPlans', count, ok: count > 0 });
     }
     if (
@@ -217,8 +232,7 @@ export class ConaSeedService {
     ) {
       for (const row of accountSeedRows) {
         const soql = buildAccountCountSoql(row);
-        const r = await this.sfCli.query(org.alias, soql);
-        const count = (r.data?.result as { totalSize?: number })?.totalSize ?? 0;
+        const count = await this.queryDatasetCount(org.alias, soql, `Accounts:${row.accountGroup}`);
         checks.push({
           dataset: `Accounts:${row.accountGroup}/${row.bottler}/${row.distributionChannel}`,
           count,
@@ -275,8 +289,8 @@ export class ConaSeedService {
     salesOfficeConfig?: BottlerSalesOfficeConfig;
     onLog?: (line: string) => Promise<void>;
   }) {
-    const source = await this.resolveOrg(options.sourceOrgId);
-    const target = await this.resolveOrg(options.targetOrgId);
+    const source = await this.resolveOrg(options.sourceOrgId, 'Source org');
+    const target = await this.resolveOrg(options.targetOrgId, 'Target org');
     const workDir = await mkdtemp(join(tmpdir(), 'cona-seed-'));
     await mkdir(workDir, { recursive: true });
 
@@ -407,7 +421,7 @@ export class ConaSeedService {
         const exp = await this.sfCli.exportBulk(soql, source.alias, csv, 10, { cwd: workDir });
         if (!exp.success) throw new Error(exp.error ?? `Account export failed for row ${i}`);
         await log(`Upserting accounts ${row.accountGroup}/${row.bottler}...`);
-        const imp = await this.sfCli.upsertBulk('Account', csv, 'cfs_ob__u_CustomerNumber__c', target.alias, 15, { cwd: workDir });
+        const imp = await this.sfCli.upsertBulk('Account', csv, 'AccountNumber', target.alias, 15, { cwd: workDir });
         if (!imp.success) throw new Error(imp.error ?? `Account upsert failed for row ${i}`);
       }
     }
@@ -511,7 +525,7 @@ export class ConaSeedService {
       const exp = await this.sfCli.exportBulk(q.soql, options.source.alias, csv, 10, { cwd: options.workDir });
       if (!exp.success) throw new Error(exp.error ?? `Export failed for ${q.label}`);
       const objectName = q.object;
-      const extId = objectName === 'Account' ? 'cfs_ob__u_CustomerNumber__c' : 'Name';
+      const extId = objectName === 'Account' ? 'AccountNumber' : 'Name';
       await options.log(`Upserting ${q.label}...`);
       const imp = await this.sfCli.upsertBulk(objectName, csv, extId, options.target.alias, 15, { cwd: options.workDir });
       if (!imp.success) throw new Error(imp.error ?? `Upsert failed for ${q.label}`);
@@ -526,17 +540,42 @@ export class ConaSeedService {
           await options.log(`Exporting accounts ${rule.id} office ${cq.office}...`);
           const exp = await this.sfCli.exportBulk(cq.soql, options.source.alias, csv, 10, { cwd: options.workDir });
           if (!exp.success) throw new Error(exp.error ?? `Account export failed for ${cq.office}`);
-          const imp = await this.sfCli.upsertBulk('Account', csv, 'cfs_ob__u_CustomerNumber__c', options.target.alias, 15, { cwd: options.workDir });
+          const imp = await this.sfCli.upsertBulk('Account', csv, 'AccountNumber', options.target.alias, 15, { cwd: options.workDir });
           if (!imp.success) throw new Error(imp.error ?? `Account upsert failed for ${cq.office}`);
         }
       }
     }
   }
 
-  private async resolveOrg(orgId: string) {
+  private async resolveOrg(orgId: string, label = 'Org') {
     const org = await prisma.orgConnection.findUnique({ where: { id: orgId } });
-    if (!org) throw new Error('Org not found');
-    return { ...org, alias: org.username ?? org.alias };
+    if (!org) throw new Error(`${label} not found`);
+    const alias = await resolveSfCliTarget(this.sfCli, org, label);
+    return { ...org, alias };
+  }
+
+  private async queryDatasetCount(alias: string, soql: string, label: string): Promise<number> {
+    const result = await this.sfCli.query(alias, soql);
+    if (!result.success) {
+      throw new Error(
+        `${label} preview failed for org "${alias}": ${
+          describeSfCliAccessError(result.error ?? 'unknown Salesforce query error')
+        }`,
+      );
+    }
+    return this.extractAggregateCount(result.data?.result);
+  }
+
+  private extractAggregateCount(
+    result: { records?: unknown[]; totalSize?: number } | undefined,
+  ): number {
+    const first = result?.records?.[0];
+    if (first && typeof first === 'object') {
+      const aggregate = Number((first as Record<string, unknown>).expr0);
+      if (Number.isSafeInteger(aggregate) && aggregate >= 0) return aggregate;
+    }
+    const totalSize = Number(result?.totalSize);
+    return Number.isSafeInteger(totalSize) && totalSize >= 0 ? totalSize : 0;
   }
 
   private async applyRecordTypeMappings(csvPath: string, mappings: Record<string, string>) {

@@ -32,7 +32,7 @@ const BASE_WHERE = (bottler: string) =>
   `cfs_ob__Bottler__c = '${bottler}' ` +
   `AND cfs_ob__Bottler__c != null ` +
   `AND cfs_ob__u_SalesOffice__c != null ` +
-  `AND cfs_ob__u_CustomerNumber__c != null ` +
+  `AND AccountNumber != null ` +
   `AND (cfs_ob__MarkforDeletion__c = false OR cfs_ob__MarkforDeletion__c = null)`;
 
 function activeCustomerClause(accountGroup: AccountSeedRule['accountGroup']): string {

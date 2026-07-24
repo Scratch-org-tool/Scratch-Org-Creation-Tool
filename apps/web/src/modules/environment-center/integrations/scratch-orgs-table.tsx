@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ExternalLink, KeyRound, Plus, Settings2, Trash2 } from 'lucide-react';
+import { ExternalLink, KeyRound, Plus, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/studio/status-badge';
 import {
@@ -25,17 +25,13 @@ function formatDate(iso?: string | null) {
 interface ScratchOrgsTableProps {
   orgs: ScratchOrg[];
   loading?: boolean;
-  deletingAlias: string | null;
   onOpenCredentials: (alias: string) => void;
-  onDelete: (alias: string) => void;
 }
 
 export function ScratchOrgsTable({
   orgs,
   loading,
-  deletingAlias,
   onOpenCredentials,
-  onDelete,
 }: ScratchOrgsTableProps) {
   if (!loading && orgs.length === 0) {
     return (
@@ -116,22 +112,10 @@ export function ScratchOrgsTable({
                     variant="ghost"
                     size="sm"
                     className="h-7 px-2 text-xs"
-                    disabled={!!deletingAlias}
                     onClick={() => onOpenCredentials(org.alias)}
                   >
                     <KeyRound className="w-3 h-3 mr-1" />
                     Creds
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-                    loading={deletingAlias === org.alias}
-                    disabled={!!deletingAlias}
-                    onClick={() => onDelete(org.alias)}
-                    aria-label={`Delete scratch org ${org.alias}`}
-                  >
-                    <Trash2 className="w-3 h-3" />
                   </Button>
                 </div>
               </IntegrationsTd>

@@ -117,7 +117,7 @@ function accountRowsToQueries(
       category: 'account',
       object: 'Account',
       soql:
-        'SELECT Name, cfs_ob__u_CustomerNumber__c FROM Account '
+        'SELECT Name, AccountNumber FROM Account '
         + `WHERE cfs_ob__Bottler__c = '${row.bottler}'`,
       limit: row.limit,
       bottler: row.bottler,
@@ -195,7 +195,7 @@ function buildMigratedQuerySection(
           accountPartnerQueryId,
           accountKeyField: DEFAULT_EXTERNAL_ID_FIELDS.account,
           employeeKeyField: DEFAULT_EXTERNAL_ID_FIELDS.employee,
-          mappingAccountKeyField: 'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c',
+          mappingAccountKeyField: 'cfs_ob__Account__r.AccountNumber',
           mappingEmployeeKeyField: 'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c',
           mappingRoleField: 'cfs_ob__PartnerRole__c',
           externalIdField: DEFAULT_EXTERNAL_ID_FIELDS.partner,

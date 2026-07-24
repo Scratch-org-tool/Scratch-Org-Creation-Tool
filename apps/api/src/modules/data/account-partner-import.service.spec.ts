@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD,
   ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
   ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
   type AccountPartnerMigrationInput,
@@ -45,6 +46,7 @@ const input: AccountPartnerMigrationInput = {
     cfs_ob__Bottler__c,
     cfs_ob__Sales_Office__c,
     ${ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD},
+    ${ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD},
     ${ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD}
   FROM cfs_ob__AccountPartner__c
   WHERE cfs_ob__Bottler__c = '5000'`,
@@ -57,10 +59,11 @@ const sourceCsv = [
     'cfs_ob__Bottler__c',
     'cfs_ob__Sales_Office__c',
     ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+    ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD,
     ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
   ].join(','),
-  'AP-1,ZR,5000,S003,000123,E-1',
-  'AP-2,ZR,5000,S003,999,E-1',
+  'AP-1,ZR,5000,S003,000123,000123,E-1',
+  'AP-2,ZR,5000,S003,999,999,E-1',
   '',
 ].join('\n');
 
@@ -96,7 +99,11 @@ describe('AccountPartnerImportService SOQL mapping', () => {
             writable('Name', false, 80),
           ]
         : objectName === 'Account'
-          ? [writable('cfs_ob__u_CustomerNumber__c', true), writable('Name')]
+          ? [
+            writable('cfs_ob__u_CustomerNumber__c', true),
+            writable('AccountNumber', true),
+            writable('Name'),
+          ]
           : [writable('cfs_ob__EmployeeNo__c', true), writable('Name')];
       return { success: true, data: { result: { fields } } };
     });
@@ -110,8 +117,8 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       } else if (soql.includes('FROM Account ')) {
         await writeFile(
           file,
-          'Id,Name,cfs_ob__u_CustomerNumber__c\n'
-          + '001ACCOUNT00000001,North Market,000123\n',
+          'Id,Name,cfs_ob__u_CustomerNumber__c,AccountNumber\n'
+          + '001ACCOUNT00000001,North Market,000123,000123\n',
           'utf8',
         );
       } else if (soql.includes('FROM cfs_ob__AccountPartner__c ')) {
@@ -243,7 +250,11 @@ describe('AccountPartnerImportService SOQL mapping', () => {
             },
           ]
         : objectName === 'Account'
-          ? [writable('cfs_ob__u_CustomerNumber__c'), writable('Name')]
+          ? [
+            writable('cfs_ob__u_CustomerNumber__c'),
+            writable('AccountNumber'),
+            writable('Name'),
+          ]
           : [writable('cfs_ob__EmployeeNo__c'), writable('Name')];
       return { success: true, data: { result: { fields } } };
     });
@@ -274,8 +285,8 @@ describe('AccountPartnerImportService SOQL mapping', () => {
       if (soql.includes('FROM Account ')) {
         await writeFile(
           file,
-          'Id,Name,cfs_ob__u_CustomerNumber__c\n'
-          + '001ACCOUNT00000001,North Market,000123\n',
+          'Id,Name,cfs_ob__u_CustomerNumber__c,AccountNumber\n'
+          + '001ACCOUNT00000001,North Market,000123,000123\n',
           'utf8',
         );
       } else if (soql.includes('FROM cfs_ob__AccountPartner__c ')) {
@@ -341,7 +352,10 @@ describe('AccountPartnerImportService SOQL mapping', () => {
             writable('cfs_ob__EmployeeMaster__c', false, false),
           ]
         : objectName === 'Account'
-          ? [writable('cfs_ob__u_CustomerNumber__c', true)]
+          ? [
+            writable('cfs_ob__u_CustomerNumber__c', true),
+            writable('AccountNumber', true),
+          ]
           : [writable('cfs_ob__EmployeeNo__c', true)];
       return { success: true, data: { result: { fields } } };
     });

@@ -89,12 +89,12 @@ export const SYSTEM_SCRATCH_TEMPLATE_PRESETS: readonly SystemScratchTemplatePres
               category: 'account',
               object: 'Account',
               soql:
-                'SELECT Name, cfs_ob__u_CustomerNumber__c, cfs_ob__Bottler__c '
+                'SELECT Name, AccountNumber, cfs_ob__Bottler__c '
                 + "FROM Account WHERE cfs_ob__Bottler__c = '{{bottler}}'",
               limit: 500,
               bottler: '5000',
               operation: 'upsert',
-              externalIdField: 'cfs_ob__u_CustomerNumber__c',
+              externalIdField: 'AccountNumber',
               variables: { bottler: '5000' },
               dependsOn: [],
             },

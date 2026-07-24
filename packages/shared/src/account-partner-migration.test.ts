@@ -25,6 +25,7 @@ const validSoql = `SELECT
   cfs_ob__Bottler__c,
   cfs_ob__Sales_Office__c,
   cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c,
+  cfs_ob__Account__r.AccountNumber,
   cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c
 FROM cfs_ob__AccountPartner__c
 WHERE cfs_ob__Bottler__c = '5000'`;
@@ -82,6 +83,26 @@ describe('Account Partner migration contract', () => {
     assert.equal(result.previewRows[0]?.action, 'create');
     assert.equal(result.stats.toCreate, 1);
     assert.equal(result.stats.toUpdate, 0);
+  });
+
+  it('matches target Accounts by customer number or account number', () => {
+    const byAccountNumber = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccounts: new Map([
+        ['456', { id: '001-account-id', key: '000456', name: 'South Market' }],
+      ]),
+      targetEmployees,
+      records: [{
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        cfs_ob__Account__r: { AccountNumber: '000456' },
+        cfs_ob__EmployeeMaster__r: { cfs_ob__EmployeeNo__c: 'E-1' },
+      }],
+    });
+
+    assert.equal(byAccountNumber.stats.ready, 1);
+    assert.equal(byAccountNumber.previewRows[0]?.accountKey, '000456');
   });
 
   it('preserves source external IDs and reports invalid or duplicate mappings', () => {

@@ -89,8 +89,6 @@ export function useIntegrationsWorkspace() {
   const [defaultDevHubErrors, setDefaultDevHubErrors] = useState<Record<string, string>>({});
   const [optimisticAnnouncement, setOptimisticAnnouncement] = useState('');
   const [pendingDisconnect, setPendingDisconnect] = useState<string | null>(null);
-  const [pendingScratchDelete, setPendingScratchDelete] = useState<string | null>(null);
-  const [deletingScratchAlias, setDeletingScratchAlias] = useState<string | null>(null);
 
   const [sfForm, setSfForm] = useState<SalesforceConnectForm>(DEFAULT_SF_FORM);
   const [authorizing, setAuthorizing] = useState(false);
@@ -553,21 +551,6 @@ export function useIntegrationsWorkspace() {
     }
   };
 
-  const deleteScratchOrg = async (alias: string) => {
-    setDeletingScratchAlias(alias);
-    setError(null);
-    try {
-      await api(`/environment/scratch-orgs/${encodeURIComponent(alias)}`, { method: 'DELETE' });
-      setScratchOrgs((list) => list.filter((o) => o.alias !== alias));
-      if (credentialsAlias === alias) closeCredentials();
-      setPendingScratchDelete(null);
-    } catch (err) {
-      setError(parseApiError(err, 'Failed to delete scratch org'));
-    } finally {
-      setDeletingScratchAlias(null);
-    }
-  };
-
   const devHubCount = orgs.filter((o) => o.isDevHub).length;
 
   return {
@@ -586,9 +569,6 @@ export function useIntegrationsWorkspace() {
     disconnectingAlias,
     pendingDisconnect,
     setPendingDisconnect,
-    pendingScratchDelete,
-    setPendingScratchDelete,
-    deletingScratchAlias,
     sfForm,
     setSfForm,
     setOrgType,
@@ -618,7 +598,6 @@ export function useIntegrationsWorkspace() {
     closeCredentials,
     copyText,
     regeneratePassword,
-    deleteScratchOrg,
     devHubCount,
   };
 }

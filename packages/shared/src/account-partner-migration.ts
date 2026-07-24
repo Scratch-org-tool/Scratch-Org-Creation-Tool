@@ -9,6 +9,12 @@ export const ACCOUNT_PARTNER_OBJECT = 'cfs_ob__AccountPartner__c';
 export const EMPLOYEE_MASTER_OBJECT = 'cfs_ob__EmployeeMaster__c';
 export const ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD =
   'cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c';
+export const ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD =
+  'cfs_ob__Account__r.AccountNumber';
+export const ACCOUNT_PARTNER_ACCOUNT_KEY_FIELDS = [
+  ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+  ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD,
+] as const;
 export const ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD =
   'cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c';
 export const ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD = 'cfs_ob__Account__c';
@@ -27,6 +33,7 @@ export const DEFAULT_ACCOUNT_PARTNER_SOQL = `SELECT
   ${ACCOUNT_PARTNER_BOTTLER_FIELD},
   ${ACCOUNT_PARTNER_OFFICE_FIELD},
   ${ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD},
+  ${ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD},
   ${ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD}
 FROM ${ACCOUNT_PARTNER_OBJECT}
 WHERE ${ACCOUNT_PARTNER_BOTTLER_FIELD} = '5000'`;
@@ -60,7 +67,7 @@ export const accountPartnerMigrationSchema = migrationBaseSchema
       extractFieldsFromSoql(data.partnerSoql).map((field) => field.toLowerCase()),
     );
     const required = [
-      ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
+      ...ACCOUNT_PARTNER_ACCOUNT_KEY_FIELDS,
       ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
       ACCOUNT_PARTNER_BOTTLER_FIELD,
       ACCOUNT_PARTNER_OFFICE_FIELD,
@@ -153,6 +160,54 @@ export function normalizeAccountPartnerAccountKey(value: unknown): string {
   return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, '') : text;
 }
 
+export function resolveAccountPartnerSourceAccountKey(
+  record: Record<string, unknown>,
+): string {
+  for (const field of ACCOUNT_PARTNER_ACCOUNT_KEY_FIELDS) {
+    const normalized = normalizeAccountPartnerAccountKey(
+      accountPartnerValueAt(record, field),
+    );
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+export function indexAccountPartnerTargetAccounts(
+  records: Array<Record<string, unknown>>,
+): Map<string, AccountPartnerTargetReference> {
+  const targetAccounts = new Map<string, AccountPartnerTargetReference>();
+  const ambiguousAccountKeys = new Set<string>();
+
+  for (const record of records) {
+    const id = accountPartnerValueAt(record, 'Id');
+    const name = accountPartnerValueAt(record, 'Name');
+    if (!id) continue;
+
+    const customerNumber = accountPartnerValueAt(record, 'cfs_ob__u_CustomerNumber__c');
+    const accountNumber = accountPartnerValueAt(record, 'AccountNumber');
+    const displayKey = customerNumber || accountNumber;
+    const normalizedKeys = [...new Set(
+      [customerNumber, accountNumber]
+        .map((value) => normalizeAccountPartnerAccountKey(value))
+        .filter(Boolean),
+    )];
+    if (normalizedKeys.length === 0) continue;
+
+    for (const normalized of normalizedKeys) {
+      if (ambiguousAccountKeys.has(normalized)) continue;
+      const existing = targetAccounts.get(normalized);
+      if (existing && existing.id !== id) {
+        targetAccounts.delete(normalized);
+        ambiguousAccountKeys.add(normalized);
+      } else {
+        targetAccounts.set(normalized, { id, key: displayKey, name });
+      }
+    }
+  }
+
+  return targetAccounts;
+}
+
 export function resolveAccountPartnerMigrationSoql(
   input: AccountPartnerMigrationInput,
 ): string {
@@ -203,9 +258,7 @@ export function buildAccountPartnerMigrationRows(input: {
       stats.skippedMissingOffice += 1;
       continue;
     }
-    const account = normalizeAccountPartnerAccountKey(
-      accountPartnerValueAt(record, ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD),
-    );
+    const account = resolveAccountPartnerSourceAccountKey(record);
     if (!account) {
       stats.skippedMissingAccountKey += 1;
       continue;

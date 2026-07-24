@@ -8,6 +8,7 @@ import { ACCOUNT_SEED_EXTERNAL_ID } from './account-seed-query.builder';
 const mocks = vi.hoisted(() => ({
   sfCli: {
     describeSObject: vi.fn(),
+    getOrgDisplay: vi.fn(),
     query: vi.fn(),
     exportBulk: vi.fn(),
     importBulk: vi.fn(),
@@ -48,6 +49,7 @@ const manualOnboardingQuery = {
 describe('ConaSeedService manual Account queries', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.sfCli.getOrgDisplay.mockResolvedValue({ success: true, data: { result: {} } });
     mocks.orgConnection.findUnique.mockImplementation(
       async ({ where }: { where: { id: string } }) => ({
         id: where.id,

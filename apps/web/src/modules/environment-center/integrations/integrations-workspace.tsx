@@ -171,18 +171,6 @@ function IntegrationsWorkspaceInner() {
         />
       )}
 
-      {w.pendingScratchDelete && (
-        <ConfirmBanner
-          title={`Delete "${w.pendingScratchDelete}"?`}
-          message="This permanently deletes the scratch org in Salesforce and removes it from this app."
-          confirmLabel="Delete"
-          variant="error"
-          loading={w.deletingScratchAlias === w.pendingScratchDelete}
-          onConfirm={() => void w.deleteScratchOrg(w.pendingScratchDelete!)}
-          onCancel={() => w.setPendingScratchDelete(null)}
-        />
-      )}
-
       <div
         role="tabpanel"
         id={`environment-panel-${w.activeTab}`}

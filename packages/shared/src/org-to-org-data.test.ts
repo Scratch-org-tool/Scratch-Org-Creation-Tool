@@ -28,7 +28,7 @@ import {
   type OrgToOrgDeployableField,
 } from './org-to-org-data';
 
-const SAMPLE_SOQL = `select id,AccountNumber,Name,cfs_ob__u_CustomerNumber__c,cfs_ob__u_ActiveCustomer__c from Account where cfs_ob__u_CustomerAccountGroup__c ='Z001'and cfs_ob__Bottler__c ='5000'`;
+const SAMPLE_SOQL = `select id,AccountNumber,Name,AccountNumber,cfs_ob__u_ActiveCustomer__c from Account where cfs_ob__u_CustomerAccountGroup__c ='Z001'and cfs_ob__Bottler__c ='5000'`;
 
 const SOURCE = '00000000-0000-4000-8000-000000000001';
 const TARGET = '00000000-0000-4000-8000-000000000002';
@@ -526,7 +526,7 @@ describe('parseOrgToOrgSoql', () => {
       'Id',
       'AccountNumber',
       'Name',
-      'cfs_ob__u_CustomerNumber__c',
+      'AccountNumber',
       'cfs_ob__u_ActiveCustomer__c',
     ]);
     assert.equal(parsed.filters.length, 2);

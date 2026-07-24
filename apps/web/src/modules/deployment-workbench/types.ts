@@ -43,6 +43,7 @@ export interface CompareSummary {
   deleted: number;
   same: number;
   unknown: number;
+  error?: string;
   typeErrors?: Array<{ metadataType: string; org: 'source' | 'target'; error: string }>;
   progress?: {
     phase: 'discovering_types' | 'listing_components' | 'resolving_xml' | 'completed';

@@ -17,6 +17,7 @@ const db = vi.hoisted(() => ({
 const sfCli = vi.hoisted(() => ({
   loginWebCancellable: vi.fn(),
   logout: vi.fn(),
+  getOrgDisplay: vi.fn(),
 }));
 
 vi.mock('@sfcc/db', () => ({ prisma: db }));
@@ -89,6 +90,7 @@ describe('OrgsService browser authorization', () => {
       kill: vi.fn(),
     });
     sfCli.logout.mockResolvedValue({ success: true });
+    sfCli.getOrgDisplay.mockResolvedValue({ success: true, data: { result: {} } });
     streamService.publish.mockResolvedValue(undefined);
     db.orgConnection.findUnique.mockResolvedValue(null);
     db.orgConnection.create.mockResolvedValue({ ...authorizingOrg });

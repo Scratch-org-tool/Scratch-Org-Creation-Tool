@@ -10,6 +10,7 @@ import {
   type MetadataSelection,
 } from '@sfcc/shared';
 import { createSfCliClient } from '@sfcc/sf-cli';
+import { describeSfCliAccessError, resolveSfCliTarget } from '../../common/sf-cli-org.util';
 import { assertOrgOwned } from '../../common/user-tenancy.util';
 
 export interface ObjectFieldRow {
@@ -54,16 +55,13 @@ export class MetadataBrowseService {
 
   private async resolveAlias(orgId: string, userId: string): Promise<string> {
     const org = await assertOrgOwned(orgId, userId, prisma);
-    return org.username ?? org.alias;
+    return resolveSfCliTarget(this.sfCli, org, 'Org');
   }
 
   private handleCliError(err: string | undefined, alias: string): never {
-    if (err?.includes('html content') || err?.includes('420')) {
-      throw new BadRequestException(
-        `Cannot reach org "${alias}" — session may be expired. Reconnect the org in Environment Center.`,
-      );
-    }
-    throw new BadRequestException(err ?? 'Salesforce CLI command failed');
+    throw new BadRequestException(
+      describeSfCliAccessError(err ?? `Salesforce CLI command failed for org "${alias}"`),
+    );
   }
 
   async listTypes(orgId: string, userId: string, search?: string, page = 1, pageSize = 100) {

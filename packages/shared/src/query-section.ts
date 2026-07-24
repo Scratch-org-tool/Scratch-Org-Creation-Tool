@@ -18,7 +18,7 @@ export const queryOperationSchema = z
 
 export const DEFAULT_EXTERNAL_ID_FIELDS = Object.freeze({
   role: 'DeveloperName',
-  account: 'cfs_ob__u_CustomerNumber__c',
+  account: 'AccountNumber',
   employee: 'cfs_ob__EmployeeNo__c',
   partner: 'cfs_ob__AccountPartnerExternalId__c',
 });
@@ -60,10 +60,10 @@ export const accountPartnerPlanSchema = z.object({
   employeeMasterQueryId: z.string().min(1),
   accountPartnerQueryId: z.string().min(1),
   roleQueryId: z.string().min(1).optional(),
-  accountKeyField: z.string().min(1).default('cfs_ob__u_CustomerNumber__c'),
+  accountKeyField: z.string().min(1).default('AccountNumber'),
   employeeKeyField: z.string().min(1).default('cfs_ob__EmployeeNo__c'),
   mappingAccountKeyField: z.string().min(1)
-    .default('cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c'),
+    .default('cfs_ob__Account__r.AccountNumber'),
   mappingEmployeeKeyField: z.string().min(1)
     .default('cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c'),
   mappingRoleField: z.string().min(1).default('cfs_ob__PartnerRole__c'),

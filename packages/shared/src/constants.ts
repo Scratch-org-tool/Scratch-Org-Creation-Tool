@@ -126,7 +126,7 @@ export const ACCOUNT_EXPORT_FIELDS =
   'cfs_ob__BusinessTypeExtension__c, cfs_ob__Business_Type__c, ' +
   'cfs_ob__PreferredOrderMethod__c, cfs_ob__Shipping_Conditions__c, ' +
   'cfs_ob__SuppressionReason__c, cfs_ob__u_CustomerName__c, ' +
-  'cfs_ob__u_CustomerNumber__c, cfs_ob__u_PrimaryGroup__c, ' +
+  'AccountNumber, cfs_ob__u_PrimaryGroup__c, ' +
   'cfs_ob__u_SalesOffice__c, cfs_ob__u_DistributionChannel__c, ' +
   'cfs_ob__u_CustomerAccountGroup__c, cfs_ob__u_ActiveCustomer__c';
 

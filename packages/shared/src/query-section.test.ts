@@ -16,7 +16,7 @@ function query(overrides: Partial<QuerySectionQuery> = {}): QuerySectionQuery {
     stage: 0,
     category: 'account',
     object: 'Account',
-    soql: 'SELECT Name, cfs_ob__u_CustomerNumber__c FROM Account LIMIT 999999',
+    soql: 'SELECT Name, AccountNumber FROM Account LIMIT 999999',
     limit: 250,
     bottler: '5000',
     operation: 'upsert',

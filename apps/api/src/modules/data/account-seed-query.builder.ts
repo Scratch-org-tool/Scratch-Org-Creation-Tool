@@ -18,7 +18,7 @@ export interface AccountSeedRow {
   limit: number;
 }
 
-export const ACCOUNT_SEED_EXTERNAL_ID = 'cfs_ob__u_CustomerNumber__c';
+export const ACCOUNT_SEED_EXTERNAL_ID = 'AccountNumber';
 
 export interface ResolvedManualAccountQuery extends ConaManualAccountQuery {
   objectName: 'Account';
@@ -29,7 +29,7 @@ const BASE_WHERE = (bottler: string) =>
   `cfs_ob__Bottler__c = '${escapeSoqlLiteral(bottler)}' ` +
   `AND cfs_ob__Bottler__c != null ` +
   `AND cfs_ob__u_SalesOffice__c != null ` +
-  `AND cfs_ob__u_CustomerNumber__c != null ` +
+  `AND AccountNumber != null ` +
   `AND (cfs_ob__MarkforDeletion__c = false OR cfs_ob__MarkforDeletion__c = null)`;
 
 function activeCustomerClause(accountGroup: AccountGroup): string {

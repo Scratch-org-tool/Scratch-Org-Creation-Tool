@@ -11,6 +11,7 @@ import { encrypt, decrypt } from '../../common/crypto.util';
 import { resolveOrgTypeFromInstance } from '../../common/org-type.util';
 import { StreamService } from '../stream/stream.service';
 import { assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
+import { describeSfCliAccessError } from '../../common/sf-cli-org.util';
 import type { AuthorizeOrgInput } from '@sfcc/shared';
 
 interface ActiveAuth {
@@ -199,7 +200,19 @@ export class OrgsService {
   async getAuthorizationStatus(alias: string, userId: string) {
     const org = await this.requireOrgByAlias(alias, userId);
     if (org.status === 'active') {
-      return { alias, orgId: org.id, status: 'authorized' as const };
+      const display = await this.sfCli.getOrgDisplay(org.username ?? org.alias);
+      if (!display.success) {
+        return {
+          alias,
+          orgId: org.id,
+          status: 'authorized' as const,
+          cliConnected: false,
+          cliError: describeSfCliAccessError(
+            display.error ?? 'Salesforce CLI cannot reach this org',
+          ),
+        };
+      }
+      return { alias, orgId: org.id, status: 'authorized' as const, cliConnected: true };
     }
 
     const outcome = this.getAuthorizationOutcome(alias);

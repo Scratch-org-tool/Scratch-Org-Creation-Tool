@@ -114,6 +114,7 @@ function defaultPartnerSoql(bottler: Bottler) {
   cfs_ob__Bottler__c,
   cfs_ob__Sales_Office__c,
   cfs_ob__Account__r.cfs_ob__u_CustomerNumber__c,
+  cfs_ob__Account__r.AccountNumber,
   cfs_ob__EmployeeMaster__r.cfs_ob__EmployeeNo__c
 FROM cfs_ob__AccountPartner__c
 WHERE cfs_ob__Bottler__c = '${bottler}'`;

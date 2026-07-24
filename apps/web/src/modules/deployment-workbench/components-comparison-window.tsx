@@ -361,7 +361,15 @@ export function ComponentsComparisonWindow(props: ComponentsComparisonWindowProp
       {comparisonStatus === 'failed' && (
         <InlineAlert variant="error" title="Metadata loading failed">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span>The org metadata could not be loaded. Check the org connections and retry.</span>
+            <span>
+              {comparisonSummary?.error
+                ?? (comparisonSummary?.typeErrors?.length
+                  ? comparisonSummary.typeErrors
+                    .slice(0, 2)
+                    .map((entry) => `${entry.org}: ${entry.error}`)
+                    .join(' ')
+                  : 'The org metadata could not be loaded. Check the org connections and retry.')}
+            </span>
             <Button size="sm" variant="outline" onClick={onRetryComparison}>
               Retry metadata loading
             </Button>

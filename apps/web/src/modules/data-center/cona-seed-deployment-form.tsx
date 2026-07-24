@@ -199,7 +199,10 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
   };
 
   const handlePreview = async () => {
-    if (!sourceOrgId || !targetOrgId) return;
+    if (!sourceOrgId || !targetOrgId) {
+      setError('Select both a source org and a target org.');
+      return;
+    }
     if (sourceOrgId === targetOrgId) {
       setError('Source and target org must differ.');
       return;
@@ -624,7 +627,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
               <>
                 <InlineAlert variant="info" title="Manual Account SOQL">
                   Queries must select Account records and include{' '}
-                  <code>cfs_ob__u_CustomerNumber__c</code> plus at least one field to seed.
+                  <code>AccountNumber</code> plus at least one field to seed.
                   Relationship subqueries and aggregate expressions are not supported. The maximum
                   records value replaces any LIMIT in the query.
                 </InlineAlert>
@@ -686,7 +689,7 @@ export function ConaSeedDeploymentForm({ embedded }: { embedded?: boolean } = {}
                           value={query.soql}
                           className="min-h-36 font-mono text-xs"
                           placeholder={
-                            'SELECT Name, cfs_ob__u_CustomerNumber__c, '
+                            'SELECT Name, AccountNumber, '
                             + 'cfs_ob__Bottler__c FROM Account WHERE ...'
                           }
                           onChange={(event) =>

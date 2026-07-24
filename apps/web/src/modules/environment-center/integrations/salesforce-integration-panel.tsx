@@ -95,9 +95,7 @@ export function SalesforceIntegrationPanel({ w }: SalesforceIntegrationPanelProp
           <ScratchOrgsTable
             orgs={w.scratchOrgs}
             loading={w.refreshing}
-            deletingAlias={w.deletingScratchAlias}
             onOpenCredentials={(alias) => void w.openCredentials(alias)}
-            onDelete={w.setPendingScratchDelete}
           />
         </GlassCard>
       </div>
