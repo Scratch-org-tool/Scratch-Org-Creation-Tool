@@ -327,6 +327,67 @@ describe('PipelineOrchestratorService existing scratch target mode', () => {
     );
   });
 
+  it('queues data pipeline start when configure-existing scope is data-only', async () => {
+    const dataOnlyConfig = {
+      ...existingConfig,
+      pipelineScope: { sourceDeployment: false, dataDeployment: true },
+      customSettings: { enabled: true, mode: 'master' as const },
+    };
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      status: 'running',
+      createdBy: 'owner-1',
+      config: dataOnlyConfig,
+      checkpoint: {
+        completedSteps: ['scratch_org_create'],
+        resumeFrom: 'prepare_existing_org',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    const service = createService();
+    const enqueueMetadataDeploy = vi.fn().mockResolvedValue({ id: 'metadata-job' });
+    const enqueueDataPipelineStart = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service as object, { enqueueMetadataDeploy, enqueueDataPipelineStart });
+
+    await service.handleJobSucceeded('run-existing', 'prepare_existing_org');
+    expect(enqueueMetadataDeploy).not.toHaveBeenCalled();
+    expect(enqueueDataPipelineStart).toHaveBeenCalledWith(
+      'run-existing',
+      dataOnlyConfig,
+      expect.objectContaining({
+        completedSteps: ['scratch_org_create', 'prepare_existing_org'],
+      }),
+      'owner-1',
+    );
+  });
+
+  it('completes after metadata deploy when configure-existing scope is source-only', async () => {
+    const sourceOnlyConfig = {
+      ...existingConfig,
+      pipelineScope: { sourceDeployment: true, dataDeployment: false },
+      customSettings: { enabled: true, mode: 'master' as const },
+    };
+    db.automationRun.findUnique.mockResolvedValue({
+      id: 'run-existing',
+      status: 'running',
+      createdBy: 'owner-1',
+      config: sourceOnlyConfig,
+      checkpoint: {
+        completedSteps: ['scratch_org_create', 'prepare_existing_org'],
+        resumeFrom: 'git_metadata_deploy',
+        targetOrgConnectionId: existingConfig.existingOrgConnectionId,
+      },
+    });
+    const service = createService();
+    const completeAutoPipeline = vi.fn().mockResolvedValue(undefined);
+    const enqueueCustomSettingsLoad = vi.fn();
+    Object.assign(service as object, { completeAutoPipeline, enqueueCustomSettingsLoad });
+
+    await service.handleJobSucceeded('run-existing', 'pipeline_metadata_deploy');
+    expect(completeAutoPipeline).toHaveBeenCalledWith('run-existing', expect.any(Object), false);
+    expect(enqueueCustomSettingsLoad).not.toHaveBeenCalled();
+  });
+
   it('resumes an existing target at preparation without entering scratch creation', async () => {
     db.automationRun.findUnique.mockResolvedValue({
       id: 'run-existing',

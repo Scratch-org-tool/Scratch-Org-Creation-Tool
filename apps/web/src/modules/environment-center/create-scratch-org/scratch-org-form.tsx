@@ -7,6 +7,7 @@ import {
   Bug,
   CheckCircle2,
   CloudUpload,
+  Database,
   ExternalLink,
   KeyRound,
   Loader2,
@@ -35,7 +36,6 @@ interface ScratchOrgFormProps {
   setForm: (f: ScratchOrgFormState) => void;
   devHubs: { alias: string }[];
   sourceOrgs: { id: string; alias: string }[];
-  templates: Array<{ id: string; name: string; isSystem: boolean }>;
   templateMeta?: { name: string; config: ScratchPipelineTemplateConfig } | null;
   metadataSource: GitMetadataSourceHook;
   installPackage: boolean;
@@ -117,7 +117,6 @@ export function ScratchOrgForm({
   setForm,
   devHubs,
   sourceOrgs,
-  templates,
   templateMeta,
   metadataSource,
   installPackage,
@@ -140,7 +139,11 @@ export function ScratchOrgForm({
 }: ScratchOrgFormProps) {
   const generatedId = useId().replace(/:/g, '');
   const fieldId = (name: string) => `scratch-org-${generatedId}-${name}`;
-  const usingTemplate = Boolean(form.templateId && templateMeta);
+  const usingTemplate = Boolean(form.foundationTemplateId && templateMeta);
+  const showDataOrgFields = mode === 'create_new'
+    ? form.pipelineScope.dataDeployment
+    : form.pipelineScope.dataDeployment;
+  const showMetadataSource = mode === 'create_new' || form.pipelineScope.sourceDeployment;
   const selectedExisting = existingCandidates.find(
     (candidate) => candidate.orgConnectionId === existingOrgConnectionId,
   );
@@ -336,77 +339,127 @@ export function ScratchOrgForm({
         </FormSection>
       )}
 
-      <FormSection title="Pipeline template" description="Use a saved template or manage templates in the sidebar.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field className="sm:col-span-2">
-            <Label htmlFor={fieldId('pipeline-template')}>Scratch pipeline template</Label>
-            <Select
-              id={fieldId('pipeline-template')}
-              value={form.templateId}
-              onChange={(e) => setForm({ ...form, templateId: e.target.value })}
-              disabled={isRunning}
-            >
-              <option value="">Manual configuration (form below)</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}{t.isSystem ? ' (default)' : ''}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          {usingTemplate && (
-            <Field className="sm:col-span-2">
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm space-y-1">
-                <p className="font-medium">From template: {templateMeta!.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  Scratch defaults and its configured deployment stages come from this template.
-                  {mode === 'create_new'
-                    ? 'Set alias, Dev Hub, and metadata source below for this run.'
-                    : 'Select the existing target and metadata source for this run.'}
+      <FormSection
+        title="Deployment scope"
+        description="Choose which pipeline stages to run for this scratch org."
+      >
+        <div className="space-y-4">
+          {mode === 'create_new' ? (
+            <>
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                <p className="font-medium">Scratch Org &amp; Source Deployment</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Always creates the scratch org and deploys metadata from your selected repository.
                 </p>
               </div>
-            </Field>
+              <PipelineOptionCard
+                label="Run Master data deployment"
+                description="Load config, partners, accounts, products, and visit plans in one SFDMU run"
+                checked={form.pipelineScope.dataDeployment}
+                onChange={(dataDeployment) => setForm({
+                  ...form,
+                  pipelineScope: { sourceDeployment: true, dataDeployment },
+                })}
+                disabled={isRunning}
+                icon={Database}
+                iconClass="bg-indigo-500/10 text-indigo-400"
+              />
+            </>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <PipelineOptionCard
+                label="Source deployment"
+                description="Deploy metadata from the connected Git repository"
+                checked={form.pipelineScope.sourceDeployment}
+                onChange={(sourceDeployment) => {
+                  if (!sourceDeployment && !form.pipelineScope.dataDeployment) return;
+                  setForm({
+                    ...form,
+                    pipelineScope: {
+                      ...form.pipelineScope,
+                      sourceDeployment,
+                    },
+                  });
+                }}
+                disabled={isRunning}
+                icon={CloudUpload}
+                iconClass="bg-violet-500/10 text-violet-400"
+              />
+              <PipelineOptionCard
+                label="Data deployment"
+                description="Run the Master Template SFDMU data load"
+                checked={form.pipelineScope.dataDeployment}
+                onChange={(dataDeployment) => {
+                  if (!dataDeployment && !form.pipelineScope.sourceDeployment) return;
+                  setForm({
+                    ...form,
+                    pipelineScope: {
+                      ...form.pipelineScope,
+                      dataDeployment,
+                    },
+                  });
+                }}
+                disabled={isRunning}
+                icon={Database}
+                iconClass="bg-indigo-500/10 text-indigo-400"
+              />
+            </div>
           )}
-          <Field>
-            <Label htmlFor={fieldId('data-org')}>Data Deployment Org</Label>
-            <Select
-              id={fieldId('data-org')}
-              value={form.dataDeploymentOrgId || form.sourceOrgId}
-              onChange={(e) => setForm({
-                ...form,
-                sourceOrgId: e.target.value,
-                dataDeploymentOrgId: e.target.value,
-              })}
-              disabled={isRunning}
-            >
-              <option value="">Use template default</option>
-              {sourceOrgs.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.alias}
-                </option>
-              ))}
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">Runtime override for queries, data seed, and partner joins.</p>
-          </Field>
-          <Field>
-            <Label htmlFor={fieldId('settings-org')}>Custom Settings Org (optional override)</Label>
-            <Select
-              id={fieldId('settings-org')}
-              value={form.customSettingsOrgId}
-              onChange={(e) => setForm({ ...form, customSettingsOrgId: e.target.value })}
-              disabled={isRunning}
-            >
-              <option value="">Use template default</option>
-              {sourceOrgs.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.alias}
-                </option>
-              ))}
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">Only used for the SFDMU custom-settings export.</p>
-          </Field>
+          {usingTemplate && (
+            <div className="rounded-lg border border-border/60 bg-card/30 p-3 text-sm space-y-1">
+              <p className="font-medium">{templateMeta!.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {mode === 'create_new'
+                  ? 'Set alias, Dev Hub, and metadata source below for this run.'
+                  : 'Select the existing target and configure deployment scope for this run.'}
+              </p>
+            </div>
+          )}
+          {showDataOrgFields && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field>
+                <Label htmlFor={fieldId('data-org')}>Data Deployment Org</Label>
+                <Select
+                  id={fieldId('data-org')}
+                  value={form.dataDeploymentOrgId || form.sourceOrgId}
+                  onChange={(e) => setForm({
+                    ...form,
+                    sourceOrgId: e.target.value,
+                    dataDeploymentOrgId: e.target.value,
+                  })}
+                  disabled={isRunning}
+                >
+                  <option value="">Select a source org</option>
+                  {sourceOrgs.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.alias}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Source org for the Master SFDMU export.
+                </p>
+              </Field>
+              <Field>
+                <Label htmlFor={fieldId('settings-org')}>Custom Settings Org (optional override)</Label>
+                <Select
+                  id={fieldId('settings-org')}
+                  value={form.customSettingsOrgId}
+                  onChange={(e) => setForm({ ...form, customSettingsOrgId: e.target.value })}
+                  disabled={isRunning}
+                >
+                  <option value="">Use data deployment org</option>
+                  {sourceOrgs.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.alias}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+          )}
           {usingTemplate && (templateMeta?.config.userProvisioning?.teams?.length ?? 0) > 0 && (
-            <Field className="sm:col-span-2">
+            <Field>
               <Label htmlFor={fieldId('runtime-email-pool')}>Replacement team email pool (optional)</Label>
               <Textarea
                 id={fieldId('runtime-email-pool')}
@@ -415,9 +468,6 @@ export function ScratchOrgForm({
                 placeholder="person1@example.com&#10;person2@example.com"
                 disabled={isRunning}
               />
-              <p className="text-xs text-muted-foreground mt-1">
-                Replaces the template pool for this run. Allocation remains deterministic shuffled round-robin.
-              </p>
             </Field>
           )}
         </div>
@@ -495,9 +545,11 @@ export function ScratchOrgForm({
         </div>
       </FormSection>}
 
-      <FormSection title="Metadata Source" description="Connected Git provider and repository used for metadata deployment.">
-        <GitMetadataSourceFields source={metadataSource} disabled={isRunning} />
-      </FormSection>
+      {showMetadataSource && (
+        <FormSection title="Metadata Source" description="Connected Git provider and repository used for metadata deployment.">
+          <GitMetadataSourceFields source={metadataSource} disabled={isRunning} />
+        </FormSection>
+      )}
 
       <FormSection title="Pipeline Options">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -62,11 +61,6 @@ export class OrgsController {
   @Post(':alias/open')
   openOrg(@Param('alias') alias: string, @CurrentUser() userId: string) {
     return this.orgsService.openOrg(alias, userId);
-  }
-
-  @Delete(':alias')
-  deleteScratchOrg(@Param('alias') alias: string, @CurrentUser() userId: string) {
-    return this.orgsService.deleteScratchOrg(alias, userId);
   }
 
   @Post(':alias/extend')

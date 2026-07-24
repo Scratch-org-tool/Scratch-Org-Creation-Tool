@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
 import type { QuerySetJson, SfdmuExportJson } from '@sfcc/shared';
 import {
   extractFieldsFromSoql,
@@ -141,10 +141,64 @@ export function writeSfdmuExportFromUpload(input: SfdmuExportWriteInput): SfdmuG
 }
 
 export function loadBundledCustomSettingsExport(): SfdmuExportJson {
-  const projectRoot = resolveSfProjectRoot();
-  const path = join(projectRoot, 'config/custom-settings-export.json');
-  const raw = JSON.parse(readFileSync(path, 'utf-8')) as SfdmuExportJson;
-  return normalizeSfdmuExport(raw);
+  return loadBundledSfdmuExport('custom-settings');
+}
+
+export function loadBundledMasterExport(): SfdmuExportJson {
+  return loadBundledSfdmuExport('master');
+}
+
+function resolveBundledExportPath(fileName: string): string {
+  const candidates = new Set<string>();
+  const configured = process.env.SF_PROJECT_ROOT?.trim();
+  if (configured) {
+    candidates.add(join(resolve(configured), fileName));
+  }
+  candidates.add(join(resolveSfProjectRoot(process.cwd(), undefined), fileName));
+
+  let walk = resolve(process.cwd());
+  for (let depth = 0; depth < 6; depth += 1) {
+    candidates.add(join(walk, fileName));
+    const parent = dirname(walk);
+    if (parent === walk) break;
+    walk = parent;
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return [...candidates][0]!;
+}
+
+export function loadBundledSfdmuExport(bundle: 'custom-settings' | 'master'): SfdmuExportJson {
+  const fileName = bundle === 'master'
+    ? 'config/scratchorg-dl-export.json'
+    : 'config/custom-settings-export.json';
+  const path = resolveBundledExportPath(fileName);
+  try {
+    const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '');
+    const raw = JSON.parse(content) as SfdmuExportJson;
+    return normalizeSfdmuExport(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to load ${bundle} SFDMU export from ${path}: ${detail}`,
+    );
+  }
+}
+
+export function resolveCustomSettingsExportConfig(
+  mode: 'bundled' | 'master' | 'custom' | undefined,
+  exportConfig?: SfdmuExportJson,
+): SfdmuExportJson {
+  if (mode === 'custom' && exportConfig) {
+    return exportConfig;
+  }
+  if (mode === 'master') {
+    return loadBundledMasterExport();
+  }
+  return loadBundledCustomSettingsExport();
 }
 
 export interface SfdmuFromSoqlInput {

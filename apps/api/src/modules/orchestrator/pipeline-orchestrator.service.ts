@@ -23,6 +23,9 @@ import {
   resolveUserProvisioningPlan,
   userProvisioningConfigSchema,
   type ResolvedProvisionUser,
+  resolvePipelineScope,
+  pipelineScopeRequiresDataSource,
+  type PipelineScope,
 } from '@sfcc/shared';
 import { QueueService } from '../queue/queue.service';
 import { JobsService } from '../jobs/jobs.service';
@@ -35,7 +38,7 @@ import { ScratchOrgJobService } from '../environment/scratch-org-job.service';
 import { ScratchOrgPreparationService } from '../environment/scratch-org-preparation.service';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 import {
-  loadBundledCustomSettingsExport,
+  resolveCustomSettingsExportConfig,
   writeSfdmuExportFromUpload,
 } from '../data/sfdmu-config.generator';
 import { ScmAdapterRegistry } from '../../integrations/foundation/adapter.registry';
@@ -429,7 +432,7 @@ export class PipelineOrchestratorService {
           });
         }
       }
-      await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
+      await this.enqueueNextAfterPreparation(automationRunId, config, checkpoint, run.createdBy);
       return;
     }
 
@@ -437,8 +440,7 @@ export class PipelineOrchestratorService {
       if (!checkpoint.completedSteps.includes('prepare_existing_org')) {
         checkpoint.completedSteps.push('prepare_existing_org');
       }
-      checkpoint.resumeFrom = 'git_metadata_deploy';
-      await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
+      await this.enqueueNextAfterPreparation(automationRunId, config, checkpoint, run.createdBy);
       return;
     }
 
@@ -454,6 +456,11 @@ export class PipelineOrchestratorService {
           where: { id: checkpoint.deploymentId },
           data: { status: 'completed' },
         });
+      }
+      const scope = resolvePipelineScope(config.pipelineScope, config.mode);
+      if (!pipelineScopeRequiresDataSource(scope)) {
+        await this.completeAutoPipeline(automationRunId, checkpoint, false);
+        return;
       }
       const customEnabled = config.customSettings?.enabled === true;
       if (customEnabled) {
@@ -1445,6 +1452,52 @@ export class PipelineOrchestratorService {
     }
   }
 
+  private getPipelineScope(config: ScratchOrgPipelineInput): PipelineScope {
+    return resolvePipelineScope(config.pipelineScope, config.mode);
+  }
+
+  private async enqueueNextAfterPreparation(
+    automationRunId: string,
+    config: ScratchOrgPipelineInput,
+    checkpoint: PipelineCheckpoint,
+    userId?: string,
+  ) {
+    const scope = this.getPipelineScope(config);
+    if (scope.sourceDeployment) {
+      checkpoint.resumeFrom = 'git_metadata_deploy';
+      await this.enqueueMetadataDeploy(automationRunId, config, checkpoint);
+      return;
+    }
+    await this.enqueueDataPipelineStart(automationRunId, config, checkpoint, userId);
+  }
+
+  private async enqueueDataPipelineStart(
+    automationRunId: string,
+    config: ScratchOrgPipelineInput,
+    checkpoint: PipelineCheckpoint,
+    userId?: string,
+  ) {
+    const ownerId = userId
+      ?? (await prisma.automationRun.findUnique({
+        where: { id: automationRunId },
+        select: { createdBy: true },
+      }))?.createdBy;
+    if (!ownerId) throw new Error('Automation run owner is required');
+
+    const customEnabled = config.customSettings?.enabled === true;
+    if (customEnabled) {
+      checkpoint.resumeFrom = 'load_custom_settings';
+      await this.enqueueCustomSettingsLoad(automationRunId, config, checkpoint, ownerId);
+      return;
+    }
+    if (config.orgConfig) {
+      checkpoint.resumeFrom = 'load_org_config';
+      await this.enqueueLoadOrgConfig(automationRunId, config, checkpoint);
+      return;
+    }
+    await this.enqueuePostDeployChain(automationRunId, config, checkpoint);
+  }
+
   private async enqueueMetadataDeploy(
     automationRunId: string,
     config: ScratchOrgPipelineInput,
@@ -1694,10 +1747,10 @@ export class PipelineOrchestratorService {
     }
 
     const mode = config.customSettings?.mode ?? 'bundled';
-    const exportConfig =
-      mode === 'custom' && config.customSettings?.exportConfig
-        ? config.customSettings.exportConfig
-        : loadBundledCustomSettingsExport();
+    const exportConfig = resolveCustomSettingsExportConfig(
+      mode,
+      config.customSettings?.exportConfig,
+    );
     if (config.version === 2 && hasInsertOperation(exportConfig)) {
       throw new Error('V2 resumable custom settings do not support Insert; use Upsert');
     }

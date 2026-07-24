@@ -6,13 +6,33 @@ import {
   migrateTemplateConfig,
   migrateTemplateConfigToV2,
   SYSTEM_SCRATCH_TEMPLATE_PRESETS,
+  SYSTEM_SCRATCH_TEMPLATE_KEYS,
   scratchOrgPipelineSchema,
   sanitizeTemplateConfigForStorage,
   scratchTemplateCreateSchema,
   scratchTemplateUpdateSchema,
   validateBottlerSalesOfficeConfig,
+  composePipelineConfig,
+  isRemovedSystemTemplateKey,
+  REMOVED_SYSTEM_SCRATCH_TEMPLATE_KEYS,
+  resolvePipelineScope,
+  pipelineScopeRequiresGitSource,
+  pipelineScopeRequiresDataSource,
+  type PipelineScope,
+  type ScratchPipelineTemplateConfig,
 } from '@sfcc/shared';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
+
+const LEGACY_REMOVED_SYSTEM_TEMPLATE_KEYS = [
+  'data-deployment-queries',
+  'config-seed-account-partners',
+] as const;
+
+function removedSystemTemplateKeys(): readonly string[] {
+  return Array.isArray(REMOVED_SYSTEM_SCRATCH_TEMPLATE_KEYS)
+    ? REMOVED_SYSTEM_SCRATCH_TEMPLATE_KEYS
+    : LEGACY_REMOVED_SYSTEM_TEMPLATE_KEYS;
+}
 
 @Injectable()
 export class ScratchTemplatesService implements OnModuleInit {
@@ -22,10 +42,15 @@ export class ScratchTemplatesService implements OnModuleInit {
 
   private async ensureSystemTemplates() {
     await prisma.$transaction(async (transaction) => {
-      // Remove rows created by the former check-then-insert bootstrap. Their
-      // null key identifies them without touching user-owned templates.
       await transaction.scratchPipelineTemplate.deleteMany({
         where: { isSystem: true, systemKey: null },
+      });
+
+      await transaction.scratchPipelineTemplate.deleteMany({
+        where: {
+          isSystem: true,
+          systemKey: { in: [...removedSystemTemplateKeys()] },
+        },
       });
 
       for (const preset of SYSTEM_SCRATCH_TEMPLATE_PRESETS) {
@@ -40,8 +65,6 @@ export class ScratchTemplatesService implements OnModuleInit {
             createdById: null,
             config: sanitizeTemplateConfigForStorage(preset.config) as Prisma.InputJsonValue,
           },
-          // System defaults are editable. Startup only repairs immutable
-          // identity/order fields and never overwrites an administrator edit.
           update: {
             isSystem: true,
             sortOrder: preset.sortOrder,
@@ -53,17 +76,21 @@ export class ScratchTemplatesService implements OnModuleInit {
   }
 
   async list(userId: string) {
-    return prisma.scratchPipelineTemplate.findMany({
+    const rows = await prisma.scratchPipelineTemplate.findMany({
       where: {
         OR: [{ isSystem: true }, { createdById: userId }],
       },
       orderBy: [{ isSystem: 'desc' }, { sortOrder: 'asc' }, { updatedAt: 'desc' }],
     });
+    return rows.filter((row) => !isRemovedSystemTemplateKey(row.systemKey));
   }
 
   async get(id: string, userId: string) {
     const template = await prisma.scratchPipelineTemplate.findUnique({ where: { id } });
     if (!template) throw new NotFoundException('Template not found');
+    if (isRemovedSystemTemplateKey(template.systemKey)) {
+      throw new NotFoundException('Template not found');
+    }
     if (!template.isSystem && template.createdById !== userId) {
       throw new NotFoundException('Template not found');
     }
@@ -154,6 +181,9 @@ export class ScratchTemplatesService implements OnModuleInit {
       dataDeploymentOrgId?: string;
       customSettingsOrgId?: string;
       templateId?: string;
+      foundationTemplateId?: string;
+      dataTemplateId?: string;
+      pipelineScope?: PipelineScope;
       gitSource?: GitSourceConfig;
       azureDeploy?: { project?: string; repo: string; branch: string; manifestPath?: string };
       installPackage?: boolean;
@@ -161,19 +191,30 @@ export class ScratchTemplatesService implements OnModuleInit {
       description?: string;
     },
   ) {
+    const scope = resolvePipelineScope(
+      overrides.pipelineScope ?? (templateConfig.pipelineScope as PipelineScope | undefined),
+      overrides.mode ?? 'create_new',
+    );
     const tmplAzure = templateConfig.azureDeploy as { manifestPath?: string } | undefined;
     const tmpl = migrateTemplateConfig(templateConfig as Parameters<typeof migrateTemplateConfig>[0]);
-    const source = normalizeGitSourceConfig({
-      gitSource: overrides.gitSource,
-      azureDeploy: overrides.azureDeploy,
-    }).gitSource;
-    if (!source) throw new BadRequestException('gitSource or azureDeploy is required');
-    const gitSource = {
-      ...(tmpl.gitSource ?? {}),
-      ...source,
-      manifestPath:
-        source.manifestPath ?? tmpl.gitSource?.manifestPath ?? tmplAzure?.manifestPath,
-    } as GitSourceConfig;
+    const requiresGit = pipelineScopeRequiresGitSource(scope);
+    const source = requiresGit
+      ? normalizeGitSourceConfig({
+          gitSource: overrides.gitSource,
+          azureDeploy: overrides.azureDeploy,
+        }).gitSource
+      : overrides.gitSource;
+    if (requiresGit && !source) {
+      throw new BadRequestException('gitSource or azureDeploy is required');
+    }
+    const gitSource = source
+      ? {
+          ...(tmpl.gitSource ?? {}),
+          ...source,
+          manifestPath:
+            source.manifestPath ?? tmpl.gitSource?.manifestPath ?? tmplAzure?.manifestPath,
+        } as GitSourceConfig
+      : undefined;
     const legacyDataOverride = templateConfig.dataDeploymentOrgId == null
       ? overrides.sourceOrgId
       : undefined;
@@ -190,6 +231,11 @@ export class ScratchTemplatesService implements OnModuleInit {
       || tmpl.userProvisioning?.userGenerators?.length,
     );
     const installPackage = overrides.installPackage ?? tmpl.installPackage;
+    const scopeSkipSteps = (templateConfig.skipSteps as string[] | undefined) ?? [];
+    const skipSteps = [
+      ...scopeSkipSteps,
+      ...(installPackage ? [] : ['installPackages']),
+    ].filter((value, index, array) => array.indexOf(value) === index);
     return {
       ...tmpl,
       mode: overrides.mode ?? 'create_new',
@@ -204,9 +250,12 @@ export class ScratchTemplatesService implements OnModuleInit {
       dataDeploymentOrgId,
       customSettingsOrgId,
       templateId: overrides.templateId,
+      foundationTemplateId: overrides.foundationTemplateId,
+      dataTemplateId: overrides.dataTemplateId,
+      pipelineScope: scope,
       definitionFile: tmpl.template ?? 'config/project-scratch-def.json',
       gitSource,
-      azureDeploy: gitSource.provider === 'azure_devops'
+      azureDeploy: gitSource?.provider === 'azure_devops'
         ? {
             project: gitSource.project ?? gitSource.namespace,
             repo: gitSource.repo,
@@ -214,7 +263,7 @@ export class ScratchTemplatesService implements OnModuleInit {
             manifestPath: gitSource.manifestPath,
           }
         : undefined,
-      skipSteps: installPackage ? [] : ['installPackages'],
+      skipSteps,
       pipelineSteps: {
         ...tmpl.pipelineSteps,
         ...(hasUsers ? {} : { autoRunUsers: false }),
@@ -222,7 +271,11 @@ export class ScratchTemplatesService implements OnModuleInit {
     };
   }
 
-  private validateAutomaticSources(config: ReturnType<ScratchTemplatesService['mergeTemplateWithLaunch']>) {
+  private validateAutomaticSources(
+    config: ReturnType<ScratchTemplatesService['mergeTemplateWithLaunch']>,
+    scope: PipelineScope,
+  ) {
+    if (!pipelineScopeRequiresDataSource(scope)) return;
     const dataSourceOrgId = config.dataDeploymentOrgId ?? config.sourceOrgId;
     const customSettingsOrgId = config.customSettingsOrgId ?? config.sourceOrgId;
     if (config.customSettings?.enabled === true && !customSettingsOrgId) {
@@ -249,16 +302,116 @@ export class ScratchTemplatesService implements OnModuleInit {
     }
   }
 
-  /** Build the immutable run snapshot from the stored template, never client template fields. */
-  async resolveLaunch(body: Record<string, unknown>, userId: string) {
-    const templateId = typeof body.templateId === 'string' ? body.templateId : undefined;
-    if (!templateId) {
-      return scratchOrgPipelineSchema.parse(body);
-    }
-    const template = await this.get(templateId, userId);
-    let authoritativeConfig = migrateTemplateConfigToV2(
+  private async loadTemplateConfig(id: string, userId: string) {
+    const template = await this.get(id, userId);
+    return migrateTemplateConfigToV2(
       template.config as Parameters<typeof migrateTemplateConfigToV2>[0],
     );
+  }
+
+  private async resolveFoundationAndMasterConfigs(
+    body: Record<string, unknown>,
+    userId: string,
+    mode: 'create_new' | 'configure_existing',
+  ) {
+    const foundationTemplateId = typeof body.foundationTemplateId === 'string'
+      ? body.foundationTemplateId
+      : undefined;
+    const dataTemplateId = typeof body.dataTemplateId === 'string'
+      ? body.dataTemplateId
+      : undefined;
+    const legacyTemplateId = typeof body.templateId === 'string' ? body.templateId : undefined;
+    const scope = resolvePipelineScope(
+      body.pipelineScope as PipelineScope | undefined,
+      mode,
+    );
+
+    if (foundationTemplateId) {
+      const foundation = await this.loadTemplateConfig(foundationTemplateId, userId);
+      const master = scope.dataDeployment && dataTemplateId
+        ? await this.loadTemplateConfig(dataTemplateId, userId)
+        : undefined;
+      return {
+        scope,
+        foundationTemplateId,
+        dataTemplateId: scope.dataDeployment ? dataTemplateId : undefined,
+        authoritativeConfig: composePipelineConfig({ foundation, master, scope }),
+      };
+    }
+
+    if (legacyTemplateId) {
+      const template = await this.get(legacyTemplateId, userId);
+      let authoritativeConfig = migrateTemplateConfigToV2(
+        template.config as Parameters<typeof migrateTemplateConfigToV2>[0],
+      );
+      if (template.systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE) {
+        scope.dataDeployment = body.pipelineScope
+          ? scope.dataDeployment
+          : true;
+        const foundationRow = await prisma.scratchPipelineTemplate.findFirst({
+          where: { systemKey: SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT },
+        });
+        if (!foundationRow) {
+          throw new NotFoundException('Foundation template not found');
+        }
+        const foundation = migrateTemplateConfigToV2(
+          foundationRow.config as Parameters<typeof migrateTemplateConfigToV2>[0],
+        );
+        authoritativeConfig = composePipelineConfig({
+          foundation,
+          master: authoritativeConfig,
+          scope,
+        });
+        return {
+          scope,
+          foundationTemplateId: foundationRow.id,
+          dataTemplateId: legacyTemplateId,
+          authoritativeConfig,
+        };
+      }
+      if (template.systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT) {
+        scope.dataDeployment = body.pipelineScope
+          ? scope.dataDeployment
+          : false;
+        authoritativeConfig = composePipelineConfig({
+          foundation: authoritativeConfig,
+          scope,
+        });
+        return {
+          scope,
+          foundationTemplateId: legacyTemplateId,
+          dataTemplateId: undefined,
+          authoritativeConfig,
+        };
+      }
+      authoritativeConfig = composePipelineConfig({
+        foundation: authoritativeConfig,
+        master: scope.dataDeployment ? authoritativeConfig : undefined,
+        scope,
+      });
+      return {
+        scope,
+        foundationTemplateId: legacyTemplateId,
+        dataTemplateId: scope.dataDeployment ? legacyTemplateId : undefined,
+        authoritativeConfig,
+      };
+    }
+
+    throw new BadRequestException('foundationTemplateId or templateId is required');
+  }
+
+  /** Build the immutable run snapshot from the stored template, never client template fields. */
+  async resolveLaunch(body: Record<string, unknown>, userId: string) {
+    const mode = body.mode === 'configure_existing' ? 'configure_existing' : 'create_new';
+    const hasScopedLaunch = typeof body.foundationTemplateId === 'string'
+      || typeof body.templateId === 'string';
+
+    if (!hasScopedLaunch) {
+      return scratchOrgPipelineSchema.parse(body);
+    }
+
+    const resolved = await this.resolveFoundationAndMasterConfigs(body, userId, mode);
+    let authoritativeConfig = resolved.authoritativeConfig;
     if (body.runtimeEmailPoolOverride !== undefined) {
       authoritativeConfig = this.applyRuntimeEmailPool(
         authoritativeConfig,
@@ -268,7 +421,7 @@ export class ScratchTemplatesService implements OnModuleInit {
     const merged = this.mergeTemplateWithLaunch(
       authoritativeConfig as Record<string, unknown>,
       {
-        mode: body.mode === 'configure_existing' ? 'configure_existing' : 'create_new',
+        mode,
         alias: typeof body.alias === 'string' ? body.alias : undefined,
         devHubAlias: typeof body.devHubAlias === 'string' ? body.devHubAlias : undefined,
         existingOrgConnectionId: body.existingOrgConnectionId as string | undefined,
@@ -279,7 +432,10 @@ export class ScratchTemplatesService implements OnModuleInit {
         sourceOrgId: body.sourceOrgId as string | undefined,
         dataDeploymentOrgId: body.dataDeploymentOrgId as string | undefined,
         customSettingsOrgId: body.customSettingsOrgId as string | undefined,
-        templateId,
+        templateId: resolved.dataTemplateId ?? resolved.foundationTemplateId,
+        foundationTemplateId: resolved.foundationTemplateId,
+        dataTemplateId: resolved.dataTemplateId,
+        pipelineScope: resolved.scope,
         gitSource: body.gitSource as GitSourceConfig | undefined,
         azureDeploy: body.azureDeploy as {
           project?: string;
@@ -292,12 +448,12 @@ export class ScratchTemplatesService implements OnModuleInit {
         description: body.description as string | undefined,
       },
     );
-    this.validateAutomaticSources(merged);
+    this.validateAutomaticSources(merged, resolved.scope);
     return scratchOrgPipelineSchema.parse(merged);
   }
 
   private applyRuntimeEmailPool(
-    config: Parameters<typeof migrateTemplateConfigToV2>[0],
+    config: ScratchPipelineTemplateConfig,
     value: unknown,
   ) {
     if (!value || typeof value !== 'object' || !Array.isArray((value as { emails?: unknown }).emails)) {

@@ -47,10 +47,8 @@ export function TemplateReview({
   const stepIndexes = new Map(steps.map((step, index) => [step.id, index]));
   const isScratchSourcePreset =
     systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT;
-  const isDataDeploymentPreset =
-    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES;
-  const isConfigPartnersPreset =
-    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS;
+  const isMasterPreset =
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE;
 
   const sections = [
     {
@@ -84,34 +82,38 @@ export function TemplateReview({
       title: 'Source orgs',
       rows: [
         ['Data deployment org', dataOrg ? orgAliases[dataOrg] ?? dataOrg : '—'],
-        ...(!isDataDeploymentPreset
-          ? [[
-              'Custom settings org',
-              customSettingsEnabled
-                ? (settingsOrg ? orgAliases[settingsOrg] ?? settingsOrg : '—')
-                : 'Not used (disabled)',
-            ] as const]
-          : []),
+        [
+          'Custom settings org',
+          customSettingsEnabled
+            ? (settingsOrg ? orgAliases[settingsOrg] ?? settingsOrg : '—')
+            : 'Not used (disabled)',
+        ],
       ] as const,
     },
     {
       stepId: 'custom-settings' as TemplateStepId,
-      title: 'Custom settings',
+      title: isMasterPreset ? 'Master SFDMU export' : 'Custom settings',
       rows: [
         ['Enabled', config.customSettings?.enabled !== false ? 'Yes' : 'No'],
         [
           'Mode',
           customSettingsEnabled
-            ? (config.customSettings?.mode === 'custom' ? 'Custom JSON' : 'Bundled')
+            ? (
+              config.customSettings?.mode === 'custom'
+                ? 'Custom JSON'
+                : config.customSettings?.mode === 'master'
+                  ? 'Master bundled'
+                  : 'Bundled'
+            )
             : 'Not applicable',
         ],
       ] as const,
     },
     {
       stepId: 'permissions' as TemplateStepId,
-      title: isConfigPartnersPreset ? 'Org configuration' : 'Permissions',
+      title: isMasterPreset ? 'Org configuration' : 'Permissions',
       rows: [
-        ...(!isConfigPartnersPreset
+        ...(!isMasterPreset
           ? [['Permission sets', formatPermissionSets(config.permissionSets) || '—'] as const]
           : []),
         ...(!isScratchSourcePreset
@@ -125,7 +127,7 @@ export function TemplateReview({
     },
     {
       stepId: 'data-seed' as TemplateStepId,
-      title: isConfigPartnersPreset ? 'Config seed' : 'Data deployment',
+      title: 'Data deployment',
       rows: [
         ['Seed mode', config.dataSeed?.mode ?? 'hybrid'],
         ['Datasets', config.dataSeed?.datasets?.join(', ') || '—'],
@@ -146,22 +148,18 @@ export function TemplateReview({
     },
     {
       stepId: 'partners-users' as TemplateStepId,
-      title: isConfigPartnersPreset ? 'Account partners & automation' : 'Partners & users',
+      title: 'Partners & users',
       rows: [
         ['Auto data seed', config.pipelineSteps?.autoRunDataSeed ? 'Yes' : 'No'],
         ['Auto partners', config.pipelineSteps?.autoRunPartners ? 'Yes' : 'No'],
         ['Partner import', config.partnerImport?.enabled ? config.partnerImport.mode : 'Off'],
         ['Per office', String(config.partnerImport?.perOffice ?? 20)],
         ['Sales offices JSON', config.partnerImport?.salesOfficeConfig ? 'Yes' : '—'],
-        ...(!isConfigPartnersPreset
-          ? [
-              ['Auto users', config.pipelineSteps?.autoRunUsers ? 'Yes' : 'No'] as const,
-              ['User templates', String(config.userProvisioning?.templates?.length ?? 0)] as const,
-              ['User generators', String(config.userProvisioning?.userGenerators?.length ?? 0)] as const,
-              ['Role+bottler mappings', String(config.userProvisioning?.roleBottlerMappings?.length ?? 0)] as const,
-              ['Users / slots', String(userCount)] as const,
-            ]
-          : []),
+        ['Auto users', config.pipelineSteps?.autoRunUsers ? 'Yes' : 'No'],
+        ['User templates', String(config.userProvisioning?.templates?.length ?? 0)],
+        ['User generators', String(config.userProvisioning?.userGenerators?.length ?? 0)],
+        ['Role+bottler mappings', String(config.userProvisioning?.roleBottlerMappings?.length ?? 0)],
+        ['Users / slots', String(userCount)],
       ] as const,
     },
   ].filter((section) => stepIndexes.has(section.stepId));

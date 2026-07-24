@@ -29,16 +29,10 @@ const SYSTEM_TEMPLATE_STEP_DESCRIPTIONS: Partial<
     scratch: 'Scratch org definition, duration, package, and Azure DevOps source defaults.',
     permissions: 'Permission sets applied after source deployment.',
   },
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES]: {
-    'source-orgs': 'Choose the source org for query-driven data deployment.',
-    'data-seed': 'Configure the data deployment mode and query inputs.',
-    'query-section': 'Edit the ordered Account, Product, and Visit Plan queries.',
-  },
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS]: {
-    'source-orgs': 'Choose source orgs for configuration seed and custom settings.',
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE]: {
+    'source-orgs': 'Choose the source org for the one-shot master SFDMU export.',
+    'custom-settings': 'Review or customize the master SFDMU object list and SOQL queries.',
     permissions: 'Configure queue IDs, domain fields, and request ID updates.',
-    'data-seed': 'Configure the onboarding configuration seed.',
-    'partners-users': 'Configure Account Partner mapping and automatic execution.',
   },
 };
 

@@ -12,6 +12,7 @@ import { ScratchTemplateForm } from './scratch-template-form';
 import { TemplatesPageHeader } from './templates-page-header';
 import { configToSummaryChips, getSystemTemplatePresentation } from './types';
 import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
+import { isRemovedSystemTemplateKey } from '@sfcc/shared';
 import {
   insertAfterId,
   MutationAwareRequestGate,
@@ -55,10 +56,11 @@ export function ScratchTemplatesWorkspace() {
     }
     try {
       const list = await api<TemplateRow[]>('/environment/scratch-templates');
+      const visible = list.filter((template) => !isRemovedSystemTemplateKey(template.systemKey));
       if (!requestGateRef.current.isLatest(request) || busyRef.current.size > 0) return;
-      templatesRef.current = list;
-      setTemplates(list);
-      setSessionCache(cacheKey, list);
+      templatesRef.current = visible;
+      setTemplates(visible);
+      setSessionCache(cacheKey, visible);
     } finally {
       if (requestGateRef.current.isLatestGeneration(request)) setLoading(false);
     }

@@ -11,7 +11,18 @@ import {
 
 export const sfdmuExportObjectSchema = z.object({
   query: z.string().min(1),
-  operation: z.enum(['Upsert', 'Insert', 'Update', 'Delete', 'upsert', 'insert', 'update', 'delete']),
+  operation: z.enum([
+    'Upsert',
+    'Insert',
+    'Update',
+    'Delete',
+    'Readonly',
+    'upsert',
+    'insert',
+    'update',
+    'delete',
+    'readonly',
+  ]),
   name: z.string().optional(),
   externalId: z.string().optional(),
   valueMapping: z.record(z.unknown()).optional(),
@@ -30,7 +41,7 @@ export function hasInsertOperation(exportConfig: SfdmuExportJson | undefined): b
 
 export const customSettingsConfigSchema = z.object({
   enabled: z.boolean().default(true),
-  mode: z.enum(['bundled', 'custom']).default('bundled'),
+  mode: z.enum(['bundled', 'master', 'custom']).default('bundled'),
   exportConfig: sfdmuExportSchema.optional(),
 });
 
@@ -178,9 +189,50 @@ function inferExternalId(query: string): string | undefined {
   return undefined;
 }
 
+/** Insert RecordType.DeveloperName after RecordTypeId when missing. */
+export function ensureRecordTypeDeveloperNameInSoql(soql: string): string {
+  if (!/\bRecordTypeId\b/i.test(soql)) return soql;
+  if (/\bRecordType\.DeveloperName\b/i.test(soql)) return soql;
+  return soql.replace(/\bRecordTypeId\b/i, 'RecordTypeId, RecordType.DeveloperName');
+}
+
+/**
+ * SFDMU remaps RecordTypeId across orgs when a Readonly RecordType object
+ * is present with DeveloperName-based externalId. Also ensures queries that
+ * select RecordTypeId include RecordType.DeveloperName.
+ */
+export function enrichSfdmuExportForRecordTypes(exportJson: SfdmuExportJson): SfdmuExportJson {
+  const objects = exportJson.objects.map((obj) => {
+    if (!/\bRecordTypeId\b/i.test(obj.query)) return obj;
+    return {
+      ...obj,
+      query: ensureRecordTypeDeveloperNameInSoql(obj.query),
+    };
+  });
+
+  const needsRecordTypeLookup = objects.some((obj) => /\bRecordTypeId\b/i.test(obj.query));
+  const hasRecordTypeObject = objects.some((obj) => {
+    const name = (obj.name ?? extractObjectFromSoql(obj.query) ?? '').toLowerCase();
+    return name === 'recordtype';
+  });
+
+  if (needsRecordTypeLookup && !hasRecordTypeObject) {
+    objects.unshift({
+      name: 'RecordType',
+      query:
+        'SELECT Id, DeveloperName, NamespacePrefix, SobjectType FROM RecordType WHERE IsActive = true',
+      operation: 'Readonly',
+      externalId: 'DeveloperName;NamespacePrefix;SobjectType',
+    });
+  }
+
+  return { objects };
+}
+
 export function normalizeSfdmuExport(exportJson: SfdmuExportJson): SfdmuExportJson {
+  const enriched = enrichSfdmuExportForRecordTypes(exportJson);
   return {
-    objects: exportJson.objects.map((obj) => {
+    objects: enriched.objects.map((obj) => {
       const name = obj.name ?? extractObjectFromSoql(obj.query) ?? undefined;
       const externalId = obj.externalId ?? inferExternalId(obj.query);
       const operation = obj.operation.charAt(0).toUpperCase() + obj.operation.slice(1).toLowerCase();

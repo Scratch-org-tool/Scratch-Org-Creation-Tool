@@ -332,6 +332,12 @@ const scratchOrgPipelineCommonSchema = scratchOrgCreateSchema.omit({
   pipelineSteps: pipelineStepsConfigSchema.optional(),
   permissionSets: z.array(z.string().trim().min(1)).max(100).optional(),
   templateId: z.string().uuid().optional(),
+  foundationTemplateId: z.string().uuid().optional(),
+  dataTemplateId: z.string().uuid().optional(),
+  pipelineScope: z.object({
+    sourceDeployment: z.boolean().default(true),
+    dataDeployment: z.boolean().default(true),
+  }).optional(),
 });
 
 const scratchOrgPipelineModeSchema = z.discriminatedUnion('mode', [
@@ -364,7 +370,8 @@ export const scratchOrgPipelineSchema = z.preprocess(
   },
   scratchOrgPipelineModeSchema,
 ).superRefine((value, context) => {
-  if (!value.gitSource && !value.azureDeploy) {
+  const scope = value.pipelineScope ?? { sourceDeployment: true, dataDeployment: true };
+  if (scope.sourceDeployment && !value.gitSource && !value.azureDeploy) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'gitSource or azureDeploy is required',
@@ -421,7 +428,7 @@ export const customSettingsLoadSchema = z.object({
   sourceOrgId: z.string().uuid(),
   targetOrgId: z.string().uuid(),
   exportConfig: sfdmuExportSchema.optional(),
-  mode: z.enum(['bundled', 'custom']).default('bundled'),
+  mode: z.enum(['bundled', 'master', 'custom']).default('bundled'),
 }).refine((data) => data.sourceOrgId !== data.targetOrgId, {
   message: 'Source and target org must differ',
   path: ['targetOrgId'],

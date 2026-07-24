@@ -109,7 +109,11 @@ export function ScratchOrgReview({
       'Custom settings',
       customSettings?.enabled === false
         ? 'Disabled'
-        : customSettings?.mode === 'custom' ? 'Custom JSON' : 'Bundled',
+        : customSettings?.mode === 'custom'
+          ? 'Custom JSON'
+          : customSettings?.mode === 'master'
+            ? 'Master bundled'
+            : 'Bundled',
     ]);
   }
   if (templateMeta && dataSeed?.datasets?.length) {
@@ -173,10 +177,34 @@ export function ScratchOrgReview({
                   }`,
                   false,
                 ],
-                ['Deploy Git metadata', `${form.azureRepo} / ${form.azureBranch}`, false],
-                ['Assign permission set', 'Run after metadata deployment', false],
-                ['Load custom settings and org configuration', 'Use resolved template and runtime overrides', false],
-                ['Run ordered queries, partner data, and users', 'Continue with Template V2 post-deploy actions', false],
+                [
+                  'Deploy Git metadata',
+                  form.pipelineScope.sourceDeployment
+                    ? `${form.azureRepo || 'Repository'} / ${form.azureBranch || 'Branch'}`
+                    : 'Skipped — source deployment not selected',
+                  !form.pipelineScope.sourceDeployment,
+                ],
+                [
+                  'Assign permission set',
+                  form.pipelineScope.sourceDeployment
+                    ? 'Run after metadata deployment'
+                    : 'Skipped — source deployment not selected',
+                  !form.pipelineScope.sourceDeployment,
+                ],
+                [
+                  'Load custom settings and org configuration',
+                  form.pipelineScope.dataDeployment
+                    ? 'Run Master Template SFDMU load'
+                    : 'Skipped — data deployment not selected',
+                  !form.pipelineScope.dataDeployment,
+                ],
+                [
+                  'Run ordered queries, partner data, and users',
+                  form.pipelineScope.dataDeployment
+                    ? 'Included in Master Template when configured'
+                    : 'Skipped — data deployment not selected',
+                  !form.pipelineScope.dataDeployment,
+                ],
               ].map(([label, detail, skipped], index) => (
                 <li key={String(label)} className="flex items-start gap-2">
                   <span className="w-5 h-5 rounded-full border border-border flex items-center justify-center shrink-0">

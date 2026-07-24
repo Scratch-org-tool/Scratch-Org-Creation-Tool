@@ -779,10 +779,6 @@ export class SfCliClient extends EventEmitter {
     return this.runStreaming(args, undefined, { json: true });
   }
 
-  async deleteScratchOrg(alias: string): Promise<SfCommandResult> {
-    return this.run(['org', 'delete', 'scratch', '--target-org', alias, '--no-prompt'], { json: true });
-  }
-
   async extendScratchOrg(alias: string, duration: number): Promise<SfCommandResult> {
     return this.run(['org', 'extend', 'scratch', '--target-org', alias, '--duration-days', String(duration)], { json: true });
   }

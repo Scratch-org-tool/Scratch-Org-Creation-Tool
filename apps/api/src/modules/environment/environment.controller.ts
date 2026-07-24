@@ -57,9 +57,9 @@ export class EnvironmentController {
     return this.environmentService.regenerateScratchOrgPassword(alias, userId);
   }
 
-  @Delete('scratch-orgs/:alias')
-  deleteScratchOrg(@Param('alias') alias: string, @CurrentUser() userId: string) {
-    return this.environmentService.deleteScratchOrg(alias, userId);
+  @Post('scratch-orgs/:alias/unlink')
+  unlinkScratchOrg(@Param('alias') alias: string, @CurrentUser() userId: string) {
+    return this.environmentService.unlinkScratchOrg(alias, userId);
   }
 
   @Post('verify-org-auth')

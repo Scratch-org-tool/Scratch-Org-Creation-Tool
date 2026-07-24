@@ -135,8 +135,8 @@ export function ScratchTemplateForm({
   const activeStep = wizardSteps[step] ?? wizardSteps[0]!;
   const isScratchSourcePreset =
     systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT;
-  const isConfigPartnersPreset =
-    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS;
+  const isMasterPreset =
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE;
 
   useEffect(() => {
     setStep((current) => Math.min(current, wizardSteps.length - 1));
@@ -599,7 +599,7 @@ export function ScratchTemplateForm({
                     orgs={orgs}
                     dataDeploymentOrgId={config.dataDeploymentOrgId ?? config.sourceOrgId}
                     customSettingsOrgId={config.customSettingsOrgId ?? config.sourceOrgId}
-                    showCustomSettings={!systemKey || isConfigPartnersPreset}
+                    showCustomSettings={!systemKey || isMasterPreset}
                     onChange={(patch) =>
                       setConfig({
                         ...config,
@@ -612,7 +612,7 @@ export function ScratchTemplateForm({
               )}
 
               {activeStep.id === 'custom-settings' && (
-                <FormSection title="Custom settings (SFDMU)">
+                <FormSection title={isMasterPreset ? 'Master SFDMU export' : 'Custom settings (SFDMU)'}>
                   {config.customSettingsOrgId && (
                     <p className="text-xs text-muted-foreground mb-4">
                       Export source:{' '}
@@ -621,7 +621,8 @@ export function ScratchTemplateForm({
                   )}
                   <SfdmuExportEditor
                     enabled={config.customSettings?.enabled !== false}
-                    mode={config.customSettings?.mode ?? 'bundled'}
+                    mode={config.customSettings?.mode ?? (isMasterPreset ? 'master' : 'bundled')}
+                    allowMasterMode={isMasterPreset}
                     json={customJson}
                     onEnabledChange={(enabled) => setConfig(setCustomSettingsEnabled(config, enabled))}
                     onModeChange={(mode) =>
@@ -642,7 +643,7 @@ export function ScratchTemplateForm({
               {activeStep.id === 'permissions' && (
                 <FormSection title={activeStep.label}>
                   <div className="space-y-6">
-                    {!isConfigPartnersPreset && (
+                    {!isMasterPreset && (
                       <PermissionSetsEditor value={permissionSetsText} onChange={setPermissionSetsText} />
                     )}
                     {!isScratchSourcePreset && (
@@ -685,15 +686,9 @@ export function ScratchTemplateForm({
                         }}
                       />
                       <div>
-                        <p className="text-sm font-medium">
-                          {isConfigPartnersPreset
-                            ? 'Enable onboarding configuration seed'
-                            : 'Enable data deployment'}
-                        </p>
+                        <p className="text-sm font-medium">Enable data deployment</p>
                         <p className="text-xs text-muted-foreground">
-                          {isConfigPartnersPreset
-                            ? 'Seed onboarding configuration before Account Partner mapping.'
-                            : 'Add built-in datasets, uploaded query JSON, or ordered V2 queries to this template.'}
+                          Add built-in datasets, uploaded query JSON, or ordered V2 queries to this template.
                         </p>
                       </div>
                     </label>
@@ -820,16 +815,14 @@ export function ScratchTemplateForm({
                       }
                     />
                   </FormSection>
-                  {!isConfigPartnersPreset && (
-                    <FormSection title="User provisioning">
+                  <FormSection title="User provisioning">
                       <UserProvisioningV2Section
                         sourceOrgId={dataDeploymentOrgId}
                         value={config.userProvisioning ?? DEFAULT_TEMPLATE_CONFIG.userProvisioning!}
                         onChange={(userProvisioning) => setConfig({ ...config, userProvisioning })}
                         onValidationChange={handleUserPlanValidation}
-                      />
-                    </FormSection>
-                  )}
+                    />
+                  </FormSection>
                   <FormSection title="Automation">
                     <PipelineStepsSection
                       value={config.pipelineSteps ?? DEFAULT_TEMPLATE_CONFIG.pipelineSteps!}
@@ -839,9 +832,6 @@ export function ScratchTemplateForm({
                         autoRunPartners: config.partnerImport?.enabled === true,
                         autoRunUsers: hasConfiguredUsers,
                       }}
-                      visibleSteps={isConfigPartnersPreset
-                        ? ['autoRunDataSeed', 'autoRunPartners']
-                        : undefined}
                     />
                   </FormSection>
                 </div>

@@ -34,6 +34,7 @@ export * from './user-provision-template.js';
 export * from './lifecycle-user-generation.js';
 export * from './template-config-migration.js';
 export * from './scratch-template-presets.js';
+export * from './scratch-pipeline-compose.js';
 export * from './integrations.js';
 export * from './jenkins.js';
 export * from './releases.js';

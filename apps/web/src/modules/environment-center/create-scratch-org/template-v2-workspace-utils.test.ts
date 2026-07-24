@@ -2,13 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AutomationRunView, ScratchOrgFormState } from '@/components/scratch-org/types';
 import {
   buildTemplateLaunchRequest,
+  canRequestServerLaunchPlan,
   completedRunAlias,
   formFromRunConfig,
   launchTargetFromRun,
+  mergeFormIntoTemplatePreviewConfig,
   metadataSourceFromForm,
   retrieveCredentialsWithRetry,
   runtimeEmailPoolOverride,
 } from './template-v2-workspace-utils';
+import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
 
 describe('Template V2 launch and recovery contracts', () => {
   it('sends a typed runtime email-pool override without changing template config', () => {
@@ -27,6 +30,9 @@ describe('Template V2 launch and recovery contracts', () => {
       gitNamespace: '',
       gitRepositoryId: '',
       templateId: 'template-id',
+      foundationTemplateId: 'foundation-id',
+      dataTemplateId: 'master-id',
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
       sourceOrgId: '',
       dataDeploymentOrgId: '',
       customSettingsOrgId: '',
@@ -38,7 +44,8 @@ describe('Template V2 launch and recovery contracts', () => {
     expect(buildTemplateLaunchRequest(form, { provider: 'github' }, true))
       .toMatchObject({
         mode: 'create_new',
-        templateId: 'template-id',
+        templateId: 'master-id',
+        foundationTemplateId: 'foundation-id',
         runtimeEmailPoolOverride: {
           emails: ['one@example.com', 'two@example.com'],
         },
@@ -61,6 +68,9 @@ describe('Template V2 launch and recovery contracts', () => {
       gitNamespace: '',
       gitRepositoryId: '',
       templateId: 'template-id',
+      foundationTemplateId: 'foundation-id',
+      dataTemplateId: 'master-id',
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
       sourceOrgId: '',
       dataDeploymentOrgId: '',
       customSettingsOrgId: '',
@@ -103,6 +113,9 @@ describe('Template V2 launch and recovery contracts', () => {
       gitNamespace: '',
       gitRepositoryId: '',
       templateId: 'template-id',
+      foundationTemplateId: 'foundation-id',
+      dataTemplateId: 'master-id',
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
       sourceOrgId: '',
       dataDeploymentOrgId: '',
       customSettingsOrgId: '',
@@ -213,6 +226,171 @@ describe('Template V2 launch and recovery contracts', () => {
         ensureRequiredPackage: true,
       },
     });
+  });
+
+  it('defers server launch-plan until git source and create fields are ready', () => {
+    const templateConfig = {
+      version: 2,
+      customSettings: { enabled: false, mode: 'bundled' },
+      pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+    } satisfies ScratchPipelineTemplateConfig;
+    const form = {
+      devHubAlias: 'devhub',
+      alias: 'scratch',
+      duration: 7,
+      template: 'config/project-scratch-def.json',
+      description: '',
+      azureProject: '',
+      azureRepo: 'repo',
+      azureBranch: 'main',
+      azureManifestPath: 'manifest/package.xml',
+      gitProvider: 'azure_devops',
+      gitConnectionId: 'conn',
+      gitNamespace: '',
+      gitRepositoryId: '',
+      templateId: 'template-id',
+      foundationTemplateId: 'foundation-id',
+      dataTemplateId: 'master-id',
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
+      sourceOrgId: '',
+      dataDeploymentOrgId: '',
+      customSettingsOrgId: '',
+      runtimeEmailPool: '',
+    } satisfies ScratchOrgFormState;
+    const gitSource = {
+      provider: 'azure_devops' as const,
+      repo: 'repo',
+      branch: 'main',
+    };
+
+    expect(canRequestServerLaunchPlan(form, null, 'create_new', templateConfig)).toBe(false);
+    expect(canRequestServerLaunchPlan(
+      { ...form, alias: '' },
+      gitSource,
+      'create_new',
+      templateConfig,
+    )).toBe(false);
+    expect(canRequestServerLaunchPlan(form, gitSource, 'create_new', templateConfig)).toBe(true);
+  });
+
+  it('defers server launch-plan until custom settings source org is selected', () => {
+    const templateConfig = {
+      version: 2,
+      customSettings: { enabled: true, mode: 'master' },
+      pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+    } satisfies ScratchPipelineTemplateConfig;
+    const form = {
+      devHubAlias: 'devhub',
+      alias: 'scratch',
+      duration: 7,
+      template: 'config/project-scratch-def.json',
+      description: '',
+      azureProject: '',
+      azureRepo: 'repo',
+      azureBranch: 'main',
+      azureManifestPath: 'manifest/package.xml',
+      gitProvider: 'azure_devops',
+      gitConnectionId: 'conn',
+      gitNamespace: '',
+      gitRepositoryId: '',
+      templateId: 'template-id',
+      foundationTemplateId: 'foundation-id',
+      dataTemplateId: 'master-id',
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
+      sourceOrgId: '',
+      dataDeploymentOrgId: '',
+      customSettingsOrgId: '',
+      runtimeEmailPool: '',
+    } satisfies ScratchOrgFormState;
+    const gitSource = {
+      provider: 'azure_devops' as const,
+      repo: 'repo',
+      branch: 'main',
+    };
+
+    expect(canRequestServerLaunchPlan(form, gitSource, 'create_new', templateConfig)).toBe(false);
+    expect(canRequestServerLaunchPlan(
+      { ...form, dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111' },
+      gitSource,
+      'create_new',
+      templateConfig,
+    )).toBe(true);
+    expect(mergeFormIntoTemplatePreviewConfig(templateConfig, {
+      ...form,
+      dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+    })).toMatchObject({
+      dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+      customSettingsOrgId: '11111111-1111-4111-8111-111111111111',
+    });
+  });
+
+  it('falls back customSettingsOrgId to the data deployment org in launch requests', () => {
+    const form = {
+      devHubAlias: 'devhub',
+      alias: 'scratch',
+      duration: 7,
+      template: 'config/project-scratch-def.json',
+      description: '',
+      azureProject: '',
+      azureRepo: 'repo',
+      azureBranch: 'main',
+      azureManifestPath: 'manifest/package.xml',
+      gitProvider: 'azure_devops',
+      gitConnectionId: 'conn',
+      gitNamespace: '',
+      gitRepositoryId: '',
+      templateId: 'template-id',
+      foundationTemplateId: 'foundation-id',
+      dataTemplateId: 'master-id',
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
+      sourceOrgId: '',
+      dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+      customSettingsOrgId: '',
+      runtimeEmailPool: '',
+    } satisfies ScratchOrgFormState;
+    expect(buildTemplateLaunchRequest(form, { provider: 'azure_devops', repo: 'repo', branch: 'main' }, true))
+      .toMatchObject({
+        customSettingsOrgId: '11111111-1111-4111-8111-111111111111',
+      });
+  });
+
+  it('allows configure-existing data-only launch plan without git source', () => {
+    const templateConfig = {
+      version: 2,
+      customSettings: { enabled: true, mode: 'master' },
+      pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+    } satisfies ScratchPipelineTemplateConfig;
+    const form = {
+      devHubAlias: 'devhub',
+      alias: 'scratch',
+      duration: 7,
+      template: 'config/project-scratch-def.json',
+      description: '',
+      azureProject: '',
+      azureRepo: '',
+      azureBranch: 'main',
+      azureManifestPath: 'manifest/package.xml',
+      gitProvider: 'azure_devops',
+      gitConnectionId: '',
+      gitNamespace: '',
+      gitRepositoryId: '',
+      templateId: 'template-id',
+      foundationTemplateId: 'foundation-id',
+      dataTemplateId: 'master-id',
+      pipelineScope: { sourceDeployment: false, dataDeployment: true },
+      sourceOrgId: '',
+      dataDeploymentOrgId: '11111111-1111-4111-8111-111111111111',
+      customSettingsOrgId: '',
+      runtimeEmailPool: '',
+    } satisfies ScratchOrgFormState;
+
+    expect(canRequestServerLaunchPlan(
+      form,
+      null,
+      'configure_existing',
+      templateConfig,
+      '22222222-2222-4222-8222-222222222222',
+    )).toBe(true);
   });
 
   it('retries credentials a bounded number of times and succeeds before handling', async () => {

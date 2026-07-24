@@ -35,6 +35,8 @@ import {
   generateSfdmuConfig,
   generateSfdmuConfigFromSoql,
   loadBundledCustomSettingsExport,
+  loadBundledMasterExport,
+  resolveCustomSettingsExportConfig,
   writeSfdmuExportFromUpload,
 } from './sfdmu-config.generator';
 import { RecordTypeMapperService } from './record-type-mapper.service';
@@ -164,13 +166,28 @@ export class DataService {
     return this.dataDeployOrchestrator.getBatchGroup(groupId, userId);
   }
 
-  getBundledCustomSettingsTemplate() {
-    return loadBundledCustomSettingsExport();
+  getBundledCustomSettingsTemplate(bundle?: 'custom-settings' | 'master') {
+    try {
+      return bundle === 'master'
+        ? loadBundledMasterExport()
+        : loadBundledCustomSettingsExport();
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : `Failed to load ${bundle ?? 'custom-settings'} SFDMU template`,
+      );
+    }
   }
 
   validateCustomSettingsExport(body: unknown) {
-    const parsed = sfdmuExportSchema.parse(body);
-    return validateSfdmuExportSummary(parsed);
+    try {
+      const parsed = sfdmuExportSchema.parse(body);
+      return validateSfdmuExportSummary(parsed);
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Invalid SFDMU export JSON',
+      );
+    }
   }
 
   async runCustomSettingsLoad(body: unknown, userId: string) {
@@ -183,10 +200,10 @@ export class DataService {
     const target = await prisma.orgConnection.findUnique({ where: { id: input.targetOrgId } });
     if (!source || !target) throw new NotFoundException('Source or target org not found');
 
-    const exportConfig =
-      input.mode === 'bundled'
-        ? loadBundledCustomSettingsExport()
-        : input.exportConfig ?? loadBundledCustomSettingsExport();
+    const exportConfig = resolveCustomSettingsExportConfig(
+      input.mode,
+      input.exportConfig,
+    );
 
     const movement = await prisma.dataMovement.create({
       data: {

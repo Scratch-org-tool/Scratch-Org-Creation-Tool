@@ -58,21 +58,12 @@ export function TemplateFormTips({ step, systemKey }: TemplateFormTipsProps) {
     tips = ['Permission sets are applied after source metadata is deployed.'];
   }
   if (
-    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS
-    && step.id === 'data-seed'
+    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE
+    && step.id === 'custom-settings'
   ) {
     tips = [
-      'Keep OnboardingConfig selected for this seed preset.',
-      'The data source org can be selected now or when the template is launched.',
-    ];
-  }
-  if (
-    systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS
-    && step.id === 'partners-users'
-  ) {
-    tips = [
-      'Account Partner mapping uses the configured bottler and sales offices.',
-      'Automation runs configuration seed before Account Partner mapping.',
+      'Master mode uses the bundled ScratchorgDL export for a one-shot SFDMU run.',
+      'You can extend the export JSON here when new objects or fields are added.',
     ];
   }
 

@@ -11,34 +11,19 @@ describe('template editor step scope', () => {
     ).toEqual(['general', 'scratch', 'permissions', 'review']);
   });
 
-  it('shows only source and query settings for the data deployment preset', () => {
+  it('shows master SFDMU settings for the master preset', () => {
     expect(
       getTemplateWizardSteps(
-        SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES,
+        SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE,
       ).map((step) => step.id),
-    ).toEqual(['general', 'source-orgs', 'data-seed', 'query-section', 'review']);
-  });
-
-  it('combines configuration seed and Account Partner settings in one preset', () => {
-    const steps = getTemplateWizardSteps(
-      SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS,
-    );
-    expect(steps.map((step) => step.id)).toEqual([
-      'general',
-      'source-orgs',
-      'custom-settings',
-      'permissions',
-      'data-seed',
-      'partners-users',
-      'review',
-    ]);
-    expect(steps.find((step) => step.id === 'partners-users')?.label).toBe(
-      'Account partners',
-    );
+    ).toEqual(['general', 'source-orgs', 'custom-settings', 'permissions', 'review']);
+    expect(
+      getTemplateWizardSteps(SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE)
+        .find((step) => step.id === 'custom-settings')?.label,
+    ).toBe('Master SFDMU export');
   });
 
   it('keeps the complete editor for private templates', () => {
     expect(getTemplateWizardSteps()).toHaveLength(9);
   });
 });
-

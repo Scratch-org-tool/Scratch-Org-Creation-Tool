@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { BookOpen, FileStack, History, Sparkles, Trash2 } from 'lucide-react';
+import { BookOpen, FileStack, History, Sparkles } from 'lucide-react';
 import { GlassCard } from '@/components/studio/glass-card';
 import { cn } from '@/utils/cn';
 
@@ -27,13 +27,6 @@ const ACTIONS = [
     href: '/environment-center?tab=salesforce#scratch-orgs',
     icon: History,
     iconClass: 'bg-emerald-500/10 text-emerald-400',
-  },
-  {
-    label: 'Bulk Org Cleanup',
-    shortName: 'Cleanup',
-    href: '/environment-center?tab=salesforce#scratch-orgs',
-    icon: Trash2,
-    iconClass: 'bg-orange-500/10 text-orange-400',
   },
 ] as const;
 

@@ -101,7 +101,6 @@ function ConfigCard({
           setForm={w.setForm}
           devHubs={w.devHubs}
           sourceOrgs={w.sourceOrgs}
-          templates={w.templates}
           templateMeta={w.templateMeta}
           metadataSource={w.metadataSource}
           installPackage={w.installPackage}
@@ -359,7 +358,6 @@ export function CreateScratchOrgWorkspace() {
                   setForm={w.setForm}
                   devHubs={w.devHubs}
                   sourceOrgs={w.sourceOrgs}
-                  templates={w.templates}
                   templateMeta={w.templateMeta}
                   metadataSource={w.metadataSource}
                   installPackage={w.installPackage}

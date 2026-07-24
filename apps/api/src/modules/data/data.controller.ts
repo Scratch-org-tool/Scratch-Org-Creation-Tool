@@ -85,8 +85,10 @@ export class DataController {
   ) {}
 
   @Get('custom-settings/template')
-  getCustomSettingsTemplate() {
-    return this.dataService.getBundledCustomSettingsTemplate();
+  getCustomSettingsTemplate(@Query('bundle') bundle?: string) {
+    return this.dataService.getBundledCustomSettingsTemplate(
+      bundle === 'master' ? 'master' : 'custom-settings',
+    );
   }
 
   @Get('custom-settings/preflight')

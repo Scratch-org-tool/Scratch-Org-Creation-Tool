@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   generateSfdmuConfig,
   generateSfdmuConfigFromSoql,
+  loadBundledMasterExport,
+  resolveCustomSettingsExportConfig,
 } from './sfdmu-config.generator';
 
 const created: string[] = [];
@@ -85,5 +87,27 @@ describe('SFDMU runtime config', () => {
     const config = JSON.parse(await readFile(insert.exportJsonPath, 'utf8'));
     expect(config.objects[0]).toMatchObject({ operation: 'Insert' });
     expect(config.objects[0]).not.toHaveProperty('externalId');
+  });
+
+  it('loads the master bundled export with RecordType mapping for Onboarding Config', () => {
+    const master = loadBundledMasterExport();
+    const names = master.objects.map((object) => object.name);
+    expect(names).toContain('RecordType');
+    expect(names).toContain('cfs_ob__NortheastDsdLWCComponent__c');
+    expect(names).toContain('Account');
+    const onboarding = master.objects.find((object) => object.name === 'cfs_ob__Onboarding_Config__c');
+    expect(onboarding?.query).toMatch(/RecordType\.DeveloperName/i);
+    expect(onboarding?.query).toMatch(/RecordTypeId/i);
+    const recordType = master.objects.find((object) => object.name === 'RecordType');
+    expect(recordType?.operation.toLowerCase()).toBe('readonly');
+    expect(recordType?.externalId).toContain('DeveloperName');
+    expect(master.objects.length).toBeGreaterThanOrEqual(42);
+  });
+
+  it('resolves master mode to the master bundled export', () => {
+    const custom = { objects: [{ query: 'SELECT Name FROM Account', operation: 'Upsert' as const }] };
+    const master = resolveCustomSettingsExportConfig('master');
+    expect(resolveCustomSettingsExportConfig('custom', custom)).toEqual(custom);
+    expect(master.objects.length).toBeGreaterThan(1);
   });
 });

@@ -43,20 +43,11 @@ const SYSTEM_TEMPLATE_STEP_IDS: Record<SystemScratchTemplateKey, readonly Templa
     'permissions',
     'review',
   ],
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES]: [
-    'general',
-    'source-orgs',
-    'data-seed',
-    'query-section',
-    'review',
-  ],
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS]: [
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE]: [
     'general',
     'source-orgs',
     'custom-settings',
     'permissions',
-    'data-seed',
-    'partners-users',
     'review',
   ],
 };
@@ -67,15 +58,10 @@ const SYSTEM_TEMPLATE_STEP_LABELS: Partial<
   [SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT]: {
     scratch: 'Scratch & source',
   },
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES]: {
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE]: {
     'source-orgs': 'Data source',
-    'data-seed': 'Data deployment',
-  },
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS]: {
-    'source-orgs': 'Seed source',
+    'custom-settings': 'Master SFDMU export',
     permissions: 'Org configuration',
-    'data-seed': 'Config seed',
-    'partners-users': 'Account partners',
   },
 };
 
@@ -118,15 +104,10 @@ const SYSTEM_TEMPLATE_PRESENTATION: Record<SystemScratchTemplateKey, SystemTempl
     stage: 'Scratch & source',
     summary: 'Scratch org creation and source-control metadata deployment',
   },
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.DATA_DEPLOYMENT_QUERIES]: {
+  [SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE]: {
     number: 2,
-    stage: 'Data deployment',
-    summary: 'Ordered, query-driven data deployment',
-  },
-  [SYSTEM_SCRATCH_TEMPLATE_KEYS.CONFIG_SEED_ACCOUNT_PARTNERS]: {
-    number: 3,
-    stage: 'Seed & map',
-    summary: 'Onboarding config seed and Account Partner mapping',
+    stage: 'Master load',
+    summary: 'One-shot SFDMU load of config, partners, accounts, products, and visit plans',
   },
 };
 
@@ -200,7 +181,10 @@ export function configToSummaryChips(config: ScratchPipelineTemplateConfig): str
     chips.push('Source deploy');
   }
   if (config.customSettings?.enabled !== false) {
-    chips.push(config.customSettings?.mode === 'custom' ? 'Custom SFDMU' : 'Bundled SFDMU');
+    const mode = config.customSettings?.mode;
+    if (mode === 'custom') chips.push('Custom SFDMU');
+    else if (mode === 'master') chips.push('Master SFDMU');
+    else chips.push('Bundled SFDMU');
   }
   const ds = config.dataSeed?.datasets?.length ?? 0;
   if (ds > 0) chips.push(`${ds} dataset${ds === 1 ? '' : 's'}`);

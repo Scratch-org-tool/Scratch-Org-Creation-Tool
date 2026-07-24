@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
     findMany: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    deleteMany: vi.fn(),
   },
   scratchOrg: { findUnique: vi.fn(), deleteMany: vi.fn() },
   job: { findFirst: vi.fn() },
@@ -193,5 +194,49 @@ describe('OrgsService browser authorization', () => {
     });
     expect(sfCli.logout).not.toHaveBeenCalled();
     expect(db.orgConnection.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrgsService unlinkScratchOrg', () => {
+  const streamService = { publish: vi.fn() };
+  let service: OrgsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sfCli.logout.mockResolvedValue({ success: true });
+    db.orgConnection.findUnique.mockResolvedValue({
+      id: 'conn-1',
+      alias: 'scratch-1',
+      type: 'scratch',
+      createdBy: userId,
+    });
+    db.scratchOrg.findUnique.mockResolvedValue({ alias: 'scratch-1' });
+    db.job.findFirst.mockResolvedValue(null);
+    db.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+    db.scratchOrg.deleteMany.mockResolvedValue({ count: 1 });
+    db.orgConnection.deleteMany.mockResolvedValue({ count: 1 });
+    service = new OrgsService(streamService as never);
+  });
+
+  it('removes local records without calling Salesforce org delete', async () => {
+    const result = await service.unlinkScratchOrg('scratch-1', userId);
+
+    expect(result).toEqual({
+      alias: 'scratch-1',
+      unlinked: true,
+      message: 'Removed from app; scratch org was not deleted in Salesforce',
+    });
+    expect(sfCli.logout).toHaveBeenCalledWith('scratch-1');
+    expect(db.scratchOrg.deleteMany).toHaveBeenCalledWith({ where: { alias: 'scratch-1' } });
+    expect(db.orgConnection.deleteMany).toHaveBeenCalledWith({
+      where: { alias: 'scratch-1', type: 'scratch' },
+    });
+    expect(sfCli).not.toHaveProperty('deleteScratchOrg');
+  });
+
+  it('routes scratch disconnect through local unlink', async () => {
+    await service.disconnectOrg('scratch-1', userId);
+    expect(sfCli.logout).toHaveBeenCalledWith('scratch-1');
+    expect(db.scratchOrg.deleteMany).toHaveBeenCalled();
   });
 });

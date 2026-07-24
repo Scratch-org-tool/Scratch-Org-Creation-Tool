@@ -47,19 +47,6 @@ function resolveAuthorizeOrgType(input: AuthorizeOrgInput): 'prod' | 'sandbox' {
   return resolveOrgTypeFromInstance(input.instanceUrl, input.isDevHub ?? false);
 }
 
-function isScratchOrgAlreadyGone(error?: string): boolean {
-  if (!error) return false;
-  const lower = error.toLowerCase();
-  return (
-    lower.includes('not found')
-    || lower.includes('does not exist')
-    || lower.includes('no authorization')
-    || lower.includes('expired')
-    || lower.includes('already been deleted')
-    || lower.includes('invalid alias')
-  );
-}
-
 @Injectable()
 export class OrgsService {
   private readonly logger = new Logger(OrgsService.name);
@@ -391,7 +378,7 @@ export class OrgsService {
     return result.data;
   }
 
-  async deleteScratchOrg(alias: string, userId: string) {
+  async unlinkScratchOrg(alias: string, userId: string) {
     await this.requireOrgByAlias(alias, userId);
     const [scratchOrg, orgConnection] = await Promise.all([
       prisma.scratchOrg.findUnique({ where: { alias } }),
@@ -410,22 +397,7 @@ export class OrgsService {
     });
     if (activeJob) {
       throw new BadRequestException(
-        `Scratch org "${alias}" has an active job (${activeJob.status}). Cancel it in Monitoring before deleting.`,
-      );
-    }
-
-    let deletedFromSalesforce = false;
-    let message: string;
-
-    const deleteResult = await this.sfCli.deleteScratchOrg(alias);
-    if (deleteResult.success) {
-      deletedFromSalesforce = true;
-      message = 'Scratch org deleted from Salesforce';
-    } else if (isScratchOrgAlreadyGone(deleteResult.error)) {
-      message = 'Scratch org was already removed or expired in Salesforce; app records cleaned up';
-    } else {
-      throw new BadRequestException(
-        deleteResult.error ?? 'Failed to delete scratch org from Salesforce',
+        `Scratch org "${alias}" has an active job (${activeJob.status}). Cancel it in Monitoring before removing it from the app.`,
       );
     }
 
@@ -440,15 +412,17 @@ export class OrgsService {
       prisma.orgConnection.deleteMany({ where: { alias, type: 'scratch' } }),
     ]);
 
-    return { alias, deletedFromSalesforce, message };
+    return {
+      alias,
+      unlinked: true,
+      message: 'Removed from app; scratch org was not deleted in Salesforce',
+    };
   }
 
   async disconnectOrg(alias: string, userId: string) {
     const org = await this.requireOrgByAlias(alias, userId);
     if (org.type === 'scratch') {
-      throw new BadRequestException(
-        `Use scratch org delete for alias "${alias}" instead of disconnect`,
-      );
+      return this.unlinkScratchOrg(alias, userId);
     }
 
     if (org.isDefaultDevHub) {

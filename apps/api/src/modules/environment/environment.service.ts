@@ -80,8 +80,8 @@ export class EnvironmentService {
     private readonly existingScratchOrgs: ExistingScratchOrgService,
   ) {}
 
-  deleteScratchOrg(alias: string, userId: string) {
-    return this.orgsService.deleteScratchOrg(alias, userId);
+  unlinkScratchOrg(alias: string, userId: string) {
+    return this.orgsService.unlinkScratchOrg(alias, userId);
   }
 
   disconnectOrg(alias: string, userId: string) {

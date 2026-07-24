@@ -212,43 +212,129 @@ describe('ScratchTemplatesService authoritative launch merge', () => {
     }));
   });
 
-  it('blocks an automatic data preset until a runtime source org is selected', async () => {
+  it('blocks scoped data deployment until a runtime source org is selected', async () => {
+    const foundationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const masterId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const service = new ScratchTemplatesService();
-    vi.spyOn(service, 'get').mockResolvedValue({
-      id: templateId,
-      name: 'Data Deployment Queries',
-      config: {
-        version: 2,
-        gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
-        customSettings: { enabled: false, mode: 'bundled' },
-        dataSeed: { mode: 'automatic', datasets: ['Products'] },
-        pipelineSteps: {
-          autoRunDataSeed: true,
-          autoRunPartners: false,
-          autoRunUsers: false,
+    vi.spyOn(service, 'get')
+      .mockResolvedValueOnce({
+        id: foundationId,
+        config: {
+          version: 2,
+          customSettings: { enabled: false, mode: 'bundled' },
+          pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
         },
-      },
-    } as never);
+      } as never)
+      .mockResolvedValueOnce({
+        id: masterId,
+        config: {
+          version: 2,
+          customSettings: { enabled: true, mode: 'master' },
+          pipelineSteps: {
+            autoRunDataSeed: true,
+            autoRunPartners: false,
+            autoRunUsers: false,
+          },
+          dataSeed: { mode: 'automatic', datasets: ['Products'] },
+        },
+      } as never);
 
     await expect(service.resolveLaunch({
-      templateId,
+      foundationTemplateId: foundationId,
+      dataTemplateId: masterId,
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
       alias: 'missing-source',
       devHubAlias: 'devhub',
       gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
-    }, 'owner')).rejects.toThrow('data deployment source org is required');
+    }, 'owner')).rejects.toThrow('custom settings source org is required');
+  });
+
+  it('composes foundation and master templates from scoped launch input', async () => {
+    const foundationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const masterId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const service = new ScratchTemplatesService();
+    const foundationConfig = {
+      version: 2,
+      installPackage: true,
+      customSettings: { enabled: false, mode: 'bundled' },
+      pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+    };
+    const masterConfig = {
+      version: 2,
+      customSettings: { enabled: true, mode: 'master' },
+      orgConfig: { upsertQueueIds: true },
+      pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+    };
+    vi.spyOn(service, 'get')
+      .mockResolvedValueOnce({ id: foundationId, config: foundationConfig } as never)
+      .mockResolvedValueOnce({ id: masterId, config: masterConfig } as never);
+
+    const result = await service.resolveLaunch({
+      foundationTemplateId: foundationId,
+      dataTemplateId: masterId,
+      pipelineScope: { sourceDeployment: true, dataDeployment: true },
+      alias: 'scoped',
+      devHubAlias: 'devhub',
+      gitSource: { provider: 'github', repo: 'repo', branch: 'main' },
+      dataDeploymentOrgId: runtimeDataSource,
+      customSettingsOrgId: runtimeSettingsSource,
+    }, 'owner');
+
+    expect(result.foundationTemplateId).toBe(foundationId);
+    expect(result.dataTemplateId).toBe(masterId);
+    expect(result.customSettings).toEqual({ enabled: true, mode: 'master' });
+    expect(result.orgConfig?.upsertQueueIds).toBe(true);
+    expect(result.dataDeploymentOrgId).toBe(runtimeDataSource);
+  });
+
+  it('allows data-only scoped launch without git source', async () => {
+    const foundationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const masterId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const service = new ScratchTemplatesService();
+    vi.spyOn(service, 'get')
+      .mockResolvedValueOnce({
+        id: foundationId,
+        config: {
+          version: 2,
+          customSettings: { enabled: false, mode: 'bundled' },
+          pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+        },
+      } as never)
+      .mockResolvedValueOnce({
+        id: masterId,
+        config: {
+          version: 2,
+          customSettings: { enabled: true, mode: 'master' },
+          pipelineSteps: { autoRunDataSeed: false, autoRunPartners: false, autoRunUsers: false },
+        },
+      } as never);
+
+    const result = await service.resolveLaunch({
+      foundationTemplateId: foundationId,
+      dataTemplateId: masterId,
+      pipelineScope: { sourceDeployment: false, dataDeployment: true },
+      mode: 'configure_existing',
+      existingOrgConnectionId: runtimeDataSource,
+      dataDeploymentOrgId: runtimeDataSource,
+      customSettingsOrgId: runtimeSettingsSource,
+    }, 'owner');
+
+    expect(result.gitSource).toBeUndefined();
+    expect(result.customSettings?.enabled).toBe(true);
+    expect(result.skipSteps).toEqual(expect.arrayContaining(['deployMetadata', 'assignPermissions']));
   });
 });
 
 describe('ScratchTemplatesService system presets', () => {
-  it('defines exactly three valid progressive configurations', () => {
-    expect(SYSTEM_SCRATCH_TEMPLATE_PRESETS).toHaveLength(3);
+  it('defines exactly two valid system configurations', () => {
+    expect(SYSTEM_SCRATCH_TEMPLATE_PRESETS).toHaveLength(2);
     expect(
       SYSTEM_SCRATCH_TEMPLATE_PRESETS.map((preset) =>
         scratchPipelineTemplateConfigSchema.safeParse(preset.config).success),
-    ).toEqual([true, true, true]);
+    ).toEqual([true, true]);
   });
 
-  it('removes legacy duplicate defaults and upserts the three keyed presets in order', async () => {
+  it('removes legacy presets and upserts the two keyed presets in order', async () => {
     prismaMock.scratchPipelineTemplate.deleteMany.mockResolvedValue({ count: 3 });
     prismaMock.scratchPipelineTemplate.upsert.mockResolvedValue({});
 
@@ -257,7 +343,13 @@ describe('ScratchTemplatesService system presets', () => {
     expect(prismaMock.scratchPipelineTemplate.deleteMany).toHaveBeenCalledWith({
       where: { isSystem: true, systemKey: null },
     });
-    expect(prismaMock.scratchPipelineTemplate.upsert).toHaveBeenCalledTimes(3);
+    expect(prismaMock.scratchPipelineTemplate.deleteMany).toHaveBeenCalledWith({
+      where: {
+        isSystem: true,
+        systemKey: { in: ['data-deployment-queries', 'config-seed-account-partners'] },
+      },
+    });
+    expect(prismaMock.scratchPipelineTemplate.upsert).toHaveBeenCalledTimes(2);
     expect(
       prismaMock.scratchPipelineTemplate.upsert.mock.calls.map(([request]) => ({
         key: request.create.systemKey,

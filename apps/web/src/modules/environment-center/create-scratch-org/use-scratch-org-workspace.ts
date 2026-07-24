@@ -7,7 +7,12 @@ import { fetchOrgsList, invalidateOrgsCache } from '@/hooks/use-orgs';
 import { useJobEventStream } from '@/hooks/use-job-event-stream';
 import { useGitMetadataSource } from '@/modules/source-control/use-git-metadata-source';
 import { SCM_PROVIDER_LABELS } from '@/modules/source-control/provider-config';
-import type { ScratchPipelineTemplateConfig } from '@sfcc/shared';
+import {
+  SYSTEM_SCRATCH_TEMPLATE_KEYS,
+  pipelineScopeRequiresGitSource,
+  resolvePipelineScope,
+  type ScratchPipelineTemplateConfig,
+} from '@sfcc/shared';
 import {
   buildSkipSteps,
   getStepStates,
@@ -46,7 +51,11 @@ import {
 } from './template-v2-runtime';
 import {
   buildTemplateLaunchRequest,
+  canRequestServerLaunchPlan,
   completedRunAlias,
+  composeClientTemplateMeta,
+  defaultPipelineScopeForMode,
+  mergeFormIntoTemplatePreviewConfig,
   formFromRunConfig,
   launchTargetFromRun,
   metadataSourceFromForm,
@@ -170,7 +179,12 @@ export function useScratchOrgWorkspace() {
 
   const [initialLoading, setInitialLoading] = useState(true);
   const [orgs, setOrgs] = useState<ConnectedOrgRow[]>([]);
-  const [templates, setTemplates] = useState<Array<{ id: string; name: string; isSystem: boolean }>>([]);
+  const [templates, setTemplates] = useState<Array<{
+    id: string;
+    name: string;
+    isSystem: boolean;
+    systemKey?: string | null;
+  }>>([]);
   const [sourceOrgs, setSourceOrgs] = useState<Array<{ id: string; alias: string }>>([]);
   const [azureStatus, setAzureStatus] = useState<AzureStatus>({ connected: false });
   const [repos, setRepos] = useState<AzureRepo[]>([]);
@@ -631,7 +645,7 @@ export function useScratchOrgWorkspace() {
           () => api<ConnectedOrgRow[]>('/environment/connected-orgs'),
         ),
       ),
-      api<Array<{ id: string; name: string; isSystem: boolean }>>(
+      api<Array<{ id: string; name: string; isSystem: boolean; systemKey?: string | null }>>(
         '/environment/scratch-templates',
         { signal },
       ).catch(() => []),
@@ -646,13 +660,34 @@ export function useScratchOrgWorkspace() {
     setOrgs(hubList);
     setTemplates(templateList);
     const hubs = hubList.filter((o) => o.isDevHub || o.orgType === 'Dev Hub');
+    const foundation = templateList.find(
+      (template) => template.systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.SCRATCH_SOURCE_DEPLOYMENT,
+    );
+    const master = templateList.find(
+      (template) => template.systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE,
+    );
+    const resolvedMode = urlMode === 'configure' ? 'configure_existing' : modeRef.current;
+    const legacyTemplate = urlTemplateId
+      ? templateList.find((template) => template.id === urlTemplateId)
+      : undefined;
+    const dataDeploymentDefault = legacyTemplate?.systemKey === SYSTEM_SCRATCH_TEMPLATE_KEYS.MASTER_TEMPLATE
+      || !legacyTemplate;
     setForm((f) => ({
       ...f,
       devHubAlias: hubs.find((h) => h.isDefaultDevHub)?.alias ?? hubs[0]?.alias ?? f.devHubAlias,
-      templateId:
-        urlTemplateId ??
-        templateList.find((t) => t.isSystem)?.id ??
-        f.templateId,
+      foundationTemplateId: foundation?.id ?? f.foundationTemplateId,
+      dataTemplateId: master?.id ?? f.dataTemplateId,
+      templateId: master?.id ?? foundation?.id ?? f.templateId,
+      ...(resolvedMode === 'create_new'
+        ? {
+            pipelineScope: {
+              sourceDeployment: true,
+              dataDeployment: dataDeploymentDefault,
+            },
+          }
+        : {
+            pipelineScope: defaultPipelineScopeForMode('configure_existing'),
+          }),
     }));
 
     const snapshot = explicitExistingTarget ? null : loadWorkspaceSnapshot();
@@ -714,19 +749,32 @@ export function useScratchOrgWorkspace() {
   }, [loadInitial]);
 
   useEffect(() => {
-    if (!form.templateId) {
+    if (!form.foundationTemplateId) {
       setTemplateMeta(null);
       return;
     }
     let cancelled = false;
-    api<{ name: string; config: ScratchPipelineTemplateConfig }>(
-      `/environment/scratch-templates/${form.templateId}`,
-    )
-      .then((t) => {
-        if (cancelled) return;
-        setTemplateMeta({ name: t.name, config: t.config });
+    const scope = resolvePipelineScope(form.pipelineScope, mode);
+    const requests = [
+      api<{ name: string; config: ScratchPipelineTemplateConfig }>(
+        `/environment/scratch-templates/${form.foundationTemplateId}`,
+      ),
+      scope.dataDeployment && form.dataTemplateId
+        ? api<{ name: string; config: ScratchPipelineTemplateConfig }>(
+            `/environment/scratch-templates/${form.dataTemplateId}`,
+          )
+        : Promise.resolve(null),
+    ];
+    Promise.all(requests)
+      .then(([foundation, master]) => {
+        if (cancelled || !foundation) return;
+        setTemplateMeta(composeClientTemplateMeta(
+          { id: form.foundationTemplateId, ...foundation },
+          master ? { id: form.dataTemplateId, ...master } : null,
+          scope,
+        ));
         if (initialLoading || automationRunId) return;
-        const cfg = t.config;
+        const cfg = foundation.config;
         const azureCfg = cfg.azureDeploy as { manifestPath?: string } | undefined;
         const gitCfg = cfg.gitSource as {
           provider?: ScratchOrgFormState['gitProvider'];
@@ -740,9 +788,6 @@ export function useScratchOrgWorkspace() {
           ...f,
           duration: (cfg.duration as number | undefined) ?? f.duration,
           template: (cfg.template as string | undefined) ?? f.template,
-          sourceOrgId: (cfg.sourceOrgId as string | undefined) || f.sourceOrgId,
-          dataDeploymentOrgId: cfg.dataDeploymentOrgId ?? cfg.sourceOrgId ?? f.dataDeploymentOrgId,
-          customSettingsOrgId: cfg.customSettingsOrgId ?? cfg.sourceOrgId ?? f.customSettingsOrgId,
           gitProvider: gitCfg?.provider ?? f.gitProvider,
           gitConnectionId: gitCfg?.connectionId ?? f.gitConnectionId,
           gitNamespace: gitCfg?.namespace ?? gitCfg?.project ?? f.gitNamespace,
@@ -767,7 +812,16 @@ export function useScratchOrgWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [automationRunId, form.templateId, initialLoading, metadataSource.setSource]);
+  }, [
+    automationRunId,
+    form.dataTemplateId,
+    form.foundationTemplateId,
+    form.pipelineScope.dataDeployment,
+    form.pipelineScope.sourceDeployment,
+    initialLoading,
+    metadataSource.setSource,
+    mode,
+  ]);
 
   useEffect(() => {
     if (!automationRunId) return;
@@ -877,9 +931,22 @@ export function useScratchOrgWorkspace() {
   );
 
   useEffect(() => {
-    if (!templateMeta || !form.templateId) {
+    if (!templateMeta || !form.foundationTemplateId) {
       templatePreviewGenerationRef.current += 1;
       setTemplatePreview(null);
+      setTemplatePreviewLoading(false);
+      return;
+    }
+    const clientPreviewConfig = mergeFormIntoTemplatePreviewConfig(templateMeta.config, form);
+    if (!canRequestServerLaunchPlan(
+      form,
+      metadataSource.gitSource,
+      mode,
+      templateMeta.config,
+      existingOrgConnectionId || undefined,
+    )) {
+      templatePreviewGenerationRef.current += 1;
+      setTemplatePreview(buildTemplateV2Preview(clientPreviewConfig));
       setTemplatePreviewLoading(false);
       return;
     }
@@ -888,7 +955,7 @@ export function useScratchOrgWorkspace() {
     setTemplatePreviewLoading(true);
     const timer = setTimeout(() => {
       void api<{ config: ScratchPipelineTemplateConfig }>(
-        `/environment/scratch-templates/${form.templateId}/launch-plan`,
+        `/environment/scratch-templates/${form.foundationTemplateId}/launch-plan`,
         {
           method: 'POST',
           signal: controller.signal,
@@ -961,13 +1028,25 @@ export function useScratchOrgWorkspace() {
         templatePreviewGenerationRef.current += 1;
       }
     };
-  }, [form.alias, form.templateId, templateLaunchRequest, templateMeta]);
+  }, [
+    existingOrgConnectionId,
+    form,
+    form.alias,
+    form.foundationTemplateId,
+    form.pipelineScope,
+    metadataSource.gitSource,
+    mode,
+    templateLaunchRequest,
+    templateMeta,
+  ]);
 
   useEffect(() => {
+    const scope = resolvePipelineScope(form.pipelineScope, mode);
+    const requiresGit = pipelineScopeRequiresGitSource(scope);
     if (
       mode !== 'configure_existing'
       || !existingOrgConnectionId
-      || !metadataSource.gitSource
+      || (requiresGit && !metadataSource.gitSource)
       || templatePreviewLoading
       || (templateMeta && (!templatePreview || templatePreview.errors.length > 0))
     ) {
@@ -1043,7 +1122,7 @@ export function useScratchOrgWorkspace() {
         && eligibility?.eligible === true
         && destructiveConfirmed
         && skipCreateConfirmed) &&
-    !!metadataSource.gitSource &&
+    (!pipelineScopeRequiresGitSource(form.pipelineScope) || !!metadataSource.gitSource) &&
     !templatePreviewLoading &&
     (!templateMeta || Boolean(templatePreview && templatePreview.errors.length === 0));
 
@@ -1187,6 +1266,9 @@ export function useScratchOrgWorkspace() {
     setForm((f) => ({
       ...DEFAULT_FORM,
       devHubAlias: f.devHubAlias,
+      foundationTemplateId: f.foundationTemplateId,
+      dataTemplateId: f.dataTemplateId,
+      pipelineScope: defaultPipelineScopeForMode('create_new'),
       azureProject: f.azureProject,
       azureRepo: f.azureRepo,
       azureBranch: f.azureBranch,
@@ -1230,6 +1312,10 @@ export function useScratchOrgWorkspace() {
     eligibilityGenerationRef.current += 1;
     modeRef.current = nextMode;
     setMode(nextMode);
+    setForm((current) => ({
+      ...current,
+      pipelineScope: defaultPipelineScopeForMode(nextMode),
+    }));
     setDestructiveConfirmed(false);
     setSkipCreateConfirmed(false);
     setEligibility(null);

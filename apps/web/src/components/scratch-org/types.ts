@@ -1,5 +1,5 @@
 import type { ScratchOrgSkipStepKey } from '@sfcc/shared';
-import type { ScmProvider } from '@sfcc/shared';
+import type { ScmProvider, PipelineScope } from '@sfcc/shared';
 
 export const PIPELINE_STEPS_UI = [
   'Create Scratch Org',
@@ -87,6 +87,9 @@ export interface ScratchOrgFormState {
   gitNamespace: string;
   gitRepositoryId: string;
   templateId: string;
+  foundationTemplateId: string;
+  dataTemplateId: string;
+  pipelineScope: PipelineScope;
   /** @deprecated Kept for restored V1 runs. */
   sourceOrgId: string;
   dataDeploymentOrgId: string;
