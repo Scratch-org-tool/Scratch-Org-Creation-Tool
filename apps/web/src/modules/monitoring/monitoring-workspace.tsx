@@ -23,9 +23,6 @@ export function MonitoringWorkspace() {
     totalPages,
     filteredJobs,
     paginatedJobs,
-    selectedJobId,
-    setSelectedJobId,
-    selectedJob,
     refresh,
   } = useMonitoringWorkspace();
 
@@ -57,11 +54,8 @@ export function MonitoringWorkspace() {
           pageSize={pageSize}
           totalPages={totalPages}
           statusFilter={statusFilter}
-          selectedJob={selectedJob}
-          selectedJobId={selectedJobId}
           onStatusFilterChange={setStatusFilter}
           onPageChange={setPage}
-          onSelectJob={setSelectedJobId}
         />
       )}
     </div>

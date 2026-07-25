@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
 import { saveAgentSession, getAgentSession } from '@sfcc/firebase';
 import type {
   AgentSession,
@@ -7,7 +7,9 @@ import type {
   KnowledgeTier,
 } from '@sfcc/shared';
 import {
+  buildCopilotTextGreeting,
   getEffectiveModules,
+  isCopilotGreeting,
   resolveCopilotTiers,
   type UserAccessProfile,
   type AppModule,
@@ -57,12 +59,27 @@ function trimHistory(
 export type CopilotStreamWriter = (event: CopilotStreamEvent) => void;
 
 @Injectable()
-export class CopilotService {
+export class CopilotService implements OnModuleInit {
   constructor(
     private readonly agentRouter: AgentRouterService,
     private readonly knowledgeService: KnowledgeService,
     private readonly appGuideService: AppGuideService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      const count = await this.knowledgeService.countBySourceType(KNOWLEDGE_CORPUS_SOURCE_TYPE);
+      if (count === 0) {
+        const result = await this.seedKnowledgeCorpus();
+        console.log(`[Copilot] Auto-seeded knowledge corpus (${result.ingested} docs)`);
+      }
+    } catch (err) {
+      console.warn(
+        '[Copilot] Knowledge auto-seed skipped:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   async chat(
     body: {
@@ -161,6 +178,40 @@ export class CopilotService {
       }
 
       const mergedContext = this.mergeContext(body.context, userProfile);
+      const pageTitle =
+        typeof mergedContext.pageTitle === 'string' ? mergedContext.pageTitle : undefined;
+      const displayName =
+        typeof mergedContext.displayName === 'string' ? mergedContext.displayName : undefined;
+
+      if (isCopilotGreeting(body.message)) {
+        const greeting = buildCopilotTextGreeting(displayName, pageTitle);
+        const userMessage: CopilotMessage = {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: body.message,
+          timestamp: new Date().toISOString(),
+        };
+        const assistantMessage: CopilotMessage = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: greeting,
+          timestamp: new Date().toISOString(),
+        };
+        session.messages.push(userMessage, assistantMessage);
+        session.updatedAt = new Date().toISOString();
+        session.agentType = 'general';
+        onDelta?.({ content: greeting });
+        void saveAgentSession(stripUndefined(session) as AgentSession).catch((err) => {
+          console.warn('[Copilot] Session save failed (non-blocking):', err instanceof Error ? err.message : err);
+        });
+        return {
+          sessionId,
+          message: assistantMessage,
+          agentType: 'general',
+          action: undefined,
+        };
+      }
+
       const guideContext = this.appGuideService.buildGuideContext(body.message, mergedContext);
 
       const userMessage: CopilotMessage = {
@@ -194,11 +245,11 @@ export class CopilotService {
 
       let action = result.action;
       if (!action && agentType === 'general') {
-        const nav = this.appGuideService.detectNavigationAction(
-          body.message,
-          (mergedContext.grantedModules as AppModule[]) ?? [],
-          mergedContext.role === 'admin' ? 'admin' : 'user',
-        );
+        const role = mergedContext.role === 'admin' ? 'admin' : 'user';
+        const modules = (mergedContext.grantedModules as AppModule[]) ?? [];
+        const nav =
+          this.appGuideService.detectNavigationAction(body.message, modules, role) ??
+          this.appGuideService.suggestWorkflowNavigation(body.message, modules, role);
         if (nav) action = nav as Record<string, unknown>;
       }
 

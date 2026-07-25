@@ -2,9 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_COPILOT_SETTINGS,
+  buildCopilotTextGreeting,
   buildCopilotVoiceGreeting,
   copilotSettingsUpdateSchema,
   copilotSpeechText,
+  isCopilotGreeting,
   matchCopilotWakeWord,
   normalizeCopilotSettings,
 } from './copilot-voice';
@@ -90,6 +92,24 @@ describe('buildCopilotVoiceGreeting', () => {
   it('falls back to a generic greeting without a name', () => {
     assert.ok(buildCopilotVoiceGreeting(undefined).startsWith('Hi there!'));
     assert.ok(buildCopilotVoiceGreeting('   ').startsWith('Hi there!'));
+  });
+});
+
+describe('isCopilotGreeting', () => {
+  it('matches standalone greetings', () => {
+    assert.equal(isCopilotGreeting('hi'), true);
+    assert.equal(isCopilotGreeting('Hello!'), true);
+    assert.equal(isCopilotGreeting('good morning'), true);
+    assert.equal(isCopilotGreeting('hi, how do I deploy?'), false);
+  });
+});
+
+describe('buildCopilotTextGreeting', () => {
+  it('greets the user for typed chat', () => {
+    assert.equal(
+      buildCopilotTextGreeting('Jane Doe', 'Dashboard'),
+      "Hi Jane! I'm your AI Copilot. You're on **Dashboard**. What would you like help with today?",
+    );
   });
 });
 

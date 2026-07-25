@@ -445,3 +445,24 @@ export function matchNavigationAction(
   }
   return undefined;
 }
+
+/** Suggest navigation to the best workflow page for how-to questions (no "go to" required). */
+export function suggestWorkflowNavigation(
+  query: string,
+  grantedModules: AppModule[] = [],
+  role: CopilotClientContext['role'] = 'user',
+): CopilotAction | undefined {
+  const workflows = matchGuideWorkflows(query, 1, { grantedModules, role });
+  const workflow = workflows[0];
+  if (!workflow || workflow.relatedPaths.length === 0) return undefined;
+
+  const href = workflow.relatedPaths[0]!;
+  const pathname = href.split('?')[0]!;
+  const adminOnly = pathname === '/admin' || pathname.startsWith('/admin/');
+  if (adminOnly && role !== 'admin') return undefined;
+
+  const module = moduleForPath(pathname);
+  if (module && role !== 'admin' && !grantedModules.includes(module)) return undefined;
+
+  return { type: 'navigate', href, label: workflow.title };
+}

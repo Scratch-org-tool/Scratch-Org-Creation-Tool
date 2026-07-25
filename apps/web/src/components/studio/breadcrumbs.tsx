@@ -17,7 +17,10 @@ export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
   if (crumbs.length <= 1) return null;
 
   return (
-    <nav aria-label="Breadcrumb" className={cn('flex items-center gap-1 text-sm text-muted-foreground', className)}>
+    <nav
+      aria-label="Breadcrumb"
+      className={cn('flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-sm text-muted-foreground', className)}
+    >
       {crumbs.map((crumb, i) => {
         const isLast = i === crumbs.length - 1;
         return (

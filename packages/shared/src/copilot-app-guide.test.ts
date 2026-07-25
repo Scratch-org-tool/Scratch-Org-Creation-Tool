@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   formatGuideForPrompt,
   matchNavigationAction,
+  suggestWorkflowNavigation,
 } from './copilot-app-guide.js';
 
 describe('permission-aware Copilot app guide', () => {
@@ -66,5 +67,20 @@ describe('permission-aware Copilot app guide', () => {
     assert.match(dataGuide, /Data Deployment/);
     assert.doesNotMatch(dataGuide, /Git Metadata Deploy:/);
     assert.doesNotMatch(dataGuide, /Org Setup:/);
+  });
+
+  it('suggests workflow navigation for how-to questions without explicit nav intent', () => {
+    assert.deepEqual(
+      suggestWorkflowNavigation('How do I create a scratch org?', ['dashboard', 'environment']),
+      {
+        type: 'navigate',
+        href: '/environment-center/create-scratch-org',
+        label: 'Create a scratch org',
+      },
+    );
+    assert.equal(
+      suggestWorkflowNavigation('How do I create a scratch org?', ['dashboard', 'copilot']),
+      undefined,
+    );
   });
 });

@@ -260,6 +260,7 @@ export interface LearningQuizAttemptView {
   moduleId: string;
   moduleTitle: string;
   pathId: string;
+  pathTitle: string;
   status: 'in_progress' | 'completed';
   source: LearningQuizSource;
   questions: LearningQuizQuestionView[];

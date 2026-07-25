@@ -16,16 +16,14 @@ const SCRATCH_ORG_JOB_TYPES = new Set([
   'account_partner_import',
 ]);
 
-export function getJobWorkspaceHref(job: JobWorkspaceLinkInput): string | null {
+export function getJobWorkspaceHref(job: JobWorkspaceLinkInput): string {
   const runId = job.automationRunId;
-  if (!runId) return null;
-
   if (
-    job.runIntent === 'scratch_org_pipeline' ||
-    SCRATCH_ORG_JOB_TYPES.has(job.type)
+    runId &&
+    (job.runIntent === 'scratch_org_pipeline' || SCRATCH_ORG_JOB_TYPES.has(job.type))
   ) {
     return `/environment-center/create-scratch-org?runId=${encodeURIComponent(runId)}`;
   }
 
-  return null;
+  return `/monitoring/jobs/${job.id}`;
 }

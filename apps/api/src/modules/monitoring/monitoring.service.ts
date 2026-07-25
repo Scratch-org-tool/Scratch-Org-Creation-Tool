@@ -369,6 +369,140 @@ export class MonitoringService {
     });
   }
 
+  async getJobDetail(jobId: string, userId: string, isAdmin: boolean) {
+    const job = await this.jobsService.findOne(jobId, userId);
+    if (!job) throw new NotFoundException('Job not found');
+
+    const deployment = await prisma.deployment.findFirst({
+      where: { jobId },
+      include: {
+        targetOrg: { select: { alias: true, username: true } },
+      },
+    });
+
+    let sourceOrgAlias: string | null = null;
+    if (deployment?.sourceOrgId) {
+      const sourceOrg = await prisma.orgConnection.findUnique({
+        where: { id: deployment.sourceOrgId },
+        select: { alias: true, username: true },
+      });
+      sourceOrgAlias = sourceOrg?.alias ?? null;
+    }
+
+    const audits = deployment
+      ? await prisma.deploymentAudit.findMany({
+          where: { deploymentId: deployment.id },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        })
+      : [];
+
+    const siblingJobs = job.parentRunId
+      ? await prisma.job.findMany({
+          where: { parentRunId: job.parentRunId },
+          select: { id: true, status: true, type: true, alias: true },
+          orderBy: { createdAt: 'asc' },
+        })
+      : [];
+
+    const payload = (job.payload ?? {}) as Record<string, unknown>;
+    const metadata = (deployment?.metadata ?? {}) as Record<string, unknown>;
+    const latestAudit = audits[0];
+    const components = Array.isArray(latestAudit?.components)
+      ? (latestAudit.components as Array<Record<string, unknown>>)
+      : [];
+
+    const componentCount =
+      latestAudit?.componentCount ??
+      (Array.isArray(payload.components) ? payload.components.length : components.length) ??
+      0;
+
+    const durationMs =
+      job.startedAt && job.finishedAt
+        ? job.finishedAt.getTime() - job.startedAt.getTime()
+        : null;
+
+    return {
+      job: {
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        queue: job.queue,
+        alias: job.alias,
+        error: job.error,
+        currentStep: job.currentStep,
+        createdBy: job.createdBy,
+        createdAt: job.createdAt.toISOString(),
+        startedAt: job.startedAt?.toISOString() ?? null,
+        finishedAt: job.finishedAt?.toISOString() ?? null,
+        durationMs,
+        payload: job.payload,
+        logs: job.logs.map((log) => ({
+          stream: log.stream,
+          line: log.line,
+          timestamp: log.timestamp.toISOString(),
+        })),
+        logsTruncated: job.logsTruncated,
+        logCount: job.logCount,
+      },
+      deployment: deployment
+        ? {
+            id: deployment.id,
+            status: deployment.status,
+            repo: deployment.repo,
+            branch: deployment.branch,
+            strategy: deployment.strategy,
+            sourceOrgId: deployment.sourceOrgId,
+            targetOrgId: deployment.targetOrgId,
+            sourceOrgAlias,
+            targetOrgAlias: deployment.targetOrg?.alias ?? null,
+            validationId: deployment.validationId,
+            metadata,
+            createdAt: deployment.createdAt.toISOString(),
+          }
+        : null,
+      audits: audits.map((audit) => ({
+        id: audit.id,
+        action: audit.action,
+        status: audit.status,
+        componentCount: audit.componentCount,
+        components: audit.components,
+        error: audit.error,
+        testLevel: audit.testLevel,
+        createdAt: audit.createdAt.toISOString(),
+      })),
+      automationRun: job.parentRun
+        ? {
+            id: job.parentRun.id,
+            intent: job.parentRun.intent,
+            status: job.parentRun.status,
+            createdBy: job.parentRun.createdBy,
+          }
+        : null,
+      siblingJobs: siblingJobs.map((sibling) => ({
+        id: sibling.id,
+        type: sibling.type,
+        status: sibling.status,
+        alias: sibling.alias,
+      })),
+      summary: {
+        totalSteps: siblingJobs.length || 1,
+        completedSteps: siblingJobs.filter((s) => s.status === 'completed').length,
+        failedSteps: siblingJobs.filter((s) => s.status === 'failed').length,
+        deployedComponents: componentCount,
+        changedComponents: components.filter(
+          (c) => c.differenceType === 'changed' || c.status === 'changed',
+        ).length,
+        newComponents: components.filter(
+          (c) => c.differenceType === 'new' || c.status === 'new',
+        ).length,
+        deletedComponents: components.filter(
+          (c) => c.differenceType === 'deleted' || c.status === 'deleted',
+        ).length,
+      },
+    };
+  }
+
   /** Replay a dead-lettered job as a fresh queue job with the original payload. */
   async replayDeadLetter(jobId: string, userId: string, isAdmin: boolean) {
     const job = await prisma.job.findUnique({

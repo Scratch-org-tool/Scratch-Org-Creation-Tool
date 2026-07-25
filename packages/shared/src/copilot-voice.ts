@@ -81,14 +81,34 @@ export function matchCopilotWakeWord(transcript: string): CopilotWakeWordMatch |
  * Spoken greeting for a wake word. Uses the user's first name when the
  * profile has one so the copilot addresses the person directly.
  */
+const COPILOT_GREETING_PATTERN =
+  /^\s*(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|greetings|what'?s\s+up)\s*[!?.]*\s*$/i;
+
+/** True when the user sent a standalone greeting with no follow-up question. */
+export function isCopilotGreeting(message: string): boolean {
+  return COPILOT_GREETING_PATTERN.test(message.trim());
+}
+
 export function buildCopilotVoiceGreeting(
   displayName?: string | null,
   pageTitle?: string,
 ): string {
+  return buildCopilotTextGreeting(displayName, pageTitle, 'voice');
+}
+
+/** Personalized greeting for typed or spoken copilot interactions. */
+export function buildCopilotTextGreeting(
+  displayName?: string | null,
+  pageTitle?: string,
+  mode: 'text' | 'voice' = 'text',
+): string {
   const firstName = displayName?.trim().split(/\s+/)[0] ?? '';
   const hello = firstName ? `Hi ${firstName}!` : 'Hi there!';
-  const where = pageTitle ? ` You're on ${pageTitle}.` : '';
-  return `${hello} I'm listening.${where} Ask me anything about this application.`;
+  const where = pageTitle ? ` You're on **${pageTitle}**.` : '';
+  if (mode === 'voice') {
+    return `${hello} I'm listening.${where.replace(/\*\*/g, '')} Ask me anything about this application.`;
+  }
+  return `${hello} I'm your AI Copilot.${where} What would you like help with today?`;
 }
 
 /** Spoken notice when listening stops because nothing was said. */

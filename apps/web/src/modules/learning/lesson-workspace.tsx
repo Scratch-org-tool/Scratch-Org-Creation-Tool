@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft,
   ArrowRight,
   BookOpen,
   Briefcase,
@@ -21,11 +20,12 @@ import {
   Target,
 } from 'lucide-react';
 import type { ExplainerFocus } from '@sfcc/shared';
-import { InlineAlert } from '@/components/studio';
+import { Breadcrumbs, InlineAlert } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/utils/cn';
 import { completeLesson, fetchLesson } from './learning-api';
+import { learningCrumbs, learningLessonCrumbs } from './learning-breadcrumbs';
 import {
   RESOURCE_SOURCE_BADGES,
   parseBody,
@@ -226,6 +226,22 @@ export function LessonWorkspace() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
+      <Breadcrumbs
+        className="mb-4"
+        items={
+          view
+            ? learningLessonCrumbs(
+                view.pathId,
+                view.pathTitle,
+                view.lesson.id,
+                view.lesson.title,
+              )
+            : lessonId
+              ? learningCrumbs({ href: `/learning/lessons/${lessonId}`, label: 'Lesson' })
+              : learningCrumbs()
+        }
+      />
+
       {error && (
         <div className="mb-4">
           <InlineAlert variant="error">{error}</InlineAlert>
@@ -245,14 +261,7 @@ export function LessonWorkspace() {
         )
       ) : (
         <>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <Link
-              href={`/learning/paths/${view.pathId}`}
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ArrowLeft className="size-3.5" />
-              {view.pathTitle} · {view.moduleTitle}
-            </Link>
+          <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
             {view.completed && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-300">
                 <CheckCircle2 className="size-3" />

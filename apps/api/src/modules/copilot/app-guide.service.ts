@@ -3,6 +3,7 @@ import {
   formatGuideForPrompt,
   matchGuideWorkflows,
   matchNavigationAction,
+  suggestWorkflowNavigation,
   type CopilotClientContext,
   type AppModule,
 } from '@sfcc/shared';
@@ -24,5 +25,13 @@ export class AppGuideService {
     role: CopilotClientContext['role'],
   ) {
     return matchNavigationAction(query, grantedModules, role);
+  }
+
+  suggestWorkflowNavigation(
+    query: string,
+    grantedModules: AppModule[],
+    role: CopilotClientContext['role'],
+  ) {
+    return suggestWorkflowNavigation(query, grantedModules, role);
   }
 }

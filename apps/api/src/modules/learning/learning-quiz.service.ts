@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { prisma, type Prisma } from '@sfcc/db';
 import {
   LEARNING_QUIZ_PASS_PERCENT,
@@ -122,29 +128,58 @@ export class LearningQuizService {
     const { path, module } = location;
     await this.learningService.assertPathVisible(userId, path.id);
 
-    const existing = await prisma.learningQuizAttempt.findFirst({
-      where: { userId, moduleId, status: 'in_progress' },
-      orderBy: { startedAt: 'desc' },
-    });
+    let existing;
+    try {
+      existing = await prisma.learningQuizAttempt.findFirst({
+        where: { userId, moduleId, status: 'in_progress' },
+        orderBy: { startedAt: 'desc' },
+      });
+    } catch (error) {
+      this.logger.error(`quiz_lookup_failed module=${moduleId}`, error);
+      throw new InternalServerErrorException(
+        'Quiz storage is unavailable. Run database migrations and try again.',
+      );
+    }
+
     if (existing) {
-      return this.toAttemptView(existing, module.title);
+      const stored = this.normalizeStoredQuestions(existing.questions);
+      if (stored.length > 0) {
+        return this.toAttemptView(
+          { ...existing, questions: stored, totalQuestions: stored.length },
+          module.title,
+          path.title,
+        );
+      }
+      try {
+        await prisma.learningQuizAttempt.delete({ where: { id: existing.id } });
+      } catch (error) {
+        this.logger.warn(`quiz_discard_corrupt_failed attempt=${existing.id}`, error);
+      }
     }
 
     const { questions, source } = await this.generateQuestions(module);
+    if (questions.length === 0) {
+      throw new BadRequestException('This module does not have quiz questions configured yet.');
+    }
 
-    const attempt = await prisma.learningQuizAttempt.create({
-      data: {
-        userId,
-        pathId: path.id,
-        moduleId,
-        status: 'in_progress',
-        source,
-        questions: questions as unknown as Prisma.InputJsonValue,
-        totalQuestions: questions.length,
-      },
-    });
+    try {
+      const attempt = await prisma.learningQuizAttempt.create({
+        data: {
+          userId,
+          pathId: path.id,
+          moduleId,
+          status: 'in_progress',
+          source,
+          questions: questions as unknown as Prisma.InputJsonValue,
+          totalQuestions: questions.length,
+        },
+      });
 
-    return this.toAttemptView(attempt, module.title);
+      return this.toAttemptView(attempt, module.title, path.title);
+    } catch (error) {
+      this.logger.error(`quiz_create_failed module=${moduleId}`, error);
+      throw new InternalServerErrorException('Unable to start the quiz right now. Please try again.');
+    }
   }
 
   async submitQuiz(
@@ -239,6 +274,22 @@ export class LearningQuizService {
     };
   }
 
+  private normalizeStoredQuestions(raw: unknown): StoredQuizQuestion[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((item): item is StoredQuizQuestion => {
+      if (!item || typeof item !== 'object') return false;
+      const question = item as Partial<StoredQuizQuestion>;
+      return (
+        typeof question.id === 'string' &&
+        typeof question.prompt === 'string' &&
+        Array.isArray(question.options) &&
+        question.options.length > 0 &&
+        typeof question.correctIndex === 'number' &&
+        typeof question.explanation === 'string'
+      );
+    });
+  }
+
   private toAttemptView(
     attempt: {
       id: string;
@@ -251,13 +302,15 @@ export class LearningQuizService {
       startedAt: Date;
     },
     moduleTitle: string,
+    pathTitle: string,
   ): LearningQuizAttemptView {
-    const stored = attempt.questions as StoredQuizQuestion[];
+    const stored = this.normalizeStoredQuestions(attempt.questions);
     return {
       id: attempt.id,
       moduleId: attempt.moduleId,
       moduleTitle,
       pathId: attempt.pathId,
+      pathTitle,
       status: attempt.status === 'completed' ? 'completed' : 'in_progress',
       source: (attempt.source === 'ai' || attempt.source === 'mixed'
         ? attempt.source

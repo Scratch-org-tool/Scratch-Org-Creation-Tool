@@ -306,6 +306,7 @@ export function AcademyWorkspace() {
       <PageHeader
         title="Salesforce Academy"
         subtitle="Salesforce, JavaScript, Java, and release engineering — from fundamentals to architecture."
+        showBreadcrumbs={false}
         actions={
           isAdmin ? (
             <Button asChild variant="outline" className="gap-2">

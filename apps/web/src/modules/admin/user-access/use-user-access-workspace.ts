@@ -135,6 +135,7 @@ export function useUserAccessWorkspace() {
   const closeManage = () => {
     setManageUser(null);
     setDraft(null);
+    setPendingRole(null);
   };
 
   /** Locked modules toggle the grant list; default modules toggle the revoke list. */

@@ -498,6 +498,9 @@ describe('AuthService admin user access', () => {
 
   it('returns 404 when the target user does not exist', async () => {
     users.getAppUser.mockResolvedValue(null);
+    users.getAppUserByFirebaseUid.mockImplementation(async (id: string) =>
+      id === 'uid' ? admin : null,
+    );
     await expect(
       service.updateUserAccess('uid', 'DPT_missing', { role: 'user' }, context),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -560,6 +563,36 @@ describe('AuthService admin user access', () => {
       expect.anything(),
       expect.objectContaining({ actorId: admin.id, roleChanged: true }),
     );
+  });
+
+  it('promotes a standard user to admin', async () => {
+    users.getAppUser.mockResolvedValue(regular);
+    users.updateAppUser.mockResolvedValue({ ...regular, role: 'admin' });
+
+    const result = await service.updateUserAccess(
+      'uid',
+      regular.id,
+      { role: 'admin' },
+      context,
+    );
+
+    expect(users.updateAppUser).toHaveBeenCalledWith(regular.id, { role: 'admin' });
+    expect(result).toMatchObject({ role: 'admin', displayRole: 'Super Admin' });
+  });
+
+  it('resolves the target by Firebase UID when the prefixed id is missing', async () => {
+    users.getAppUser.mockResolvedValue(null);
+    users.getAppUserByFirebaseUid.mockImplementation(async (id: string) => {
+      if (id === 'uid') return admin;
+      if (id === 'firebase-uid') return regular;
+      return null;
+    });
+    users.updateAppUser.mockResolvedValue({ ...regular, role: 'admin' });
+
+    await service.updateUserAccess('uid', 'firebase-uid', { role: 'admin' }, context);
+
+    expect(users.getAppUserByFirebaseUid).toHaveBeenCalledWith('firebase-uid');
+    expect(users.updateAppUser).toHaveBeenCalledWith(regular.id, { role: 'admin' });
   });
 
   it('updates a standard user and reports module changes without leaking PII', async () => {

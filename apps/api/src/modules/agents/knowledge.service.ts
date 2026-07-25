@@ -41,6 +41,10 @@ export class KnowledgeService {
     return result.count;
   }
 
+  async countBySourceType(sourceType: string): Promise<number> {
+    return prisma.knowledgeChunk.count({ where: { sourceType } });
+  }
+
   /**
    * Tier-filtered retrieval. The tier filter runs in the database query, so
    * chunks outside the caller's tiers can never appear in an LLM prompt.

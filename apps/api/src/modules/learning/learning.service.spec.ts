@@ -12,6 +12,7 @@ const db = vi.hoisted(() => ({
     findUnique: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    delete: vi.fn(),
   },
   learningAssignment: {
     findMany: vi.fn(),
@@ -549,8 +550,36 @@ describe('LearningQuizService', () => {
 
     const attempt = await quizService.startQuiz(USER, module.id);
     expect(attempt.id).toBe('attempt-existing');
+    expect(attempt.pathTitle).toBe(CURRICULUM[0]!.title);
     expect(nvidia.chat).not.toHaveBeenCalled();
     expect(db.learningQuizAttempt.create).not.toHaveBeenCalled();
+  });
+
+  it('discards corrupt in-progress attempts and starts a fresh quiz', async () => {
+    const module = CURRICULUM[0]!.modules[0]!;
+    db.learningQuizAttempt.findFirst.mockResolvedValue({
+      id: 'attempt-corrupt',
+      moduleId: module.id,
+      pathId: CURRICULUM[0]!.id,
+      status: 'in_progress',
+      source: 'static',
+      questions: null,
+      totalQuestions: 0,
+      startedAt: new Date(),
+    });
+    db.learningQuizAttempt.delete.mockResolvedValue({ id: 'attempt-corrupt' });
+    db.learningQuizAttempt.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+      Promise.resolve({
+        id: 'attempt-fresh',
+        ...data,
+        startedAt: new Date(),
+      }),
+    );
+
+    const attempt = await quizService.startQuiz(USER, module.id);
+    expect(db.learningQuizAttempt.delete).toHaveBeenCalledWith({ where: { id: 'attempt-corrupt' } });
+    expect(attempt.id).toBe('attempt-fresh');
+    expect(attempt.questions.length).toBeGreaterThan(0);
   });
 
   it('scores submissions server-side and returns a full review', async () => {

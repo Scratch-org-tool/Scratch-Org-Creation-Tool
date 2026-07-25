@@ -127,6 +127,14 @@ select option {
 html:has([data-auth-page]) {
   overflow-x: hidden;
   overscroll-behavior-x: none;
+  width: 100%;
+}
+
+html:has([data-auth-page]) body,
+html:has([data-auth-page]) #__app {
+  width: 100%;
+  min-height: 100dvh;
+  overflow-x: hidden;
 }
 
 /* Error page fallbacks — full styles inlined in layout head (chunk-error-inline-css.ts) */
@@ -224,6 +232,29 @@ html.server-error-failed #__server_error {
 
 
 
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #job-detail-report,
+  #job-detail-report * {
+    visibility: visible;
+  }
+
+  #job-detail-report {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: white !important;
+    color: black !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
 @layer base {
   :root {
     --sidebar-background: 0 0% 98%;

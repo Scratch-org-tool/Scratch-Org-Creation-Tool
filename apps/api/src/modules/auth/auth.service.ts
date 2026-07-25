@@ -577,7 +577,8 @@ export class AuthService {
   ) {
     const requester = await this.assertAdmin(requesterFirebaseUid);
 
-    const target = await getAppUser(targetUserId);
+    const target =
+      (await getAppUser(targetUserId)) ?? (await getAppUserByFirebaseUid(targetUserId));
     if (!target) {
       throw new NotFoundException(AUTH_USER_NOT_FOUND);
     }
@@ -612,7 +613,7 @@ export class AuthService {
 
     let updated;
     try {
-      updated = await updateAppUser(targetUserId, body);
+      updated = await updateAppUser(target.id, body);
     } catch {
       throw new BadRequestException(AUTH_GENERIC_INVALID);
     }

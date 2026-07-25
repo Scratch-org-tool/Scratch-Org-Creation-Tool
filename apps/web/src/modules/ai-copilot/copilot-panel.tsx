@@ -5,9 +5,11 @@ import { usePathname } from 'next/navigation';
 import { Bot, Mic, Send, ChevronDown, ChevronUp, X, Square } from 'lucide-react';
 import {
   COPILOT_VOICE_SILENCE_NOTICE,
+  buildCopilotTextGreeting,
   buildCopilotVoiceGreeting,
   copilotSpeechText,
   getQuickPromptsForPath,
+  isCopilotGreeting,
   matchCopilotWakeWord,
 } from '@sfcc/shared';
 import { Button } from '@/components/ui/button';
@@ -165,6 +167,16 @@ export function CopilotPanel() {
     }
     setInput('');
     addMessage({ role: 'user', content: msg });
+
+    if (isCopilotGreeting(msg)) {
+      const greeting = buildCopilotTextGreeting(
+        profile?.displayName ?? user?.displayName,
+        copilotContext.pageTitle,
+      );
+      addMessage({ role: 'assistant', content: greeting });
+      speakReply(greeting);
+      return;
+    }
 
     const assistantId = addMessage({
       role: 'assistant',

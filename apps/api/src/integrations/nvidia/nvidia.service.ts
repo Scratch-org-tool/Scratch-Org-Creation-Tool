@@ -147,7 +147,19 @@ export class NvidiaService {
   private buildNemotronMessages(
     messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
   ): Array<{ role: 'user' | 'assistant' | 'system'; content: string }> {
-    return [{ role: 'system', content: '/no_think' }, ...messages];
+    // Nemotron expects /no_think in the system prompt. Prepending a separate
+    // system message caused many models to ignore the real app instructions.
+    const firstSystemIdx = messages.findIndex((m) => m.role === 'system');
+    if (firstSystemIdx === -1) {
+      return [{ role: 'system', content: '/no_think' }, ...messages];
+    }
+    const merged = [...messages];
+    const system = merged[firstSystemIdx]!;
+    merged[firstSystemIdx] = {
+      ...system,
+      content: `/no_think\n\n${system.content}`,
+    };
+    return merged;
   }
 
   private async chatCopilotFallback(

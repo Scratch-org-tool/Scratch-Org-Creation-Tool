@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
-  ArrowLeft,
   Award,
   BookOpen,
   CheckCircle2,
@@ -16,11 +15,12 @@ import {
   RotateCcw,
   Sparkles,
 } from 'lucide-react';
-import { InlineAlert } from '@/components/studio';
+import { Breadcrumbs, InlineAlert } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/utils/cn';
 import { fetchPath } from './learning-api';
+import { learningCrumbs, learningPathCrumbs } from './learning-breadcrumbs';
 import { LEVEL_THEMES, formatDuration, levelLabel } from './learning-ui';
 import { ProgressRing } from './progress-ring';
 import type { LearningModuleMeta, LearningPathSummary } from './types';
@@ -204,13 +204,16 @@ export function PathWorkspace() {
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-5xl mx-auto">
-      <Link
-        href="/learning"
-        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ArrowLeft className="size-3.5" />
-        Salesforce Academy
-      </Link>
+      <Breadcrumbs
+        className="mb-1"
+        items={
+          path
+            ? learningPathCrumbs(path.id, path.title)
+            : pathId
+              ? learningCrumbs({ href: `/learning/paths/${pathId}`, label: 'Training path' })
+              : learningCrumbs()
+        }
+      />
 
       {error && <InlineAlert variant="error">{error}</InlineAlert>}
 

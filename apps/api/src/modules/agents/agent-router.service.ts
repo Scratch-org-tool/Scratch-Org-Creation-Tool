@@ -11,7 +11,8 @@ import {
   tierGuardrails,
   wantsExecutableAction,
 } from './agent-options';
-import { matchNavigationAction, type AppModule } from '@sfcc/shared';
+import { matchNavigationAction, suggestWorkflowNavigation, type AppModule } from '@sfcc/shared';
+import { searchKnowledgeCorpus } from '../copilot/knowledge-corpus';
 
 export interface AgentResult {
   content: string;
@@ -26,12 +27,15 @@ const OPERATOR_SYSTEM_PROMPT = `You are the in-app assistant for **Salesforce De
 Your job is to help users **operate this application**: where to click in the sidebar, which page to open, what form fields mean, and what happens after each step.
 
 Rules:
-- Use the application route map and workflows below as your source of truth. Do not invent pages or features that are not listed.
+- You ONLY answer questions about this application. If asked about unrelated topics, politely redirect to app usage.
+- Use the application route map, workflows, and knowledge sections below as your source of truth. Do not invent pages or features that are not listed.
+- Never answer from general world knowledge when the app guide or knowledge sections cover the topic.
 - Always respect grantedModules in the user context — never suggest pages the user cannot access.
 - If the user is already on the correct page (see pathname in context), explain that screen instead of sending them elsewhere.
 - Answer format: short and actionable — **where to go**, **what to click**, **what to enter**, **what happens next**.
 - Use markdown links to in-app paths, e.g. [Metadata Deployment](/metadata-deployment), when pointing to another section.
-- For greetings or vague questions on a specific page, explain what that page does and offer 2–3 relevant next steps.
+- For greetings (hi, hello, hey, etc.), greet the user by first name from displayName in context, then briefly mention the current page and offer 2–3 relevant next steps.
+- For other vague questions on a specific page, explain what that page does and offer 2–3 relevant next steps.
 - If unsure, ask one clarifying question — do not guess.
 - Professional tone — no emojis, no filler phrases.
 - Do not discuss unrelated topics; redirect to app usage.`;
@@ -63,6 +67,13 @@ export class AgentRouterService {
       knowledgeContext: await this.retrieveKnowledge(query, options),
     };
 
+    // Specialized agents don't get the guide block in their system prompt — merge it
+    // into retrieved knowledge so every route stays application-grounded.
+    if (agentType !== 'general' && options?.guideContext) {
+      const parts = [options.guideContext, grounded.knowledgeContext].filter(Boolean);
+      grounded.knowledgeContext = parts.length > 0 ? parts.join('\n\n') : undefined;
+    }
+
     switch (agentType) {
       case 'scratch_org':
         return this.scratchOrgAgent.run(query, context, grounded, onDelta);
@@ -82,15 +93,21 @@ export class AgentRouterService {
     options?: AgentRunOptions,
   ): Promise<string | undefined> {
     const tiers = options?.tiers ?? ['app_guide', 'internal'];
+
+    const formatHits = (hits: Array<{ source: string; content: string }>) =>
+      hits.map((h) => `--- ${h.source} ---\n${h.content}`).join('\n\n');
+
     try {
       const hits = await this.knowledgeService.search(query, 4, tiers);
-      if (hits.length === 0) return undefined;
-      return hits
-        .map((h) => `--- ${h.source} ---\n${h.content}`)
-        .join('\n\n');
+      if (hits.length > 0) {
+        return formatHits(hits);
+      }
     } catch {
-      return undefined;
+      /* fall through to in-memory corpus */
     }
+
+    const fallback = searchKnowledgeCorpus(query, tiers, 4);
+    return fallback.length > 0 ? formatHits(fallback) : undefined;
   }
 
   private async generalChat(
@@ -127,11 +144,17 @@ export class AgentRouterService {
     result = await this.nvidiaService.chatCopilotResilient(messages, onDelta);
 
     const grantedModules = (context?.grantedModules as AppModule[] | undefined) ?? [];
-    const navAction = matchNavigationAction(
-      query,
-      grantedModules,
-      context?.role === 'admin' ? 'admin' : 'user',
-    );
+    const navAction =
+      matchNavigationAction(
+        query,
+        grantedModules,
+        context?.role === 'admin' ? 'admin' : 'user',
+      ) ??
+      suggestWorkflowNavigation(
+        query,
+        grantedModules,
+        context?.role === 'admin' ? 'admin' : 'user',
+      );
 
     return {
       content: result.content,

@@ -24,10 +24,13 @@ interface UserAccessManageDrawerProps {
   draft: ManageDraft | null;
   saving: boolean;
   error?: string | null;
+  pendingRoleChange?: 'admin' | 'user' | null;
   onClose: () => void;
   onDraftChange: (draft: ManageDraft) => void;
   onToggleModule: (module: AppModule) => void;
   onSave: () => void;
+  onConfirmRoleChange?: () => void;
+  onCancelRoleChange?: () => void;
   isSelf: boolean;
 }
 
@@ -68,10 +71,13 @@ export function UserAccessManageDrawer({
   draft,
   saving,
   error,
+  pendingRoleChange = null,
   onClose,
   onDraftChange,
   onToggleModule,
   onSave,
+  onConfirmRoleChange,
+  onCancelRoleChange,
   isSelf,
 }: UserAccessManageDrawerProps) {
   const learningEnabled = draft
@@ -213,13 +219,47 @@ export function UserAccessManageDrawer({
           )}
         </div>
 
-        <div className="p-4 border-t border-border flex gap-2">
-          <Button variant="outline" className="flex-1" onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
-          <Button className="flex-1" loading={saving} disabled={isSelf} onClick={onSave}>
-            Save changes
-          </Button>
+        <div className="p-4 border-t border-border space-y-3">
+          {pendingRoleChange && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+              <p className="font-medium text-foreground">
+                Change role to {pendingRoleChange === 'admin' ? 'Super Admin' : 'standard user'}?
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                This updates the user&apos;s permissions across the app.
+              </p>
+            </div>
+          )}
+          <div className="flex gap-2">
+            {pendingRoleChange ? (
+              <>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={onCancelRoleChange}
+                  disabled={saving}
+                >
+                  Back
+                </Button>
+                <Button
+                  className="flex-1"
+                  loading={saving}
+                  onClick={onConfirmRoleChange}
+                >
+                  Confirm role change
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" className="flex-1" onClick={onClose} disabled={saving}>
+                  Cancel
+                </Button>
+                <Button className="flex-1" loading={saving} disabled={isSelf} onClick={onSave}>
+                  Save changes
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </SheetContent>
       )}

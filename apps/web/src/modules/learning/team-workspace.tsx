@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import {
-  ArrowLeft,
   Award,
   BarChart3,
   BookOpenCheck,
@@ -22,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/utils/cn';
 import { AssignDrawer } from './assign-drawer';
+import { learningTeamCrumbs } from './learning-breadcrumbs';
 import { LEVEL_THEMES, formatDate, formatRelative, levelLabel } from './learning-ui';
 import { useTeamWorkspace } from './use-team-workspace';
 import { VideoSessionManager } from './video-session-manager';
@@ -262,18 +262,10 @@ export function TeamWorkspace() {
 
   return (
     <div className="p-4 md:p-6 space-y-5">
-      <Link
-        href="/learning"
-        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ArrowLeft className="size-3.5" />
-        Salesforce Academy
-      </Link>
-
       <PageHeader
         title="Team Academy Progress"
         subtitle="Assign training paths and track every learner's lessons, quiz scores, and completions."
-        showBreadcrumbs={false}
+        breadcrumbs={learningTeamCrumbs()}
         actions={
           <Button className="gap-1.5" onClick={() => openDrawer()}>
             <ClipboardList className="size-4" />

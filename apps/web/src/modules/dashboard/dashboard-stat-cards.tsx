@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Activity,
@@ -26,6 +27,7 @@ export function DashboardStatCards({
   showEnvironment = false,
   showDeployment = false,
 }: DashboardStatCardsProps) {
+  const router = useRouter();
   const total = data?.jobStats.total ?? 0;
   const sparkData = data?.sparklines.map((p) => p.count) ?? [];
 
@@ -111,22 +113,41 @@ export function DashboardStatCards({
         }
       />
 
-      {ringCards.map((c) => (
-        <KpiCard
-          key={c.label}
-          label={c.label}
-          value={c.value}
-          icon={c.icon}
-          iconClass={c.iconClass}
-          accentColor={c.accentColor}
-          trend={c.trend}
-          footer={
-            <div className="flex justify-end -mt-1">
-              <ProgressRing value={c.value} max={total || 1} size={44} color={c.ringColor} />
-            </div>
-          }
-        />
-      ))}
+      {ringCards.map((c) => {
+        const card = (
+          <KpiCard
+            key={c.label}
+            label={c.label}
+            value={c.value}
+            icon={c.icon}
+            iconClass={c.iconClass}
+            accentColor={c.accentColor}
+            trend={c.trend}
+            className={c.label === 'Running' && c.value > 0 ? 'cursor-pointer' : undefined}
+            footer={
+              <div className="flex justify-end -mt-1">
+                <ProgressRing value={c.value} max={total || 1} size={44} color={c.ringColor} />
+              </div>
+            }
+          />
+        );
+
+        if (c.label === 'Running' && c.value > 0) {
+          return (
+            <button
+              key={c.label}
+              type="button"
+              className="text-left"
+              onClick={() => router.push('/monitoring?status=running')}
+              aria-label={`View ${c.value} running jobs`}
+            >
+              {card}
+            </button>
+          );
+        }
+
+        return card;
+      })}
 
       {simpleCards.map((c) => (
         <KpiCard

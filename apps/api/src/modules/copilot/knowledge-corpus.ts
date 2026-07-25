@@ -16,6 +16,35 @@ export const KNOWLEDGE_CORPUS_SOURCE_TYPE = 'app_corpus';
  * are retrievable by admins only — enforcement happens in the tier-filtered
  * retrieval query, not the prompt.
  */
+/** Keyword search over the curated corpus when DB retrieval is empty or unavailable. */
+export function searchKnowledgeCorpus(
+  query: string,
+  tiers: KnowledgeTier[],
+  limit = 4,
+): Array<{ source: string; content: string }> {
+  const lower = query.toLowerCase();
+  const words = lower.split(/\s+/).filter((w) => w.length > 2);
+
+  return KNOWLEDGE_CORPUS.filter((doc) => tiers.includes(doc.tier))
+    .map((doc) => {
+      const contentLower = doc.content.toLowerCase();
+      const sourceLower = doc.source.toLowerCase();
+      let score = 0;
+      for (const word of words) {
+        if (contentLower.includes(word)) score += 1;
+        if (sourceLower.includes(word)) score += 2;
+      }
+      for (const kw of ['scratch', 'deploy', 'org', 'data', 'metadata', 'monitor', 'defect', 'copilot']) {
+        if (lower.includes(kw) && contentLower.includes(kw)) score += 1;
+      }
+      return { doc, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => ({ source: entry.doc.source, content: entry.doc.content }));
+}
+
 export const KNOWLEDGE_CORPUS: CorpusDoc[] = [
   // ---------------------------------------------------------------------
   // app_guide tier — usage help

@@ -52,7 +52,7 @@ export function LoginWorkspace({ mode, onModeChange, notice }: LoginWorkspacePro
   const copy = COPY[mode];
 
   return (
-    <div className="overflow-x-hidden bg-background" data-auth-page>
+    <div className="min-h-[100dvh] w-full overflow-x-hidden bg-background" data-auth-page>
       {isBusy && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm"
@@ -72,7 +72,7 @@ export function LoginWorkspace({ mode, onModeChange, notice }: LoginWorkspacePro
         </div>
       )}
 
-      <main className="lg:grid lg:min-h-screen lg:grid-cols-2 lg:overflow-hidden">
+      <main className="w-full lg:grid lg:min-h-screen lg:grid-cols-2 lg:overflow-hidden">
         <div className="relative hidden h-full min-h-screen flex-col border-r border-border bg-secondary p-10 lg:flex">
           <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-background" />
           <div className="relative z-10 mr-auto flex items-center gap-2.5">
@@ -93,7 +93,7 @@ export function LoginWorkspace({ mode, onModeChange, notice }: LoginWorkspacePro
           </div>
         </div>
 
-        <div className="relative w-full px-6 py-8 sm:px-8 lg:flex lg:min-h-screen lg:flex-col lg:justify-center lg:py-10">
+        <div className="relative box-border flex w-full min-h-[100dvh] min-w-0 flex-col items-center justify-center px-[max(1.5rem,env(safe-area-inset-left))] py-8 pr-[max(1.5rem,env(safe-area-inset-right))] pt-[max(2rem,env(safe-area-inset-top))] sm:px-8 sm:pr-8 sm:pt-8 lg:min-h-screen lg:py-10">
           <div
             aria-hidden
             className="pointer-events-none absolute inset-0 -z-10 hidden overflow-hidden opacity-60 lg:block"
@@ -103,7 +103,7 @@ export function LoginWorkspace({ mode, onModeChange, notice }: LoginWorkspacePro
             <div className="absolute top-0 right-0 h-[320px] w-60 -translate-y-[87.5%] rounded-full bg-[radial-gradient(ellipse_at_center,hsl(var(--foreground)/0.04)_0%,transparent_80%)]" />
           </div>
 
-          <div className="mx-auto w-full max-w-sm space-y-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+          <div className="w-full min-w-0 max-w-sm space-y-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
             <div className="flex items-center gap-2.5 lg:hidden">
               <AppLogo size="sm" priority />
               <span className="text-sm font-semibold">SF DevOps Command Center</span>

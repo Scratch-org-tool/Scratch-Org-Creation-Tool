@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
-  ArrowLeft,
   ArrowRight,
   Award,
   CheckCircle2,
@@ -15,15 +14,16 @@ import {
   Trophy,
   XCircle,
 } from 'lucide-react';
-import { InlineAlert } from '@/components/studio';
+import { Breadcrumbs, InlineAlert } from '@/components/studio';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/utils/cn';
 import { startQuiz, submitQuiz } from './learning-api';
+import { learningCrumbs, learningQuizCrumbs } from './learning-breadcrumbs';
 import { ProgressRing } from './progress-ring';
 import type { LearningQuizAttemptView, LearningQuizResult } from './types';
 
-type Stage = 'loading' | 'quiz' | 'submitting' | 'result';
+type Stage = 'loading' | 'quiz' | 'submitting' | 'result' | 'error';
 
 function OptionButton({
   option,
@@ -43,7 +43,7 @@ function OptionButton({
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        'flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition-all',
+        'flex w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all sm:gap-3 sm:px-4 sm:py-3',
         selected
           ? 'border-primary bg-primary/10 shadow-sm shadow-primary/10'
           : 'border-border/60 bg-secondary/20 hover:border-primary/40',
@@ -57,7 +57,7 @@ function OptionButton({
       >
         {letters[index] ?? index + 1}
       </span>
-      <span className="text-sm leading-relaxed">{option}</span>
+      <span className="min-w-0 flex-1 text-sm leading-relaxed">{option}</span>
     </button>
   );
 }
@@ -96,7 +96,7 @@ function ReviewCard({ item, index }: { item: LearningQuizResult['review'][number
             <div
               key={optionIndex}
               className={cn(
-                'flex items-start gap-2 rounded-lg border px-3 py-1.5 text-xs',
+                'flex flex-col gap-1 rounded-lg border px-3 py-1.5 text-xs sm:flex-row sm:items-start sm:gap-2',
                 isCorrect
                   ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
                   : isSelected
@@ -104,17 +104,19 @@ function ReviewCard({ item, index }: { item: LearningQuizResult['review'][number
                     : 'border-transparent text-muted-foreground',
               )}
             >
-              <span className="font-bold">{letters[optionIndex] ?? optionIndex + 1}.</span>
-              <span>{option}</span>
-              {isCorrect && <span className="ml-auto shrink-0 font-medium">Correct</span>}
+              <div className="flex min-w-0 items-start gap-2">
+                <span className="shrink-0 font-bold">{letters[optionIndex] ?? optionIndex + 1}.</span>
+                <span className="min-w-0 flex-1">{option}</span>
+              </div>
+              {isCorrect && <span className="shrink-0 font-medium sm:ml-auto">Correct</span>}
               {isSelected && !isCorrect && (
-                <span className="ml-auto shrink-0 font-medium">Your answer</span>
+                <span className="shrink-0 font-medium sm:ml-auto">Your answer</span>
               )}
             </div>
           );
         })}
       </div>
-      <p className="mt-2.5 rounded-lg bg-secondary/30 px-3 py-2 text-xs leading-relaxed text-foreground/80 ml-6">
+      <p className="mt-2.5 ml-0 rounded-lg bg-secondary/30 px-3 py-2 text-xs leading-relaxed text-foreground/80 sm:ml-6">
         {item.explanation}
       </p>
     </div>
@@ -145,7 +147,7 @@ export function QuizWorkspace() {
       setStage('quiz');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start the quiz');
-      setStage('quiz');
+      setStage('error');
     }
   }, [moduleId]);
 
@@ -179,19 +181,32 @@ export function QuizWorkspace() {
   const question = attempt?.questions[current];
 
   return (
-    <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-5">
-      <div className="flex items-center justify-between gap-2">
-        <Link
-          href={attempt ? `/learning/paths/${attempt.pathId}` : '/learning'}
-          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          {attempt ? `Back to path` : 'Salesforce Academy'}
-        </Link>
+    <div className="mx-auto w-full min-w-0 max-w-3xl space-y-4 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-4 sm:space-y-5 sm:px-6 sm:py-6">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <Breadcrumbs
+          className="w-full min-w-0"
+          items={
+            attempt
+              ? learningQuizCrumbs(
+                  attempt.pathId,
+                  attempt.pathTitle ?? 'Training path',
+                  attempt.moduleId,
+                  attempt.moduleTitle,
+                )
+              : moduleId
+                ? learningCrumbs({
+                    href: `/learning/modules/${moduleId}/quiz`,
+                    label: 'Module quiz',
+                  })
+                : learningCrumbs()
+          }
+        />
         {attempt && stage !== 'result' && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-500/15 px-2.5 py-1 text-[11px] font-medium text-violet-300">
+          <span className="inline-flex w-fit shrink-0 items-center gap-1.5 self-start rounded-full bg-violet-500/15 px-2.5 py-1 text-[11px] font-medium text-violet-300">
             <Sparkles className="size-3" />
-            {attempt.source === 'static' ? 'Curated question set' : 'AI-generated questions'}
+            <span className="hidden min-[400px]:inline">
+              {attempt.source === 'static' ? 'Curated question set' : 'AI-generated questions'}
+            </span>
           </span>
         )}
       </div>
@@ -208,21 +223,31 @@ export function QuizWorkspace() {
         </div>
       )}
 
+      {stage === 'error' && (
+        <div className="rounded-xl border border-border/60 bg-card/60 p-6 text-center space-y-4">
+          <p className="text-sm text-muted-foreground">
+            We couldn&apos;t start this quiz. If you just updated the app, wait a moment for the API
+            to finish restarting and try again.
+          </p>
+          <Button onClick={() => void begin()}>Try again</Button>
+        </div>
+      )}
+
       {(stage === 'quiz' || stage === 'submitting') && attempt && question && (
         <>
-          <div className="rounded-xl border border-border/60 bg-card/60 p-5">
-            <div className="flex items-center justify-between gap-3">
+          <div className="rounded-xl border border-border/60 bg-card/60 p-4 sm:p-5">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
               <div className="min-w-0">
-                <p className="flex items-center gap-2 text-sm font-semibold">
-                  <FileQuestion className="size-4 text-sky-300" />
-                  {attempt.moduleTitle} — module quiz
+                <p className="flex items-start gap-2 text-sm font-semibold leading-snug">
+                  <FileQuestion className="mt-0.5 size-4 shrink-0 text-sky-300" />
+                  <span className="min-w-0">{attempt.moduleTitle} — module quiz</span>
                 </p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground sm:mt-0.5">
                   {attempt.questionCount} questions · pass at {attempt.passPercent}% · instant
                   scoring with explanations
                 </p>
               </div>
-              <span className="shrink-0 rounded-lg bg-secondary/50 px-3 py-1.5 text-xs font-semibold tabular-nums">
+              <span className="w-fit shrink-0 self-start rounded-lg bg-secondary/50 px-3 py-1.5 text-xs font-semibold tabular-nums">
                 {current + 1} / {attempt.questionCount}
               </span>
             </div>
@@ -234,7 +259,7 @@ export function QuizWorkspace() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-border/60 bg-card/60 p-5">
+          <div className="rounded-xl border border-border/60 bg-card/60 p-4 sm:p-5">
             {question.topic && (
               <span className="mb-2 inline-block rounded-full bg-secondary/50 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 {question.topic}
@@ -256,17 +281,8 @@ export function QuizWorkspace() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-3">
-            <Button
-              variant="outline"
-              className="gap-1.5"
-              disabled={current === 0 || stage === 'submitting'}
-              onClick={() => setCurrent((value) => Math.max(0, value - 1))}
-            >
-              <ChevronLeft className="size-4" />
-              Previous
-            </Button>
-            <div className="flex items-center gap-1.5">
+          <div className="space-y-3">
+            <div className="flex justify-center gap-1.5 overflow-x-auto px-1 py-0.5 scrollbar-thin">
               {attempt.questions.map((q, index) => (
                 <button
                   key={q.id}
@@ -274,7 +290,7 @@ export function QuizWorkspace() {
                   aria-label={`Go to question ${index + 1}`}
                   onClick={() => setCurrent(index)}
                   className={cn(
-                    'size-2.5 rounded-full transition-colors',
+                    'size-2.5 shrink-0 rounded-full transition-colors',
                     index === current
                       ? 'bg-primary'
                       : answers[q.id] !== undefined
@@ -284,31 +300,43 @@ export function QuizWorkspace() {
                 />
               ))}
             </div>
-            {current < attempt.questionCount - 1 ? (
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:justify-between">
               <Button
-                className="gap-1.5"
-                disabled={stage === 'submitting'}
-                onClick={() => setCurrent((value) => Math.min(attempt.questionCount - 1, value + 1))}
+                variant="outline"
+                className="w-full gap-1.5 sm:w-auto"
+                disabled={current === 0 || stage === 'submitting'}
+                onClick={() => setCurrent((value) => Math.max(0, value - 1))}
               >
-                Next
-                <ArrowRight className="size-4" />
+                <ChevronLeft className="size-4" />
+                <span className="hidden min-[400px]:inline">Previous</span>
+                <span className="min-[400px]:hidden">Prev</span>
               </Button>
-            ) : (
-              <Button
-                className="gap-1.5"
-                loading={stage === 'submitting'}
-                disabled={answeredCount < attempt.questionCount}
-                title={
-                  answeredCount < attempt.questionCount
-                    ? `Answer all questions (${answeredCount}/${attempt.questionCount})`
-                    : undefined
-                }
-                onClick={() => void submit()}
-              >
-                <CheckCircle2 className="size-4" />
-                Submit quiz
-              </Button>
-            )}
+              {current < attempt.questionCount - 1 ? (
+                <Button
+                  className="w-full gap-1.5 sm:w-auto"
+                  disabled={stage === 'submitting'}
+                  onClick={() => setCurrent((value) => Math.min(attempt.questionCount - 1, value + 1))}
+                >
+                  Next
+                  <ArrowRight className="size-4" />
+                </Button>
+              ) : (
+                <Button
+                  className="w-full gap-1.5 sm:w-auto"
+                  loading={stage === 'submitting'}
+                  disabled={answeredCount < attempt.questionCount}
+                  title={
+                    answeredCount < attempt.questionCount
+                      ? `Answer all questions (${answeredCount}/${attempt.questionCount})`
+                      : undefined
+                  }
+                  onClick={() => void submit()}
+                >
+                  <CheckCircle2 className="size-4" />
+                  Submit
+                </Button>
+              )}
+            </div>
           </div>
         </>
       )}
@@ -317,7 +345,7 @@ export function QuizWorkspace() {
         <>
           <div
             className={cn(
-              'relative overflow-hidden rounded-xl border p-6 text-center',
+              'relative overflow-hidden rounded-xl border p-4 text-center sm:p-6',
               result.passed ? 'border-emerald-400/30' : 'border-amber-400/30',
             )}
           >
@@ -369,14 +397,18 @@ export function QuizWorkspace() {
               <p className="max-w-xl text-xs leading-relaxed text-muted-foreground">
                 {result.coaching}
               </p>
-              <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+              <div className="mt-1 flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
                 {!result.passed && (
-                  <Button onClick={() => void begin()} className="gap-1.5">
+                  <Button onClick={() => void begin()} className="w-full gap-1.5 sm:w-auto">
                     <RotateCcw className="size-4" />
                     Retake quiz
                   </Button>
                 )}
-                <Button asChild variant={result.passed ? 'default' : 'outline'} className="gap-1.5">
+                <Button
+                  asChild
+                  variant={result.passed ? 'default' : 'outline'}
+                  className="w-full gap-1.5 sm:w-auto"
+                >
                   <Link href={`/learning/paths/${result.pathId}`}>
                     {result.passed ? 'Continue the path' : 'Review the lessons'}
                     <ArrowRight className="size-4" />

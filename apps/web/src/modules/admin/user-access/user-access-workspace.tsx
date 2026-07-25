@@ -3,7 +3,7 @@
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ConfirmBanner, InlineAlert, PageHeader } from '@/components/studio';
+import { InlineAlert, PageHeader } from '@/components/studio';
 import { UserAccessTabs } from './user-access-tabs';
 import { UserAccessManageDrawer } from './user-access-manage-drawer';
 import { UserAccessQuickCards } from './user-access-quick-cards';
@@ -88,17 +88,6 @@ export function UserAccessWorkspace() {
         </InlineAlert>
       )}
 
-      {pendingRole && (
-        <ConfirmBanner
-          title={`Change role to ${pendingRole.nextRole === 'admin' ? 'Super Admin' : 'standard user'}?`}
-          message="This updates the user's permissions across the app."
-          confirmLabel="Change role"
-          onConfirm={() => void confirmRoleChange()}
-          onCancel={() => setPendingRole(null)}
-          loading={saving}
-        />
-      )}
-
       {showDataSkeleton ? (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
@@ -147,10 +136,17 @@ export function UserAccessWorkspace() {
         draft={draft}
         saving={saving}
         error={error}
+        pendingRoleChange={
+          pendingRole && manageUser && pendingRole.userId === manageUser.id
+            ? pendingRole.nextRole
+            : null
+        }
         onClose={closeManage}
         onDraftChange={setDraft}
         onToggleModule={toggleDraftModule}
         onSave={() => void saveManage()}
+        onConfirmRoleChange={() => void confirmRoleChange()}
+        onCancelRoleChange={() => setPendingRole(null)}
         isSelf={manageUser?.id === profile.id}
       />
         </>

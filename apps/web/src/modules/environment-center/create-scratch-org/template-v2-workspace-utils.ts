@@ -36,7 +36,6 @@ export function mergeFormIntoTemplatePreviewConfig(
     sourceOrgId: dataSourceOrgId,
     dataDeploymentOrgId: dataSourceOrgId,
     customSettingsOrgId: form.customSettingsOrgId || dataSourceOrgId,
-    pipelineScope: form.pipelineScope,
   };
 }
 

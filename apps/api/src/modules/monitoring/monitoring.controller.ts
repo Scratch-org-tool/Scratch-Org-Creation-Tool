@@ -53,6 +53,17 @@ export class MonitoringController {
     return this.monitoringService.replayDeadLetter(jobId, userId, isAdmin);
   }
 
+  @Get('jobs/:id')
+  @RequireModule('monitoring')
+  getJobDetail(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+    @CurrentUser() userId: string,
+  ) {
+    const isAdmin = req.userProfile?.role === 'admin';
+    return this.monitoringService.getJobDetail(id, userId, isAdmin);
+  }
+
   @Get('datadog')
   @RequireModule('monitoring')
   getDatadogStub() {
