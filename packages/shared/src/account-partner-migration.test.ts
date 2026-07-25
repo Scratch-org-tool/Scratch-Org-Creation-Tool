@@ -8,6 +8,8 @@ import {
   ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
   accountPartnerMigrationSchema,
   buildAccountPartnerMigrationRows,
+  applyAccountPartnerPerOfficeLimit,
+  sampleAccountPartnerExcelRecordsByOffice,
   resolveAccountPartnerMigrationSoql,
 } from './account-partner-migration.js';
 
@@ -105,6 +107,49 @@ describe('Account Partner migration contract', () => {
     assert.equal(byAccountNumber.previewRows[0]?.accountKey, '000456');
   });
 
+  it('tries each source account key until one matches the target index', () => {
+    const result = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccounts: new Map([
+        ['123', { id: '001-account-id', key: '000123', name: 'North Market' }],
+      ]),
+      targetEmployees,
+      records: [{
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        cfs_ob__Account__r: {
+          cfs_ob__u_CustomerNumber__c: '999999',
+          AccountNumber: '000123',
+        },
+        cfs_ob__EmployeeMaster__r: { cfs_ob__EmployeeNo__c: 'E-1' },
+      }],
+    });
+
+    assert.equal(result.stats.ready, 1);
+    assert.equal(result.previewRows[0]?.accountKey, '000123');
+  });
+
+  it('normalizes numeric employee numbers when matching target Employee Masters', () => {
+    const result = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccounts,
+      targetEmployees: new Map([
+        ['123', { id: '001-employee-id', key: '123', name: 'Alex Employee' }],
+      ]),
+      records: [{
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: '00123',
+      }],
+    });
+
+    assert.equal(result.stats.ready, 1);
+    assert.equal(result.previewRows[0]?.employeeKey, '123');
+  });
+
   it('preserves source external IDs and reports invalid or duplicate mappings', () => {
     const valid = {
       cfs_ob__AccountPartnerExternalId__c: 'SOURCE-AP-1',
@@ -144,7 +189,131 @@ describe('Account Partner migration contract', () => {
       skippedMissingRole: 0,
       skippedTargetAccount: 1,
       skippedTargetEmployee: 1,
+      skippedNoDistributionMatch: 0,
+      skippedPerOfficeLimit: 0,
     });
+    assert.deepEqual(result.readyExternalIds, ['SOURCE-AP-1']);
+  });
+
+  it('samples unique role and employee pairs per sales office before matching', () => {
+    const sampled = sampleAccountPartnerExcelRecordsByOffice([
+      {
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '1',
+      },
+      {
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-2',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '2',
+      },
+      {
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-3',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '3',
+      },
+      {
+        cfs_ob__Sales_Office__c: 'S004',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '4',
+      },
+    ], 2);
+    assert.equal(sampled.records.length, 3);
+    assert.equal(sampled.skippedPerOfficeLimit, 1);
+  });
+
+  it('preview mode skips upsert row materialization', () => {
+    const result = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccounts,
+      targetEmployees,
+      mode: 'preview',
+      records: [{
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+      }],
+    });
+    assert.equal(result.stats.ready, 1);
+    assert.equal(result.rows.length, 0);
+    assert.equal(result.previewRows.length, 1);
+    assert.equal(result.readyExternalIds.length, 0);
+    assert.equal(result.stats.toCreate, 1);
+    assert.equal(result.stats.toUpdate, 0);
+  });
+
+  it('limits ready mappings per sales office by unique employee and role', () => {
+    const records = [
+      {
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+      },
+      {
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-2',
+      },
+      {
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-3',
+      },
+      {
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S004',
+        cfs_ob__PartnerRole__c: 'ZR',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-4',
+      },
+    ];
+    const mapping = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccounts,
+      targetEmployees: new Map([
+        ['E-1', { id: '001-employee-1', key: 'E-1', name: 'Alex' }],
+        ['E-2', { id: '001-employee-2', key: 'E-2', name: 'Blair' }],
+        ['E-3', { id: '001-employee-3', key: 'E-3', name: 'Casey' }],
+        ['E-4', { id: '001-employee-4', key: 'E-4', name: 'Dana' }],
+      ]),
+      records,
+    });
+    const limited = applyAccountPartnerPerOfficeLimit(mapping, 2);
+
+    assert.equal(mapping.stats.ready, 4);
+    assert.equal(limited.stats.ready, 3);
+    assert.equal(limited.stats.skippedPerOfficeLimit, 1);
+    assert.deepEqual(
+      limited.previewRows.map((row) => row.salesOffice),
+      ['S003', 'S003', 'S004'],
+    );
+
+    const limitedInline = buildAccountPartnerMigrationRows({
+      bottler: '5000',
+      targetAccounts,
+      targetEmployees: new Map([
+        ['E-1', { id: '001-employee-1', key: 'E-1', name: 'Alex' }],
+        ['E-2', { id: '001-employee-2', key: 'E-2', name: 'Blair' }],
+        ['E-3', { id: '001-employee-3', key: 'E-3', name: 'Casey' }],
+        ['E-4', { id: '001-employee-4', key: 'E-4', name: 'Dana' }],
+      ]),
+      records,
+      perOffice: 2,
+    });
+    assert.equal(limitedInline.stats.ready, 3);
+    assert.equal(limitedInline.stats.skippedPerOfficeLimit, 1);
   });
 
   it('rejects one external ID being assigned to different partner mappings', () => {

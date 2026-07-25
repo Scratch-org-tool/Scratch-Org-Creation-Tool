@@ -63,13 +63,23 @@ export const CONA_ADMIN_EXTENSION_PERMSET = SCRATCH_PERMISSION_SET;
 export const CONA_SUPER_USER_PERMSET = 'Lifecycle_Super_User';
 export const ERROR_LOGGER_PACKAGE_ID = '04t4x000000IcRT';
 
-/** Max workbook upload size for Bulk Data Update (inspect, preview, run). */
-export const BULK_DATA_UPDATE_MAX_FILE_BYTES = 25 * 1024 * 1024;
-export const BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS = 100_000;
+/** Max workbook upload size for Bulk Data Update / Account Partner Excel (inspect, preview, run). */
+export const BULK_DATA_UPDATE_MAX_FILE_BYTES = 200 * 1024 * 1024;
+
+/**
+ * @deprecated No per-sheet row cap — workbook size is limited by {@link BULK_DATA_UPDATE_MAX_FILE_BYTES} only.
+ * Kept so older builds that import the symbol still resolve.
+ */
+export const BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS = Number.MAX_SAFE_INTEGER;
 
 export function bulkDataUpdateMaxFileSizeLabel(): string {
   return `${Math.round(BULK_DATA_UPDATE_MAX_FILE_BYTES / (1024 * 1024))} MB`;
 }
+
+/** Excel Account Partner previews above this row count run as a background job. */
+export const ACCOUNT_PARTNER_EXCEL_ASYNC_PREVIEW_MIN_ROWS = 30_000;
+/** Excel Account Partner previews above this size run as a background job. */
+export const ACCOUNT_PARTNER_EXCEL_ASYNC_PREVIEW_MIN_BYTES = 5 * 1024 * 1024;
 
 export const DEFAULT_AZURE_MANIFEST_PATH = 'CoreFlex Onboarding/manifest/package.xml';
 

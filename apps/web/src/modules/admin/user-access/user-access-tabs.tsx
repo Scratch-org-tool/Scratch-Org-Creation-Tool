@@ -24,10 +24,10 @@ export function UserAccessTabs({ active, onChange }: UserAccessTabsProps) {
           type="button"
           onClick={() => onChange(t.id)}
           className={cn(
-            'px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors',
+            'relative px-4 py-2.5 text-sm font-medium transition-colors',
             active === t.id
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground',
+              ? 'text-primary after:absolute after:bottom-0 after:left-4 after:right-4 after:h-0.5 after:rounded-full after:bg-primary'
+              : 'text-muted-foreground hover:text-foreground',
           )}
         >
           {t.label}

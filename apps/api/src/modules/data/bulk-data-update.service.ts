@@ -8,7 +8,6 @@ import { createSfCliClient } from '@sfcc/sf-cli';
 import {
   bulkDataUpdateConfigSchema,
   BULK_DATA_UPDATE_MAX_FILE_BYTES,
-  BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS,
   bulkDataUpdateMaxFileSizeLabel,
   escapeSoqlLiteral,
   parseBulkCsv,
@@ -20,7 +19,6 @@ import { removeTempDir } from '../../common/temp-cleanup.util';
 import { BulkThrottleService } from './bulk-throttle.service';
 
 const MAX_FILE_BYTES = BULK_DATA_UPDATE_MAX_FILE_BYTES;
-const MAX_WORKBOOK_ROWS = BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS;
 const MAX_WORKBOOK_COLUMNS = 200;
 const TARGET_QUERY_CHUNK_SIZE = 500;
 const TARGET_QUERY_CHUNK_SIZE_WINDOWS = 80;
@@ -400,11 +398,6 @@ export class BulkDataUpdateService {
       }
       if (rowIndex > headerIndex && rowHasData) {
         rowCount += 1;
-        if (rowCount > MAX_WORKBOOK_ROWS) {
-          throw new BadRequestException(
-            `Workbook sheet "${sheetName}" exceeds the ${MAX_WORKBOOK_ROWS.toLocaleString()} row limit`,
-          );
-        }
         if (includeRows) dataRowIndexes.push(rowIndex);
       }
     }

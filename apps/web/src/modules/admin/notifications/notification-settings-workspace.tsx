@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
-import { GlassCard, InlineAlert, PageHeader } from '@/components/studio';
+import { GlassCard, InlineAlert, MasterToggleCard, PageHeader } from '@/components/studio';
 import { cn } from '@/utils/cn';
 import { ChatWebhooksCard } from './chat-webhooks-card';
 import { useNotificationSettings } from './use-notification-settings';
@@ -129,56 +129,20 @@ export function NotificationSettingsWorkspace() {
         </div>
       ) : draft ? (
         <>
-          <GlassCard
-            className={cn(
-              'border-2 transition-colors',
-              enabled ? 'border-emerald-500/30' : 'border-amber-500/40',
-            )}
-          >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex items-start gap-3">
-                <span
-                  className={cn(
-                    'flex size-10 shrink-0 items-center justify-center rounded-full',
-                    enabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400',
-                  )}
-                >
-                  <BellRing className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-base font-semibold text-foreground">
-                    {enabled ? 'Notifications are ON' : 'Notifications are OFF'}
-                  </p>
-                  <p className="mt-0.5 max-w-xl text-sm text-muted-foreground">
-                    This master switch controls everything. While it is off, the platform creates
-                    and sends nothing — no in-app alerts, no email — regardless of the settings
-                    below.
-                  </p>
-                  {!enabled && (
-                    <p className="mt-2 text-xs font-medium text-amber-300">
-                      Turn this on, choose channels and categories below, then click “Save changes”.
-                    </p>
-                  )}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-3 sm:pt-0.5">
-                <span
-                  className={cn(
-                    'text-xs font-semibold uppercase tracking-wide',
-                    enabled ? 'text-emerald-400' : 'text-amber-300',
-                  )}
-                >
-                  {enabled ? 'On' : 'Off'}
-                </span>
-                <Switch
-                  size="lg"
-                  checked={enabled}
-                  onChange={setEnabled}
-                  aria-label={enabled ? 'Turn notifications off' : 'Turn notifications on'}
-                />
-              </div>
-            </div>
-          </GlassCard>
+          <MasterToggleCard
+            enabled={enabled}
+            onChange={setEnabled}
+            icon={BellRing}
+            title={enabled ? 'Notifications are ON' : 'Notifications are OFF'}
+            description="This master switch controls everything. While it is off, the platform creates and sends nothing — no in-app alerts, no email — regardless of the settings below."
+            hint={
+              !enabled
+                ? 'Turn this on, choose channels and categories below, then click “Save changes”.'
+                : undefined
+            }
+            statusLabel={enabled ? 'On' : 'Off'}
+            ariaLabel={enabled ? 'Turn notifications off' : 'Turn notifications on'}
+          />
 
           <GlassCard
             title="Delivery channels"

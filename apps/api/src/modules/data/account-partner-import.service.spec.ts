@@ -1,9 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as XLSX from 'xlsx';
 import {
   ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD,
   ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD,
   ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
+  type AccountPartnerExcelMigrationInput,
   type AccountPartnerMigrationInput,
 } from '@sfcc/shared';
 
@@ -11,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   sfCli: {
     describeSObject: vi.fn(),
     exportBulk: vi.fn(),
+    query: vi.fn(),
     queryAll: vi.fn(),
     upsertBulk: vi.fn(),
   },
@@ -363,5 +366,459 @@ describe('AccountPartnerImportService SOQL mapping', () => {
     const preview = await service.previewSoqlMapping(input);
 
     expect(preview.ok).toBe(true);
+  });
+});
+
+const excelInput: AccountPartnerExcelMigrationInput = {
+  targetOrgId: '22222222-2222-4222-8222-222222222222',
+  bottler: '5000',
+  excelBase64: '',
+  sheet: 'Partners',
+};
+
+function partnerWorkbookBase64(rows: Array<Record<string, string>>): string {
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Partners');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }).toString('base64');
+}
+
+function targetAccountBulkCsv(rows: string[]): string {
+  return [
+    'Id,Name,cfs_ob__u_CustomerNumber__c,AccountNumber,cfs_ob__u_DistributionChannel__c',
+    ...rows,
+  ].join('\n');
+}
+
+describe('AccountPartnerImportService Excel mapping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    excelInput.excelBase64 = partnerWorkbookBase64([
+      {
+        cfs_ob__AccountPartnerExternalId__c: 'AP-1',
+        cfs_ob__PartnerRole__c: 'ZR',
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '000123',
+        [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '000123',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+      },
+      {
+        cfs_ob__AccountPartnerExternalId__c: 'AP-2',
+        cfs_ob__PartnerRole__c: 'ZR',
+        cfs_ob__Bottler__c: '5000',
+        cfs_ob__Sales_Office__c: 'S003',
+        [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '999',
+        [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '999',
+        [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+      },
+    ]);
+    mocks.orgConnection.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({
+        id: where.id,
+        alias: 'target',
+        username: null,
+      }),
+    );
+    mocks.sfCli.describeSObject.mockImplementation(async (
+      _alias: string,
+      objectName: string,
+    ) => {
+      const writable = (name: string, externalId = false, length?: number) => ({
+        name,
+        externalId,
+        createable: true,
+        updateable: true,
+        length: length ?? (externalId ? 255 : undefined),
+        type: 'string',
+      });
+      const fields = objectName === 'cfs_ob__AccountPartner__c'
+        ? [
+            writable('cfs_ob__AccountPartnerExternalId__c', true),
+            writable('cfs_ob__PartnerRole__c'),
+            writable('cfs_ob__Bottler__c'),
+            writable('cfs_ob__Account__c'),
+            writable('cfs_ob__EmployeeMaster__c'),
+            writable('Name', false, 80),
+          ]
+        : objectName === 'Account'
+          ? [
+            writable('cfs_ob__u_CustomerNumber__c', true),
+            writable('AccountNumber', true),
+            writable('Name'),
+          ]
+          : [writable('cfs_ob__EmployeeNo__c', true), writable('Name')];
+      return { success: true, data: { result: { fields } } };
+    });
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      soql: string,
+      _alias: string,
+      file: string,
+    ) => {
+      if (soql.includes('FROM Account ')) {
+        await writeFile(
+          file,
+          targetAccountBulkCsv(['001ACCOUNT00000001,North Market,000123,000123,01']),
+          'utf8',
+        );
+      } else if (soql.includes('FROM cfs_ob__AccountPartner__c ')) {
+        await writeFile(
+          file,
+          'cfs_ob__AccountPartnerExternalId__c\nAP-1\n',
+          'utf8',
+        );
+      } else {
+        await writeFile(
+          file,
+          'Id,Name,cfs_ob__EmployeeNo__c\n'
+          + '001EMPLOYEE0000001,Alex Employee,E-1\n',
+          'utf8',
+        );
+      }
+      return { success: true };
+    });
+    mocks.sfCli.upsertBulk.mockResolvedValue({ success: true });
+    mocks.sfCli.queryAll.mockImplementation(async (_alias: string, soql: string) => {
+      if (soql.includes('FROM cfs_ob__EmployeeMaster__c')) {
+        return {
+          success: true,
+          data: {
+            records: [{
+              Id: '001EMPLOYEE0000001',
+              Name: 'Alex Employee',
+              cfs_ob__EmployeeNo__c: 'E-1',
+            }],
+          },
+        };
+      }
+      return { success: true, data: { records: [] } };
+    });
+  });
+
+  it('exports target accounts only once during Excel preview with distribution remapping', async () => {
+    const service = new AccountPartnerImportService();
+    const buffer = Buffer.from(excelInput.excelBase64, 'base64');
+
+    await service.previewExcelMappingFromWorkbook(buffer, {
+      targetOrgId: excelInput.targetOrgId,
+      bottler: excelInput.bottler,
+      sheet: excelInput.sheet,
+      matchOrgDistribution: true,
+    });
+
+    const accountExports = mocks.sfCli.exportBulk.mock.calls.filter(
+      ([soql]) => soql.includes('FROM Account '),
+    );
+    expect(accountExports).toHaveLength(1);
+    expect(accountExports[0]?.[0]).toContain('cfs_ob__u_DistributionChannel__c');
+  });
+
+  it('previews spreadsheet rows against target Accounts and Employee Masters', async () => {
+    const service = new AccountPartnerImportService();
+    const buffer = Buffer.from(excelInput.excelBase64, 'base64');
+
+    const preview = await service.previewExcelMappingFromWorkbook(buffer, {
+      targetOrgId: excelInput.targetOrgId,
+      bottler: excelInput.bottler,
+      sheet: excelInput.sheet,
+    });
+
+    expect(preview.ok).toBe(true);
+    expect(preview.sheet).toBe('Partners');
+    expect(preview.stats).toEqual(expect.objectContaining({
+      total: 2,
+      ready: 1,
+      skippedTargetAccount: 1,
+      toCreate: 1,
+      toUpdate: 0,
+    }));
+    expect(preview.sample[0]).toEqual(expect.objectContaining({
+      externalId: 'AP-1',
+      accountKey: '000123',
+      employeeKey: 'E-1',
+    }));
+    expect(preview.matchOrgDistribution).toBe(true);
+    expect(preview.distributionAccountsIndexed).toBeGreaterThanOrEqual(1);
+    expect(preview.prepareCacheKey).toBeTruthy();
+  });
+
+  it('remaps source account numbers via target distribution accounts for cross-org exports', async () => {
+    const service = new AccountPartnerImportService();
+    const crossOrgInput = {
+      ...excelInput,
+      excelBase64: partnerWorkbookBase64([
+        {
+          cfs_ob__AccountPartnerExternalId__c: 'AP-CROSS',
+          cfs_ob__PartnerRole__c: 'ZR',
+          cfs_ob__Bottler__c: '5000',
+          cfs_ob__Sales_Office__c: 'S003',
+          [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '602443249',
+          [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '602443249',
+          [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+        },
+      ]),
+    };
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      soql: string,
+      _alias: string,
+      file: string,
+    ) => {
+      if (soql.includes('FROM Account ')) {
+        await writeFile(
+          file,
+          targetAccountBulkCsv(['001ACCOUNT00000002,Cross Org Market,602443249,602443249,01']),
+          'utf8',
+        );
+      } else {
+        await writeFile(
+          file,
+          'Id,Name,cfs_ob__EmployeeNo__c\n'
+          + '001EMPLOYEE0000001,Alex Employee,E-1\n',
+          'utf8',
+        );
+      }
+      return { success: true };
+    });
+    mocks.sfCli.queryAll.mockImplementation(async (_alias: string, soql: string) => {
+      if (soql.includes('FROM cfs_ob__EmployeeMaster__c')) {
+        return {
+          success: true,
+          data: {
+            records: [{
+              Id: '001EMPLOYEE0000001',
+              Name: 'Alex Employee',
+              cfs_ob__EmployeeNo__c: 'E-1',
+            }],
+          },
+        };
+      }
+      return { success: true, data: { records: [] } };
+    });
+
+    const preview = await service.previewExcelMappingFromWorkbook(
+      Buffer.from(crossOrgInput.excelBase64, 'base64'),
+      {
+        targetOrgId: crossOrgInput.targetOrgId,
+        bottler: crossOrgInput.bottler,
+        sheet: crossOrgInput.sheet,
+        matchOrgDistribution: true,
+      },
+    );
+
+    expect(preview.ok).toBe(true);
+    expect(preview.stats.ready).toBe(1);
+    expect(preview.stats.skippedNoDistributionMatch).toBe(0);
+    expect(preview.sample[0]).toEqual(expect.objectContaining({
+      externalId: 'AP-CROSS',
+      accountKey: '602443249',
+      employeeKey: 'E-1',
+    }));
+  });
+
+  it('skips cross-org source account numbers when distribution remapping is disabled', async () => {
+    const service = new AccountPartnerImportService();
+    const crossOrgInput = {
+      ...excelInput,
+      excelBase64: partnerWorkbookBase64([
+        {
+          cfs_ob__AccountPartnerExternalId__c: 'AP-CROSS',
+          cfs_ob__PartnerRole__c: 'ZR',
+          cfs_ob__Bottler__c: '5000',
+          cfs_ob__Sales_Office__c: 'S003',
+          [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '602443249',
+          [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '602443249',
+          [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+        },
+      ]),
+    };
+
+    const preview = await service.previewExcelMappingFromWorkbook(
+      Buffer.from(crossOrgInput.excelBase64, 'base64'),
+      {
+        targetOrgId: crossOrgInput.targetOrgId,
+        bottler: crossOrgInput.bottler,
+        sheet: crossOrgInput.sheet,
+        matchOrgDistribution: false,
+      },
+    );
+
+    expect(preview.ok).toBe(false);
+    expect(preview.stats.ready).toBe(0);
+    expect(preview.stats.skippedTargetAccount).toBe(1);
+    expect(preview.matchOrgDistribution).toBe(false);
+  });
+
+  it('applies a per-sales-office partner limit after target matching', async () => {
+    const service = new AccountPartnerImportService();
+    const limitedInput = {
+      ...excelInput,
+      excelBase64: partnerWorkbookBase64([
+        {
+          cfs_ob__AccountPartnerExternalId__c: 'AP-1',
+          cfs_ob__PartnerRole__c: 'ZR',
+          cfs_ob__Bottler__c: '5000',
+          cfs_ob__Sales_Office__c: 'S003',
+          [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '000123',
+          [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '000123',
+          [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-1',
+        },
+        {
+          cfs_ob__AccountPartnerExternalId__c: 'AP-2',
+          cfs_ob__PartnerRole__c: 'ZR',
+          cfs_ob__Bottler__c: '5000',
+          cfs_ob__Sales_Office__c: 'S003',
+          [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '000123',
+          [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '000123',
+          [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-2',
+        },
+        {
+          cfs_ob__AccountPartnerExternalId__c: 'AP-3',
+          cfs_ob__PartnerRole__c: 'ZR',
+          cfs_ob__Bottler__c: '5000',
+          cfs_ob__Sales_Office__c: 'S003',
+          [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '000123',
+          [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '000123',
+          [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: 'E-3',
+        },
+      ]),
+    };
+    mocks.sfCli.queryAll.mockImplementation(async (_alias: string, soql: string) => {
+      if (soql.includes('FROM cfs_ob__EmployeeMaster__c')) {
+        return {
+          success: true,
+          data: {
+            records: [
+              { Id: '001EMPLOYEE0000001', Name: 'Alex Employee', cfs_ob__EmployeeNo__c: 'E-1' },
+              { Id: '001EMPLOYEE0000002', Name: 'Blair Employee', cfs_ob__EmployeeNo__c: 'E-2' },
+              { Id: '001EMPLOYEE0000003', Name: 'Casey Employee', cfs_ob__EmployeeNo__c: 'E-3' },
+            ],
+          },
+        };
+      }
+      return { success: true, data: { records: [] } };
+    });
+
+    const preview = await service.previewExcelMappingFromWorkbook(
+      Buffer.from(limitedInput.excelBase64, 'base64'),
+      {
+        targetOrgId: limitedInput.targetOrgId,
+        bottler: limitedInput.bottler,
+        sheet: limitedInput.sheet,
+        perOffice: 2,
+      },
+    );
+
+    expect(preview.stats.ready).toBe(2);
+    expect(preview.stats.skippedPerOfficeLimit).toBe(1);
+    expect(preview.perOffice).toBe(2);
+    expect(preview.stats.total).toBe(3);
+    expect(preview.matchedBeforePerOfficeLimit).toBe(3);
+  });
+
+  it('matches target Accounts when Salesforce keeps leading zeros on AccountNumber', async () => {
+    const service = new AccountPartnerImportService();
+    const paddedInput = {
+      ...excelInput,
+      excelBase64: partnerWorkbookBase64([
+        {
+          cfs_ob__AccountPartnerExternalId__c: 'AP-PAD',
+          cfs_ob__PartnerRole__c: 'ZR',
+          cfs_ob__Bottler__c: '5000',
+          cfs_ob__Sales_Office__c: 'S003',
+          [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '123',
+          [ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD]: '123',
+          [ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD]: '1003539',
+        },
+      ]),
+      matchOrgDistribution: false,
+    };
+    mocks.sfCli.exportBulk.mockImplementation(async (
+      soql: string,
+      _alias: string,
+      file: string,
+    ) => {
+      if (soql.includes('FROM Account ')) {
+        await writeFile(
+          file,
+          targetAccountBulkCsv(['001ACCOUNT00000099,Padded Market,000123,000123,']),
+          'utf8',
+        );
+      } else {
+        await writeFile(
+          file,
+          'Id,Name,cfs_ob__EmployeeNo__c\n'
+          + '001EMPLOYEE0000001,Alex Employee,E-1\n',
+          'utf8',
+        );
+      }
+      return { success: true };
+    });
+    mocks.sfCli.queryAll.mockImplementation(async (_alias: string, soql: string) => {
+      if (soql.includes('FROM cfs_ob__EmployeeMaster__c')) {
+        if (!soql.includes("'001003539'") && !soql.includes("'1003539'")) {
+          return { success: true, data: { records: [] } };
+        }
+        return {
+          success: true,
+          data: {
+            records: [{
+              Id: '001EMPLOYEE0000099',
+              Name: 'Padded Employee',
+              cfs_ob__EmployeeNo__c: '001003539',
+            }],
+          },
+        };
+      }
+      return { success: true, data: { records: [] } };
+    });
+
+    const preview = await service.previewExcelMappingFromWorkbook(
+      Buffer.from(paddedInput.excelBase64, 'base64'),
+      {
+        targetOrgId: paddedInput.targetOrgId,
+        bottler: paddedInput.bottler,
+        sheet: paddedInput.sheet,
+        matchOrgDistribution: false,
+      },
+    );
+
+    expect(preview.stats.ready).toBe(1);
+    expect(preview.targetAccounts).toBeGreaterThanOrEqual(1);
+    expect(preview.targetEmployees).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rejects spreadsheets missing required Salesforce export columns', async () => {
+    const service = new AccountPartnerImportService();
+    const invalidInput = {
+      ...excelInput,
+      excelBase64: partnerWorkbookBase64([
+        {
+          [ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD]: '000123',
+        },
+      ]),
+    };
+
+    await expect(service.previewExcelMapping(invalidInput)).rejects.toThrow(
+      /missing required columns/i,
+    );
+  });
+
+  it('upserts mapped Account Partners from spreadsheet rows', async () => {
+    const service = new AccountPartnerImportService();
+    let csv = '';
+    mocks.sfCli.upsertBulk.mockImplementation(async (
+      _object: string,
+      file: string,
+    ) => {
+      csv = await readFile(file, 'utf8');
+      return { success: true };
+    });
+
+    const result = await service.migrateExcelMapping(excelInput);
+
+    expect(result.success).toBe(true);
+    expect(result.stats.ready).toBe(1);
+    expect(csv).toContain('AP-1');
+    expect(csv).toContain('001ACCOUNT00000001');
   });
 });

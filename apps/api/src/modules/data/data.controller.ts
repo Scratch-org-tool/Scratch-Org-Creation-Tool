@@ -31,9 +31,15 @@ import { AuthGuard } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../../common/module.guard';
 import { assertOrgOwned } from '../../common/user-tenancy.util';
+import { mkdtemp, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   accountSeedPreviewSchema,
   accountPartnerMigrationSchema,
+  accountPartnerExcelMigrationFormSchema,
+  ACCOUNT_PARTNER_EXCEL_ASYNC_PREVIEW_MIN_BYTES,
+  ACCOUNT_PARTNER_EXCEL_ASYNC_PREVIEW_MIN_ROWS,
   BULK_DATA_UPDATE_MAX_FILE_BYTES,
   conaSeedRunSchema,
   formatZodIssues,
@@ -565,6 +571,92 @@ export class DataController {
     await assertOrgOwned(input.sourceOrgId, userId, prisma);
     await assertOrgOwned(input.targetOrgId, userId, prisma);
     return this.dataService.enqueueAccountPartnerMigration(input, userId);
+  }
+
+  @Post('account-partners/excel/mapping/preview')
+  @UseInterceptors(FileInterceptor('file', BULK_DATA_UPDATE_UPLOAD_OPTIONS))
+  async previewAccountPartnerExcelMapping(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() userId: string,
+  ) {
+    if (!file) throw new BadRequestException('A multipart file field named "file" is required');
+    const parsed = accountPartnerExcelMigrationFormSchema.safeParse({
+      targetOrgId: body.targetOrgId,
+      bottler: body.bottler,
+      sheet: typeof body.sheet === 'string' && body.sheet.trim() ? body.sheet : undefined,
+      matchOrgDistribution: body.matchOrgDistribution,
+      perOffice: body.perOffice,
+    });
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+      );
+    }
+    const input = parsed.data;
+    await assertOrgOwned(input.targetOrgId, userId, prisma);
+    const rowCount = Number(body.rowCount);
+    const useAsyncPreview =
+      file.size >= ACCOUNT_PARTNER_EXCEL_ASYNC_PREVIEW_MIN_BYTES
+      || (Number.isFinite(rowCount) && rowCount >= ACCOUNT_PARTNER_EXCEL_ASYNC_PREVIEW_MIN_ROWS);
+    if (useAsyncPreview) {
+      const dir = await mkdtemp(join(tmpdir(), 'account-partner-excel-preview-'));
+      const excelPath = join(dir, file.originalname || 'partners.xlsx');
+      await writeFile(excelPath, file.buffer);
+      return this.dataService.enqueueAccountPartnerExcelPreview({
+        ...input,
+        excelPath,
+        fileSize: file.size,
+        rowCount: Number.isFinite(rowCount) ? rowCount : undefined,
+      }, userId);
+    }
+    try {
+      return await this.partnerImportService.previewExcelMappingFromWorkbook(
+        file.buffer,
+        input,
+      );
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Account Partner Excel preview failed',
+      );
+    }
+  }
+
+  @Post('account-partners/excel/mapping/run')
+  @UseInterceptors(FileInterceptor('file', BULK_DATA_UPDATE_UPLOAD_OPTIONS))
+  async runAccountPartnerExcelMapping(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: Record<string, unknown>,
+    @CurrentUser() userId: string,
+  ) {
+    if (!file) throw new BadRequestException('A multipart file field named "file" is required');
+    const parsed = accountPartnerExcelMigrationFormSchema.safeParse({
+      targetOrgId: body.targetOrgId,
+      bottler: body.bottler,
+      sheet: typeof body.sheet === 'string' && body.sheet.trim() ? body.sheet : undefined,
+      matchOrgDistribution: body.matchOrgDistribution,
+      perOffice: body.perOffice,
+    });
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+      );
+    }
+    const input = parsed.data;
+    await assertOrgOwned(input.targetOrgId, userId, prisma);
+    const prepareCacheKey =
+      typeof body.prepareCacheKey === 'string' && body.prepareCacheKey.trim()
+        ? body.prepareCacheKey.trim()
+        : undefined;
+    const dir = await mkdtemp(join(tmpdir(), 'account-partner-excel-upload-'));
+    const excelPath = join(dir, file.originalname || 'partners.xlsx');
+    await writeFile(excelPath, file.buffer);
+    return this.dataService.enqueueAccountPartnerExcelMigration({
+      ...input,
+      excelPath,
+      prepareCacheKey,
+      fileSize: file.size,
+    }, userId);
   }
 
   @Post('account-partners/load')

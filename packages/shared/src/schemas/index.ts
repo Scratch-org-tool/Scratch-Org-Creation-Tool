@@ -556,6 +556,35 @@ export const partnerTransferSchema = z.object({
   path: ['targetOrgId'],
 });
 
+const accountPartnerMatchOrgDistributionSchema = z.preprocess((value) => {
+  if (value === 'true' || value === true) return true;
+  if (value === 'false' || value === false) return false;
+  return value;
+}, z.boolean().default(true));
+
+const accountPartnerPerOfficeSchema = z.preprocess((value) => {
+  if (value === '' || value === null || value === undefined) return undefined;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : value;
+}, z.number().int().positive().optional());
+
+export const accountPartnerExcelMigrationFormSchema = z.object({
+  targetOrgId: z.string().uuid(),
+  bottler: z.enum(['5000', '4900', '4600']),
+  sheet: z.string().trim().min(1).optional(),
+  matchOrgDistribution: accountPartnerMatchOrgDistributionSchema,
+  perOffice: accountPartnerPerOfficeSchema,
+});
+
+export const accountPartnerExcelMigrationSchema = accountPartnerExcelMigrationFormSchema.extend({
+  excelBase64: z.string().min(1).optional(),
+  excelPath: z.string().min(1).optional(),
+  prepareCacheKey: z.string().min(1).optional(),
+}).refine((data) => Boolean(data.excelBase64 || data.excelPath || data.prepareCacheKey), {
+  message: 'excelBase64, excelPath, or prepareCacheKey is required',
+  path: ['excelBase64'],
+});
+
 export const conaUserProvisionSchema = z.object({
   orgId: z.string().uuid(),
   users: z.array(z.object({
@@ -728,6 +757,10 @@ export type ConaManualSeedQuery = z.infer<typeof conaManualSeedQuerySchema>;
 export type ConaManualAccountQuery = z.infer<typeof conaManualAccountQuerySchema>;
 export type ConaSeedRunInput = z.infer<typeof conaSeedRunSchema>;
 export type PartnerImportProcessInput = z.infer<typeof partnerImportProcessSchema>;
+export type AccountPartnerExcelMigrationInput = z.infer<typeof accountPartnerExcelMigrationSchema>;
+export type AccountPartnerExcelMigrationFormInput = z.infer<
+  typeof accountPartnerExcelMigrationFormSchema
+>;
 export type PipelineRunActionsInput = z.infer<typeof pipelineRunActionsSchema>;
 export type CopilotMessageInput = z.infer<typeof copilotMessageSchema>;
 export type CustomSettingsLoadInput = z.infer<typeof customSettingsLoadSchema>;

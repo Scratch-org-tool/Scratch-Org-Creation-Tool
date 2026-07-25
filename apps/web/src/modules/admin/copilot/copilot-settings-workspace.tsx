@@ -2,10 +2,8 @@
 
 import { Bot, Ear, MessageSquareText, Mic, TimerOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
-import { GlassCard, InlineAlert, PageHeader } from '@/components/studio';
-import { cn } from '@/utils/cn';
+import { GlassCard, InlineAlert, MasterToggleCard, PageHeader } from '@/components/studio';
 import { useCopilotAdminSettings } from './use-copilot-admin-settings';
 
 const VOICE_BEHAVIOURS = [
@@ -92,57 +90,17 @@ export function CopilotSettingsWorkspace() {
         </div>
       ) : settings ? (
         <>
-          <GlassCard
-            className={cn(
-              'border-2 transition-colors',
-              enabled ? 'border-emerald-500/30' : 'border-amber-500/40',
-            )}
-          >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex items-start gap-3">
-                <span
-                  className={cn(
-                    'flex size-10 shrink-0 items-center justify-center rounded-full',
-                    enabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400',
-                  )}
-                >
-                  <Bot className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-base font-semibold text-foreground">
-                    {enabled ? 'Voice assistant is ON' : 'Voice assistant is OFF'}
-                  </p>
-                  <p className="mt-0.5 max-w-xl text-sm text-muted-foreground">
-                    This switch controls the copilot voiceover for the whole workspace. While it
-                    is off, no user sees the mic button and nothing is listened to or spoken —
-                    the copilot stays text-only.
-                  </p>
-                  {!enabled && (
-                    <p className="mt-2 text-xs font-medium text-amber-300">
-                      Turn this on to activate voice for users with copilot access.
-                    </p>
-                  )}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-3 sm:pt-0.5">
-                <span
-                  className={cn(
-                    'text-xs font-semibold uppercase tracking-wide',
-                    enabled ? 'text-emerald-400' : 'text-amber-300',
-                  )}
-                >
-                  {saving ? 'Saving…' : enabled ? 'On' : 'Off'}
-                </span>
-                <Switch
-                  size="lg"
-                  checked={enabled}
-                  disabled={saving}
-                  onChange={(next) => void setVoiceEnabled(next)}
-                  aria-label={enabled ? 'Turn the voice assistant off' : 'Turn the voice assistant on'}
-                />
-              </div>
-            </div>
-          </GlassCard>
+          <MasterToggleCard
+            enabled={enabled}
+            onChange={(next) => void setVoiceEnabled(next)}
+            icon={Bot}
+            title={enabled ? 'Voice assistant is ON' : 'Voice assistant is OFF'}
+            description="This switch controls the copilot voiceover for the whole workspace. While it is off, no user sees the mic button and nothing is listened to or spoken — the copilot stays text-only."
+            hint={!enabled ? 'Turn this on to activate voice for users with copilot access.' : undefined}
+            statusLabel={saving ? 'Saving…' : enabled ? 'On' : 'Off'}
+            disabled={saving}
+            ariaLabel={enabled ? 'Turn the voice assistant off' : 'Turn the voice assistant on'}
+          />
 
           <GlassCard
             title="What users get when voice is on"

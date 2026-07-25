@@ -37,4 +37,37 @@ describe('AccountPartnerImportWorker SOQL mapping', () => {
     expect(addLog).toHaveBeenCalledWith('job-id', 'stdout', 'mapping ready');
     expect(publishJobLog).toHaveBeenCalledWith('job-id', 'stdout', 'mapping ready');
   });
+
+  it('routes excel mapping migrations through migrateExcelMapping', async () => {
+    const migrateExcelMapping = vi.fn().mockImplementation(async (_input, log) => {
+      await log('excel mapping ready');
+      return { success: true };
+    });
+    const addLog = vi.fn().mockResolvedValue(undefined);
+    const publishJobLog = vi.fn().mockResolvedValue(undefined);
+    const worker = new AccountPartnerImportWorker(
+      { migrateExcelMapping } as never,
+      { addLog } as never,
+      { publishJobLog } as never,
+    );
+
+    await expect(worker.process({
+      data: {
+        mode: 'excel_mapping',
+        targetOrgId: 'target-id',
+        bottler: '5000',
+        excelBase64: 'ZmlsZQ==',
+        sheet: 'Partners',
+        dbJobId: 'job-id',
+      },
+    } as never)).resolves.toEqual({ success: true });
+
+    expect(migrateExcelMapping).toHaveBeenCalledWith({
+      targetOrgId: 'target-id',
+      bottler: '5000',
+      excelBase64: 'ZmlsZQ==',
+      sheet: 'Partners',
+    }, expect.any(Function));
+    expect(addLog).toHaveBeenCalledWith('job-id', 'stdout', 'excel mapping ready');
+  });
 });

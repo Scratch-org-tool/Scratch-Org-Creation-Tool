@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Job } from 'bullmq';
+import { readFile, rm } from 'fs/promises';
+import { dirname } from 'path';
 import { AccountPartnerImportService } from '../modules/data/account-partner-import.service';
 import { resolveSalesOfficeConfig } from '../modules/data/bottler-config';
 import type { BottlerSalesOfficeConfig } from '@sfcc/shared';
@@ -17,7 +19,7 @@ export class AccountPartnerImportWorker {
 
   async process(job: Job) {
     const data = job.data as {
-      mode: 'excel' | 'org_to_org' | 'org_to_org_matched' | 'soql_mapping';
+      mode: 'excel' | 'excel_mapping' | 'excel_preview' | 'org_to_org' | 'org_to_org_matched' | 'soql_mapping';
       bottler: BottlerId | 'all';
       targetOrgId: string;
       sourceOrgId?: string;
@@ -27,6 +29,7 @@ export class AccountPartnerImportWorker {
       excelBase64?: string;
       excelPath?: string;
       sheet?: string;
+      prepareCacheKey?: string;
       dryRun?: boolean;
       partnerSoql?: string;
       recordLimit?: number;
@@ -52,6 +55,73 @@ export class AccountPartnerImportWorker {
         partnerSoql: data.partnerSoql,
         recordLimit: data.recordLimit,
       }, log);
+    }
+
+    if (data.mode === 'excel_preview') {
+      if (!data.excelPath) {
+        throw new Error('excelPath is required for excel_preview');
+      }
+      if (data.bottler === 'all') {
+        throw new Error('Account Partner Excel preview requires a specific bottler');
+      }
+      try {
+        await log('Parsing workbook and matching rows against the target org…');
+        await log('Large spreadsheets can take 10–15 minutes. Keep this tab open.');
+        const buffer = await readFile(data.excelPath);
+        const onProgress = async (percent: number, step: string) => {
+          await log(`[progress:${percent}] ${step}…`);
+        };
+        const preview = await this.partnerService.previewExcelMappingFromWorkbook(buffer, {
+          targetOrgId: data.targetOrgId,
+          bottler: data.bottler as BottlerId,
+          sheet: data.sheet,
+          matchOrgDistribution: data.matchOrgDistribution ?? true,
+          perOffice: data.perOffice,
+        }, onProgress);
+        await this.jobsService.mergePayload(data.dbJobId, { previewResult: preview });
+        await log(
+          `Preview ready: ${preview.stats.ready.toLocaleString()} of `
+          + `${preview.stats.total.toLocaleString()} rows can be migrated.`,
+        );
+        return preview;
+      } finally {
+        await rm(dirname(data.excelPath), { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+
+    if (data.mode === 'excel_mapping') {
+      if (!data.excelBase64 && !data.excelPath && !data.prepareCacheKey) {
+        throw new Error('excelPath, excelBase64, or prepareCacheKey is required for excel_mapping');
+      }
+      if (data.bottler === 'all') {
+        throw new Error('Account Partner Excel migration requires a specific bottler');
+      }
+      try {
+        return await this.partnerService.migrateExcelMapping({
+          targetOrgId: data.targetOrgId,
+          bottler: data.bottler as BottlerId,
+          excelBase64: data.excelBase64,
+          excelPath: data.excelPath,
+          sheet: data.sheet,
+          matchOrgDistribution: data.matchOrgDistribution ?? true,
+          perOffice: data.perOffice,
+          prepareCacheKey: data.prepareCacheKey,
+        }, log);
+      } finally {
+        await job.updateData({
+          mode: data.mode,
+          targetOrgId: data.targetOrgId,
+          bottler: data.bottler,
+          sheet: data.sheet,
+          matchOrgDistribution: data.matchOrgDistribution,
+          perOffice: data.perOffice,
+          prepareCacheKey: data.prepareCacheKey,
+          dbJobId: data.dbJobId,
+        }).catch(() => undefined);
+        if (data.excelPath) {
+          await rm(dirname(data.excelPath), { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
     }
 
     if (data.mode === 'org_to_org_matched') {

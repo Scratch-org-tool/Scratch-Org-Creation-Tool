@@ -81,7 +81,20 @@ export async function api<T>(
       headers,
       cache: 'no-store',
     });
-  } catch {
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    if (
+      message.includes('Failed to fetch')
+      || message.includes('NetworkError')
+      || message.includes('ECONNREFUSED')
+      || message.includes('ERR_CONNECTION_REFUSED')
+    ) {
+      throw new Error(
+        'Lost connection to the API while the request was running. '
+        + 'Large workbook previews can take 10–15 minutes and may restart the API if memory runs out. '
+        + 'Confirm `npm run dev` is still running on port 3001, then try again.',
+      );
+    }
     throw new Error(
       'Cannot reach API. Make sure `npm run dev` is running on the host machine (web + API).',
     );
@@ -124,7 +137,20 @@ export async function apiBlob(
       headers,
       cache: 'no-store',
     });
-  } catch {
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    if (
+      message.includes('Failed to fetch')
+      || message.includes('NetworkError')
+      || message.includes('ECONNREFUSED')
+      || message.includes('ERR_CONNECTION_REFUSED')
+    ) {
+      throw new Error(
+        'Lost connection to the API while the request was running. '
+        + 'Large workbook previews can take 10–15 minutes and may restart the API if memory runs out. '
+        + 'Confirm `npm run dev` is still running on port 3001, then try again.',
+      );
+    }
     throw new Error(
       'Cannot reach API. Make sure `npm run dev` is running on the host machine (web + API).',
     );

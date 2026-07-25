@@ -44,7 +44,15 @@ export function GlassCard({
           {headerAction}
         </CardHeader>
       )}
-      {noPadding ? children : <CardContent className={contentClassName}>{children}</CardContent>}
+      {noPadding ? (
+        children
+      ) : (
+        <CardContent
+          className={cn(!title && !description && !headerAction && 'pt-6', contentClassName)}
+        >
+          {children}
+        </CardContent>
+      )}
     </Card>
   );
 }

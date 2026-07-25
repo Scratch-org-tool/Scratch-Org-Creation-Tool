@@ -15,6 +15,7 @@ import {
   OrgToOrgSoqlParseError,
   sfdmuExportSchema,
   type AccountPartnerMigrationInput,
+  type AccountPartnerExcelMigrationInput,
   type BulkDataUpdateConfig,
   type ConaSeedRunInput,
   type OrgToOrgDeployBatchResult,
@@ -43,6 +44,9 @@ import { RecordTypeMapperService } from './record-type-mapper.service';
 import { OrgToOrgBrowseService } from './org-to-org-browse.service';
 import { assertOrgOwned, assertResourceOwner, userOwnedWhere } from '../../common/user-tenancy.util';
 import { randomUUID } from 'crypto';
+import { mkdtemp, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { DataPreflightService, type DataDeployPreflightResult } from './data-preflight.service';
 import { DataRollbackService } from './data-rollback.service';
 
@@ -1009,6 +1013,90 @@ export class DataService {
         recordLimit: input.recordLimit,
       },
       { createdBy: userId },
+    );
+    return { jobId: job.id, status: 'queued' };
+  }
+
+  async enqueueAccountPartnerExcelPreview(
+    input: AccountPartnerExcelMigrationInput & {
+      excelPath: string;
+      fileSize?: number;
+      rowCount?: number;
+    },
+    userId?: string,
+  ) {
+    const job = await this.orchestrator.enqueueJob(
+      QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT,
+      'account_partner_excel_preview',
+      {
+        mode: 'excel_preview',
+        targetOrgId: input.targetOrgId,
+        bottler: input.bottler,
+        excelPath: input.excelPath,
+        sheet: input.sheet,
+        matchOrgDistribution: input.matchOrgDistribution,
+        perOffice: input.perOffice,
+      },
+      {
+        createdBy: userId,
+        persistedPayload: {
+          mode: 'excel_preview',
+          targetOrgId: input.targetOrgId,
+          bottler: input.bottler,
+          sheet: input.sheet,
+          matchOrgDistribution: input.matchOrgDistribution,
+          perOffice: input.perOffice,
+          fileSize: input.fileSize,
+          rowCount: input.rowCount,
+        },
+      },
+    );
+    return { jobId: job.id, status: 'queued', async: true as const };
+  }
+
+  async enqueueAccountPartnerExcelMigration(
+    input: AccountPartnerExcelMigrationInput & { fileSize?: number },
+    userId?: string,
+  ) {
+    let excelPath = input.excelPath;
+    if (!excelPath && input.excelBase64) {
+      const dir = await mkdtemp(join(tmpdir(), 'account-partner-excel-upload-'));
+      excelPath = join(dir, 'partners.xlsx');
+      await writeFile(excelPath, Buffer.from(input.excelBase64, 'base64'));
+    }
+    if (!excelPath && !input.prepareCacheKey) {
+      throw new BadRequestException('excelPath, excelBase64, or prepareCacheKey is required');
+    }
+
+    const job = await this.orchestrator.enqueueJob(
+      QUEUE_NAMES.ACCOUNT_PARTNER_IMPORT,
+      'account_partner_excel_mapping',
+      {
+        mode: 'excel_mapping',
+        targetOrgId: input.targetOrgId,
+        bottler: input.bottler,
+        excelPath,
+        sheet: input.sheet,
+        matchOrgDistribution: input.matchOrgDistribution,
+        perOffice: input.perOffice,
+        prepareCacheKey: input.prepareCacheKey,
+      },
+      {
+        createdBy: userId,
+        persistedPayload: {
+          mode: 'excel_mapping',
+          targetOrgId: input.targetOrgId,
+          bottler: input.bottler,
+          sheet: input.sheet,
+          matchOrgDistribution: input.matchOrgDistribution,
+          perOffice: input.perOffice,
+          fileSize: input.fileSize
+            ?? (input.excelBase64
+              ? Buffer.byteLength(input.excelBase64, 'base64')
+              : undefined),
+          prepareCacheKey: input.prepareCacheKey,
+        },
+      },
     );
     return { jobId: job.id, status: 'queued' };
   }

@@ -40,19 +40,17 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        'relative inline-flex shrink-0 items-center rounded-full border-2 transition-colors',
+        'relative inline-flex shrink-0 items-center justify-start rounded-full p-0.5 transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         dims.track,
-        checked
-          ? 'border-transparent bg-primary'
-          : 'border-border bg-muted hover:border-primary/50',
+        checked ? 'bg-primary' : 'bg-muted hover:bg-muted/80',
         disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
         className,
       )}
     >
       <span
         className={cn(
-          'pointer-events-none block rounded-full bg-white shadow-md ring-0 transition-transform',
+          'pointer-events-none block rounded-full bg-white shadow-sm ring-0 transition-transform duration-200 ease-in-out',
           dims.knob,
           checked ? dims.on : 'translate-x-0',
         )}

@@ -1,6 +1,7 @@
 export { PageHeader } from './page-header';
 export { Breadcrumbs } from './breadcrumbs';
 export { GlassCard } from './glass-card';
+export { MasterToggleCard } from './master-toggle-card';
 export { StatCard, StatCardGrid } from './stat-card';
 export { KpiCard, CardDecoration } from './kpi-card';
 export { QuickActionGrid, type QuickActionItem } from './quick-action-grid';

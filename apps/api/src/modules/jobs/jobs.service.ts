@@ -3,6 +3,25 @@ import { prisma, type JobStatus, type LogStream, Prisma } from '@sfcc/db';
 import { assertResourceOwner } from '../../common/user-tenancy.util';
 
 const DEFAULT_LOG_TAIL = 500;
+const LARGE_JOB_PAYLOAD_KEYS = new Set([
+  'excelBase64',
+  'workbookBase64',
+  'excelPath',
+]);
+
+function sanitizeJobPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const source = payload as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (LARGE_JOB_PAYLOAD_KEYS.has(key)) {
+      sanitized[key] = '[omitted]';
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
 
 @Injectable()
 export class JobsService {
@@ -43,7 +62,10 @@ export class JobsService {
       include: { logs: { orderBy: { timestamp: 'asc' }, take: 100 } },
       orderBy: { createdAt: 'desc' },
       take: 100,
-    });
+    }).then((jobs) => jobs.map((job) => ({
+      ...job,
+      payload: sanitizeJobPayload(job.payload),
+    })));
   }
 
   async findOne(id: string, userId?: string) {
@@ -66,6 +88,7 @@ export class JobsService {
 
     return {
       ...job,
+      payload: sanitizeJobPayload(job.payload),
       logs: logs.reverse(),
       logsTruncated: logCount > DEFAULT_LOG_TAIL,
       logCount,
@@ -81,6 +104,20 @@ export class JobsService {
         startedAt: status === 'running' ? new Date() : undefined,
         finishedAt: ['completed', 'failed', 'cancelled'].includes(status) ? new Date() : undefined,
         attempts: status === 'running' ? { increment: 1 } : undefined,
+      },
+    });
+  }
+
+  async mergePayload(id: string, patch: Record<string, unknown>) {
+    const job = await prisma.job.findUnique({ where: { id }, select: { payload: true } });
+    if (!job) throw new NotFoundException('Job not found');
+    const current = (job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload))
+      ? job.payload as Record<string, unknown>
+      : {};
+    return prisma.job.update({
+      where: { id },
+      data: {
+        payload: { ...current, ...patch } as Prisma.InputJsonValue,
       },
     });
   }

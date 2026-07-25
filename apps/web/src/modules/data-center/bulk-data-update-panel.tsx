@@ -24,7 +24,6 @@ import { useOrgs } from '@/hooks/use-orgs';
 import { api } from '@/services/api';
 import {
   BULK_DATA_UPDATE_MAX_FILE_BYTES,
-  BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS,
   bulkDataUpdateMaxFileSizeLabel,
 } from '@sfcc/shared';
 import {
@@ -507,9 +506,15 @@ export function BulkDataUpdatePanel() {
           file={file}
           disabled={configurationLocked}
           label="Drop an Excel or CSV file here"
-          hint={`Up to ${bulkDataUpdateMaxFileSizeLabel()} and ${BULK_DATA_UPDATE_MAX_WORKBOOK_ROWS.toLocaleString()} rows per sheet`}
+          hint={`Up to ${bulkDataUpdateMaxFileSizeLabel()}. No row limit — large workbooks can take several minutes to load.`}
           onFileChange={(nextFile) => void inspectFile(nextFile)}
         />
+        {inspectionLoading && (
+          <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            Inspecting workbook… Large files may take a few minutes.
+          </p>
+        )}
         {inspection && (
           <div className="grid gap-4 md:grid-cols-2">
             <div>

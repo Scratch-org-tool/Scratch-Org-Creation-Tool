@@ -111,6 +111,8 @@ export interface AccountPartnerMigrationStats {
   skippedMissingRole: number;
   skippedTargetAccount: number;
   skippedTargetEmployee: number;
+  skippedNoDistributionMatch: number;
+  skippedPerOfficeLimit: number;
 }
 
 export interface AccountPartnerTargetReference {
@@ -135,10 +137,13 @@ export interface AccountPartnerMigrationResult {
     partnerName: string;
     action: 'create' | 'update';
     role: string;
+    salesOffice: string;
     targetAccountId: string;
     targetEmployeeId: string;
   }>;
   stats: AccountPartnerMigrationStats;
+  /** All ready external IDs (even in preview mode when rows are empty). */
+  readyExternalIds: string[];
 }
 
 export function accountPartnerValueAt(
@@ -160,16 +165,106 @@ export function normalizeAccountPartnerAccountKey(value: unknown): string {
   return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, '') : text;
 }
 
-export function resolveAccountPartnerSourceAccountKey(
+export function normalizeAccountPartnerEmployeeKey(value: unknown): string {
+  return normalizeAccountPartnerAccountKey(value);
+}
+
+export function resolveAccountPartnerSourceAccountKeys(
   record: Record<string, unknown>,
-): string {
+): string[] {
+  const keys = new Set<string>();
   for (const field of ACCOUNT_PARTNER_ACCOUNT_KEY_FIELDS) {
     const normalized = normalizeAccountPartnerAccountKey(
       accountPartnerValueAt(record, field),
     );
-    if (normalized) return normalized;
+    if (normalized) keys.add(normalized);
   }
-  return '';
+  return [...keys];
+}
+
+export function resolveAccountPartnerSourceAccountKey(
+  record: Record<string, unknown>,
+): string {
+  return resolveAccountPartnerSourceAccountKeys(record)[0] ?? '';
+}
+
+/**
+ * Early per-office sampling: keep the first `perOffice` unique role+employee
+ * pairs per sales office before any Salesforce matching.
+ */
+export function sampleAccountPartnerExcelRecordsByOffice(
+  records: Array<Record<string, unknown>>,
+  perOffice: number,
+): {
+  records: Array<Record<string, unknown>>;
+  skippedPerOfficeLimit: number;
+  totalBeforeSample: number;
+} {
+  if (!Number.isFinite(perOffice) || perOffice <= 0) {
+    return {
+      records,
+      skippedPerOfficeLimit: 0,
+      totalBeforeSample: records.length,
+    };
+  }
+
+  const officeBuckets = new Map<string, Map<string, Record<string, unknown>>>();
+  let skippedNoOffice = 0;
+
+  for (const record of records) {
+    const office = accountPartnerValueAt(record, ACCOUNT_PARTNER_OFFICE_FIELD);
+    if (!office) {
+      skippedNoOffice += 1;
+      continue;
+    }
+    const employee = normalizeAccountPartnerEmployeeKey(
+      accountPartnerValueAt(record, ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD),
+    );
+    const role =
+      accountPartnerValueAt(record, ACCOUNT_PARTNER_ROLE_FIELD)
+      || accountPartnerValueAt(record, ACCOUNT_PARTNER_FUNCTION_FIELD);
+    if (!employee || !role) continue;
+
+    const dedupeKey = `${role}|${employee}`;
+    if (!officeBuckets.has(office)) officeBuckets.set(office, new Map());
+    const bucket = officeBuckets.get(office)!;
+    if (!bucket.has(dedupeKey) && bucket.size < perOffice) {
+      bucket.set(dedupeKey, record);
+    }
+  }
+
+  const sampled: Array<Record<string, unknown>> = [];
+  for (const office of [...officeBuckets.keys()].sort()) {
+    sampled.push(...officeBuckets.get(office)!.values());
+  }
+
+  const considered = records.length - skippedNoOffice;
+  const skippedPerOfficeLimit = Math.max(0, considered - sampled.length);
+  return {
+    records: sampled,
+    skippedPerOfficeLimit,
+    totalBeforeSample: records.length,
+  };
+}
+
+export function collectAccountPartnerExcelLookupKeys(
+  records: Array<Record<string, unknown>>,
+): { accountKeys: string[]; employeeKeys: string[] } {
+  const accountKeys = new Set<string>();
+  const employeeKeys = new Set<string>();
+  for (const record of records) {
+    for (const key of resolveAccountPartnerSourceAccountKeys(record)) {
+      accountKeys.add(key);
+    }
+    const employee = normalizeAccountPartnerEmployeeKey(
+      accountPartnerValueAt(record, ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD),
+    );
+    if (employee) employeeKeys.add(employee);
+  }
+  return {
+    accountKeys: [...accountKeys],
+    employeeKeys: [...employeeKeys],
+  };
 }
 
 export function indexAccountPartnerTargetAccounts(
@@ -208,6 +303,41 @@ export function indexAccountPartnerTargetAccounts(
   return targetAccounts;
 }
 
+export function indexAccountPartnerTargetEmployees(
+  records: Array<Record<string, unknown>>,
+): Map<string, AccountPartnerTargetReference> {
+  const targetEmployees = new Map<string, AccountPartnerTargetReference>();
+  const ambiguousEmployeeKeys = new Set<string>();
+
+  for (const record of records) {
+    const rawKey = accountPartnerValueAt(record, 'cfs_ob__EmployeeNo__c');
+    const normalizedKey = normalizeAccountPartnerEmployeeKey(rawKey);
+    const id = accountPartnerValueAt(record, 'Id');
+    const name = accountPartnerValueAt(record, 'Name');
+    if (!normalizedKey || !id || ambiguousEmployeeKeys.has(normalizedKey)) continue;
+    const existing = targetEmployees.get(normalizedKey);
+    if (existing && existing.id !== id) {
+      targetEmployees.delete(normalizedKey);
+      ambiguousEmployeeKeys.add(normalizedKey);
+    } else {
+      targetEmployees.set(normalizedKey, { id, key: rawKey || normalizedKey, name });
+    }
+  }
+
+  return targetEmployees;
+}
+
+function resolveTargetAccountMatch(
+  accountKeys: string[],
+  targetAccounts: ReadonlyMap<string, AccountPartnerTargetReference>,
+): { account: string; targetAccount: AccountPartnerTargetReference } | null {
+  for (const key of accountKeys) {
+    const targetAccount = targetAccounts.get(key);
+    if (targetAccount) return { account: key, targetAccount };
+  }
+  return null;
+}
+
 export function resolveAccountPartnerMigrationSoql(
   input: AccountPartnerMigrationInput,
 ): string {
@@ -218,6 +348,8 @@ export function resolveAccountPartnerMigrationSoql(
   });
 }
 
+const ACCOUNT_PARTNER_PREVIEW_SAMPLE_LIMIT = 50;
+
 export function buildAccountPartnerMigrationRows(input: {
   records: Array<Record<string, unknown>>;
   bottler: AccountPartnerMigrationInput['bottler'];
@@ -226,11 +358,28 @@ export function buildAccountPartnerMigrationRows(input: {
   existingExternalIds?: ReadonlySet<string>;
   externalIdMaxLength?: number;
   nameWriteConfig?: AccountPartnerNameWriteConfig;
+  /** preview skips materializing full upsert rows; migrate builds them. */
+  mode?: 'preview' | 'migrate';
+  previewSampleLimit?: number;
+  /**
+   * After a row matches target Account + Employee, keep at most this many
+   * unique role+employee pairs per sales office (full-sheet match, then cap).
+   */
+  perOffice?: number;
 }): AccountPartnerMigrationResult {
+  const mode = input.mode ?? 'migrate';
+  const previewSampleLimit = input.previewSampleLimit ?? ACCOUNT_PARTNER_PREVIEW_SAMPLE_LIMIT;
+  const perOffice =
+    Number.isFinite(input.perOffice) && (input.perOffice ?? 0) > 0
+      ? input.perOffice!
+      : 0;
   const rows: Array<Record<string, string>> = [];
   const previewRows: AccountPartnerMigrationResult['previewRows'] = [];
+  const readyExternalIds: string[] = [];
   const seen = new Set<string>();
   const seenExternalIds = new Map<string, string>();
+  const officeCounts = new Map<string, number>();
+  const officeSeen = new Map<string, Set<string>>();
   const stats: AccountPartnerMigrationStats = {
     total: input.records.length,
     ready: 0,
@@ -245,6 +394,8 @@ export function buildAccountPartnerMigrationRows(input: {
     skippedMissingRole: 0,
     skippedTargetAccount: 0,
     skippedTargetEmployee: 0,
+    skippedNoDistributionMatch: 0,
+    skippedPerOfficeLimit: 0,
   };
 
   for (const record of input.records) {
@@ -258,12 +409,20 @@ export function buildAccountPartnerMigrationRows(input: {
       stats.skippedMissingOffice += 1;
       continue;
     }
-    const account = resolveAccountPartnerSourceAccountKey(record);
-    if (!account) {
+    const accountKeys = resolveAccountPartnerSourceAccountKeys(record);
+    if (accountKeys.length === 0) {
       stats.skippedMissingAccountKey += 1;
       continue;
     }
-    const employee = accountPartnerValueAt(record, ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD);
+    const accountMatch = resolveTargetAccountMatch(accountKeys, input.targetAccounts);
+    if (!accountMatch) {
+      stats.skippedTargetAccount += 1;
+      continue;
+    }
+    const { account, targetAccount } = accountMatch;
+    const employee = normalizeAccountPartnerEmployeeKey(
+      accountPartnerValueAt(record, ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD),
+    );
     if (!employee) {
       stats.skippedMissingEmployeeKey += 1;
       continue;
@@ -273,11 +432,6 @@ export function buildAccountPartnerMigrationRows(input: {
       || accountPartnerValueAt(record, ACCOUNT_PARTNER_FUNCTION_FIELD);
     if (!role) {
       stats.skippedMissingRole += 1;
-      continue;
-    }
-    const targetAccount = input.targetAccounts.get(account);
-    if (!targetAccount) {
-      stats.skippedTargetAccount += 1;
       continue;
     }
     const targetEmployee = input.targetEmployees.get(employee);
@@ -305,46 +459,129 @@ export function buildAccountPartnerMigrationRows(input: {
       stats.externalIdCollisions += 1;
       continue;
     }
+
+    if (perOffice > 0) {
+      const officeDedupeKey = `${role}\u0000${employee}`;
+      const officePairSeen = officeSeen.get(office) ?? new Set<string>();
+      if (officePairSeen.has(officeDedupeKey)) {
+        // Same role+employee already kept for this office — treat as duplicate.
+        stats.duplicates += 1;
+        continue;
+      }
+      const officeCount = officeCounts.get(office) ?? 0;
+      if (officeCount >= perOffice) {
+        stats.skippedPerOfficeLimit += 1;
+        continue;
+      }
+      officePairSeen.add(officeDedupeKey);
+      officeSeen.set(office, officePairSeen);
+      officeCounts.set(office, officeCount + 1);
+    }
+
     seen.add(dedupeKey);
     seenExternalIds.set(externalId, dedupeKey);
+    if (mode === 'migrate') {
+      readyExternalIds.push(externalId);
+    }
     const partnerName = targetEmployee.name
       || [targetAccount.name, role].filter(Boolean).join(' — ')
       || 'Account Partner';
-    const row: Record<string, string> = {
-      [ACCOUNT_PARTNER_EXTERNAL_ID_FIELD]: externalId,
-      [ACCOUNT_PARTNER_ROLE_FIELD]: role,
-      [ACCOUNT_PARTNER_BOTTLER_FIELD]: input.bottler,
-      [ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD]: targetAccount.id,
-      [ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD]: targetEmployee.id,
-    };
-    if (input.nameWriteConfig) {
-      row[input.nameWriteConfig.fieldName] = partnerName.slice(
-        0,
-        input.nameWriteConfig.maxLength,
-      );
-    }
-    rows.push(row);
-    const action = input.existingExternalIds?.has(externalId) ? 'update' : 'create';
+    const action = mode === 'preview'
+      ? 'create'
+      : (input.existingExternalIds?.has(externalId) ? 'update' : 'create');
     if (action === 'update') {
       stats.toUpdate += 1;
     } else {
       stats.toCreate += 1;
     }
-    previewRows.push({
-      externalId,
-      accountKey: targetAccount.key,
-      accountName: targetAccount.name,
-      employeeKey: targetEmployee.key,
-      employeeName: targetEmployee.name,
-      partnerName,
-      action,
-      role,
-      targetAccountId: targetAccount.id,
-      targetEmployeeId: targetEmployee.id,
-    });
+    stats.ready += 1;
+
+    if (mode === 'migrate') {
+      const row: Record<string, string> = {
+        [ACCOUNT_PARTNER_EXTERNAL_ID_FIELD]: externalId,
+        [ACCOUNT_PARTNER_ROLE_FIELD]: role,
+        [ACCOUNT_PARTNER_BOTTLER_FIELD]: input.bottler,
+        [ACCOUNT_PARTNER_ACCOUNT_LOOKUP_FIELD]: targetAccount.id,
+        [ACCOUNT_PARTNER_EMPLOYEE_LOOKUP_FIELD]: targetEmployee.id,
+      };
+      if (input.nameWriteConfig) {
+        row[input.nameWriteConfig.fieldName] = partnerName.slice(
+          0,
+          input.nameWriteConfig.maxLength,
+        );
+      }
+      rows.push(row);
+    }
+
+    if (previewRows.length < previewSampleLimit) {
+      previewRows.push({
+        externalId,
+        accountKey: targetAccount.key,
+        accountName: targetAccount.name,
+        employeeKey: targetEmployee.key,
+        employeeName: targetEmployee.name,
+        partnerName,
+        action,
+        role,
+        salesOffice: office,
+        targetAccountId: targetAccount.id,
+        targetEmployeeId: targetEmployee.id,
+      });
+    }
   }
-  stats.ready = rows.length;
-  return { rows, previewRows, stats };
+  return { rows, previewRows, stats, readyExternalIds };
+}
+
+export function applyAccountPartnerPerOfficeLimit(
+  mapping: AccountPartnerMigrationResult,
+  perOffice: number,
+): AccountPartnerMigrationResult {
+  if (!Number.isFinite(perOffice) || perOffice <= 0) return mapping;
+
+  const officeCounts = new Map<string, number>();
+  const officeSeen = new Map<string, Set<string>>();
+  const keptIndices: number[] = [];
+
+  for (let index = 0; index < mapping.previewRows.length; index += 1) {
+    const preview = mapping.previewRows[index];
+    const office = preview.salesOffice;
+    if (!office) {
+      keptIndices.push(index);
+      continue;
+    }
+    const dedupeKey = `${preview.role}\u0000${preview.employeeKey}`;
+    const seen = officeSeen.get(office) ?? new Set<string>();
+    if (seen.has(dedupeKey)) continue;
+
+    const count = officeCounts.get(office) ?? 0;
+    if (count >= perOffice) continue;
+
+    seen.add(dedupeKey);
+    officeSeen.set(office, seen);
+    officeCounts.set(office, count + 1);
+    keptIndices.push(index);
+  }
+
+  const skippedPerOfficeLimit = mapping.previewRows.length - keptIndices.length;
+  if (skippedPerOfficeLimit === 0) return mapping;
+
+  const previewRows = keptIndices.map((index) => mapping.previewRows[index]);
+  const rows = keptIndices.map((index) => mapping.rows[index]);
+  const toCreate = previewRows.filter((row) => row.action === 'create').length;
+  const toUpdate = previewRows.filter((row) => row.action === 'update').length;
+
+  return {
+    rows,
+    previewRows,
+    readyExternalIds: keptIndices.map((index) => mapping.readyExternalIds[index]),
+    stats: {
+      ...mapping.stats,
+      ready: previewRows.length,
+      toCreate,
+      toUpdate,
+      skippedPerOfficeLimit,
+    },
+  };
 }
 
 function fitAccountPartnerExternalId(value: string, maxLength = 255): string {
@@ -361,4 +598,48 @@ function fitAccountPartnerExternalId(value: string, maxLength = 255): string {
     + (second >>> 0).toString(16).padStart(8, '0');
   if (maxLength <= hash.length) return hash.slice(0, maxLength);
   return `${value.slice(0, maxLength - hash.length - 1)}-${hash}`;
+}
+
+export const ACCOUNT_PARTNER_EXCEL_REQUIRED_HEADERS = [
+  ACCOUNT_PARTNER_EMPLOYEE_KEY_FIELD,
+  ACCOUNT_PARTNER_BOTTLER_FIELD,
+  ACCOUNT_PARTNER_OFFICE_FIELD,
+] as const;
+
+export const ACCOUNT_PARTNER_EXCEL_OPTIONAL_HEADERS = [
+  ACCOUNT_PARTNER_EXTERNAL_ID_FIELD,
+  ACCOUNT_PARTNER_ROLE_FIELD,
+  ACCOUNT_PARTNER_FUNCTION_FIELD,
+  ...ACCOUNT_PARTNER_ACCOUNT_KEY_FIELDS,
+] as const;
+
+export function validateAccountPartnerExcelHeaders(headers: string[]): {
+  ok: boolean;
+  missing: string[];
+  detected: string[];
+} {
+  const normalized = new Set(headers.map((header) => header.trim()).filter(Boolean));
+  const hasAccountKey = ACCOUNT_PARTNER_ACCOUNT_KEY_FIELDS.some((field) => normalized.has(field));
+  const hasRole =
+    normalized.has(ACCOUNT_PARTNER_ROLE_FIELD)
+    || normalized.has(ACCOUNT_PARTNER_FUNCTION_FIELD);
+  const missing: string[] = [];
+  for (const field of ACCOUNT_PARTNER_EXCEL_REQUIRED_HEADERS) {
+    if (!normalized.has(field)) missing.push(field);
+  }
+  if (!hasAccountKey) {
+    missing.push(
+      `${ACCOUNT_PARTNER_ACCOUNT_KEY_FIELD} or ${ACCOUNT_PARTNER_ACCOUNT_ALT_KEY_FIELD}`,
+    );
+  }
+  if (!hasRole) {
+    missing.push(
+      `${ACCOUNT_PARTNER_ROLE_FIELD} or ${ACCOUNT_PARTNER_FUNCTION_FIELD}`,
+    );
+  }
+  const detected = [
+    ...ACCOUNT_PARTNER_EXCEL_REQUIRED_HEADERS,
+    ...ACCOUNT_PARTNER_EXCEL_OPTIONAL_HEADERS,
+  ].filter((field) => normalized.has(field));
+  return { ok: missing.length === 0, missing, detected };
 }

@@ -8,6 +8,8 @@ interface LoadingOverlayProps {
   label: string;
   /** Secondary line under the label. */
   sublabel?: string;
+  /** Determinate progress 0-100. When set, a progress bar is shown. */
+  progress?: number;
   className?: string;
 }
 
@@ -16,7 +18,7 @@ interface LoadingOverlayProps {
  * content underneath and centers a spinner + description so the user always
  * sees that background work is in progress.
  */
-export function LoadingOverlay({ label, sublabel, className }: LoadingOverlayProps) {
+export function LoadingOverlay({ label, sublabel, progress, className }: LoadingOverlayProps) {
   return (
     <div
       role="status"
@@ -29,6 +31,17 @@ export function LoadingOverlay({ label, sublabel, className }: LoadingOverlayPro
     >
       <Spinner size="lg" />
       <p className="text-sm font-medium text-foreground">{label}</p>
+      {typeof progress === 'number' && (
+        <div className="mt-2 h-1.5 w-48 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-500"
+            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+          />
+        </div>
+      )}
+      {typeof progress === 'number' && (
+        <p className="text-xs text-muted-foreground">{Math.round(progress)}%</p>
+      )}
       {sublabel && <p className="max-w-md text-center text-xs text-muted-foreground">{sublabel}</p>}
     </div>
   );

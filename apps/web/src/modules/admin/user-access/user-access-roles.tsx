@@ -45,33 +45,36 @@ export function UserAccessRoles({ users }: { users: UserAccessRow[] }) {
   const countFor = (role: string) => users.filter((u) => u.displayRole === role).length;
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        {ROLE_DEFS.map((def) => (
-          <GlassCard key={def.role}>
-            <div className="flex items-start gap-3">
-              <span
-                className={cn(
-                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
-                  def.accent,
-                )}
-              >
-                <def.icon className="h-5 w-5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">{def.role}</h3>
-                  <span className="rounded-md border border-border/60 bg-secondary/50 px-2 py-0.5 text-xs text-muted-foreground">
-                    {countFor(def.role)} user{countFor(def.role) === 1 ? '' : 's'}
-                  </span>
+    <div className="space-y-5">
+      <div className="grid gap-4 md:gap-5 sm:grid-cols-2">
+        {ROLE_DEFS.map((def) => {
+          const count = countFor(def.role);
+          return (
+            <GlassCard key={def.role} className="hover:border-primary/25">
+              <div className="flex items-start gap-3.5">
+                <span
+                  className={cn(
+                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ring-white/5',
+                    def.accent,
+                  )}
+                >
+                  <def.icon className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-foreground">{def.role}</h3>
+                    <span className="shrink-0 rounded-full border border-border/70 bg-secondary/70 px-2.5 py-0.5 text-[11px] font-medium text-foreground/80">
+                      {count} user{count === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-sm leading-relaxed text-foreground/65">{def.description}</p>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{def.description}</p>
               </div>
-            </div>
-          </GlassCard>
-        ))}
+            </GlassCard>
+          );
+        })}
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm leading-relaxed text-foreground/60">
         Roles are derived from each user&apos;s platform role and granted modules. Use{' '}
         <span className="font-medium text-foreground">Manage</span> on a user to change their role or
         module access.
