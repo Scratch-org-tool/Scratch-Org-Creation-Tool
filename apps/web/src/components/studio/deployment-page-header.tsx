@@ -11,6 +11,8 @@ interface DeploymentPageHeaderProps {
   accentClass?: string;
   showBreadcrumbs?: boolean;
   actions?: React.ReactNode;
+  /** Stack actions below title when there are many controls (e.g. defects filters). */
+  actionsLayout?: 'inline' | 'stacked';
 }
 
 export function DeploymentPageHeader({
@@ -20,6 +22,7 @@ export function DeploymentPageHeader({
   accentClass = 'to-violet-500/10',
   showBreadcrumbs = false,
   actions,
+  actionsLayout = 'inline',
 }: DeploymentPageHeaderProps) {
   return (
     <div
@@ -34,17 +37,31 @@ export function DeploymentPageHeader({
       </div>
       <div className="relative p-5 md:p-6">
         {showBreadcrumbs && <Breadcrumbs className="mb-2" />}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-            <p className="text-muted-foreground text-sm mt-1 max-w-2xl">{subtitle}</p>
-          </div>
-          {actions && (
-            <div className="flex flex-wrap items-center justify-end gap-2 shrink-0 w-full sm:w-auto">
-              {actions}
+        {actionsLayout === 'stacked' ? (
+          <div className="flex flex-col gap-4">
+            <div className="min-w-0 pr-20 sm:pr-28">
+              <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+              <p className="text-muted-foreground text-sm mt-1 max-w-3xl">{subtitle}</p>
             </div>
-          )}
-        </div>
+            {actions && (
+              <div className="flex flex-wrap items-center gap-2">
+                {actions}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="min-w-0 pr-20 sm:pr-28">
+              <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+              <p className="text-muted-foreground text-sm mt-1 max-w-2xl">{subtitle}</p>
+            </div>
+            {actions && (
+              <div className="flex flex-wrap items-center justify-end gap-2 shrink-0 w-full sm:w-auto">
+                {actions}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

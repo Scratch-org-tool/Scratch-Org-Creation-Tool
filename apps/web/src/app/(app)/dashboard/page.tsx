@@ -55,24 +55,23 @@ export default function DashboardPage() {
           />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {canViewDeployment && (
-              <DashboardRecentDeployments
-                deployments={data?.recentDeployments ?? []}
+            <div className="flex flex-col gap-5">
+              <DashboardSummaryDonut
+                distribution={data?.statusDistribution ?? null}
                 loading={loading}
               />
-            )}
+              {canViewDeployment && (
+                <DashboardRecentDeployments
+                  deployments={data?.recentDeployments ?? []}
+                  loading={loading}
+                />
+              )}
+            </div>
             <DashboardPlatformHealth
               health={data?.health ?? null}
               durationSeries={data?.durationSeries ?? []}
               loading={loading}
               showEnvironment={canViewEnvironment}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <DashboardSummaryDonut
-              distribution={data?.statusDistribution ?? null}
-              loading={loading}
             />
           </div>
         </>

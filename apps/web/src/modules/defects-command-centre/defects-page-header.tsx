@@ -37,6 +37,7 @@ export function DefectsPageHeader({ w }: { w: DefectsWorkspaceState }) {
         }
         icon={Bug}
         accentClass="to-rose-500/10"
+        actionsLayout="stacked"
         actions={
           <>
             <Select
